@@ -660,6 +660,10 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		m.menuOpen = false
 		m.status = "Menu closed"
+	case "h", "?":
+		m.menuOpen = false
+		m.showHelp = true
+		m.status = "Help"
 	case "up", "k":
 		m.menuIndex = m.nextSelectableMenuIndex(-1)
 		m.keepMenuVisible()

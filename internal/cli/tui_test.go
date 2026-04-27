@@ -572,6 +572,22 @@ func TestTUIActionMenuNumberShortcutRunsVisibleItem(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuCanOpenHelp(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.openActionMenu()
+
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	model = updated.(clusterBrowserModel)
+
+	if model.menuOpen || !model.showHelp || model.status != "Help" {
+		t.Fatalf("menu help state menu=%v help=%v status=%q", model.menuOpen, model.showHelp, model.status)
+	}
+}
+
 func TestTUIActionMenuSectionsAreNotSelectable(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
