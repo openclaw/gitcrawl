@@ -771,6 +771,24 @@ func TestTUIMemberRowsGroupAndSkipHeaders(t *testing.T) {
 	}
 }
 
+func TestTUILoadSelectedClusterResetsDetailScroll(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detailView.Width = 40
+	model.detailView.Height = 2
+	model.detailView.SetContent(strings.Repeat("line\n", 20))
+	model.detailView.SetYOffset(8)
+
+	model.loadSelectedCluster()
+
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("detail scroll offset = %d, want 0", model.detailView.YOffset)
+	}
+}
+
 func TestTUIMemberMovementHonorsStepSize(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

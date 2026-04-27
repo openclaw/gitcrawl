@@ -1496,6 +1496,7 @@ func (m *clusterBrowserModel) sortMembersFromHeader(relativeX int) {
 
 func (m *clusterBrowserModel) loadSelectedCluster() {
 	m.detailScroll = 0
+	m.detailView.GotoTop()
 	m.memberOff = 0
 	m.memberIndex = -1
 	m.memberRows = nil
