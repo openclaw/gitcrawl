@@ -1177,6 +1177,46 @@ func TestTUIRepositoryPickerSwitchesRepository(t *testing.T) {
 	}
 }
 
+func TestTUIRepositorySwitchRelaxesEmptyFilters(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoOneID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "one", FullName: "openclaw/one", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo one: %v", err)
+	}
+	repoTwoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "two", FullName: "openclaw/two", RawJSON: "{}", UpdatedAt: "2026-04-27T01:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo two: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoTwoID, 21, 201, "singleton cluster"); err != nil {
+		t.Fatalf("seed repo two cluster: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoOneID, clusterBrowserPayload{
+		Repository: "openclaw/one",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.minSize = 10
+
+	model.switchRepository("openclaw/two")
+
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 21 {
+		t.Fatalf("relaxed switch clusters = %#v, want singleton cluster", model.payload.Clusters)
+	}
+	if model.minSize != 1 {
+		t.Fatalf("relaxed min size = %d, want 1", model.minSize)
+	}
+	if !strings.Contains(model.status, "filters relaxed") {
+		t.Fatalf("relaxed switch status = %q", model.status)
+	}
+}
+
 func TestTUIQuitMenuReturnsQuitCommand(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

@@ -2186,8 +2186,18 @@ func (m *clusterBrowserModel) switchRepository(fullName string) {
 	m.hasDetail = false
 	m.detail = store.ClusterDetail{}
 	m.applyClusterFilters()
+	relaxedFilters := false
+	if len(m.payload.Clusters) == 0 && len(m.allClusters) > 0 {
+		m.showClosed = true
+		m.minSize = 1
+		m.applyClusterFilters()
+		relaxedFilters = true
+	}
 	m.focus = focusClusters
 	m.status = "Repository: " + repo.FullName
+	if relaxedFilters {
+		m.status += " (filters relaxed)"
+	}
 }
 
 func (m *clusterBrowserModel) applyClusterFilters() {
