@@ -53,4 +53,11 @@ func TestUpsertRepositoryAndThread(t *testing.T) {
 	if len(rows) != 1 || rows[0].Title != "download stalls" {
 		t.Fatalf("unexpected rows: %#v", rows)
 	}
+	filtered, err := st.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repoID, Numbers: []int{1}, Limit: 1})
+	if err != nil {
+		t.Fatalf("filtered threads: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Number != 1 {
+		t.Fatalf("unexpected filtered rows: %#v", filtered)
+	}
 }

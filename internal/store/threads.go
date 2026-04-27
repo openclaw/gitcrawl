@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 type Thread struct {
@@ -76,9 +77,34 @@ func (s *Store) UpsertThread(ctx context.Context, thread Thread) (int64, error) 
 }
 
 func (s *Store) ListThreads(ctx context.Context, repoID int64, includeClosed bool) ([]Thread, error) {
+	return s.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repoID, IncludeClosed: includeClosed})
+}
+
+type ThreadListOptions struct {
+	RepoID        int64
+	IncludeClosed bool
+	Numbers       []int
+	Limit         int
+}
+
+func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptions) ([]Thread, error) {
 	where := `repo_id = ?`
-	if !includeClosed {
+	args := []any{options.RepoID}
+	if !options.IncludeClosed {
 		where += ` and closed_at_local is null`
+	}
+	if len(options.Numbers) > 0 {
+		placeholders := make([]string, 0, len(options.Numbers))
+		for _, number := range options.Numbers {
+			placeholders = append(placeholders, "?")
+			args = append(args, number)
+		}
+		where += ` and number in (` + strings.Join(placeholders, ",") + `)`
+	}
+	limitSQL := ``
+	if options.Limit > 0 {
+		limitSQL = ` limit ?`
+		args = append(args, options.Limit)
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type,
@@ -87,8 +113,7 @@ func (s *Store) ListThreads(ctx context.Context, repoID int64, includeClosed boo
 			first_pulled_at, last_pulled_at, updated_at, closed_at_local, close_reason_local
 		from threads
 		where `+where+`
-		order by number
-	`, repoID)
+		order by number`+limitSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list threads: %w", err)
 	}

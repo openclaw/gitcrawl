@@ -252,8 +252,10 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	includeClosed := fs.Bool("include-closed", false, "include locally closed rows")
+	numbersRaw := fs.String("numbers", "", "comma-separated issue or pull request numbers")
+	limitRaw := fs.String("limit", "", "maximum thread rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, nil)); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"numbers": true, "limit": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -261,6 +263,14 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("threads requires owner/repo"))
 	}
 	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	numbers, err := parseOptionalPositiveIntList(*numbersRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -279,7 +289,12 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	threads, err := st.ListThreads(ctx, repo.ID, *includeClosed)
+	threads, err := st.ListThreadsFiltered(ctx, store.ThreadListOptions{
+		RepoID:        repo.ID,
+		IncludeClosed: *includeClosed,
+		Numbers:       numbers,
+		Limit:         limit,
+	})
 	if err != nil {
 		return err
 	}
@@ -480,6 +495,22 @@ func parseOptionalPositiveInt(value string) (int, error) {
 		return 0, fmt.Errorf("expected positive integer, got %q", value)
 	}
 	return parsed, nil
+}
+
+func parseOptionalPositiveIntList(value string) ([]int, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		parsed, err := parseOptionalPositiveInt(strings.TrimSpace(part))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, parsed)
+	}
+	return out, nil
 }
 
 func (a *App) writeOutput(title string, payload any, allowLog bool) error {
