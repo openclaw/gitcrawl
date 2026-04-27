@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type Thread struct {
@@ -131,6 +132,32 @@ func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptio
 		return nil, fmt.Errorf("iterate threads: %w", err)
 	}
 	return out, nil
+}
+
+func (s *Store) CloseThreadLocally(ctx context.Context, repoID int64, number int, reason string) error {
+	if repoID <= 0 {
+		return fmt.Errorf("repo id must be positive")
+	}
+	if number <= 0 {
+		return fmt.Errorf("thread number must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "local close"
+	}
+	closedAt := time.Now().UTC().Format(timeLayout)
+	result, err := s.q().ExecContext(ctx, `
+		update threads
+		set closed_at_local = ?, close_reason_local = ?, updated_at = ?
+		where repo_id = ? and number = ?
+	`, closedAt, reason, closedAt, repoID, number)
+	if err != nil {
+		return fmt.Errorf("close thread locally: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("thread #%d was not found", number)
+	}
+	return nil
 }
 
 func scanThread(rows interface {
