@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/openclaw/gitcrawl/internal/documents"
 	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
@@ -88,7 +89,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 	for _, row := range rows {
 		thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
-		if _, err := s.store.UpsertThread(ctx, thread); err != nil {
+		threadID, err := s.store.UpsertThread(ctx, thread)
+		if err != nil {
+			return Stats{}, err
+		}
+		thread.ID = threadID
+		if _, err := s.store.UpsertDocument(ctx, documents.Build(thread)); err != nil {
 			return Stats{}, err
 		}
 		stats.ThreadsSynced++
