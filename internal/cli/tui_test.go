@@ -345,8 +345,12 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	for _, item := range model.menuItems {
 		labels = append(labels, item.label)
 	}
-	if !strings.Contains(strings.Join(labels, "\n"), "Copy cluster summary") {
+	joinedLabels := strings.Join(labels, "\n")
+	if !strings.Contains(joinedLabels, "Copy cluster summary") {
 		t.Fatalf("expected cluster action menu items, got %+v", model.menuItems)
+	}
+	if !strings.Contains(joinedLabels, "Copy visible clusters") {
+		t.Fatalf("expected visible cluster action menu item, got %+v", model.menuItems)
 	}
 }
 
@@ -441,6 +445,21 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestTUIVisibleClustersClipboardText(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	text := model.visibleClustersClipboardText()
+	for _, want := range []string{"C1 [active] 3 items alpha-bravo-charlie", "C2 [active] 5 items delta-echo-foxtrot"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("visible clusters clipboard missing %q in:\n%s", want, text)
 		}
 	}
 }

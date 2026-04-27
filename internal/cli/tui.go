@@ -752,6 +752,9 @@ func (m *clusterBrowserModel) openActionMenu() {
 	if m.hasSelectedCluster() {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"})
 	}
+	if len(m.payload.Clusters) > 0 {
+		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy visible clusters", action: "copy-visible-clusters"})
+	}
 	if _, ok := m.firstReferenceLink(); ok {
 		m.menuItems = append(m.menuItems,
 			tuiMenuItem{label: "Open first body link", action: "open-first-link"},
@@ -771,6 +774,22 @@ func (m *clusterBrowserModel) openActionMenu() {
 func (m *clusterBrowserModel) runAction(action string) {
 	if action == "close-menu" {
 		m.status = "Menu closed"
+		return
+	}
+	switch action {
+	case "copy-cluster":
+		if err := copyText(m.clusterClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied cluster summary"
+		}
+		return
+	case "copy-visible-clusters":
+		if err := copyText(m.visibleClustersClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied visible clusters"
+		}
 		return
 	}
 	thread, ok := m.selectedThread()
@@ -804,12 +823,6 @@ func (m *clusterBrowserModel) runAction(action string) {
 			m.status = err.Error()
 		} else {
 			m.status = "Copied title"
-		}
-	case "copy-cluster":
-		if err := copyText(m.clusterClipboardText()); err != nil {
-			m.status = err.Error()
-		} else {
-			m.status = "Copied cluster summary"
 		}
 	case "open-first-link":
 		link, ok := m.firstReferenceLink()
@@ -1512,6 +1525,25 @@ func (m clusterBrowserModel) clusterClipboardText() string {
 	if member, ok := m.selectedMember(); ok {
 		thread := member.Thread
 		lines = append(lines, "", fmt.Sprintf("%s #%d: %s", kindTitle(thread.Kind), thread.Number, thread.Title), thread.HTMLURL)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m clusterBrowserModel) visibleClustersClipboardText() string {
+	if len(m.payload.Clusters) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(m.payload.Clusters))
+	for _, cluster := range m.payload.Clusters {
+		lines = append(lines, fmt.Sprintf(
+			"C%d [%s] %d items %s - %s (%s)",
+			cluster.ID,
+			firstNonEmpty(cluster.Status, "unknown"),
+			cluster.MemberCount,
+			cluster.StableSlug,
+			firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster"),
+			threadRef(cluster),
+		))
 	}
 	return strings.Join(lines, "\n")
 }
