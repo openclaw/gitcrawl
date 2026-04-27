@@ -1073,6 +1073,13 @@ func TestTUISubmenuBackKeyReturnsToActions(t *testing.T) {
 	if !model.menuOpen || model.menuTitle != "Actions" {
 		t.Fatalf("back key menu=%v title=%q", model.menuOpen, model.menuTitle)
 	}
+
+	model.openReferenceLinkMenu("copy")
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = updated.(clusterBrowserModel)
+	if !model.menuOpen || model.menuTitle != "Actions" {
+		t.Fatalf("action key from submenu menu=%v title=%q", model.menuOpen, model.menuTitle)
+	}
 }
 
 func TestTUIActionMenuIncludesViewControls(t *testing.T) {

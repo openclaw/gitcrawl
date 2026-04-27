@@ -672,6 +672,10 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.inMenuSubmenu() {
 			m.openActionMenu()
 		}
+	case "a":
+		if m.inMenuSubmenu() {
+			m.openActionMenu()
+		}
 	case "/":
 		cmd := m.startFilterInput()
 		return m, cmd
