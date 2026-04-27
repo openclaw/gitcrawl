@@ -479,7 +479,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		}
 		return a.writeOutput("tui", payload, true)
 	}
-	return a.runInteractiveTUI(payload)
+	return a.runInteractiveTUI(ctx, rt.Store, repo.ID, payload)
 }
 
 func (a *App) resolveOptionalRepository(ctx context.Context, rt localRuntime, args []string) (store.Repository, bool, error) {

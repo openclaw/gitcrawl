@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -38,6 +40,9 @@ type tuiRect struct {
 
 type clusterBrowserModel struct {
 	payload      clusterBrowserPayload
+	ctx          context.Context
+	store        *store.Store
+	repoID       int64
 	focus        tuiFocus
 	width        int
 	height       int
@@ -48,14 +53,13 @@ type clusterBrowserModel struct {
 	memberOff    int
 	memberIndex  int
 	detailScroll int
+	detailCache  map[int64]store.ClusterDetail
+	detail       store.ClusterDetail
+	hasDetail    bool
 }
 
 type memberRow struct {
-	number  int
-	kind    string
-	state   string
-	title   string
-	updated string
+	member store.ClusterMemberDetail
 }
 
 func (a *App) canRunInteractiveTUI() bool {
@@ -66,28 +70,32 @@ func (a *App) canRunInteractiveTUI() bool {
 	return isatty.IsTerminal(out.Fd()) && isatty.IsTerminal(os.Stdin.Fd())
 }
 
-func (a *App) runInteractiveTUI(payload clusterBrowserPayload) error {
+func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int64, payload clusterBrowserPayload) error {
 	out, ok := a.Stdout.(*os.File)
 	if !ok {
 		return a.writeOutput("tui", payload, true)
 	}
-	model := newClusterBrowserModel(payload)
+	model := newClusterBrowserModel(ctx, st, repoID, payload)
 	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen())
 	_, err := program.Run()
 	return err
 }
 
-func newClusterBrowserModel(payload clusterBrowserPayload) clusterBrowserModel {
+func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, payload clusterBrowserPayload) clusterBrowserModel {
 	clusters := append([]store.ClusterSummary(nil), payload.Clusters...)
 	payload.Clusters = clusters
 	model := clusterBrowserModel{
 		payload:     payload,
+		ctx:         ctx,
+		store:       st,
+		repoID:      repoID,
 		focus:       focusClusters,
 		status:      "Ready",
 		memberIndex: -1,
+		detailCache: map[int64]store.ClusterDetail{},
 	}
 	model.sortClusters()
-	model.syncSyntheticMembers()
+	model.loadSelectedCluster()
 	return model
 }
 
@@ -134,6 +142,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.payload.Sort = "recent"
 			}
 			m.sortClusters()
+			m.loadSelectedCluster()
 			m.status = "Sort: " + m.payload.Sort
 		case "h", "?":
 			m.status = "Tab focus  arrows move  s sort  Enter drill in  q quit"
@@ -246,7 +255,7 @@ func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
 		style := lipgloss.NewStyle()
 		if i == m.memberIndex {
 			style = style.Background(lipgloss.Color(selectedColor(m.focus == focusMembers))).Foreground(lipgloss.Color(selectedFG(m.focus == focusMembers))).Bold(true)
-		} else if member.state != "open" {
+		} else if member.thread().State != "open" {
 			style = style.Foreground(lipgloss.Color("#777777"))
 		} else {
 			style = style.Foreground(lipgloss.Color("#dfe7ef"))
@@ -299,19 +308,40 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		fmt.Sprintf("representative: %s", threadRef(cluster)),
 		"",
 	)
+	if !m.hasDetail {
+		lines = append(lines, "Cluster details unavailable.", m.status)
+		return lines
+	}
 	if len(m.memberRows) == 0 {
 		lines = append(lines, "Select a cluster to inspect members.")
 		return lines
 	}
 	member := m.memberRows[clampInt(m.memberIndex, 0, len(m.memberRows)-1)]
 	lines = append(lines,
-		bold(fmt.Sprintf("%s #%d", kindTitle(member.kind), member.number)),
-		member.title,
-		"",
-		fmt.Sprintf("state: %s   updated: %s", member.state, formatRelativeTime(member.updated)),
-		"",
-		dim("Full member details load in the next pass; this shell now matches the ghcrawl pane workflow."),
+		bold(fmt.Sprintf("%s #%d", kindTitle(member.thread().Kind), member.thread().Number)),
 	)
+	lines = append(lines, wrapPlain(member.thread().Title, width)...)
+	lines = append(lines,
+		"",
+		fmt.Sprintf("state: %s   updated: %s   author: %s", member.thread().State, formatRelativeTime(member.thread().UpdatedAtGitHub), firstNonEmpty(member.thread().AuthorLogin, "unknown")),
+		fmt.Sprintf("url: %s", member.thread().HTMLURL),
+		"",
+	)
+	if labels := labelsFromJSON(member.thread().LabelsJSON); labels != "" {
+		lines = append(lines, "labels: "+labels, "")
+	}
+	if len(member.member.Summaries) > 0 {
+		lines = append(lines, bold("LLM Summary"))
+		for _, key := range sortedSummaryKeys(member.member.Summaries) {
+			lines = append(lines, dim(key+":"))
+			lines = append(lines, wrapPlain(member.member.Summaries[key], width)...)
+			lines = append(lines, "")
+		}
+	}
+	if strings.TrimSpace(member.member.BodySnippet) != "" {
+		lines = append(lines, bold("Main Preview"))
+		lines = append(lines, wrapPlain(member.member.BodySnippet, width)...)
+	}
 	return lines
 }
 
@@ -325,14 +355,14 @@ func (m *clusterBrowserModel) move(delta int) {
 			return
 		}
 		m.memberIndex = clampInt(m.memberIndex+delta, 0, len(m.memberRows)-1)
-		m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].number)
+		m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
 		return
 	}
 	if len(m.payload.Clusters) == 0 {
 		return
 	}
 	m.selected = clampInt(m.selected+delta, 0, len(m.payload.Clusters)-1)
-	m.syncSyntheticMembers()
+	m.loadSelectedCluster()
 	m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
 }
 
@@ -359,7 +389,7 @@ func (m *clusterBrowserModel) jumpEdge(end bool) {
 		} else {
 			m.selected = 0
 		}
-		m.syncSyntheticMembers()
+		m.loadSelectedCluster()
 	}
 }
 
@@ -407,23 +437,45 @@ func (m *clusterBrowserModel) sortClusters() {
 	m.selected = clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1))
 }
 
-func (m *clusterBrowserModel) syncSyntheticMembers() {
+func (m *clusterBrowserModel) loadSelectedCluster() {
 	m.detailScroll = 0
 	m.memberOff = 0
 	m.memberIndex = -1
 	m.memberRows = nil
+	m.hasDetail = false
 	if len(m.payload.Clusters) == 0 {
 		return
 	}
 	cluster := m.payload.Clusters[m.selected]
-	if cluster.RepresentativeNumber > 0 {
-		m.memberRows = []memberRow{{
-			number:  cluster.RepresentativeNumber,
-			kind:    cluster.RepresentativeKind,
-			state:   "open",
-			title:   firstNonEmpty(cluster.RepresentativeTitle, cluster.Title),
-			updated: cluster.UpdatedAt,
-		}}
+	if cached, ok := m.detailCache[cluster.ID]; ok {
+		m.applyClusterDetail(cached)
+		return
+	}
+	if m.store == nil {
+		return
+	}
+	detail, err := m.store.ClusterDetail(m.ctx, store.ClusterDetailOptions{
+		RepoID:        m.repoID,
+		ClusterID:     cluster.ID,
+		IncludeClosed: true,
+		MemberLimit:   200,
+		BodyChars:     1600,
+	})
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.detailCache[cluster.ID] = detail
+	m.applyClusterDetail(detail)
+}
+
+func (m *clusterBrowserModel) applyClusterDetail(detail store.ClusterDetail) {
+	m.detail = detail
+	m.hasDetail = true
+	for _, member := range detail.Members {
+		m.memberRows = append(m.memberRows, memberRow{member: member})
+	}
+	if len(m.memberRows) > 0 {
 		m.memberIndex = 0
 	}
 }
@@ -442,7 +494,12 @@ func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
 }
 
 func (r memberRow) format(width int) string {
-	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", r.number, r.state, formatRelativeTime(r.updated), r.title), width)
+	thread := r.thread()
+	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, thread.State, formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
+}
+
+func (r memberRow) thread() store.Thread {
+	return r.member.Thread
 }
 
 func paneStyle(pane, focus tuiFocus, width, height int) lipgloss.Style {
@@ -493,6 +550,42 @@ func nextFocus(current tuiFocus, delta int) tuiFocus {
 
 func splitClusterTitle(cluster store.ClusterSummary) string {
 	return firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster")
+}
+
+func sortedSummaryKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		if strings.TrimSpace(value) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func labelsFromJSON(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var labels []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(raw), &labels); err == nil && len(labels) > 0 {
+		names := make([]string, 0, len(labels))
+		for _, label := range labels {
+			if strings.TrimSpace(label.Name) != "" {
+				names = append(names, label.Name)
+			}
+		}
+		if len(names) > 0 {
+			return strings.Join(names, ", ")
+		}
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err == nil && len(names) > 0 {
+		return strings.Join(names, ", ")
+	}
+	return ""
 }
 
 func kindLabel(kind string) string {
