@@ -104,6 +104,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runClusterDetail(ctx, rest[1:])
 	case "neighbors":
 		return a.runNeighbors(ctx, rest[1:])
+	case "portable":
+		return a.runPortable(ctx, rest[1:])
 	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
@@ -657,6 +659,54 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runPortable(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return usageErr(fmt.Errorf("portable requires a subcommand"))
+	}
+	switch args[0] {
+	case "prune":
+		return a.runPortablePrune(ctx, args[1:])
+	default:
+		return usageErr(fmt.Errorf("unknown portable subcommand %q", args[0]))
+	}
+}
+
+func (a *App) runPortablePrune(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("portable prune", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	bodyCharsRaw := fs.String("body-chars", "256", "maximum thread body characters to keep")
+	noVacuum := fs.Bool("no-vacuum", false, "skip SQLite vacuum after pruning")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"body-chars": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 0 {
+		return usageErr(fmt.Errorf("portable prune does not take positional arguments"))
+	}
+	bodyChars, err := parseOptionalPositiveInt(*bodyCharsRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if bodyChars == 0 {
+		bodyChars = 256
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+	stats, err := rt.Store.PrunePortablePayloads(ctx, store.PortablePruneOptions{
+		BodyChars: bodyChars,
+		Vacuum:    !*noVacuum,
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("portable prune", stats, true)
+}
+
 func defaultPortableStoreDir(configPath, remoteURL string) string {
 	base := filepath.Join(filepath.Dir(configPath), "stores")
 	name := strings.TrimSuffix(remoteURL, ".git")
@@ -922,6 +972,7 @@ Core commands:
   clusters             list cluster summaries
   cluster-detail       dump one durable cluster
   search               search local thread documents
+  portable prune       prune volatile payloads from a portable store
   tui                  browse local clusters in a terminal UI
 
 No API server is provided. There is intentionally no serve command.

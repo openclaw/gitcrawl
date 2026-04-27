@@ -143,3 +143,54 @@ func TestDocumentsFTSWorks(t *testing.T) {
 		t.Fatalf("fts count: got %d want 1", count)
 	}
 }
+
+func TestPrunePortablePayloads(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	_, err = st.DB().ExecContext(ctx, `
+		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
+		values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{"id":1}', '2026-04-26T00:00:00Z');
+		insert into threads(id, repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
+		values(1, 1, '1', 1, 'issue', 'open', 'download stalls', 'abcdefghijklmnopqrstuvwxyz', 'https://github.com/openclaw/gitcrawl/issues/1', '[]', '[]', '{"body":"abcdefghijklmnopqrstuvwxyz"}', 'hash', '2026-04-26T00:00:00Z');
+		insert into documents(thread_id, title, body, raw_text, dedupe_text, updated_at)
+		values(1, 'download stalls', 'abcdefghijklmnopqrstuvwxyz', 'download stalls abcdefghijklmnopqrstuvwxyz', 'download stalls', '2026-04-26T00:00:00Z');
+		insert into thread_revisions(thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values(1, '2026-04-26T00:00:00Z', 'hash', 'title-hash', 'body-hash', 'labels-hash', '2026-04-26T00:00:00Z');
+		insert into thread_fingerprints(thread_revision_id, algorithm_version, fingerprint_hash, fingerprint_slug, title_tokens_json, body_token_hash, linked_refs_json, file_set_hash, module_buckets_json, simhash64, feature_json, created_at)
+		values(1, 'v1', 'fp-hash', 'fp-slug', '["download","stalls"]', 'body-token-hash', '["#1"]', 'files', '["runtime"]', '123', '{"tokens":["download"]}', '2026-04-26T00:00:00Z');
+	`)
+	if err != nil {
+		t.Fatalf("seed prune data: %v", err)
+	}
+
+	stats, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 8})
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if stats.DocumentsDeleted != 1 || stats.FingerprintsPruned != 1 {
+		t.Fatalf("unexpected stats: %#v", stats)
+	}
+
+	var repoRaw, body, threadRaw, titleTokens, linkedRefs, buckets, features string
+	var documentCount int
+	if err := st.DB().QueryRowContext(ctx, `select raw_json from repositories where id = 1`).Scan(&repoRaw); err != nil {
+		t.Fatalf("repo raw: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select body, raw_json from threads where id = 1`).Scan(&body, &threadRaw); err != nil {
+		t.Fatalf("thread payload: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select title_tokens_json, linked_refs_json, module_buckets_json, feature_json from thread_fingerprints where id = 1`).Scan(&titleTokens, &linkedRefs, &buckets, &features); err != nil {
+		t.Fatalf("fingerprint payload: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from documents`).Scan(&documentCount); err != nil {
+		t.Fatalf("document count: %v", err)
+	}
+	if repoRaw != "" || body != "abcdefgh" || threadRaw != "" || titleTokens != "[]" || linkedRefs != "[]" || buckets != "[]" || features != "{}" || documentCount != 0 {
+		t.Fatalf("payloads not pruned: repoRaw=%q body=%q threadRaw=%q titleTokens=%q linkedRefs=%q buckets=%q features=%q documents=%d", repoRaw, body, threadRaw, titleTokens, linkedRefs, buckets, features, documentCount)
+	}
+}

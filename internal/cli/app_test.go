@@ -50,6 +50,20 @@ func TestDefaultPortableStoreDir(t *testing.T) {
 	}
 }
 
+func TestPortablePruneCommand(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(context.Background(), []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seed := New()
+	if err := seed.Run(context.Background(), []string{"--config", configPath, "portable", "prune", "--body-chars", "8", "--no-vacuum", "--json"}); err != nil {
+		t.Fatalf("portable prune: %v", err)
+	}
+}
+
 func TestServeIsUnsupported(t *testing.T) {
 	app := New()
 	err := app.Run(context.Background(), []string{"serve"})
