@@ -76,7 +76,7 @@ func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int
 		return a.writeOutput("tui", payload, true)
 	}
 	model := newClusterBrowserModel(ctx, st, repoID, payload)
-	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := program.Run()
 	return err
 }
@@ -147,6 +147,9 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "h", "?":
 			m.status = "Tab focus  arrows move  s sort  Enter drill in  q quit"
 		}
+		m.keepVisible()
+	case tea.MouseMsg:
+		m.handleMouse(msg)
 		m.keepVisible()
 	}
 	return m, nil
@@ -366,6 +369,70 @@ func (m *clusterBrowserModel) move(delta int) {
 	m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
 }
 
+func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
+	layout := m.layout()
+	if msg.Button != tea.MouseButtonLeft && !isMouseWheel(msg.Button) {
+		return
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.mouseWheel(layout, msg, -3)
+	case tea.MouseButtonWheelDown:
+		m.mouseWheel(layout, msg, 3)
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionPress {
+			return
+		}
+		switch {
+		case layout.clusters.contains(msg.X, msg.Y):
+			m.focus = focusClusters
+			row := msg.Y - layout.clusters.y - 2
+			if row <= 0 {
+				return
+			}
+			index := m.clusterOff + row - 1
+			if index >= 0 && index < len(m.payload.Clusters) {
+				m.selected = index
+				m.loadSelectedCluster()
+				m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
+			}
+		case layout.members.contains(msg.X, msg.Y):
+			m.focus = focusMembers
+			row := msg.Y - layout.members.y - 2
+			if row <= 0 {
+				return
+			}
+			index := m.memberOff + row - 1
+			if index >= 0 && index < len(m.memberRows) {
+				m.memberIndex = index
+				m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
+			}
+		case layout.detail.contains(msg.X, msg.Y):
+			m.focus = focusDetail
+		}
+	}
+}
+
+func isMouseWheel(button tea.MouseButton) bool {
+	return button == tea.MouseButtonWheelUp || button == tea.MouseButtonWheelDown || button == tea.MouseButtonWheelLeft || button == tea.MouseButtonWheelRight
+}
+
+func (m *clusterBrowserModel) mouseWheel(layout tuiLayout, msg tea.MouseMsg, delta int) {
+	switch {
+	case layout.clusters.contains(msg.X, msg.Y):
+		m.focus = focusClusters
+		m.move(delta)
+	case layout.members.contains(msg.X, msg.Y):
+		m.focus = focusMembers
+		m.move(delta)
+	case layout.detail.contains(msg.X, msg.Y):
+		m.focus = focusDetail
+		m.move(delta)
+	default:
+		m.move(delta)
+	}
+}
+
 func (m *clusterBrowserModel) jumpEdge(end bool) {
 	if m.focus == focusDetail {
 		if end {
@@ -391,6 +458,10 @@ func (m *clusterBrowserModel) jumpEdge(end bool) {
 		}
 		m.loadSelectedCluster()
 	}
+}
+
+func (r tuiRect) contains(x, y int) bool {
+	return x >= r.x && x < r.x+r.w && y >= r.y && y < r.y+r.h
 }
 
 func (m *clusterBrowserModel) keepVisible() {
