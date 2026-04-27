@@ -140,7 +140,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runConfigure(rest[1:])
 	case "clusters":
 		return a.runClusters(ctx, rest[1:])
+	case "durable-clusters":
+		return a.runClusters(ctx, rest[1:])
 	case "cluster-detail":
+		return a.runClusterDetail(ctx, rest[1:])
+	case "cluster-explain":
 		return a.runClusterDetail(ctx, rest[1:])
 	case "neighbors":
 		return a.runNeighbors(ctx, rest[1:])
@@ -150,7 +154,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster-experiment", "durable-clusters", "cluster-explain", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "refresh", "summarize", "key-summaries", "embed", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -1715,7 +1719,9 @@ Core commands:
   set-cluster-canonical
                        set the canonical row for a durable cluster
   clusters             list cluster summaries
+  durable-clusters     alias for clusters
   cluster-detail       dump one durable cluster
+  cluster-explain      alias for cluster-detail
   neighbors            list vector-nearest local issue and pull request rows
   search               search local thread documents
   portable prune       prune volatile payloads from a portable store
