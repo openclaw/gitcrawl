@@ -25,7 +25,6 @@ type Config struct {
 	OpenAI         OpenAIConfig `toml:"openai"`
 	EmbeddingBasis string       `toml:"embedding_basis"`
 	TUI            TUIConfig    `toml:"tui"`
-	Compat         CompatConfig `toml:"compat"`
 }
 
 type GitHubConfig struct {
@@ -42,10 +41,6 @@ type OpenAIConfig struct {
 
 type TUIConfig struct {
 	DefaultSort string `toml:"default_sort"`
-}
-
-type CompatConfig struct {
-	ReadGHCrawlEnv bool `toml:"read_ghcrawl_env"`
 }
 
 type TokenResolution struct {
@@ -75,9 +70,6 @@ func Default() Config {
 		},
 		TUI: TUIConfig{
 			DefaultSort: "recent",
-		},
-		Compat: CompatConfig{
-			ReadGHCrawlEnv: true,
 		},
 	}
 }
@@ -157,10 +149,10 @@ func (c *Config) Normalize() error {
 		c.OpenAI.APIKeyEnv = def.OpenAI.APIKeyEnv
 	}
 	if c.OpenAI.SummaryModel == "" {
-		c.OpenAI.SummaryModel = envOrDefault("GITCRAWL_SUMMARY_MODEL", legacyEnv("GHCRAWL_SUMMARY_MODEL"), def.OpenAI.SummaryModel)
+		c.OpenAI.SummaryModel = envOrDefault("GITCRAWL_SUMMARY_MODEL", def.OpenAI.SummaryModel)
 	}
 	if c.OpenAI.EmbedModel == "" {
-		c.OpenAI.EmbedModel = envOrDefault("GITCRAWL_EMBED_MODEL", legacyEnv("GHCRAWL_EMBED_MODEL"), def.OpenAI.EmbedModel)
+		c.OpenAI.EmbedModel = envOrDefault("GITCRAWL_EMBED_MODEL", def.OpenAI.EmbedModel)
 	}
 	if c.OpenAI.BatchSize <= 0 {
 		c.OpenAI.BatchSize = def.OpenAI.BatchSize
@@ -174,7 +166,7 @@ func (c *Config) Normalize() error {
 	if c.TUI.DefaultSort == "" {
 		c.TUI.DefaultSort = def.TUI.DefaultSort
 	}
-	c.DBPath = expandHome(envOrDefault("GITCRAWL_DB_PATH", legacyEnv("GHCRAWL_DB_PATH"), c.DBPath))
+	c.DBPath = expandHome(envOrDefault("GITCRAWL_DB_PATH", c.DBPath))
 	c.CacheDir = expandHome(c.CacheDir)
 	c.VectorDir = expandHome(c.VectorDir)
 	c.LogDir = expandHome(c.LogDir)
@@ -195,18 +187,11 @@ func ResolveOpenAIKey(cfg Config) TokenResolution {
 	return TokenResolution{}
 }
 
-func envOrDefault(primary, legacy, fallback string) string {
+func envOrDefault(primary, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(primary)); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(legacy); value != "" {
-		return value
-	}
 	return fallback
-}
-
-func legacyEnv(name string) string {
-	return os.Getenv(name)
 }
 
 func expandHome(path string) string {

@@ -10,18 +10,18 @@ import (
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
-func TestGHCrawlDatabaseCompatibility(t *testing.T) {
-	source := os.Getenv("GITCRAWL_GHCRAWL_COMPAT_DB")
+func TestLegacyDatabaseCompatibility(t *testing.T) {
+	source := os.Getenv("GITCRAWL_LEGACY_COMPAT_DB")
 	if source == "" {
-		t.Skip("set GITCRAWL_GHCRAWL_COMPAT_DB to a copied ghcrawl.db to run this compatibility test")
+		t.Skip("set GITCRAWL_LEGACY_COMPAT_DB to a copied legacy SQLite database to run this compatibility test")
 	}
-	copyPath := filepath.Join(t.TempDir(), "ghcrawl-copy.db")
+	copyPath := filepath.Join(t.TempDir(), "legacy-copy.db")
 	copyFile(t, source, copyPath)
 
 	ctx := context.Background()
 	st, err := store.Open(ctx, copyPath)
 	if err != nil {
-		t.Fatalf("open copied ghcrawl db: %v", err)
+		t.Fatalf("open copied legacy db: %v", err)
 	}
 	defer st.Close()
 
@@ -30,7 +30,7 @@ func TestGHCrawlDatabaseCompatibility(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 	if status.RepositoryCount == 0 || status.ThreadCount == 0 {
-		t.Fatalf("expected populated ghcrawl db, got %#v", status)
+		t.Fatalf("expected populated legacy db, got %#v", status)
 	}
 
 	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
