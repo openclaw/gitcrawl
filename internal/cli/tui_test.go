@@ -442,9 +442,44 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link", "Copy all body links"} {
+	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link", "Open body link...", "Copy body link...", "Copy all body links"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestTUILinkPickerKeepsMenuOpen(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.hasDetail = true
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{
+			Thread:      store.Thread{Number: 42, Kind: "issue", State: "open", Title: "Thread with links", HTMLURL: "https://github.com/openclaw/openclaw/issues/42"},
+			BodySnippet: "See https://example.com/run and https://example.com/raw.",
+		},
+	}}
+	model.openActionMenu()
+
+	if closeMenu := model.runAction("open-link-picker"); closeMenu {
+		t.Fatal("link picker action should keep menu open")
+	}
+	if model.menuTitle != "Open Link" {
+		t.Fatalf("menu title = %q, want Open Link", model.menuTitle)
+	}
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	joined := strings.Join(labels, "\n")
+	for _, want := range []string{" 1  https://example.com/run", " 2  https://example.com/raw", "Back to actions"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("link picker missing %q in:\n%s", want, joined)
 		}
 	}
 }

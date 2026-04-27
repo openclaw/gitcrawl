@@ -87,6 +87,7 @@ type clusterBrowserModel struct {
 	searching     bool
 	showHelp      bool
 	menuOpen      bool
+	menuTitle     string
 	menuIndex     int
 	menuItems     []tuiMenuItem
 	showClosed    bool
@@ -118,6 +119,7 @@ type memberRow struct {
 type tuiMenuItem struct {
 	label  string
 	action string
+	value  string
 }
 
 func (a *App) canRunInteractiveTUI() bool {
@@ -535,7 +537,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 }
 
 func (m clusterBrowserModel) menuLines(width int) []string {
-	lines := []string{bold("Actions"), ""}
+	lines := []string{bold(firstNonEmpty(m.menuTitle, "Actions")), ""}
 	for index, item := range m.menuItems {
 		prefix := "  "
 		if index == m.menuIndex {
@@ -558,7 +560,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
 	case "enter":
 		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
-			if m.runAction(m.menuItems[m.menuIndex].action) {
+			if m.runMenuItem(m.menuItems[m.menuIndex]) {
 				m.menuOpen = false
 			}
 		}
@@ -707,7 +709,7 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		return
 	}
 	m.menuIndex = index
-	if m.runAction(m.menuItems[m.menuIndex].action) {
+	if m.runMenuItem(m.menuItems[m.menuIndex]) {
 		m.menuOpen = false
 	}
 }
@@ -765,12 +767,17 @@ func (m *clusterBrowserModel) openActionMenu() {
 		)
 	}
 	if len(referenceLinks) > 1 {
-		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy all body links", action: "copy-reference-links"})
+		m.menuItems = append(m.menuItems,
+			tuiMenuItem{label: "Open body link...", action: "open-link-picker"},
+			tuiMenuItem{label: "Copy body link...", action: "copy-link-picker"},
+			tuiMenuItem{label: "Copy all body links", action: "copy-reference-links"},
+		)
 	}
 	if len(m.menuItems) == 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
 	}
 	m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close menu", action: "close-menu"})
+	m.menuTitle = "Actions"
 	m.menuIndex = 0
 	m.menuOpen = true
 	m.showHelp = false
@@ -778,11 +785,39 @@ func (m *clusterBrowserModel) openActionMenu() {
 }
 
 func (m *clusterBrowserModel) runAction(action string) bool {
+	return m.runMenuItem(tuiMenuItem{action: action})
+}
+
+func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
+	action := item.action
 	if action == "close-menu" {
 		m.status = "Menu closed"
 		return true
 	}
 	switch action {
+	case "back-to-actions":
+		m.openActionMenu()
+		return false
+	case "open-link-picker":
+		m.openReferenceLinkMenu("open")
+		return false
+	case "copy-link-picker":
+		m.openReferenceLinkMenu("copy")
+		return false
+	case "open-picked-link":
+		if err := openURL(item.value); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Opened " + item.value
+		}
+		return true
+	case "copy-picked-link":
+		if err := copyText(item.value); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied body link"
+		}
+		return true
 	case "copy-cluster":
 		if err := copyText(m.clusterClipboardText()); err != nil {
 			m.status = err.Error()
@@ -868,6 +903,32 @@ func (m *clusterBrowserModel) runAction(action string) bool {
 		m.status = "Menu closed"
 	}
 	return true
+}
+
+func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {
+	links := m.referenceLinks()
+	if len(links) == 0 {
+		m.status = "No body links found"
+		return
+	}
+	action := "copy-picked-link"
+	m.menuTitle = "Copy Link"
+	if mode == "open" {
+		action = "open-picked-link"
+		m.menuTitle = "Open Link"
+	}
+	items := make([]tuiMenuItem, 0, len(links)+1)
+	for index, link := range links {
+		items = append(items, tuiMenuItem{
+			label:  formatLinkChoiceLabel(link, index),
+			action: action,
+			value:  link,
+		})
+	}
+	items = append(items, tuiMenuItem{label: "Back to actions", action: "back-to-actions"})
+	m.menuItems = items
+	m.menuIndex = 0
+	m.status = m.menuTitle
 }
 
 func isMouseWheel(button tea.MouseButton) bool {
@@ -2050,6 +2111,10 @@ func markdownLinks(value string) []string {
 		}
 	}
 	return links
+}
+
+func formatLinkChoiceLabel(url string, index int) string {
+	return fmt.Sprintf("%2d  %s", index+1, url)
 }
 
 func stripTrailingURLPunctuation(value string) string {
