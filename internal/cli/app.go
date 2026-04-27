@@ -118,6 +118,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runCloseThread(ctx, rest[1:])
 	case "reopen-thread":
 		return a.runReopenThread(ctx, rest[1:])
+	case "close-cluster":
+		return a.runCloseCluster(ctx, rest[1:])
+	case "reopen-cluster":
+		return a.runReopenCluster(ctx, rest[1:])
 	case "runs":
 		return a.runRuns(ctx, rest[1:])
 	case "search":
@@ -134,7 +138,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -801,6 +805,96 @@ func (a *App) runReopenThread(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runCloseCluster(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("close-cluster", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	idRaw := fs.String("id", "", "cluster id")
+	reason := fs.String("reason", "CLI manual close", "local close reason")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "reason": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("close-cluster requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	clusterID, err := parseOptionalPositiveInt(*idRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if clusterID == 0 {
+		return usageErr(fmt.Errorf("close-cluster requires --id"))
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	if err := rt.Store.CloseClusterLocally(ctx, repo.ID, int64(clusterID), *reason); err != nil {
+		return err
+	}
+	return a.writeOutput("close-cluster", map[string]any{
+		"repository": repo.FullName,
+		"id":         clusterID,
+		"reason":     strings.TrimSpace(*reason),
+		"closed":     true,
+	}, true)
+}
+
+func (a *App) runReopenCluster(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("reopen-cluster", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	idRaw := fs.String("id", "", "cluster id")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("reopen-cluster requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	clusterID, err := parseOptionalPositiveInt(*idRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if clusterID == 0 {
+		return usageErr(fmt.Errorf("reopen-cluster requires --id"))
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	if err := rt.Store.ReopenClusterLocally(ctx, repo.ID, int64(clusterID)); err != nil {
+		return err
+	}
+	return a.writeOutput("reopen-cluster", map[string]any{
+		"repository": repo.FullName,
+		"id":         clusterID,
+		"reopened":   true,
+	}, true)
+}
+
 func (a *App) runSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1275,6 +1369,8 @@ Core commands:
   threads              list local issue and pull request rows
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
+  close-cluster        locally hide one durable cluster
+  reopen-cluster       clear a local hide for one durable cluster
   clusters             list cluster summaries
   cluster-detail       dump one durable cluster
   neighbors            list vector-nearest local issue and pull request rows

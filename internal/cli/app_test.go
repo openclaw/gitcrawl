@@ -282,6 +282,104 @@ func TestCloseThreadCommandLocallyClosesThread(t *testing.T) {
 	}
 }
 
+func TestCloseClusterCommandLocallyClosesCluster(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "77",
+		Number:        77,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "Cluster member",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/77",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(77, ?, 'cluster-77', 'cluster-77', 'active', ?, 'Cluster 77', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z');
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(77, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z');
+	`, repoID, threadID, threadID); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "close-cluster", "openclaw/openclaw", "--id", "77", "--reason", "handled", "--json"}); err != nil {
+		t.Fatalf("close-cluster: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"closed": true`) {
+		t.Fatalf("close-cluster output = %q", stdout.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	active, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20})
+	if err != nil {
+		t.Fatalf("list active clusters: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("closed cluster should be hidden, got %#v", active)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store after close check: %v", err)
+	}
+
+	reopen := New()
+	stdout.Reset()
+	reopen.Stdout = &stdout
+	if err := reopen.Run(ctx, []string{"--config", configPath, "reopen-cluster", "openclaw/openclaw", "--id", "77", "--json"}); err != nil {
+		t.Fatalf("reopen-cluster: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"reopened": true`) {
+		t.Fatalf("reopen-cluster output = %q", stdout.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store after cluster reopen: %v", err)
+	}
+	defer st.Close()
+	active, err = st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20})
+	if err != nil {
+		t.Fatalf("list reopened clusters: %v", err)
+	}
+	if len(active) != 1 || active[0].ClosedAt != "" {
+		t.Fatalf("reopened cluster should be visible, got %#v", active)
+	}
+}
+
 func TestTUIHelp(t *testing.T) {
 	app := New()
 	var stdout bytes.Buffer
