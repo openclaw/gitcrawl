@@ -71,14 +71,19 @@ func (s *Store) ListClusterSummaries(ctx context.Context, options ClusterSummary
 		minSize = 1
 	}
 	args = append(args, minSize, limit)
+	memberThreadJoin := `left join threads mt on mt.id = cm.thread_id`
+	if !options.IncludeClosed {
+		memberThreadJoin += ` and mt.closed_at_local is null`
+	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		select cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title,
-			count(cm.thread_id) as member_count,
+			count(mt.id) as member_count,
 			cg.updated_at, cg.closed_at
 		from cluster_groups cg
 		left join cluster_memberships cm on cm.cluster_id = cg.id and cm.state = 'active'
+		`+memberThreadJoin+`
 		left join threads rt on rt.id = cg.representative_thread_id
 		where `+where+`
 		group by cg.id

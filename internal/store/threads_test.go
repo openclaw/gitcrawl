@@ -38,8 +38,21 @@ func TestCloseThreadLocallyHidesThreadAndSurvivesUpsert(t *testing.T) {
 		ContentHash:   "hash-a",
 		UpdatedAt:     "2026-04-27T00:00:00Z",
 	}
-	if _, err := st.UpsertThread(ctx, thread); err != nil {
+	threadID, err := st.UpsertThread(ctx, thread)
+	if err != nil {
 		t.Fatalf("upsert thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(1, ?, 'cluster-1', 'cluster-1', 'active', ?, 'Noisy duplicate cluster', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, repoID, threadID); err != nil {
+		t.Fatalf("insert cluster: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(1, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, threadID); err != nil {
+		t.Fatalf("insert membership: %v", err)
 	}
 
 	if err := st.CloseThreadLocally(ctx, repoID, 42, "TUI manual close"); err != nil {
@@ -58,6 +71,20 @@ func TestCloseThreadLocallyHidesThreadAndSurvivesUpsert(t *testing.T) {
 	}
 	if len(closedRows) != 1 || closedRows[0].ClosedAtLocal == "" || closedRows[0].CloseReasonLocal != "TUI manual close" {
 		t.Fatalf("closed thread not marked correctly: %#v", closedRows)
+	}
+	activeClusters, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20})
+	if err != nil {
+		t.Fatalf("list active clusters: %v", err)
+	}
+	if len(activeClusters) != 0 {
+		t.Fatalf("cluster with only locally closed members should be hidden, got %#v", activeClusters)
+	}
+	allClusters, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20})
+	if err != nil {
+		t.Fatalf("list all clusters: %v", err)
+	}
+	if len(allClusters) != 1 || allClusters[0].MemberCount != 1 {
+		t.Fatalf("include closed should retain cluster membership count, got %#v", allClusters)
 	}
 
 	thread.Title = "Noisy duplicate updated upstream"
