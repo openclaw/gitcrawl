@@ -1528,6 +1528,37 @@ func TestTUIMemberListClipboardText(t *testing.T) {
 	}
 }
 
+func TestTUILocallyClosedMembersUseLocalState(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	member := store.ClusterMemberDetail{Thread: store.Thread{
+		Number:           43,
+		Kind:             "issue",
+		State:            "open",
+		Title:            "Locally closed bug",
+		HTMLURL:          "https://github.com/openclaw/openclaw/issues/43",
+		ClosedAtLocal:    "2026-04-27T00:00:00Z",
+		CloseReasonLocal: "TUI manual close",
+	}}
+	model.memberRows = []memberRow{{selectable: true, member: member}}
+	if got := model.memberTableRows()[0][1]; got != "loc" {
+		t.Fatalf("member table state = %q, want loc", got)
+	}
+	if got := model.memberListClipboardText(); !strings.Contains(got, "#43 [local]") {
+		t.Fatalf("member clipboard should show local state: %q", got)
+	}
+
+	model.showClosed = false
+	model.detail = store.ClusterDetail{Members: []store.ClusterMemberDetail{member}}
+	model.sortMembers()
+	if len(model.memberRows) != 0 {
+		t.Fatalf("locally closed member should be hidden when closed rows are hidden: %#v", model.memberRows)
+	}
+}
+
 func TestTUIActionMenuOmitsThreadActionsWithoutSelectedThread(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

@@ -1978,7 +1978,7 @@ func (m clusterBrowserModel) memberTableRows() []table.Row {
 		thread := member.thread()
 		rows = append(rows, table.Row{
 			fmt.Sprintf("#%d", thread.Number),
-			stateGlyph(thread.State),
+			stateGlyph(threadDisplayState(thread)),
 			formatRelativeTime(thread.UpdatedAtGitHub),
 			thread.Title,
 		})
@@ -2449,7 +2449,7 @@ func (m *clusterBrowserModel) sortMembers() {
 	}
 	members := make([]store.ClusterMemberDetail, 0, len(m.detail.Members))
 	for _, member := range m.detail.Members {
-		if !m.showClosed && member.Thread.State != "open" {
+		if !threadVisible(member.Thread, m.showClosed) {
 			continue
 		}
 		members = append(members, member)
@@ -2712,7 +2712,7 @@ func (m clusterBrowserModel) threadDetailClipboardText() string {
 	thread := member.Thread
 	lines := []string{
 		fmt.Sprintf("%s #%d: %s", kindTitle(thread.Kind), thread.Number, thread.Title),
-		"State: " + firstNonEmpty(thread.State, "unknown"),
+		"State: " + threadDisplayState(thread),
 		"Author: " + firstNonEmpty(thread.AuthorLogin, "unknown"),
 		"Updated: " + firstNonEmpty(thread.UpdatedAtGitHub, thread.UpdatedAt, "unknown"),
 		"URL: " + thread.HTMLURL,
@@ -2828,7 +2828,7 @@ func (m clusterBrowserModel) memberListClipboardText() string {
 		thread := row.thread()
 		lines = append(lines, fmt.Sprintf("#%d [%s] %s %s %s",
 			thread.Number,
-			firstNonEmpty(thread.State, "unknown"),
+			threadDisplayState(thread),
 			kindTitle(thread.Kind),
 			thread.Title,
 			thread.HTMLURL,
@@ -2839,7 +2839,7 @@ func (m clusterBrowserModel) memberListClipboardText() string {
 
 func (r memberRow) format(width int) string {
 	thread := r.thread()
-	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, thread.State, formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
+	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, threadDisplayState(thread), formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
 }
 
 func (r memberRow) thread() store.Thread {
@@ -3127,6 +3127,8 @@ func stateGlyph(state string) string {
 		return "opn"
 	case "closed":
 		return "cls"
+	case "local":
+		return "loc"
 	case "merged":
 		return "mrg"
 	default:
@@ -3134,8 +3136,22 @@ func stateGlyph(state string) string {
 	}
 }
 
+func threadDisplayState(thread store.Thread) string {
+	if thread.ClosedAtLocal != "" {
+		return "local"
+	}
+	return firstNonEmpty(thread.State, "unknown")
+}
+
+func threadVisible(thread store.Thread, showClosed bool) bool {
+	if showClosed {
+		return true
+	}
+	return thread.State == "open" && thread.ClosedAtLocal == ""
+}
+
 func closedLabel(thread store.Thread) string {
-	if thread.State == "open" {
+	if thread.ClosedAtLocal == "" && thread.State == "open" {
 		return "no"
 	}
 	closedAt := firstNonEmpty(thread.ClosedAtLocal, thread.ClosedAtGitHub, thread.State)
