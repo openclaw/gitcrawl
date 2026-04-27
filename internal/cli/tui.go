@@ -917,7 +917,7 @@ func (m clusterBrowserModel) memberViewportHeight() int {
 }
 
 func fallbackTableViewportHeight(rect tuiRect) int {
-	return maxInt(1, maxInt(1, rect.h-6)-1)
+	return maxInt(1, maxInt(2, rect.h-3)-1)
 }
 
 func tableVisibleStart(cursor, rowCount, viewportHeight int) int {
@@ -933,10 +933,10 @@ func (m *clusterBrowserModel) syncComponents() {
 	clusterW := maxInt(24, layout.clusters.w-4)
 	memberW := maxInt(24, layout.members.w-4)
 	detailW := maxInt(24, layout.detail.w-4)
-	detailH := maxInt(2, layout.detail.h-4)
+	detailH := maxInt(2, layout.detail.h-2)
 
 	m.clusterTable.SetWidth(clusterW)
-	m.clusterTable.SetHeight(maxInt(1, layout.clusters.h-6))
+	m.clusterTable.SetHeight(maxInt(2, layout.clusters.h-3))
 	m.clusterTable.SetStyles(tuiTableStyles(m.focus == focusClusters, "#5bc0eb", "#23445c"))
 	m.clusterTable.SetColumns(clusterColumns(clusterW, m.payload.Sort))
 	m.clusterTable.SetRows(m.clusterRows())
@@ -948,7 +948,7 @@ func (m *clusterBrowserModel) syncComponents() {
 	}
 
 	m.memberTable.SetWidth(memberW)
-	m.memberTable.SetHeight(maxInt(1, layout.members.h-6))
+	m.memberTable.SetHeight(maxInt(2, layout.members.h-3))
 	m.memberTable.SetStyles(tuiTableStyles(m.focus == focusMembers, "#9bc53d", "#33521e"))
 	m.memberTable.SetColumns(memberColumns(memberW, m.memberSort))
 	m.memberTable.SetRows(m.memberTableRows())
@@ -1087,11 +1087,11 @@ func (m clusterBrowserModel) memberTableRows() []table.Row {
 func (m clusterBrowserModel) pageStep() int {
 	switch m.focus {
 	case focusMembers:
-		return maxInt(1, m.layout().members.h-5)
+		return m.memberViewportHeight()
 	case focusDetail:
-		return maxInt(1, m.layout().detail.h-5)
+		return maxInt(1, m.detailView.Height)
 	default:
-		return maxInt(1, m.layout().clusters.h-5)
+		return m.clusterViewportHeight()
 	}
 }
 

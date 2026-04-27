@@ -35,6 +35,24 @@ func TestTUILayoutStacksNarrowTerminals(t *testing.T) {
 	}
 }
 
+func TestTUIViewShowsRowsInDefaultTerminal(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 80
+	model.height = 24
+
+	view := model.View()
+	if !strings.Contains(view, "alpha-bravo") {
+		t.Fatalf("expected default terminal view to render cluster rows:\n%s", view)
+	}
+	if model.clusterTable.Height() < 1 {
+		t.Fatalf("cluster table viewport height = %d, want at least 1", model.clusterTable.Height())
+	}
+}
+
 func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
