@@ -90,12 +90,64 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runThreads(ctx, rest[1:])
 	case "runs":
 		return a.runRuns(ctx, rest[1:])
-	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "search":
+		return a.runSearch(ctx, rest[1:])
+	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
 		return usageErr(fmt.Errorf("unknown command %q", rest[0]))
 	}
+}
+
+func (a *App) runSearch(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("search", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	query := fs.String("query", "", "search query")
+	limitRaw := fs.String("limit", "", "maximum hit rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(args); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("search requires owner/repo"))
+	}
+	if strings.TrimSpace(*query) == "" {
+		return usageErr(fmt.Errorf("search requires --query"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	repo, err := st.RepositoryByFullName(ctx, owner+"/"+repoName)
+	if err != nil {
+		return err
+	}
+	hits, err := st.SearchDocuments(ctx, repo.ID, strings.TrimSpace(*query), limit)
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("search", map[string]any{
+		"repository": repo.FullName,
+		"query":      strings.TrimSpace(*query),
+		"hits":       hits,
+	}, true)
 }
 
 func (a *App) runRuns(ctx context.Context, args []string) error {
