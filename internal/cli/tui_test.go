@@ -291,6 +291,23 @@ func TestTUIRefreshWithoutStoreReportsUnavailable(t *testing.T) {
 	}
 }
 
+func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   nil,
+	})
+
+	detail := strings.Join(model.detailLines(80), "\n")
+	if !strings.Contains(detail, "Try f to lower the minimum size") {
+		t.Fatalf("detail empty state missing recovery actions:\n%s", detail)
+	}
+	rows := model.clusterRows()
+	if len(rows) != 1 || !strings.Contains(rows[0][2], "No clusters visible") {
+		t.Fatalf("cluster empty row mismatch: %+v", rows)
+	}
+}
+
 func sampleTUIClusters() []store.ClusterSummary {
 	return []store.ClusterSummary{
 		{

@@ -425,7 +425,15 @@ func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
 
 func (m clusterBrowserModel) detailLines(width int) []string {
 	if len(m.payload.Clusters) == 0 {
-		return []string{"No clusters visible in this view.", "", "Run sync/embed/cluster, then reopen the TUI."}
+		return []string{
+			bold("No clusters visible"),
+			"",
+			"No clusters match the current view.",
+			"",
+			"Try f to lower the minimum size, / to clear the filter, x to show closed clusters, or r to refresh from the local store.",
+			"",
+			"If the store is empty, run sync, refresh summaries/embeddings, and cluster first.",
+		}
 	}
 	cluster := m.payload.Clusters[m.selected]
 	lines := []string{
@@ -974,6 +982,9 @@ func memberColumns(width int, sortMode tuiMemberSort) []table.Column {
 }
 
 func (m clusterBrowserModel) clusterRows() []table.Row {
+	if len(m.payload.Clusters) == 0 {
+		return []table.Row{{"", "", "No clusters visible. Press f, /, x, or r.", "", ""}}
+	}
 	rows := make([]table.Row, 0, len(m.payload.Clusters))
 	for _, cluster := range m.payload.Clusters {
 		rows = append(rows, table.Row{
@@ -988,6 +999,9 @@ func (m clusterBrowserModel) clusterRows() []table.Row {
 }
 
 func (m clusterBrowserModel) memberTableRows() []table.Row {
+	if len(m.memberRows) == 0 {
+		return []table.Row{{"", "", "", "Select a cluster to inspect members."}}
+	}
 	rows := make([]table.Row, 0, len(m.memberRows))
 	for _, member := range m.memberRows {
 		if !member.selectable {
