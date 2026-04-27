@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/openclaw/gitcrawl/internal/config"
 )
 
 type App struct {
@@ -74,12 +76,84 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.writeOutput("version", map[string]string{"version": version}, false)
 	case "serve":
 		return usageErr(fmt.Errorf("serve is not supported in gitcrawl"))
-	case "init", "doctor", "configure", "sync", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "threads", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "init":
+		return a.runInit(rest[1:])
+	case "doctor":
+		return a.runDoctor(ctx, rest[1:])
+	case "configure", "sync", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "threads", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
 		return usageErr(fmt.Errorf("unknown command %q", rest[0]))
 	}
+}
+
+func (a *App) runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dbPath := fs.String("db", "", "database path")
+	if err := fs.Parse(args); err != nil {
+		return usageErr(err)
+	}
+
+	cfg := config.Default()
+	if strings.TrimSpace(*dbPath) != "" {
+		cfg.DBPath = strings.TrimSpace(*dbPath)
+	}
+	if err := config.Save(a.configPath, cfg); err != nil {
+		return err
+	}
+	if err := config.EnsureRuntimeDirs(cfg); err != nil {
+		return err
+	}
+	return a.writeOutput("init", map[string]any{
+		"config_path": config.ResolvePath(a.configPath),
+		"db_path":     cfg.DBPath,
+		"cache_dir":   cfg.CacheDir,
+		"vector_dir":  cfg.VectorDir,
+	}, true)
+}
+
+func (a *App) runDoctor(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return usageErr(err)
+	}
+	_ = ctx
+
+	cfg, err := config.Load(a.configPath)
+	configExists := true
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		configExists = false
+		cfg = config.Default()
+		if err := cfg.Normalize(); err != nil {
+			return err
+		}
+	}
+	if err := config.EnsureRuntimeDirs(cfg); err != nil {
+		return err
+	}
+
+	githubToken := config.ResolveGitHubToken(cfg)
+	openAIKey := config.ResolveOpenAIKey(cfg)
+	return a.writeOutput("doctor", map[string]any{
+		"version":              version,
+		"config_path":          config.ResolvePath(a.configPath),
+		"config_exists":        configExists,
+		"db_path":              cfg.DBPath,
+		"github_token_present": githubToken.Value != "",
+		"github_token_source":  githubToken.Source,
+		"openai_key_present":   openAIKey.Value != "",
+		"openai_key_source":    openAIKey.Source,
+		"summary_model":        cfg.OpenAI.SummaryModel,
+		"embed_model":          cfg.OpenAI.EmbedModel,
+		"embedding_basis":      cfg.EmbeddingBasis,
+		"api_supported":        false,
+	}, true)
 }
 
 func resolveOutputFormat(value string, jsonOut bool) (OutputFormat, error) {
