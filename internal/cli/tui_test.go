@@ -759,7 +759,7 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Min size 1+", "Hide closed", "Help"} {
+	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Min size 1+", "Hide closed", "Help", "Quit"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
 		}
@@ -780,6 +780,27 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 	model.runAction("show-help")
 	if !model.showHelp {
 		t.Fatal("help menu action did not show help")
+	}
+	model.runAction("quit")
+	if !model.quitRequested {
+		t.Fatal("quit menu action did not request quit")
+	}
+}
+
+func TestTUIQuitMenuReturnsQuitCommand(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.openActionMenu()
+	model.menuItems = []tuiMenuItem{{label: "Quit", action: "quit"}}
+	model.menuIndex = 0
+
+	_, cmd := model.updateMenu(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected quit command from menu action")
 	}
 }
 

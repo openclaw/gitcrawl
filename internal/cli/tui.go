@@ -94,6 +94,7 @@ type clusterBrowserModel struct {
 	menuIndex     int
 	menuOff       int
 	menuItems     []tuiMenuItem
+	quitRequested bool
 	showClosed    bool
 	compactDetail bool
 	minSize       int
@@ -293,6 +294,9 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 	case tea.MouseMsg:
 		m.handleMouse(msg)
+		if m.quitRequested {
+			return m, tea.Quit
+		}
 		m.keepVisible()
 		m.syncComponents()
 	}
@@ -606,6 +610,9 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.runMenuItem(m.menuItems[m.menuIndex]) {
 				m.menuOpen = false
 			}
+			if m.quitRequested {
+				return m, tea.Quit
+			}
 		}
 	}
 	return m, nil
@@ -868,6 +875,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Min size 10+", action: "min-size-10"},
 		tuiMenuItem{label: closedToggleLabel(m.showClosed), action: "toggle-closed"},
 		tuiMenuItem{label: "Help", action: "show-help"},
+		tuiMenuItem{label: "Quit", action: "quit"},
 	)
 	if len(m.menuItems) == 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
@@ -892,6 +900,9 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	}
 	switch action {
+	case "quit":
+		m.quitRequested = true
+		return true
 	case "sort-size":
 		m.payload.Sort = "size"
 		m.sortClusters()
