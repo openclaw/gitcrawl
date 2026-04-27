@@ -456,13 +456,17 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
 	}
-	return a.writeOutput("tui", map[string]any{
-		"repository":          repo.FullName,
-		"inferred_repository": inferred,
-		"mode":                "cluster-browser",
-		"sort":                sort,
-		"clusters":            clusters,
-	}, true)
+	payload := clusterBrowserPayload{
+		Repository:         repo.FullName,
+		InferredRepository: inferred,
+		Mode:               "cluster-browser",
+		Sort:               sort,
+		Clusters:           clusters,
+	}
+	if a.format != FormatText || !a.canRunInteractiveTUI() {
+		return a.writeOutput("tui", payload, true)
+	}
+	return a.runInteractiveTUI(payload)
 }
 
 func (a *App) resolveOptionalRepository(ctx context.Context, rt localRuntime, args []string) (store.Repository, bool, error) {
