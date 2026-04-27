@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/openclaw/gitcrawl/internal/config"
+	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
+	"github.com/openclaw/gitcrawl/internal/syncer"
 )
 
 type App struct {
@@ -81,12 +84,70 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runInit(rest[1:])
 	case "doctor":
 		return a.runDoctor(ctx, rest[1:])
-	case "configure", "sync", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "threads", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "sync":
+		return a.runSync(ctx, rest[1:])
+	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "threads", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
 		return usageErr(fmt.Errorf("unknown command %q", rest[0]))
 	}
+}
+
+func (a *App) runSync(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	since := fs.String("since", "", "GitHub since timestamp")
+	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
+	fs.Bool("include-comments", false, "accepted for compatibility; hydration is not implemented yet")
+	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
+	if err := fs.Parse(args); err != nil {
+		return usageErr(err)
+	}
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("sync requires owner/repo"))
+	}
+	owner, repo, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return err
+	}
+	token := config.ResolveGitHubToken(cfg)
+	if token.Value == "" {
+		return fmt.Errorf("missing GitHub token: set %s", cfg.GitHub.TokenEnv)
+	}
+	if err := config.EnsureRuntimeDirs(cfg); err != nil {
+		return err
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	client := gh.New(gh.Options{Token: token.Value})
+	service := syncer.New(client, st)
+	stats, err := service.Sync(ctx, syncer.Options{
+		Owner: owner,
+		Repo:  repo,
+		Since: strings.TrimSpace(*since),
+		Limit: limit,
+		Reporter: func(message string) {
+			fmt.Fprintln(a.Stderr, message)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("sync", stats, true)
 }
 
 func (a *App) runInit(args []string) error {
@@ -183,6 +244,25 @@ func resolveOutputFormat(value string, jsonOut bool) (OutputFormat, error) {
 	default:
 		return "", fmt.Errorf("unsupported format %q: use text, json, or log", value)
 	}
+}
+
+func parseOwnerRepo(value string) (string, string, error) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("expected owner/repo, got %q", value)
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+}
+
+func parseOptionalPositiveInt(value string) (int, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("expected positive integer, got %q", value)
+	}
+	return parsed, nil
 }
 
 func (a *App) writeOutput(title string, payload any, allowLog bool) error {
