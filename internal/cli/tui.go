@@ -507,7 +507,9 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"",
 		"Mouse",
 		"  left click: focus/select a pane row",
+		"  left click menu row: run that action",
 		"  wheel: scroll the pane under the pointer",
+		"  wheel in menu: move the highlighted action",
 		"  right click: open a stable action menu",
 		"",
 		"Keyboard",
@@ -525,6 +527,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  x: show/hide closed clusters",
 		"  o: open selected thread in browser",
 		"  c: copy selected thread URL",
+		"  Enter in menu: run action or open link picker",
 		"  ?: toggle this help",
 		"  q: quit",
 	}

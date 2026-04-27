@@ -70,6 +70,21 @@ func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
 	}
 }
 
+func TestTUIInAppHelpMentionsMenuMouse(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	help := strings.Join(model.helpLines(80), "\n")
+	for _, want := range []string{"left click menu row", "wheel in menu", "open link picker"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q:\n%s", want, help)
+		}
+	}
+}
+
 func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
