@@ -11,6 +11,10 @@ import (
 var whitespacePattern = regexp.MustCompile(`\s+`)
 
 func Build(thread store.Thread) store.Document {
+	return BuildWithComments(thread, nil)
+}
+
+func BuildWithComments(thread store.Thread, comments []store.Comment) store.Document {
 	labels := labelNames(thread.LabelsJSON)
 	sections := []string{
 		"# " + thread.Title,
@@ -21,8 +25,20 @@ func Build(thread store.Thread) store.Document {
 	if len(labels) > 0 {
 		sections = append(sections, "Labels: "+strings.Join(labels, ", "))
 	}
+	for _, comment := range comments {
+		if comment.IsBot || strings.TrimSpace(comment.Body) == "" {
+			continue
+		}
+		sections = append(sections, comment.AuthorLogin+": "+strings.TrimSpace(comment.Body))
+	}
 	rawText := strings.Join(sections, "\n\n")
 	dedupeParts := []string{thread.Title, thread.Body, strings.Join(labels, " ")}
+	for _, comment := range comments {
+		if comment.IsBot {
+			continue
+		}
+		dedupeParts = append(dedupeParts, comment.Body)
+	}
 	return store.Document{
 		ThreadID:   thread.ID,
 		Title:      thread.Title,

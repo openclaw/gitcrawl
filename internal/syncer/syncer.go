@@ -100,15 +100,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			return Stats{}, err
 		}
 		thread.ID = threadID
-		if _, err := s.store.UpsertDocument(ctx, documents.Build(thread)); err != nil {
-			return Stats{}, err
-		}
+		var comments []store.Comment
 		if options.IncludeComments {
-			count, err := s.syncComments(ctx, options, thread)
+			var err error
+			comments, err = s.syncComments(ctx, options, thread)
 			if err != nil {
 				return Stats{}, err
 			}
-			stats.CommentsSynced += count
+			stats.CommentsSynced += len(comments)
+		}
+		if _, err := s.store.UpsertDocument(ctx, documents.BuildWithComments(thread, comments)); err != nil {
+			return Stats{}, err
 		}
 		stats.ThreadsSynced++
 		if thread.Kind == "pull_request" {
@@ -171,11 +173,11 @@ func mapIssueToThread(repoID int64, row map[string]any, pulledAt string) store.T
 	}
 }
 
-func (s *Syncer) syncComments(ctx context.Context, options Options, thread store.Thread) (int, error) {
+func (s *Syncer) syncComments(ctx context.Context, options Options, thread store.Thread) ([]store.Comment, error) {
 	var rows []commentRow
 	issueComments, err := s.client.ListIssueComments(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	for _, row := range issueComments {
 		rows = append(rows, commentRow{kind: "issue_comment", raw: row})
@@ -183,31 +185,31 @@ func (s *Syncer) syncComments(ctx context.Context, options Options, thread store
 	if thread.Kind == "pull_request" {
 		reviews, err := s.client.ListPullReviews(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, row := range reviews {
 			rows = append(rows, commentRow{kind: "pull_review", raw: row})
 		}
 		reviewComments, err := s.client.ListPullReviewComments(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, row := range reviewComments {
 			rows = append(rows, commentRow{kind: "pull_review_comment", raw: row})
 		}
 	}
-	count := 0
+	var comments []store.Comment
 	for _, row := range rows {
 		comment := mapComment(thread.ID, row.kind, row.raw)
 		if comment.Body == "" {
 			continue
 		}
 		if _, err := s.store.UpsertComment(ctx, comment); err != nil {
-			return 0, err
+			return nil, err
 		}
-		count++
+		comments = append(comments, comment)
 	}
-	return count, nil
+	return comments, nil
 }
 
 type commentRow struct {

@@ -105,7 +105,7 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 		t.Fatalf("second thread kind: %s", threads[1].Kind)
 	}
 	var documentCount int
-	if err := st.DB().QueryRowContext(ctx, `select count(*) from documents_fts where documents_fts match 'download'`).Scan(&documentCount); err != nil {
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from documents_fts where documents_fts match 'failure OR bug'`).Scan(&documentCount); err != nil {
 		t.Fatalf("query document index: %v", err)
 	}
 	if documentCount != 1 {
