@@ -294,7 +294,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	since := fs.String("since", "", "GitHub since timestamp")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	fs.Bool("include-comments", false, "accepted for compatibility; hydration is not implemented yet")
+	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
@@ -332,10 +332,11 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	client := gh.New(gh.Options{Token: token.Value})
 	service := syncer.New(client, st)
 	stats, err := service.Sync(ctx, syncer.Options{
-		Owner: owner,
-		Repo:  repo,
-		Since: strings.TrimSpace(*since),
-		Limit: limit,
+		Owner:           owner,
+		Repo:            repo,
+		Since:           strings.TrimSpace(*since),
+		Limit:           limit,
+		IncludeComments: *includeComments,
 		Reporter: func(message string) {
 			fmt.Fprintln(a.Stderr, message)
 		},
