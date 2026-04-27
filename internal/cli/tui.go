@@ -912,6 +912,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			index := m.memberVisibleStart() + row
 			if index >= 0 && index < len(m.memberRows) {
 				if !m.memberRows[index].selectable {
+					m.memberIndex = index
 					m.status = m.memberRows[index].label
 					return
 				}

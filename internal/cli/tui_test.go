@@ -512,6 +512,45 @@ func TestTUIRightClickMemberHeaderOpensClusterActions(t *testing.T) {
 	}
 }
 
+func TestTUILeftClickMemberHeaderClearsThreadSelection(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.memberIndex = 1
+	model.memberRows = []memberRow{
+		{label: "ISSUES (1)"},
+		{
+			selectable: true,
+			member: store.ClusterMemberDetail{Thread: store.Thread{
+				Number:  42,
+				Kind:    "issue",
+				State:   "open",
+				Title:   "Selected issue",
+				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+			}},
+		},
+	}
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.members.x + 2,
+		Y:      layout.members.y + 3,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.memberIndex != 0 {
+		t.Fatalf("member index = %d, want header row", model.memberIndex)
+	}
+	if _, ok := model.selectedThread(); ok {
+		t.Fatal("member header should clear selected thread")
+	}
+}
+
 func TestTUIMouseCanClickActionMenuItems(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
