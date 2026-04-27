@@ -789,6 +789,33 @@ func TestTUILoadSelectedClusterResetsDetailScroll(t *testing.T) {
 	}
 }
 
+func TestTUIMemberChangeResetsDetailScroll(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.focus = focusMembers
+	model.memberRows = []memberRow{
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{ID: 1, Number: 10, Kind: "issue", State: "open", Title: "First"}}},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{ID: 2, Number: 11, Kind: "issue", State: "open", Title: "Second"}}},
+	}
+	model.memberIndex = 0
+	model.detailView.Width = 40
+	model.detailView.Height = 2
+	model.detailView.SetContent(strings.Repeat("line\n", 20))
+	model.detailView.SetYOffset(8)
+
+	model.move(1)
+
+	if model.memberIndex != 1 {
+		t.Fatalf("member index = %d, want 1", model.memberIndex)
+	}
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("detail scroll offset = %d, want 0", model.detailView.YOffset)
+	}
+}
+
 func TestTUIMemberMovementHonorsStepSize(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

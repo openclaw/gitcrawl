@@ -598,7 +598,11 @@ func (m *clusterBrowserModel) move(delta int) {
 		if len(m.memberRows) == 0 {
 			return
 		}
+		previous := m.memberIndex
 		m.memberIndex = m.nextSelectableMemberIndex(m.memberIndex, delta)
+		if m.memberIndex != previous {
+			m.detailView.GotoTop()
+		}
 		if thread, ok := m.selectedThread(); ok {
 			m.status = fmt.Sprintf("Selected #%d", thread.Number)
 		}
@@ -689,7 +693,11 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 					m.status = m.memberRows[index].label
 					return
 				}
+				previous := m.memberIndex
 				m.memberIndex = index
+				if m.memberIndex != previous {
+					m.detailView.GotoTop()
+				}
 				m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
 			}
 		case layout.detail.contains(msg.X, msg.Y):
@@ -761,7 +769,11 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 				if !m.memberRows[index].selectable {
 					return
 				}
+				previous := m.memberIndex
 				m.memberIndex = index
+				if m.memberIndex != previous {
+					m.detailView.GotoTop()
+				}
 			}
 		}
 	case layout.detail.contains(x, y):
@@ -1125,10 +1137,14 @@ func (m *clusterBrowserModel) jumpEdge(end bool) {
 		return
 	}
 	if m.focus == focusMembers && len(m.memberRows) > 0 {
+		previous := m.memberIndex
 		if end {
 			m.memberIndex = m.lastSelectableMemberIndex()
 		} else {
 			m.memberIndex = m.firstSelectableMemberIndex()
+		}
+		if m.memberIndex != previous {
+			m.detailView.GotoTop()
 		}
 		return
 	}
