@@ -1540,8 +1540,8 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 		})
 		rep := threads[builtCluster.RepresentativeThreadID]
 		input := store.DurableClusterInput{
-			StableKey:              durableClusterStableKey(builtCluster.Members),
-			StableSlug:             durableClusterSlug(builtCluster.Members),
+			StableKey:              durableClusterStableKey(builtCluster.Members, threads),
+			StableSlug:             durableClusterSlug(builtCluster.Members, threads),
 			RepresentativeThreadID: builtCluster.RepresentativeThreadID,
 			Title:                  rep.Title,
 			Members:                make([]store.DurableClusterMemberInput, 0, len(builtCluster.Members)),
@@ -1562,16 +1562,20 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 	return inputs, len(edges), nil
 }
 
-func durableClusterStableKey(threadIDs []int64) string {
+func durableClusterStableKey(threadIDs []int64, threads map[int64]store.Thread) string {
 	parts := make([]string, 0, len(threadIDs))
 	for _, id := range threadIDs {
+		if thread, ok := threads[id]; ok && thread.Number > 0 {
+			parts = append(parts, strconv.Itoa(thread.Number))
+			continue
+		}
 		parts = append(parts, strconv.FormatInt(id, 10))
 	}
-	return "members:" + strings.Join(parts, ",")
+	return "numbers:" + strings.Join(parts, ",")
 }
 
-func durableClusterSlug(threadIDs []int64) string {
-	sum := sha256.Sum256([]byte(durableClusterStableKey(threadIDs)))
+func durableClusterSlug(threadIDs []int64, threads map[int64]store.Thread) string {
+	sum := sha256.Sum256([]byte(durableClusterStableKey(threadIDs, threads)))
 	return "cluster-" + hex.EncodeToString(sum[:])[:12]
 }
 
