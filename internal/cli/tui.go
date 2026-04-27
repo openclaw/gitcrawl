@@ -755,11 +755,15 @@ func (m *clusterBrowserModel) openActionMenu() {
 	if len(m.payload.Clusters) > 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy visible clusters", action: "copy-visible-clusters"})
 	}
-	if _, ok := m.firstReferenceLink(); ok {
+	referenceLinks := m.referenceLinks()
+	if len(referenceLinks) > 0 {
 		m.menuItems = append(m.menuItems,
 			tuiMenuItem{label: "Open first body link", action: "open-first-link"},
 			tuiMenuItem{label: "Copy first body link", action: "copy-first-link"},
 		)
+	}
+	if len(referenceLinks) > 1 {
+		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy all body links", action: "copy-reference-links"})
 	}
 	if len(m.menuItems) == 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
@@ -789,6 +793,18 @@ func (m *clusterBrowserModel) runAction(action string) {
 			m.status = err.Error()
 		} else {
 			m.status = "Copied visible clusters"
+		}
+		return
+	case "copy-reference-links":
+		links := m.referenceLinks()
+		if len(links) == 0 {
+			m.status = "No body links found"
+			return
+		}
+		if err := copyText(strings.Join(links, "\n")); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied body links"
 		}
 		return
 	}
@@ -1496,16 +1512,29 @@ func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) 
 }
 
 func (m clusterBrowserModel) firstReferenceLink() (string, bool) {
-	member, ok := m.selectedMember()
-	if !ok {
-		return "", false
-	}
-	for _, value := range append([]string{member.BodySnippet}, sortedSummaryValues(member.Summaries)...) {
-		if link, ok := firstMarkdownLink(value); ok {
-			return link, true
-		}
+	links := m.referenceLinks()
+	if len(links) > 0 {
+		return links[0], true
 	}
 	return "", false
+}
+
+func (m clusterBrowserModel) referenceLinks() []string {
+	member, ok := m.selectedMember()
+	if !ok {
+		return nil
+	}
+	links := make([]string, 0, 4)
+	seen := map[string]bool{}
+	for _, value := range append([]string{member.BodySnippet}, sortedSummaryValues(member.Summaries)...) {
+		for _, link := range markdownLinks(value) {
+			if !seen[link] {
+				links = append(links, link)
+				seen[link] = true
+			}
+		}
+	}
+	return links
 }
 
 func (m clusterBrowserModel) clusterClipboardText() string {
@@ -1989,15 +2018,35 @@ func renderInlineMarkdown(value string) string {
 }
 
 func firstMarkdownLink(value string) (string, bool) {
-	if match := markdownLinkRE.FindStringSubmatch(value); match != nil {
-		return stripTrailingURLPunctuation(match[2]), true
+	links := markdownLinks(value)
+	if len(links) == 0 {
+		return "", false
+	}
+	return links[0], true
+}
+
+func markdownLinks(value string) []string {
+	links := make([]string, 0, 2)
+	seen := map[string]bool{}
+	for _, match := range markdownLinkRE.FindAllStringSubmatch(value, -1) {
+		if len(match) > 2 {
+			link := stripTrailingURLPunctuation(match[2])
+			if !seen[link] {
+				links = append(links, link)
+				seen[link] = true
+			}
+		}
 	}
 	for _, match := range bareLinkRE.FindAllStringSubmatch(value, -1) {
 		if len(match) > 2 {
-			return stripTrailingURLPunctuation(match[2]), true
+			link := stripTrailingURLPunctuation(match[2])
+			if !seen[link] {
+				links = append(links, link)
+				seen[link] = true
+			}
 		}
 	}
-	return "", false
+	return links
 }
 
 func stripTrailingURLPunctuation(value string) string {

@@ -431,7 +431,7 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 				Title:   "Thread with links",
 				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
 			},
-			BodySnippet: "See [the repro](https://example.com/repro).",
+			BodySnippet: "See [the repro](https://example.com/repro) and https://example.com/log.",
 		},
 	}}
 
@@ -442,10 +442,32 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link"} {
+	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link", "Copy all body links"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
 		}
+	}
+}
+
+func TestTUIReferenceLinksAreUniqueAndOrdered(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{
+			BodySnippet: "See [run](https://example.com/run), https://example.com/run, and https://example.com/raw.",
+			Summaries:   map[string]string{"key_summary": "Summary link https://example.com/summary."},
+		},
+	}}
+
+	links := model.referenceLinks()
+	want := []string{"https://example.com/run", "https://example.com/raw", "https://example.com/summary"}
+	if strings.Join(links, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("reference links = %+v, want %+v", links, want)
 	}
 }
 
