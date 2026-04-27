@@ -15,6 +15,7 @@ gitcrawl init
 gitcrawl doctor
 gitcrawl sync owner/repo
 gitcrawl refresh owner/repo
+gitcrawl cluster owner/repo --threshold 0.82
 gitcrawl clusters owner/repo
 gitcrawl cluster-detail owner/repo --id 123
 gitcrawl close-thread owner/repo --number 123 --reason "duplicate handled"

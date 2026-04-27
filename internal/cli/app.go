@@ -1703,6 +1703,7 @@ Core commands:
   sync                 sync GitHub issue and pull request metadata
   refresh              run sync, enrichment, embedding, and clustering pipeline
   threads              list local issue and pull request rows
+  cluster              build durable clusters from local thread vectors
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
   close-cluster        locally hide one durable cluster
