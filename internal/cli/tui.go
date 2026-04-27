@@ -240,6 +240,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "l":
 			m.toggleWideLayout()
+		case "r":
+			m.refreshFromStore()
 		case "f":
 			m.minSize = nextMinSize(m.minSize)
 			m.applyClusterFilters()
@@ -392,7 +394,7 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  d detail  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
 		line = "Filter: " + m.searchInput.View()
@@ -494,6 +496,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  s: toggle cluster sort",
 		"  m: cycle member sort",
 		"  d: toggle compact/full detail",
+		"  r: refresh from local store",
 		"  l: toggle wide layout",
 		"  f: cycle minimum cluster size",
 		"  x: show/hide closed clusters",
@@ -1040,6 +1043,46 @@ func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
 	m.sortClusters()
 	m.loadSelectedCluster()
 	m.status = "Sort: " + m.payload.Sort
+}
+
+func (m *clusterBrowserModel) refreshFromStore() {
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Refresh unavailable for this view"
+		return
+	}
+	currentID := int64(0)
+	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
+		currentID = m.payload.Clusters[m.selected].ID
+	}
+	limit := maxInt(20, len(m.allClusters))
+	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+		RepoID:        m.repoID,
+		IncludeClosed: true,
+		MinSize:       1,
+		Limit:         limit,
+		Sort:          m.payload.Sort,
+	})
+	if err != nil {
+		m.status = "Refresh failed: " + err.Error()
+		return
+	}
+	if clusters == nil {
+		clusters = []store.ClusterSummary{}
+	}
+	m.detailCache = map[int64]store.ClusterDetail{}
+	m.allClusters = append([]store.ClusterSummary(nil), clusters...)
+	m.payload.Clusters = append([]store.ClusterSummary(nil), clusters...)
+	m.applyClusterFilters()
+	if currentID != 0 {
+		for index, cluster := range m.payload.Clusters {
+			if cluster.ID == currentID {
+				m.selected = index
+				m.loadSelectedCluster()
+				break
+			}
+		}
+	}
+	m.status = fmt.Sprintf("Refreshed %d cluster(s)", len(m.payload.Clusters))
 }
 
 func (m *clusterBrowserModel) applyClusterFilters() {

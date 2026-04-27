@@ -277,6 +277,20 @@ func TestTUICompactDetailLimitsBody(t *testing.T) {
 	}
 }
 
+func TestTUIRefreshWithoutStoreReportsUnavailable(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	model.refreshFromStore()
+
+	if model.status != "Refresh unavailable for this view" {
+		t.Fatalf("refresh status = %q", model.status)
+	}
+}
+
 func sampleTUIClusters() []store.ClusterSummary {
 	return []store.ClusterSummary{
 		{
