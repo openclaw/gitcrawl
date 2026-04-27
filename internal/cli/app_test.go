@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -129,6 +131,96 @@ func TestSyncPortableStoreResetsDirtyCache(t *testing.T) {
 	}
 	if string(got) != "remote-v2" {
 		t.Fatalf("checkout db = %q, want remote-v2", string(got))
+	}
+}
+
+func TestReadCommandRefreshesPortableStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 1, "initial issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("clone portable store: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(checkoutDir, dbRel)}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 2, "refreshed issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add update: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "update store"); err != nil {
+		t.Fatalf("git commit update: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "threads", "openclaw/openclaw", "--numbers", "2", "--json"}); err != nil {
+		t.Fatalf("threads: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "refreshed issue") {
+		t.Fatalf("read command did not refresh portable store, got %q", stdout.String())
+	}
+}
+
+func seedPortableThread(t *testing.T, dbPath string, number int, title string) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open portable db: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("upsert repository: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      strconv.Itoa(number),
+		Number:        number,
+		Kind:          "issue",
+		State:         "open",
+		Title:         title,
+		Body:          title,
+		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   fmt.Sprintf("hash-%d", number),
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `pragma wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatalf("checkpoint portable db: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close portable db: %v", err)
 	}
 }
 

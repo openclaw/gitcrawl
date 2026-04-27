@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -30,6 +32,7 @@ func (a *App) openLocalRuntimeReadOnly(ctx context.Context) (localRuntime, error
 	if err != nil {
 		return localRuntime{}, err
 	}
+	_ = refreshPortableStoreForDB(ctx, cfg.DBPath)
 	st, err := store.OpenReadOnly(ctx, cfg.DBPath)
 	if err != nil {
 		return localRuntime{}, err
@@ -50,4 +53,39 @@ func (rt localRuntime) defaultRepository(ctx context.Context) (store.Repository,
 		return store.Repository{}, fmt.Errorf("no local repositories found")
 	}
 	return repos[0], nil
+}
+
+func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
+	root, ok := portableStoreRoot(dbPath)
+	if !ok {
+		return nil
+	}
+	if !gitWorktreeClean(ctx, root) {
+		return nil
+	}
+	return runGit(ctx, "", "-C", root, "pull", "--ff-only", "--quiet")
+}
+
+func portableStoreRoot(dbPath string) (string, bool) {
+	dir := filepath.Clean(filepath.Dir(dbPath))
+	for {
+		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func gitWorktreeClean(ctx context.Context, dir string) bool {
+	if err := runGit(ctx, "", "-C", dir, "diff", "--quiet", "--"); err != nil {
+		return false
+	}
+	if err := runGit(ctx, "", "-C", dir, "diff", "--cached", "--quiet", "--"); err != nil {
+		return false
+	}
+	return true
 }
