@@ -815,8 +815,17 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy selected URL", action: "copy-url"},
 			tuiMenuItem{label: "Copy title", action: "copy-title"},
 			tuiMenuItem{label: "Copy markdown link", action: "copy-markdown"},
+			tuiMenuItem{label: "Copy selected detail", action: "copy-thread-detail"},
 			tuiMenuItem{label: "Load neighbors", action: "load-neighbors"},
 		)
+	}
+	if member, ok := m.selectedMember(); ok {
+		if strings.TrimSpace(member.BodySnippet) != "" {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy body preview", action: "copy-body-preview"})
+		}
+		if len(member.Summaries) > 0 {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy summaries", action: "copy-summaries"})
+		}
 	}
 	if m.hasSelectedCluster() {
 		m.menuItems = append(m.menuItems,
@@ -926,6 +935,32 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	case "load-neighbors":
 		m.loadSelectedThreadNeighbors(10, 0.2)
+		return true
+	case "copy-thread-detail":
+		if err := copyText(m.threadDetailClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied selected detail"
+		}
+		return true
+	case "copy-body-preview":
+		member, ok := m.selectedMember()
+		if !ok || strings.TrimSpace(member.BodySnippet) == "" {
+			m.status = "No body preview"
+			return true
+		}
+		if err := copyText(member.BodySnippet); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied body preview"
+		}
+		return true
+	case "copy-summaries":
+		if err := copyText(m.summariesClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied summaries"
+		}
 		return true
 	case "copy-cluster-id":
 		cluster, ok := m.selectedCluster()
@@ -1896,6 +1931,65 @@ func (m clusterBrowserModel) referenceLinks() []string {
 		}
 	}
 	return links
+}
+
+func (m clusterBrowserModel) threadDetailClipboardText() string {
+	member, ok := m.selectedMember()
+	if !ok {
+		return ""
+	}
+	thread := member.Thread
+	lines := []string{
+		fmt.Sprintf("%s #%d: %s", kindTitle(thread.Kind), thread.Number, thread.Title),
+		"State: " + firstNonEmpty(thread.State, "unknown"),
+		"Author: " + firstNonEmpty(thread.AuthorLogin, "unknown"),
+		"Updated: " + firstNonEmpty(thread.UpdatedAtGitHub, thread.UpdatedAt, "unknown"),
+		"URL: " + thread.HTMLURL,
+	}
+	if summaries := summariesClipboardText(member.Summaries); summaries != "" {
+		lines = append(lines, "", "Summaries", summaries)
+	}
+	if strings.TrimSpace(member.BodySnippet) != "" {
+		lines = append(lines, "", "Body preview", member.BodySnippet)
+	}
+	if links := m.referenceLinks(); len(links) > 0 {
+		lines = append(lines, "", "Links", strings.Join(links, "\n"))
+	}
+	if neighbors, ok := m.neighborCache[thread.ID]; ok {
+		lines = append(lines, "", "Neighbors")
+		if len(neighbors) == 0 {
+			lines = append(lines, "No neighbors above threshold.")
+		} else {
+			for _, neighbor := range neighbors {
+				lines = append(lines, fmt.Sprintf("#%d %s %.1f%% %s",
+					neighbor.Thread.Number,
+					kindTitle(neighbor.Thread.Kind),
+					neighbor.Score*100,
+					neighbor.Thread.Title,
+				))
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m clusterBrowserModel) summariesClipboardText() string {
+	member, ok := m.selectedMember()
+	if !ok {
+		return ""
+	}
+	return summariesClipboardText(member.Summaries)
+}
+
+func summariesClipboardText(summaries map[string]string) string {
+	if len(summaries) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(summaries)*2)
+	for _, key := range sortedSummaryKeys(summaries) {
+		lines = append(lines, formatSummaryLabel(key)+":", summaries[key], "")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func (m clusterBrowserModel) clusterClipboardText() string {

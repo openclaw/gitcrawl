@@ -563,6 +563,7 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
 			},
 			BodySnippet: "See [the repro](https://example.com/repro) and https://example.com/log.",
+			Summaries:   map[string]string{"key_summary": "Useful summary."},
 		},
 	}}
 
@@ -573,9 +574,46 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Copy title", "Copy cluster summary", "Load neighbors", "Open first body link", "Copy first body link", "Open body link...", "Copy body link...", "Copy all body links"} {
+	for _, want := range []string{"Copy title", "Copy cluster summary", "Copy selected detail", "Copy body preview", "Copy summaries", "Load neighbors", "Open first body link", "Copy first body link", "Open body link...", "Copy body link...", "Copy all body links"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestTUIThreadDetailClipboardText(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{
+			Thread: store.Thread{
+				ID:              42,
+				Number:          42,
+				Kind:            "issue",
+				State:           "open",
+				Title:           "Thread with context",
+				AuthorLogin:     "maintainer",
+				UpdatedAtGitHub: "2026-04-27T10:00:00Z",
+				HTMLURL:         "https://github.com/openclaw/openclaw/issues/42",
+			},
+			BodySnippet: "Body with https://example.com/repro.",
+			Summaries:   map[string]string{"key_summary": "Summary text."},
+		},
+	}}
+	model.neighborCache[42] = []tuiNeighbor{{
+		Thread: store.Thread{Number: 43, Kind: "issue", Title: "Neighbor issue"},
+		Score:  0.91,
+	}}
+
+	text := model.threadDetailClipboardText()
+	for _, want := range []string{"Issue #42: Thread with context", "Summary text.", "Body with https://example.com/repro.", "https://example.com/repro", "#43 Issue 91.0% Neighbor issue"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("thread detail clipboard missing %q in:\n%s", want, text)
 		}
 	}
 }
