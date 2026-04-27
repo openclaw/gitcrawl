@@ -167,8 +167,12 @@ func (m clusterBrowserModel) View() string {
 	footer := m.renderFooter(layout.footer.w)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, clusters, members, detail)
 	if layout.stacked {
-		top := lipgloss.JoinHorizontal(lipgloss.Top, clusters, members)
-		body = lipgloss.JoinVertical(lipgloss.Left, top, detail)
+		if layout.members.x == 0 {
+			body = lipgloss.JoinVertical(lipgloss.Left, clusters, members, detail)
+		} else {
+			top := lipgloss.JoinHorizontal(lipgloss.Top, clusters, members)
+			body = lipgloss.JoinVertical(lipgloss.Left, top, detail)
+		}
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
