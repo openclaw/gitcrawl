@@ -1196,4 +1196,6 @@ Press a to open the same action menu from the keyboard.
 Press # to jump directly to an issue or PR number.
 Press p to switch between repositories already present in the local store.
 Press n to load neighbors for the selected issue or PR.
+Enter from the members pane also loads neighbors before opening detail.
+The TUI quietly refreshes from the local store every 15 seconds and leaves the current status alone when nothing changed.
 `
