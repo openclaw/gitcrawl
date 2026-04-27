@@ -87,6 +87,58 @@ func TestTUIMouseIgnoresRightClick(t *testing.T) {
 	}
 }
 
+func TestTUIFiltersClusters(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	model.search = "second"
+	model.applyClusterFilters()
+	if len(model.payload.Clusters) != 1 {
+		t.Fatalf("filtered clusters: got %d want 1", len(model.payload.Clusters))
+	}
+	if model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("filtered cluster id: got %d want 2", model.payload.Clusters[0].ID)
+	}
+
+	model.search = ""
+	model.minSize = 4
+	model.applyClusterFilters()
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("min-size filter mismatch: %+v", model.payload.Clusters)
+	}
+}
+
+func TestTUIRightClickOpensActionMenu(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.clusters.x + 2,
+		Y:      layout.clusters.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonRight,
+	})
+
+	if !model.menuOpen {
+		t.Fatal("expected right click to open action menu")
+	}
+	if model.selected != 1 {
+		t.Fatalf("right click selected %d, want 1", model.selected)
+	}
+	if len(model.menuItems) < 3 {
+		t.Fatalf("expected action menu items, got %+v", model.menuItems)
+	}
+}
+
 func sampleTUIClusters() []store.ClusterSummary {
 	return []store.ClusterSummary{
 		{
