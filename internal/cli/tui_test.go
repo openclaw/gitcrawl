@@ -653,6 +653,44 @@ func TestTUIActionMenuQuickKeysStartInputs(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuQuickKeysRunViewActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 160
+	model.height = 40
+
+	model.openActionMenu()
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	model = updated.(clusterBrowserModel)
+	if model.menuOpen || model.wideLayout != wideLayoutRightStack {
+		t.Fatalf("menu layout key state menu=%v layout=%q", model.menuOpen, model.wideLayout)
+	}
+
+	model.openActionMenu()
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = updated.(clusterBrowserModel)
+	if model.menuOpen || !model.compactDetail {
+		t.Fatalf("menu detail key state menu=%v compact=%v", model.menuOpen, model.compactDetail)
+	}
+
+	model.openActionMenu()
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = updated.(clusterBrowserModel)
+	if model.menuOpen || model.payload.Sort != "size" {
+		t.Fatalf("menu sort key state menu=%v sort=%q", model.menuOpen, model.payload.Sort)
+	}
+
+	model.openActionMenu()
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = updated.(clusterBrowserModel)
+	if model.menuOpen || model.memberSort == memberSortKind {
+		t.Fatalf("menu member-sort key state menu=%v sort=%q", model.menuOpen, model.memberSort)
+	}
+}
+
 func TestTUIActionMenuSectionsAreNotSelectable(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

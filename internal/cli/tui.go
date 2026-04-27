@@ -666,6 +666,35 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "#":
 		cmd := m.startJumpInput()
 		return m, cmd
+	case "p":
+		m.openRepositoryMenu()
+	case "n":
+		m.menuOpen = false
+		m.loadSelectedThreadNeighbors(10, 0.2)
+	case "r":
+		m.menuOpen = false
+		m.refreshFromStore()
+	case "l":
+		m.menuOpen = false
+		m.toggleWideLayout()
+	case "d":
+		m.menuOpen = false
+		m.toggleDetailMode()
+	case "s":
+		m.menuOpen = false
+		if m.payload.Sort == "recent" {
+			m.payload.Sort = "size"
+		} else {
+			m.payload.Sort = "recent"
+		}
+		m.sortClusters()
+		m.loadSelectedCluster()
+		m.status = "Sort: " + m.payload.Sort
+	case "m":
+		m.menuOpen = false
+		m.memberSort = nextMemberSort(m.memberSort)
+		m.sortMembers()
+		m.status = "Member sort: " + string(m.memberSort)
 	case "up", "k":
 		m.menuIndex = m.nextSelectableMenuIndex(-1)
 		m.keepMenuVisible()
