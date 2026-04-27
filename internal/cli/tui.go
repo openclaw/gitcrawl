@@ -401,10 +401,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		case layout.clusters.contains(msg.X, msg.Y):
 			m.focus = focusClusters
 			row := msg.Y - layout.clusters.y - 3
-			if row <= 0 {
+			if row < 0 {
 				return
 			}
-			index := m.clusterOff + row - 1
+			index := m.clusterOff + row
 			if index >= 0 && index < len(m.payload.Clusters) {
 				m.selected = index
 				m.loadSelectedCluster()
@@ -413,10 +413,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		case layout.members.contains(msg.X, msg.Y):
 			m.focus = focusMembers
 			row := msg.Y - layout.members.y - 3
-			if row <= 0 {
+			if row < 0 {
 				return
 			}
-			index := m.memberOff + row - 1
+			index := m.memberOff + row
 			if index >= 0 && index < len(m.memberRows) {
 				m.memberIndex = index
 				m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
