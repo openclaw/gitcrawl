@@ -486,6 +486,43 @@ func TestTUIActionMenuKeepsSelectionVisible(t *testing.T) {
 	if !strings.Contains(lines, "/") {
 		t.Fatalf("expected menu footer to show visible range:\n%s", lines)
 	}
+	if !strings.Contains(lines, "Pg page") {
+		t.Fatalf("expected menu footer to mention paging:\n%s", lines)
+	}
+}
+
+func TestTUIActionMenuPagesWithKeyboard(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 16
+	model.syncComponents()
+	model.detailView.Height = 6
+	model.openActionMenu()
+
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(clusterBrowserModel)
+	if model.menuIndex != 2 {
+		t.Fatalf("page down menu index = %d, want 2", model.menuIndex)
+	}
+	if model.menuOff == 0 {
+		t.Fatalf("expected page down to scroll menu offset")
+	}
+
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyEnd})
+	model = updated.(clusterBrowserModel)
+	if model.menuIndex != len(model.menuItems)-1 {
+		t.Fatalf("end menu index = %d, want last", model.menuIndex)
+	}
+
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyHome})
+	model = updated.(clusterBrowserModel)
+	if model.menuIndex != 0 || model.menuOff != 0 {
+		t.Fatalf("home menu index/off = %d/%d, want 0/0", model.menuIndex, model.menuOff)
+	}
 }
 
 func TestTUIMouseClickUsesMenuOffset(t *testing.T) {

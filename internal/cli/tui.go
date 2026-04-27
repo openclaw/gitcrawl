@@ -589,13 +589,14 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 	}
 	footer := "Enter run  Esc close"
 	if len(m.menuItems) > visible {
-		footer = fmt.Sprintf("Enter run  Esc close  %d-%d/%d", start+1, end, len(m.menuItems))
+		footer = fmt.Sprintf("Enter run  Esc close  Pg page  %d-%d/%d", start+1, end, len(m.menuItems))
 	}
 	lines = append(lines, "", dim(footer))
 	return lines
 }
 
 func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	page := maxInt(1, m.menuVisibleCount())
 	switch msg.String() {
 	case "esc", "q":
 		m.menuOpen = false
@@ -605,6 +606,18 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.keepMenuVisible()
 	case "down", "j":
 		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
+	case "pgup", "ctrl+b":
+		m.menuIndex = clampInt(m.menuIndex-page, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
+	case "pgdown", "ctrl+f":
+		m.menuIndex = clampInt(m.menuIndex+page, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
+	case "home", "g":
+		m.menuIndex = 0
+		m.keepMenuVisible()
+	case "end", "G":
+		m.menuIndex = maxInt(0, len(m.menuItems)-1)
 		m.keepMenuVisible()
 	case "enter":
 		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
