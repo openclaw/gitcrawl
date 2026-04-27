@@ -1122,17 +1122,19 @@ func (m *clusterBrowserModel) openRepositoryMenu() {
 		return
 	}
 	items := make([]tuiMenuItem, 0, len(repos)+1)
+	currentIndex := 0
 	for _, repo := range repos {
 		label := repo.FullName
 		if repo.FullName == m.payload.Repository {
 			label = "* " + label
+			currentIndex = len(items)
 		}
 		items = append(items, tuiMenuItem{label: label, action: "select-repo", value: repo.FullName})
 	}
 	items = append(items, tuiMenuItem{label: "Back to actions", action: "back-to-actions"})
 	m.menuItems = items
 	m.menuTitle = "Repositories"
-	m.menuIndex = 0
+	m.menuIndex = currentIndex
 	m.menuOff = 0
 	m.menuOpen = true
 	m.showHelp = false

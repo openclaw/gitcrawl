@@ -1197,6 +1197,9 @@ func TestTUIRepositoryPickerSwitchesRepository(t *testing.T) {
 	if !strings.Contains(joined, "openclaw/two") {
 		t.Fatalf("repository menu missing repo two:\n%s", joined)
 	}
+	if model.menuItems[model.menuIndex].value != "openclaw/one" {
+		t.Fatalf("repository menu selected %q, want current repo", model.menuItems[model.menuIndex].value)
+	}
 
 	model.runMenuItem(tuiMenuItem{action: "select-repo", value: "openclaw/two"})
 
