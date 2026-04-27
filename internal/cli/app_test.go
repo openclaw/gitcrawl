@@ -89,6 +89,20 @@ func TestPortablePruneCommand(t *testing.T) {
 	}
 }
 
+func TestMainHelpListsNeighbors(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+
+	if err := app.Run(context.Background(), nil); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "neighbors") {
+		t.Fatalf("main help should list neighbors command, got %q", out)
+	}
+}
+
 func TestTUIInfersRepository(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

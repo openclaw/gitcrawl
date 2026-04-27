@@ -1176,6 +1176,7 @@ Core commands:
   threads              list local issue and pull request rows
   clusters             list cluster summaries
   cluster-detail       dump one durable cluster
+  neighbors            list vector-nearest local issue and pull request rows
   search               search local thread documents
   portable prune       prune volatile payloads from a portable store
   tui [owner/repo]     browse clusters in the terminal UI; repo is inferred when omitted
