@@ -109,7 +109,7 @@ func (a *App) runConfigure(args []string) error {
 	embedModel := fs.String("embed-model", "", "embedding model")
 	embeddingBasis := fs.String("embedding-basis", "", "embedding basis")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"summary-model": true, "embed-model": true, "embedding-basis": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -156,7 +156,7 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	query := fs.String("query", "", "search query")
 	limitRaw := fs.String("limit", "", "maximum hit rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"query": true, "limit": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -206,7 +206,7 @@ func (a *App) runRuns(ctx context.Context, args []string) error {
 	kind := fs.String("kind", "sync", "run kind: sync|summary|embedding|cluster")
 	limitRaw := fs.String("limit", "", "maximum run rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"kind": true, "limit": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -252,7 +252,7 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	includeClosed := fs.Bool("include-closed", false, "include locally closed rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, nil)); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -296,7 +296,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "limit": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -352,7 +352,7 @@ func (a *App) runInit(args []string) error {
 	fs.SetOutput(io.Discard)
 	dbPath := fs.String("db", "", "database path")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -379,7 +379,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, nil)); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
