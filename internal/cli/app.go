@@ -86,12 +86,53 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runDoctor(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
-	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "threads", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "threads":
+		return a.runThreads(ctx, rest[1:])
+	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
 		return usageErr(fmt.Errorf("unknown command %q", rest[0]))
 	}
+}
+
+func (a *App) runThreads(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("threads", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	includeClosed := fs.Bool("include-closed", false, "include locally closed rows")
+	if err := fs.Parse(args); err != nil {
+		return usageErr(err)
+	}
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("threads requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	repo, err := st.RepositoryByFullName(ctx, owner+"/"+repoName)
+	if err != nil {
+		return err
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, *includeClosed)
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("threads", map[string]any{
+		"repository": repo.FullName,
+		"threads":    threads,
+	}, true)
 }
 
 func (a *App) runSync(ctx context.Context, args []string) error {
