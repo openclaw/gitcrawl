@@ -2,14 +2,15 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"os"
+	"sort"
 	"strings"
-	"unicode/utf8"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 	"github.com/openclaw/gitcrawl/internal/store"
-	"golang.org/x/term"
 )
 
 type clusterBrowserPayload struct {
@@ -20,12 +21,41 @@ type clusterBrowserPayload struct {
 	Clusters           []store.ClusterSummary `json:"clusters"`
 }
 
+type tuiFocus string
+
+const (
+	focusClusters tuiFocus = "clusters"
+	focusMembers  tuiFocus = "members"
+	focusDetail   tuiFocus = "detail"
+)
+
+type tuiRect struct {
+	x int
+	y int
+	w int
+	h int
+}
+
 type clusterBrowserModel struct {
-	payload  clusterBrowserPayload
-	selected int
-	offset   int
-	width    int
-	height   int
+	payload      clusterBrowserPayload
+	focus        tuiFocus
+	width        int
+	height       int
+	status       string
+	selected     int
+	clusterOff   int
+	memberRows   []memberRow
+	memberOff    int
+	memberIndex  int
+	detailScroll int
+}
+
+type memberRow struct {
+	number  int
+	kind    string
+	state   string
+	title   string
+	updated string
 }
 
 func (a *App) canRunInteractiveTUI() bool {
@@ -41,230 +71,582 @@ func (a *App) runInteractiveTUI(payload clusterBrowserPayload) error {
 	if !ok {
 		return a.writeOutput("tui", payload, true)
 	}
-	return runClusterBrowserTUI(os.Stdin, out, payload)
-}
-
-func runClusterBrowserTUI(in *os.File, out *os.File, payload clusterBrowserPayload) error {
-	oldState, err := term.MakeRaw(int(in.Fd()))
-	if err != nil {
-		return fmt.Errorf("enter raw terminal mode: %w", err)
-	}
-	defer func() {
-		_ = term.Restore(int(in.Fd()), oldState)
-	}()
-
-	fmt.Fprint(out, "\x1b[?1049h\x1b[?25l")
-	defer fmt.Fprint(out, "\x1b[?25h\x1b[?1049l")
-
-	model := clusterBrowserModel{payload: payload}
-	if err := renderClusterBrowser(out, &model); err != nil {
-		return err
-	}
-
-	var buf [16]byte
-	for {
-		n, err := in.Read(buf[:])
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			continue
-		}
-		if handleClusterBrowserInput(&model, string(buf[:n])) {
-			return nil
-		}
-		if err := renderClusterBrowser(out, &model); err != nil {
-			return err
-		}
-	}
-}
-
-func handleClusterBrowserInput(model *clusterBrowserModel, input string) bool {
-	switch input {
-	case "q", "Q", "\x03":
-		return true
-	case "j", "\x1b[B":
-		moveClusterSelection(model, 1)
-	case "k", "\x1b[A":
-		moveClusterSelection(model, -1)
-	case "\x06", "\x1b[6~":
-		moveClusterSelection(model, visibleClusterRows(model)-1)
-	case "\x02", "\x1b[5~":
-		moveClusterSelection(model, -(visibleClusterRows(model) - 1))
-	case "g":
-		model.selected = 0
-	case "G":
-		if len(model.payload.Clusters) > 0 {
-			model.selected = len(model.payload.Clusters) - 1
-		}
-	}
-	keepSelectionVisible(model)
-	return false
-}
-
-func moveClusterSelection(model *clusterBrowserModel, delta int) {
-	if len(model.payload.Clusters) == 0 {
-		model.selected = 0
-		return
-	}
-	model.selected += delta
-	if model.selected < 0 {
-		model.selected = 0
-	}
-	if model.selected >= len(model.payload.Clusters) {
-		model.selected = len(model.payload.Clusters) - 1
-	}
-}
-
-func keepSelectionVisible(model *clusterBrowserModel) {
-	rows := visibleClusterRows(model)
-	if rows <= 0 {
-		model.offset = 0
-		return
-	}
-	if model.selected < model.offset {
-		model.offset = model.selected
-	}
-	if model.selected >= model.offset+rows {
-		model.offset = model.selected - rows + 1
-	}
-	if model.offset < 0 {
-		model.offset = 0
-	}
-}
-
-func renderClusterBrowser(out io.Writer, model *clusterBrowserModel) error {
-	width, height, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || width <= 0 || height <= 0 {
-		width, height = 100, 32
-	}
-	model.width = width
-	model.height = height
-	keepSelectionVisible(model)
-
-	var b strings.Builder
-	b.WriteString("\x1b[H\x1b[2J")
-	writeTUILine(&b, width, "\x1b[1mGitcrawl\x1b[0m  "+model.payload.Repository+"  sort="+model.payload.Sort)
-	if model.payload.InferredRepository {
-		writeTUILine(&b, width, "repo inferred from local database")
-	} else {
-		writeTUILine(&b, width, "")
-	}
-	writeTUILine(&b, width, strings.Repeat("-", width))
-
-	rows := visibleClusterRows(model)
-	if len(model.payload.Clusters) == 0 {
-		writeTUILine(&b, width, "no clusters found")
-	} else {
-		end := model.offset + rows
-		if end > len(model.payload.Clusters) {
-			end = len(model.payload.Clusters)
-		}
-		for i := model.offset; i < end; i++ {
-			cluster := model.payload.Clusters[i]
-			marker := " "
-			styleStart := ""
-			styleEnd := ""
-			if i == model.selected {
-				marker = ">"
-				styleStart = "\x1b[7m"
-				styleEnd = "\x1b[0m"
-			}
-			number := ""
-			if cluster.RepresentativeNumber > 0 {
-				number = fmt.Sprintf(" #%d", cluster.RepresentativeNumber)
-			}
-			line := fmt.Sprintf("%s %-24s %4d  %-12s%s  %s",
-				marker,
-				truncateRunes(cluster.StableSlug, 24),
-				cluster.MemberCount,
-				truncateRunes(cluster.RepresentativeKind, 12),
-				number,
-				firstNonEmpty(cluster.RepresentativeTitle, cluster.Title),
-			)
-			writeTUIStyledLine(&b, width, styleStart, line, styleEnd)
-		}
-	}
-
-	for currentVisualLineCount(b.String()) < height-6 {
-		writeTUILine(&b, width, "")
-	}
-	writeTUILine(&b, width, strings.Repeat("-", width))
-	writeClusterDetail(&b, width, model)
-	writeTUILine(&b, width, "j/k or arrows move  g/G jump  ctrl-f/ctrl-b page  q quit")
-	_, err = io.WriteString(out, b.String())
+	model := newClusterBrowserModel(payload)
+	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen())
+	_, err := program.Run()
 	return err
 }
 
-func writeClusterDetail(b *strings.Builder, width int, model *clusterBrowserModel) {
-	if len(model.payload.Clusters) == 0 {
-		writeTUILine(b, width, "")
-		writeTUILine(b, width, "")
+func newClusterBrowserModel(payload clusterBrowserPayload) clusterBrowserModel {
+	clusters := append([]store.ClusterSummary(nil), payload.Clusters...)
+	payload.Clusters = clusters
+	model := clusterBrowserModel{
+		payload:     payload,
+		focus:       focusClusters,
+		status:      "Ready",
+		memberIndex: -1,
+	}
+	model.sortClusters()
+	model.syncSyntheticMembers()
+	return model
+}
+
+func (m clusterBrowserModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.keepVisible()
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "tab", "right":
+			m.focus = nextFocus(m.focus, 1)
+		case "shift+tab", "left":
+			m.focus = nextFocus(m.focus, -1)
+		case "up", "k":
+			m.move(-1)
+		case "down", "j":
+			m.move(1)
+		case "pgup", "ctrl+b":
+			m.move(-m.pageStep())
+		case "pgdown", "ctrl+f":
+			m.move(m.pageStep())
+		case "home", "g":
+			m.jumpEdge(false)
+		case "end", "G":
+			m.jumpEdge(true)
+		case "enter":
+			if m.focus == focusClusters {
+				m.focus = focusMembers
+			} else if m.focus == focusMembers {
+				m.focus = focusDetail
+			}
+		case "s":
+			if m.payload.Sort == "recent" {
+				m.payload.Sort = "size"
+			} else {
+				m.payload.Sort = "recent"
+			}
+			m.sortClusters()
+			m.status = "Sort: " + m.payload.Sort
+		case "h", "?":
+			m.status = "Tab focus  arrows move  s sort  Enter drill in  q quit"
+		}
+		m.keepVisible()
+	}
+	return m, nil
+}
+
+func (m clusterBrowserModel) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return "loading gitcrawl tui..."
+	}
+	layout := m.layout()
+	header := m.renderHeader(layout.header.w)
+	clusters := m.renderClusters(layout.clusters)
+	members := m.renderMembers(layout.members)
+	detail := m.renderDetail(layout.detail)
+	footer := m.renderFooter(layout.footer.w)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, clusters, members, detail)
+	if layout.stacked {
+		top := lipgloss.JoinHorizontal(lipgloss.Top, clusters, members)
+		body = lipgloss.JoinVertical(lipgloss.Left, top, detail)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+}
+
+type tuiLayout struct {
+	header   tuiRect
+	clusters tuiRect
+	members  tuiRect
+	detail   tuiRect
+	footer   tuiRect
+	stacked  bool
+}
+
+func (m clusterBrowserModel) layout() tuiLayout {
+	width := maxInt(m.width, 80)
+	height := maxInt(m.height, 24)
+	headerH := 2
+	footerH := 2
+	bodyH := maxInt(8, height-headerH-footerH)
+	layout := tuiLayout{
+		header: tuiRect{x: 0, y: 0, w: width, h: headerH},
+		footer: tuiRect{x: 0, y: headerH + bodyH, w: width, h: footerH},
+	}
+	if width >= 118 {
+		clusterW := minInt(50, maxInt(36, width*36/100))
+		memberW := minInt(42, maxInt(30, width*28/100))
+		detailW := maxInt(32, width-clusterW-memberW)
+		layout.clusters = tuiRect{x: 0, y: headerH, w: clusterW, h: bodyH}
+		layout.members = tuiRect{x: clusterW, y: headerH, w: memberW, h: bodyH}
+		layout.detail = tuiRect{x: clusterW + memberW, y: headerH, w: detailW, h: bodyH}
+		return layout
+	}
+	layout.stacked = true
+	topH := maxInt(8, bodyH/2)
+	bottomH := bodyH - topH
+	clusterW := width / 2
+	layout.clusters = tuiRect{x: 0, y: headerH, w: clusterW, h: topH}
+	layout.members = tuiRect{x: clusterW, y: headerH, w: width - clusterW, h: topH}
+	layout.detail = tuiRect{x: 0, y: headerH + topH, w: width, h: bottomH}
+	return layout
+}
+
+func (m clusterBrowserModel) renderHeader(width int) string {
+	openCounts := m.openCounts()
+	repoLine := fmt.Sprintf("%s  %d PR  %d issues  sort:%s  focus:%s", m.payload.Repository, openCounts.pulls, openCounts.issues, m.payload.Sort, m.focus)
+	if m.payload.InferredRepository {
+		repoLine += "  inferred"
+	}
+	style := lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Padding(0, 1)
+	return style.Render(lipgloss.JoinVertical(lipgloss.Left, bold(repoLine), dim("local SQLite cluster browser")))
+}
+
+func (m clusterBrowserModel) renderFooter(width int) string {
+	controls := "Tab focus  arrows/jk move  Enter drill in  s sort  h help  q quit"
+	line := truncateCells(firstNonEmpty(m.status, "Ready"), width)
+	return lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#5bc0eb")).Foreground(lipgloss.Color("#05070d")).Padding(0, 1).Render(line + "\n" + truncateCells(controls, maxInt(1, width-2)))
+}
+
+func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
+	rows := []string{m.clusterHeader(rect.w - 2)}
+	visible := maxInt(1, rect.h-4)
+	end := minInt(len(m.payload.Clusters), m.clusterOff+visible)
+	for i := m.clusterOff; i < end; i++ {
+		cluster := m.payload.Clusters[i]
+		style := lipgloss.NewStyle()
+		if i == m.selected {
+			style = style.Background(lipgloss.Color(selectedColor(m.focus == focusClusters))).Foreground(lipgloss.Color(selectedFG(m.focus == focusClusters))).Bold(true)
+		} else if cluster.Status != "" && cluster.Status != "active" {
+			style = style.Foreground(lipgloss.Color("#777777"))
+		} else {
+			style = style.Foreground(lipgloss.Color("#dfe7ef"))
+		}
+		rows = append(rows, style.Render(truncateCells(m.clusterRow(cluster, rect.w-4), rect.w-4)))
+	}
+	for len(rows) < visible+1 {
+		rows = append(rows, "")
+	}
+	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(strings.Join(rows, "\n"))
+}
+
+func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
+	rows := []string{truncateCells("number    state   updated  title", rect.w-4)}
+	visible := maxInt(1, rect.h-4)
+	end := minInt(len(m.memberRows), m.memberOff+visible)
+	for i := m.memberOff; i < end; i++ {
+		member := m.memberRows[i]
+		style := lipgloss.NewStyle()
+		if i == m.memberIndex {
+			style = style.Background(lipgloss.Color(selectedColor(m.focus == focusMembers))).Foreground(lipgloss.Color(selectedFG(m.focus == focusMembers))).Bold(true)
+		} else if member.state != "open" {
+			style = style.Foreground(lipgloss.Color("#777777"))
+		} else {
+			style = style.Foreground(lipgloss.Color("#dfe7ef"))
+		}
+		rows = append(rows, style.Render(truncateCells(member.format(rect.w-4), rect.w-4)))
+	}
+	for len(rows) < visible+1 {
+		rows = append(rows, "")
+	}
+	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(strings.Join(rows, "\n"))
+}
+
+func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
+	lines := m.detailLines(rect.w - 4)
+	visible := maxInt(1, rect.h-3)
+	start := minInt(m.detailScroll, maxInt(0, len(lines)-visible))
+	end := minInt(len(lines), start+visible)
+	body := strings.Join(lines[start:end], "\n")
+	return paneStyle(focusDetail, m.focus, rect.w, rect.h).Render(body)
+}
+
+func (m clusterBrowserModel) clusterHeader(width int) string {
+	return truncateCells(fmt.Sprintf("%3s  %-20s  %-44s  %-9s %s", "cnt", "cluster", "title", "type", "updated"), width)
+}
+
+func (m clusterBrowserModel) clusterRow(cluster store.ClusterSummary, width int) string {
+	title := splitClusterTitle(cluster)
+	return truncateCells(fmt.Sprintf("%3d  %-20s  %-44s  %-9s %s",
+		cluster.MemberCount,
+		truncateCells(cluster.StableSlug, 20),
+		truncateCells(title, 44),
+		truncateCells(kindLabel(cluster.RepresentativeKind), 9),
+		formatRelativeTime(cluster.UpdatedAt),
+	), width)
+}
+
+func (m clusterBrowserModel) detailLines(width int) []string {
+	if len(m.payload.Clusters) == 0 {
+		return []string{"No clusters visible in this view.", "", "Run sync/embed/cluster, then reopen the TUI."}
+	}
+	cluster := m.payload.Clusters[m.selected]
+	lines := []string{
+		bold(fmt.Sprintf("Cluster %d", cluster.ID)),
+		color("#5bc0eb", cluster.StableSlug),
+	}
+	lines = append(lines, wrapPlain(firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster"), width)...)
+	lines = append(lines,
+		"",
+		fmt.Sprintf("members: %d   status: %s   updated: %s", cluster.MemberCount, firstNonEmpty(cluster.Status, "unknown"), formatRelativeTime(cluster.UpdatedAt)),
+		fmt.Sprintf("representative: %s", threadRef(cluster)),
+		"",
+	)
+	if len(m.memberRows) == 0 {
+		lines = append(lines, "Select a cluster to inspect members.")
+		return lines
+	}
+	member := m.memberRows[clampInt(m.memberIndex, 0, len(m.memberRows)-1)]
+	lines = append(lines,
+		bold(fmt.Sprintf("%s #%d", kindTitle(member.kind), member.number)),
+		member.title,
+		"",
+		fmt.Sprintf("state: %s   updated: %s", member.state, formatRelativeTime(member.updated)),
+		"",
+		dim("Full member details load in the next pass; this shell now matches the ghcrawl pane workflow."),
+	)
+	return lines
+}
+
+func (m *clusterBrowserModel) move(delta int) {
+	if m.focus == focusDetail {
+		m.detailScroll = maxInt(0, m.detailScroll+delta)
 		return
 	}
-	cluster := model.payload.Clusters[model.selected]
-	writeTUILine(b, width, fmt.Sprintf("%s  %s  members=%d  status=%s",
-		cluster.StableSlug,
-		threadRef(cluster),
-		cluster.MemberCount,
-		firstNonEmpty(cluster.Status, "unknown"),
-	))
-	writeTUILine(b, width, firstNonEmpty(cluster.RepresentativeTitle, cluster.Title))
-	writeTUILine(b, width, "updated "+cluster.UpdatedAt)
+	if m.focus == focusMembers {
+		if len(m.memberRows) == 0 {
+			return
+		}
+		m.memberIndex = clampInt(m.memberIndex+delta, 0, len(m.memberRows)-1)
+		m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].number)
+		return
+	}
+	if len(m.payload.Clusters) == 0 {
+		return
+	}
+	m.selected = clampInt(m.selected+delta, 0, len(m.payload.Clusters)-1)
+	m.syncSyntheticMembers()
+	m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
+}
+
+func (m *clusterBrowserModel) jumpEdge(end bool) {
+	if m.focus == focusDetail {
+		if end {
+			m.detailScroll = 9999
+		} else {
+			m.detailScroll = 0
+		}
+		return
+	}
+	if m.focus == focusMembers && len(m.memberRows) > 0 {
+		if end {
+			m.memberIndex = len(m.memberRows) - 1
+		} else {
+			m.memberIndex = 0
+		}
+		return
+	}
+	if len(m.payload.Clusters) > 0 {
+		if end {
+			m.selected = len(m.payload.Clusters) - 1
+		} else {
+			m.selected = 0
+		}
+		m.syncSyntheticMembers()
+	}
+}
+
+func (m *clusterBrowserModel) keepVisible() {
+	clusterRows := maxInt(1, m.layout().clusters.h-4)
+	if m.selected < m.clusterOff {
+		m.clusterOff = m.selected
+	}
+	if m.selected >= m.clusterOff+clusterRows {
+		m.clusterOff = m.selected - clusterRows + 1
+	}
+	m.clusterOff = maxInt(0, m.clusterOff)
+	memberRows := maxInt(1, m.layout().members.h-4)
+	if m.memberIndex < m.memberOff {
+		m.memberOff = m.memberIndex
+	}
+	if m.memberIndex >= m.memberOff+memberRows {
+		m.memberOff = m.memberIndex - memberRows + 1
+	}
+	m.memberOff = maxInt(0, m.memberOff)
+}
+
+func (m clusterBrowserModel) pageStep() int {
+	switch m.focus {
+	case focusMembers:
+		return maxInt(1, m.layout().members.h-5)
+	case focusDetail:
+		return maxInt(1, m.layout().detail.h-5)
+	default:
+		return maxInt(1, m.layout().clusters.h-5)
+	}
+}
+
+func (m *clusterBrowserModel) sortClusters() {
+	sort.SliceStable(m.payload.Clusters, func(i, j int) bool {
+		left := m.payload.Clusters[i]
+		right := m.payload.Clusters[j]
+		if m.payload.Sort == "size" {
+			if left.MemberCount != right.MemberCount {
+				return left.MemberCount > right.MemberCount
+			}
+		}
+		return parseTime(left.UpdatedAt).After(parseTime(right.UpdatedAt))
+	})
+	m.selected = clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1))
+}
+
+func (m *clusterBrowserModel) syncSyntheticMembers() {
+	m.detailScroll = 0
+	m.memberOff = 0
+	m.memberIndex = -1
+	m.memberRows = nil
+	if len(m.payload.Clusters) == 0 {
+		return
+	}
+	cluster := m.payload.Clusters[m.selected]
+	if cluster.RepresentativeNumber > 0 {
+		m.memberRows = []memberRow{{
+			number:  cluster.RepresentativeNumber,
+			kind:    cluster.RepresentativeKind,
+			state:   "open",
+			title:   firstNonEmpty(cluster.RepresentativeTitle, cluster.Title),
+			updated: cluster.UpdatedAt,
+		}}
+		m.memberIndex = 0
+	}
+}
+
+func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
+	var out struct{ pulls, issues int }
+	for _, cluster := range m.payload.Clusters {
+		switch cluster.RepresentativeKind {
+		case "pull_request":
+			out.pulls++
+		case "issue":
+			out.issues++
+		}
+	}
+	return out
+}
+
+func (r memberRow) format(width int) string {
+	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", r.number, r.state, formatRelativeTime(r.updated), r.title), width)
+}
+
+func paneStyle(pane, focus tuiFocus, width, height int) lipgloss.Style {
+	borderColor := "#4a5568"
+	switch pane {
+	case focusClusters:
+		borderColor = "#5bc0eb"
+	case focusMembers:
+		borderColor = "#9bc53d"
+	case focusDetail:
+		borderColor = "#fde74c"
+	}
+	if pane == focus {
+		borderColor = "#f7f7ff"
+	}
+	label := map[tuiFocus]string{
+		focusClusters: "Clusters",
+		focusMembers:  "Members",
+		focusDetail:   "Detail",
+	}[pane]
+	if pane == focus {
+		label = "[*] " + label
+	} else {
+		label = "[ ] " + label
+	}
+	return lipgloss.NewStyle().
+		Width(width-2).
+		Height(height-2).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color(borderColor)).
+		Foreground(lipgloss.Color("#dfe7ef")).
+		Padding(0, 1).
+		SetString(label)
+}
+
+func nextFocus(current tuiFocus, delta int) tuiFocus {
+	order := []tuiFocus{focusClusters, focusMembers, focusDetail}
+	index := 0
+	for i, item := range order {
+		if item == current {
+			index = i
+			break
+		}
+	}
+	index = (index + delta + len(order)) % len(order)
+	return order[index]
+}
+
+func splitClusterTitle(cluster store.ClusterSummary) string {
+	return firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster")
+}
+
+func kindLabel(kind string) string {
+	if kind == "pull_request" {
+		return "PR"
+	}
+	if kind == "issue" {
+		return "issue"
+	}
+	return firstNonEmpty(kind, "thread")
+}
+
+func kindTitle(kind string) string {
+	if kind == "pull_request" {
+		return "PR"
+	}
+	return "Issue"
 }
 
 func threadRef(cluster store.ClusterSummary) string {
 	if cluster.RepresentativeNumber == 0 {
-		return ""
+		return "none"
 	}
-	if cluster.RepresentativeKind == "" {
-		return fmt.Sprintf("#%d", cluster.RepresentativeNumber)
-	}
-	return fmt.Sprintf("%s #%d", cluster.RepresentativeKind, cluster.RepresentativeNumber)
+	return fmt.Sprintf("%s #%d", kindLabel(cluster.RepresentativeKind), cluster.RepresentativeNumber)
 }
 
-func visibleClusterRows(model *clusterBrowserModel) int {
-	rows := model.height - 9
-	if rows < 1 {
-		return 1
+func formatRelativeTime(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "never"
 	}
-	return rows
+	parsed := parseTime(value)
+	if parsed.IsZero() {
+		return value
+	}
+	diff := time.Since(parsed)
+	if diff < time.Minute {
+		return "now"
+	}
+	if diff < time.Hour {
+		return fmt.Sprintf("%dm ago", int(diff/time.Minute))
+	}
+	if diff < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(diff/time.Hour))
+	}
+	if diff < 60*24*time.Hour {
+		return fmt.Sprintf("%dd ago", int(diff/(24*time.Hour)))
+	}
+	return fmt.Sprintf("%dmo ago", maxInt(1, int(diff/(30*24*time.Hour))))
 }
 
-func writeTUILine(b *strings.Builder, width int, line string) {
-	if width <= 0 {
-		width = 80
+func parseTime(value string) time.Time {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed
+		}
 	}
-	b.WriteString(truncateRunes(line, width))
-	b.WriteString("\r\n")
+	return time.Time{}
 }
 
-func writeTUIStyledLine(b *strings.Builder, width int, styleStart, line, styleEnd string) {
-	if width <= 0 {
-		width = 80
+func wrapPlain(value string, width int) []string {
+	width = maxInt(20, width)
+	words := strings.Fields(value)
+	if len(words) == 0 {
+		return []string{""}
 	}
-	b.WriteString(styleStart)
-	b.WriteString(truncateRunes(line, width))
-	b.WriteString(styleEnd)
-	b.WriteString("\r\n")
+	var lines []string
+	var line string
+	for _, word := range words {
+		if lipgloss.Width(line)+1+lipgloss.Width(word) > width && line != "" {
+			lines = append(lines, line)
+			line = word
+			continue
+		}
+		if line == "" {
+			line = word
+		} else {
+			line += " " + word
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
-func truncateRunes(value string, max int) string {
+func truncateCells(value string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(value) <= max {
+	if lipgloss.Width(value) <= max {
 		return value
 	}
 	if max <= 3 {
 		return strings.Repeat(".", max)
 	}
 	runes := []rune(value)
-	return string(runes[:max-3]) + "..."
+	for len(runes) > 0 && lipgloss.Width(string(runes))+3 > max {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "..."
 }
 
-func currentVisualLineCount(value string) int {
-	return strings.Count(value, "\n")
+func bold(value string) string {
+	return lipgloss.NewStyle().Bold(true).Render(value)
+}
+
+func dim(value string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("#8b95a7")).Render(value)
+}
+
+func color(hex, value string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(value)
+}
+
+func selectedColor(focused bool) string {
+	if focused {
+		return "#f7f7ff"
+	}
+	return "#23445c"
+}
+
+func selectedFG(focused bool) string {
+	if focused {
+		return "#05070d"
+	}
+	return "#f7f7ff"
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func clampInt(value, minValue, maxValue int) int {
+	if maxValue < minValue {
+		return minValue
+	}
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func firstNonEmpty(values ...string) string {
