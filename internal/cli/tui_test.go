@@ -53,6 +53,23 @@ func TestTUIViewShowsRowsInDefaultTerminal(t *testing.T) {
 	}
 }
 
+func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 80
+	model.height = 24
+
+	view := model.View()
+	for _, want := range []string{"right-click menu", "? help", "q quit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("narrow footer missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

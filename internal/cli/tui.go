@@ -400,6 +400,9 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 
 func (m clusterBrowserModel) renderFooter(width int) string {
 	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	if width < 100 {
+		controls = "Tab focus  click select  right-click menu  / filter  ? help  q quit"
+	}
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
 		line = "Filter: " + m.searchInput.View()
