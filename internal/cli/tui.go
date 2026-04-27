@@ -703,13 +703,16 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 }
 
 func (m *clusterBrowserModel) openActionMenu() {
-	m.menuItems = []tuiMenuItem{
-		{label: "Open selected thread", action: "open"},
-		{label: "Copy selected URL", action: "copy-url"},
-		{label: "Copy title", action: "copy-title"},
-		{label: "Copy markdown link", action: "copy-markdown"},
+	m.menuItems = nil
+	if thread, ok := m.selectedThread(); ok {
+		m.menuItems = append(m.menuItems,
+			tuiMenuItem{label: fmt.Sprintf("Open #%d in browser", thread.Number), action: "open"},
+			tuiMenuItem{label: "Copy selected URL", action: "copy-url"},
+			tuiMenuItem{label: "Copy title", action: "copy-title"},
+			tuiMenuItem{label: "Copy markdown link", action: "copy-markdown"},
+		)
 	}
-	if m.hasDetail {
+	if m.hasSelectedCluster() {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"})
 	}
 	if _, ok := m.firstReferenceLink(); ok {
@@ -717,6 +720,9 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Open first body link", action: "open-first-link"},
 			tuiMenuItem{label: "Copy first body link", action: "copy-first-link"},
 		)
+	}
+	if len(m.menuItems) == 0 {
+		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
 	}
 	m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close menu", action: "close-menu"})
 	m.menuIndex = 0
@@ -1353,6 +1359,10 @@ func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {
 		return store.Thread{}, false
 	}
 	return thread, true
+}
+
+func (m clusterBrowserModel) hasSelectedCluster() bool {
+	return len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters)
 }
 
 func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) {

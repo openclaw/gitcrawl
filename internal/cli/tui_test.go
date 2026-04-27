@@ -183,8 +183,12 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	if model.selected != 1 {
 		t.Fatalf("right click selected %d, want 1", model.selected)
 	}
-	if len(model.menuItems) < 3 {
-		t.Fatalf("expected action menu items, got %+v", model.menuItems)
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	if !strings.Contains(strings.Join(labels, "\n"), "Copy cluster summary") {
+		t.Fatalf("expected cluster action menu items, got %+v", model.menuItems)
 	}
 }
 
@@ -221,6 +225,31 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
 		}
+	}
+}
+
+func TestTUIActionMenuOmitsThreadActionsWithoutSelectedThread(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.hasDetail = true
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{label: "ISSUES (1)"}}
+
+	model.openActionMenu()
+
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	joined := strings.Join(labels, "\n")
+	if strings.Contains(joined, "Open selected thread") || strings.Contains(joined, "Copy selected URL") {
+		t.Fatalf("menu should omit thread actions without a selected thread:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Copy cluster summary") {
+		t.Fatalf("menu should keep cluster action:\n%s", joined)
 	}
 }
 
