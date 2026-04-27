@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -61,6 +63,9 @@ type clusterBrowserModel struct {
 	search       string
 	searching    bool
 	showHelp     bool
+	menuOpen     bool
+	menuIndex    int
+	menuItems    []tuiMenuItem
 	showClosed   bool
 	minSize      int
 	memberSort   tuiMemberSort
@@ -77,6 +82,11 @@ type clusterBrowserModel struct {
 
 type memberRow struct {
 	member store.ClusterMemberDetail
+}
+
+type tuiMenuItem struct {
+	label  string
+	action string
 }
 
 func (a *App) canRunInteractiveTUI() bool {
@@ -131,6 +141,9 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.keepVisible()
 	case tea.KeyMsg:
+		if m.menuOpen {
+			return m.updateMenu(msg)
+		}
 		if m.searching {
 			m.handleSearchKey(msg)
 			m.keepVisible()
@@ -161,6 +174,10 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.focus == focusMembers {
 				m.focus = focusDetail
 			}
+		case "o":
+			m.runAction("open")
+		case "c":
+			m.runAction("copy-url")
 		case "s":
 			if m.payload.Sort == "recent" {
 				m.payload.Sort = "size"
@@ -357,6 +374,9 @@ func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
 	if m.showHelp {
 		lines = append([]string{paneTitle(focusDetail, m.focus)}, m.helpLines(rect.w-4)...)
 	}
+	if m.menuOpen {
+		lines = append([]string{paneTitle(focusDetail, m.focus)}, m.menuLines(rect.w-4)...)
+	}
 	visible := maxInt(1, rect.h-3)
 	start := minInt(m.detailScroll, maxInt(0, len(lines)-visible))
 	end := minInt(len(lines), start+visible)
@@ -451,6 +471,8 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  m: cycle member sort",
 		"  f: cycle minimum cluster size",
 		"  x: show/hide closed clusters",
+		"  o: open selected thread in browser",
+		"  c: copy selected thread URL",
 		"  ?: toggle this help",
 		"  q: quit",
 		"",
@@ -465,6 +487,37 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		out = append(out, wrapPlain(line, width)...)
 	}
 	return out
+}
+
+func (m clusterBrowserModel) menuLines(width int) []string {
+	lines := []string{bold("Actions"), ""}
+	for index, item := range m.menuItems {
+		prefix := "  "
+		if index == m.menuIndex {
+			prefix = "> "
+		}
+		lines = append(lines, truncateCells(prefix+item.label, width))
+	}
+	lines = append(lines, "", dim("Enter run  Esc close"))
+	return lines
+}
+
+func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.menuOpen = false
+		m.status = "Menu closed"
+	case "up", "k":
+		m.menuIndex = clampInt(m.menuIndex-1, 0, maxInt(0, len(m.menuItems)-1))
+	case "down", "j":
+		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
+	case "enter":
+		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
+			m.runAction(m.menuItems[m.menuIndex].action)
+		}
+		m.menuOpen = false
+	}
+	return m, nil
 }
 
 func (m *clusterBrowserModel) move(delta int) {
@@ -517,7 +570,7 @@ func (m *clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) {
 
 func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 	layout := m.layout()
-	if msg.Button != tea.MouseButtonLeft && !isMouseWheel(msg.Button) {
+	if msg.Button != tea.MouseButtonLeft && msg.Button != tea.MouseButtonRight && !isMouseWheel(msg.Button) {
 		return
 	}
 	switch msg.Button {
@@ -556,6 +609,86 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		case layout.detail.contains(msg.X, msg.Y):
 			m.focus = focusDetail
 		}
+	case tea.MouseButtonRight:
+		if msg.Action != tea.MouseActionPress {
+			return
+		}
+		m.selectByMousePosition(layout, msg.X, msg.Y)
+		m.openActionMenu()
+	}
+}
+
+func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) {
+	switch {
+	case layout.clusters.contains(x, y):
+		m.focus = focusClusters
+		row := y - layout.clusters.y - 3
+		if row >= 0 {
+			index := m.clusterOff + row
+			if index >= 0 && index < len(m.payload.Clusters) {
+				m.selected = index
+				m.loadSelectedCluster()
+			}
+		}
+	case layout.members.contains(x, y):
+		m.focus = focusMembers
+		row := y - layout.members.y - 3
+		if row >= 0 {
+			index := m.memberOff + row
+			if index >= 0 && index < len(m.memberRows) {
+				m.memberIndex = index
+			}
+		}
+	case layout.detail.contains(x, y):
+		m.focus = focusDetail
+	}
+}
+
+func (m *clusterBrowserModel) openActionMenu() {
+	m.menuItems = []tuiMenuItem{
+		{label: "Open selected thread", action: "open"},
+		{label: "Copy selected URL", action: "copy-url"},
+		{label: "Copy markdown link", action: "copy-markdown"},
+		{label: "Close menu", action: "close-menu"},
+	}
+	m.menuIndex = 0
+	m.menuOpen = true
+	m.showHelp = false
+	m.status = "Action menu"
+}
+
+func (m *clusterBrowserModel) runAction(action string) {
+	if action == "close-menu" {
+		m.status = "Menu closed"
+		return
+	}
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return
+	}
+	switch action {
+	case "open":
+		if err := openURL(thread.HTMLURL); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Opened " + thread.HTMLURL
+		}
+	case "copy-url":
+		if err := copyText(thread.HTMLURL); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied URL"
+		}
+	case "copy-markdown":
+		link := fmt.Sprintf("[#%d %s](%s)", thread.Number, thread.Title, thread.HTMLURL)
+		if err := copyText(link); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied markdown link"
+		}
+	case "close-menu":
+		m.status = "Menu closed"
 	}
 }
 
@@ -771,6 +904,17 @@ func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
 	return out
 }
 
+func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {
+	if len(m.memberRows) == 0 || m.memberIndex < 0 || m.memberIndex >= len(m.memberRows) {
+		return store.Thread{}, false
+	}
+	thread := m.memberRows[m.memberIndex].thread()
+	if strings.TrimSpace(thread.HTMLURL) == "" {
+		return store.Thread{}, false
+	}
+	return thread, true
+}
+
 func (r memberRow) format(width int) string {
 	thread := r.thread()
 	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, thread.State, formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
@@ -778,6 +922,45 @@ func (r memberRow) format(width int) string {
 
 func (r memberRow) thread() store.Thread {
 	return r.member.Thread
+}
+
+func openURL(url string) error {
+	if strings.TrimSpace(url) == "" {
+		return fmt.Errorf("no URL selected")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open URL: %w", err)
+	}
+	return nil
+}
+
+func copyText(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("nothing to copy")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		cmd = exec.Command("xclip", "-selection", "clipboard")
+	}
+	cmd.Stdin = strings.NewReader(value)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("copy text: %w", err)
+	}
+	return nil
 }
 
 func paneStyle(pane, focus tuiFocus, width, height int) lipgloss.Style {
