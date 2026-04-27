@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -15,10 +16,16 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 	"github.com/openclaw/gitcrawl/internal/store"
+)
+
+var (
+	markdownLinkRE    = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)\s]+)\)`)
+	markdownHeadingRE = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
+	markdownListRE    = regexp.MustCompile(`^(\s*)([-*+]|\d+[.)])\s+(.+)$`)
+	terminalControlRE = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
 )
 
 type clusterBrowserPayload struct {
@@ -747,6 +754,7 @@ func (m *clusterBrowserModel) syncComponents() {
 
 	m.clusterTable.SetWidth(clusterW)
 	m.clusterTable.SetHeight(maxInt(1, layout.clusters.h-6))
+	m.clusterTable.SetStyles(tuiTableStyles(m.focus == focusClusters, "#5bc0eb", "#23445c"))
 	m.clusterTable.SetColumns(clusterColumns(clusterW))
 	m.clusterTable.SetRows(m.clusterRows())
 	m.clusterTable.SetCursor(clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1)))
@@ -758,6 +766,7 @@ func (m *clusterBrowserModel) syncComponents() {
 
 	m.memberTable.SetWidth(memberW)
 	m.memberTable.SetHeight(maxInt(1, layout.members.h-6))
+	m.memberTable.SetStyles(tuiTableStyles(m.focus == focusMembers, "#9bc53d", "#33521e"))
 	m.memberTable.SetColumns(memberColumns(memberW))
 	m.memberTable.SetRows(m.memberTableRows())
 	m.memberTable.SetCursor(clampInt(m.memberIndex, 0, maxInt(0, len(m.memberRows)-1)))
@@ -775,38 +784,55 @@ func (m *clusterBrowserModel) syncComponents() {
 }
 
 func newTUITable() table.Model {
+	return table.New(table.WithStyles(tuiTableStyles(false, "#5bc0eb", "#23445c")), table.WithFocused(false))
+}
+
+func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
 	styles := table.DefaultStyles()
 	styles.Header = styles.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#4a5568")).
-		BorderBottom(true).
 		Bold(true).
-		Foreground(lipgloss.Color("#f7f7ff"))
-	styles.Cell = styles.Cell.Foreground(lipgloss.Color("#dfe7ef")).Padding(0, 1)
+		Padding(0, 0).
+		Foreground(lipgloss.Color(accent))
+	styles.Cell = styles.Cell.Foreground(lipgloss.Color("#dfe7ef")).Padding(0, 0)
+	selectedBG := inactive
+	selectedFG := "#f7f7ff"
+	if focused {
+		selectedBG = "#f7f7ff"
+		selectedFG = "#05070d"
+	}
 	styles.Selected = styles.Selected.
-		Foreground(lipgloss.Color("#05070d")).
-		Background(lipgloss.Color("#f7f7ff")).
+		Foreground(lipgloss.Color(selectedFG)).
+		Background(lipgloss.Color(selectedBG)).
 		Bold(true)
-	return table.New(table.WithStyles(styles), table.WithFocused(false))
+	return styles
 }
 
 func clusterColumns(width int) []table.Column {
-	titleW := maxInt(14, width-36)
+	width = maxInt(28, width)
+	cntW := 4
+	kindW := 5
+	ageW := 7
+	clusterW := clampInt(width/3, 12, 22)
+	titleW := maxInt(8, width-cntW-clusterW-kindW-ageW)
 	return []table.Column{
-		{Title: "cnt", Width: 4},
-		{Title: "cluster", Width: 20},
+		{Title: "cnt", Width: cntW},
+		{Title: "cluster", Width: clusterW},
 		{Title: "title", Width: titleW},
-		{Title: "kind", Width: 6},
-		{Title: "age", Width: 8},
+		{Title: "kind", Width: kindW},
+		{Title: "age", Width: ageW},
 	}
 }
 
 func memberColumns(width int) []table.Column {
-	titleW := maxInt(12, width-28)
+	width = maxInt(28, width)
+	numberW := 7
+	stateW := 6
+	ageW := 7
+	titleW := maxInt(8, width-numberW-stateW-ageW)
 	return []table.Column{
-		{Title: "number", Width: 8},
-		{Title: "state", Width: 7},
-		{Title: "age", Width: 8},
+		{Title: "number", Width: numberW},
+		{Title: "state", Width: stateW},
+		{Title: "age", Width: ageW},
 		{Title: "title", Width: titleW},
 	}
 }
@@ -1229,6 +1255,14 @@ func wrapPlain(value string, width int) []string {
 	var lines []string
 	var line string
 	for _, word := range words {
+		if lipgloss.Width(word) > width {
+			if line != "" {
+				lines = append(lines, line)
+				line = ""
+			}
+			lines = append(lines, truncateCells(word, width))
+			continue
+		}
 		if lipgloss.Width(line)+1+lipgloss.Width(word) > width && line != "" {
 			lines = append(lines, line)
 			line = word
@@ -1250,22 +1284,94 @@ func markdownLines(value string, width int) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(maxInt(24, width)),
+	width = maxInt(20, width)
+	var lines []string
+	inFence := false
+	blankRun := 0
+	for _, rawLine := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		line := strings.TrimRight(stripTerminalControls(rawLine), " \t")
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+			lines = append(lines, dim("--- code ---"))
+			blankRun = 0
+			continue
+		}
+		if inFence {
+			lines = append(lines, dim(truncateCells(line, width)))
+			blankRun = 0
+			continue
+		}
+		if trimmed == "" {
+			blankRun++
+			if blankRun <= 1 {
+				lines = append(lines, "")
+			}
+			continue
+		}
+		blankRun = 0
+		if match := markdownHeadingRE.FindStringSubmatch(trimmed); match != nil {
+			lines = appendWrappedStyled(lines, "", renderInlineMarkdown(match[2]), width, bold)
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">") {
+			quote := strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
+			lines = appendWrappedStyled(lines, "> ", renderInlineMarkdown(quote), width, dim)
+			continue
+		}
+		if match := markdownListRE.FindStringSubmatch(line); match != nil {
+			indent := match[1]
+			if lipgloss.Width(indent) > 4 {
+				indent = strings.Repeat(" ", 4)
+			}
+			lines = appendWrappedStyled(lines, indent+"- ", renderInlineMarkdown(match[3]), width, nil)
+			continue
+		}
+		lines = appendWrappedStyled(lines, "", renderInlineMarkdown(line), width, nil)
+	}
+	return trimTrailingBlankLines(lines)
+}
+
+func appendWrappedStyled(lines []string, prefix, value string, width int, styler func(string) string) []string {
+	contentWidth := maxInt(8, width-lipgloss.Width(prefix))
+	wrapped := wrapPlain(value, contentWidth)
+	if len(wrapped) == 0 {
+		return lines
+	}
+	continuation := strings.Repeat(" ", lipgloss.Width(prefix))
+	for index, line := range wrapped {
+		prefixForLine := prefix
+		if index > 0 {
+			prefixForLine = continuation
+		}
+		if styler != nil {
+			line = styler(line)
+		}
+		lines = append(lines, prefixForLine+line)
+	}
+	return lines
+}
+
+func renderInlineMarkdown(value string) string {
+	value = markdownLinkRE.ReplaceAllString(value, "$1 <$2>")
+	replacer := strings.NewReplacer(
+		"`", "",
+		"**", "",
+		"__", "",
+		"~~", "",
 	)
-	if err != nil {
-		return wrapPlain(value, width)
+	return strings.TrimSpace(replacer.Replace(value))
+}
+
+func stripTerminalControls(value string) string {
+	return terminalControlRE.ReplaceAllString(value, "")
+}
+
+func trimTrailingBlankLines(lines []string) []string {
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
 	}
-	rendered, err := renderer.Render(value)
-	if err != nil {
-		return wrapPlain(value, width)
-	}
-	rendered = strings.TrimRight(rendered, "\n")
-	if rendered == "" {
-		return nil
-	}
-	return strings.Split(rendered, "\n")
+	return lines
 }
 
 func truncateCells(value string, max int) string {
