@@ -1334,6 +1334,27 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 	}
 	thread, ok := m.selectedThread()
 	if !ok {
+		if action == "open" || action == "copy-url" {
+			url, urlOK := m.selectedActionURL()
+			if !urlOK {
+				m.status = "No selected thread"
+				return true
+			}
+			if action == "open" {
+				if err := openURL(url); err != nil {
+					m.status = err.Error()
+				} else {
+					m.status = "Opened " + url
+				}
+				return true
+			}
+			if err := copyText(url); err != nil {
+				m.status = err.Error()
+			} else {
+				m.status = "Copied representative URL"
+			}
+			return true
+		}
 		m.status = "No selected thread"
 		return true
 	}
@@ -2452,6 +2473,13 @@ func (m clusterBrowserModel) selectedClusterURL() (string, bool) {
 		path = "pull"
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/%d", m.payload.Repository, path, cluster.RepresentativeNumber), true
+}
+
+func (m clusterBrowserModel) selectedActionURL() (string, bool) {
+	if thread, ok := m.selectedThread(); ok {
+		return thread.HTMLURL, true
+	}
+	return m.selectedClusterURL()
 }
 
 func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) {

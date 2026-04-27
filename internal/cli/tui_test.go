@@ -1227,6 +1227,34 @@ func TestTUIActionMenuOmitsThreadActionsWithoutSelectedThread(t *testing.T) {
 	}
 }
 
+func TestTUISelectedActionURLFallsBackToRepresentative(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	url, ok := model.selectedActionURL()
+	if !ok || url != "https://github.com/openclaw/openclaw/issues/11" {
+		t.Fatalf("cluster action URL = %q/%v, want representative issue URL", url, ok)
+	}
+
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{Thread: store.Thread{
+			Number:  42,
+			Kind:    "issue",
+			Title:   "Selected issue",
+			HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+		}},
+	}}
+	url, ok = model.selectedActionURL()
+	if !ok || url != "https://github.com/openclaw/openclaw/issues/42" {
+		t.Fatalf("thread action URL = %q/%v, want selected issue URL", url, ok)
+	}
+}
+
 func TestTUIMemberRowsGroupAndSkipHeaders(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
