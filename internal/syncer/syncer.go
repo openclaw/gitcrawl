@@ -99,6 +99,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 	}
 	stats.FinishedAt = s.now().Format(time.RFC3339Nano)
+	if _, err := s.store.RecordRun(ctx, store.RunRecord{
+		RepoID:     repoID,
+		Kind:       "sync",
+		Scope:      "open",
+		Status:     "success",
+		StartedAt:  stats.StartedAt,
+		FinishedAt: stats.FinishedAt,
+		StatsJSON:  mustJSON(stats),
+	}); err != nil {
+		return Stats{}, err
+	}
 	return stats, nil
 }
 
