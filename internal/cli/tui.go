@@ -101,7 +101,6 @@ type clusterBrowserModel struct {
 	memberRows    []memberRow
 	memberOff     int
 	memberIndex   int
-	detailScroll  int
 	clusterTable  table.Model
 	memberTable   table.Model
 	detailView    viewport.Model
@@ -1511,7 +1510,6 @@ func (m *clusterBrowserModel) sortMembersFromHeader(relativeX int) {
 }
 
 func (m *clusterBrowserModel) loadSelectedCluster() {
-	m.detailScroll = 0
 	m.detailView.GotoTop()
 	m.memberOff = 0
 	m.memberIndex = -1
