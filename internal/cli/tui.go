@@ -201,6 +201,16 @@ func (m clusterBrowserModel) layout() tuiLayout {
 		layout.detail = tuiRect{x: clusterW + memberW, y: headerH, w: detailW, h: bodyH}
 		return layout
 	}
+	if width < 100 {
+		layout.stacked = true
+		clusterH := maxInt(7, bodyH*36/100)
+		memberH := maxInt(6, bodyH*28/100)
+		detailH := maxInt(6, bodyH-clusterH-memberH)
+		layout.clusters = tuiRect{x: 0, y: headerH, w: width, h: clusterH}
+		layout.members = tuiRect{x: 0, y: headerH + clusterH, w: width, h: memberH}
+		layout.detail = tuiRect{x: 0, y: headerH + clusterH + memberH, w: width, h: detailH}
+		return layout
+	}
 	layout.stacked = true
 	topH := maxInt(8, bodyH/2)
 	bottomH := bodyH - topH
@@ -228,8 +238,8 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
-	rows := []string{m.clusterHeader(rect.w - 2)}
-	visible := maxInt(1, rect.h-4)
+	rows := []string{paneTitle(focusClusters, m.focus), m.clusterHeader(rect.w - 4)}
+	visible := maxInt(1, rect.h-5)
 	end := minInt(len(m.payload.Clusters), m.clusterOff+visible)
 	for i := m.clusterOff; i < end; i++ {
 		cluster := m.payload.Clusters[i]
@@ -243,15 +253,15 @@ func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
 		}
 		rows = append(rows, style.Render(truncateCells(m.clusterRow(cluster, rect.w-4), rect.w-4)))
 	}
-	for len(rows) < visible+1 {
+	for len(rows) < visible+2 {
 		rows = append(rows, "")
 	}
 	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(strings.Join(rows, "\n"))
 }
 
 func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
-	rows := []string{truncateCells("number    state   updated  title", rect.w-4)}
-	visible := maxInt(1, rect.h-4)
+	rows := []string{paneTitle(focusMembers, m.focus), truncateCells("number    state   updated  title", rect.w-4)}
+	visible := maxInt(1, rect.h-5)
 	end := minInt(len(m.memberRows), m.memberOff+visible)
 	for i := m.memberOff; i < end; i++ {
 		member := m.memberRows[i]
@@ -265,14 +275,14 @@ func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
 		}
 		rows = append(rows, style.Render(truncateCells(member.format(rect.w-4), rect.w-4)))
 	}
-	for len(rows) < visible+1 {
+	for len(rows) < visible+2 {
 		rows = append(rows, "")
 	}
 	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(strings.Join(rows, "\n"))
 }
 
 func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
-	lines := m.detailLines(rect.w - 4)
+	lines := append([]string{paneTitle(focusDetail, m.focus)}, m.detailLines(rect.w-4)...)
 	visible := maxInt(1, rect.h-3)
 	start := minInt(m.detailScroll, maxInt(0, len(lines)-visible))
 	end := minInt(len(lines), start+visible)
@@ -386,7 +396,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		switch {
 		case layout.clusters.contains(msg.X, msg.Y):
 			m.focus = focusClusters
-			row := msg.Y - layout.clusters.y - 2
+			row := msg.Y - layout.clusters.y - 3
 			if row <= 0 {
 				return
 			}
@@ -398,7 +408,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			}
 		case layout.members.contains(msg.X, msg.Y):
 			m.focus = focusMembers
-			row := msg.Y - layout.members.y - 2
+			row := msg.Y - layout.members.y - 3
 			if row <= 0 {
 				return
 			}
@@ -465,7 +475,7 @@ func (r tuiRect) contains(x, y int) bool {
 }
 
 func (m *clusterBrowserModel) keepVisible() {
-	clusterRows := maxInt(1, m.layout().clusters.h-4)
+	clusterRows := maxInt(1, m.layout().clusters.h-5)
 	if m.selected < m.clusterOff {
 		m.clusterOff = m.selected
 	}
@@ -473,7 +483,7 @@ func (m *clusterBrowserModel) keepVisible() {
 		m.clusterOff = m.selected - clusterRows + 1
 	}
 	m.clusterOff = maxInt(0, m.clusterOff)
-	memberRows := maxInt(1, m.layout().members.h-4)
+	memberRows := maxInt(1, m.layout().members.h-5)
 	if m.memberIndex < m.memberOff {
 		m.memberOff = m.memberIndex
 	}
@@ -586,24 +596,26 @@ func paneStyle(pane, focus tuiFocus, width, height int) lipgloss.Style {
 	if pane == focus {
 		borderColor = "#f7f7ff"
 	}
-	label := map[tuiFocus]string{
-		focusClusters: "Clusters",
-		focusMembers:  "Members",
-		focusDetail:   "Detail",
-	}[pane]
-	if pane == focus {
-		label = "[*] " + label
-	} else {
-		label = "[ ] " + label
-	}
 	return lipgloss.NewStyle().
 		Width(width-2).
 		Height(height-2).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(borderColor)).
 		Foreground(lipgloss.Color("#dfe7ef")).
-		Padding(0, 1).
-		SetString(label)
+		Padding(0, 1)
+}
+
+func paneTitle(pane, focus tuiFocus) string {
+	label := map[tuiFocus]string{
+		focusClusters: "Clusters",
+		focusMembers:  "Members",
+		focusDetail:   "Detail",
+	}[pane]
+	prefix := "[ ] "
+	if pane == focus {
+		prefix = "[*] "
+	}
+	return bold(prefix + label)
 }
 
 func nextFocus(current tuiFocus, delta int) tuiFocus {
