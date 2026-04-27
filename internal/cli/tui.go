@@ -1060,6 +1060,12 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy cluster title", action: "copy-cluster-title"},
 			tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"},
 		)
+		cluster, _ := m.selectedCluster()
+		if cluster.Status == "closed" || cluster.ClosedAt != "" {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Reopen cluster locally...", action: "reopen-cluster-confirm"})
+		} else {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close cluster locally...", action: "close-cluster-confirm"})
+		}
 		if m.hasDetail {
 			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy member list", action: "copy-member-list"})
 		}
@@ -1261,6 +1267,18 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		} else {
 			m.status = "Copied representative URL"
 		}
+		return true
+	case "close-cluster-confirm":
+		m.openCloseClusterMenu()
+		return false
+	case "close-cluster-local":
+		m.closeSelectedClusterLocally()
+		return true
+	case "reopen-cluster-confirm":
+		m.openReopenClusterMenu()
+		return false
+	case "reopen-cluster-local":
+		m.reopenSelectedClusterLocally()
 		return true
 	case "load-neighbors":
 		m.loadSelectedThreadNeighbors(10, 0.2)
@@ -1643,6 +1661,38 @@ func (m *clusterBrowserModel) openReopenThreadMenu() {
 	m.status = fmt.Sprintf("Confirm local reopen for #%d", thread.Number)
 }
 
+func (m *clusterBrowserModel) openCloseClusterMenu() {
+	cluster, ok := m.selectedCluster()
+	if !ok {
+		m.status = "No selected cluster"
+		return
+	}
+	m.menuTitle = "Close Cluster"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Close cluster C%d locally", cluster.ID), action: "close-cluster-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm local close for cluster C%d", cluster.ID)
+}
+
+func (m *clusterBrowserModel) openReopenClusterMenu() {
+	cluster, ok := m.selectedCluster()
+	if !ok {
+		m.status = "No selected cluster"
+		return
+	}
+	m.menuTitle = "Reopen Cluster"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Reopen cluster C%d locally", cluster.ID), action: "reopen-cluster-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm local reopen for cluster C%d", cluster.ID)
+}
+
 func (m *clusterBrowserModel) closeSelectedThreadLocally() {
 	thread, ok := m.selectedThread()
 	if !ok {
@@ -1678,6 +1728,42 @@ func (m *clusterBrowserModel) reopenSelectedThreadLocally() {
 	}
 	m.refreshFromStore()
 	m.status = fmt.Sprintf("Reopened #%d locally", thread.Number)
+}
+
+func (m *clusterBrowserModel) closeSelectedClusterLocally() {
+	cluster, ok := m.selectedCluster()
+	if !ok {
+		m.status = "No selected cluster"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local cluster close unavailable for this view"
+		return
+	}
+	if err := m.store.CloseClusterLocally(m.ctx, m.repoID, cluster.ID, "TUI manual close"); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Closed cluster C%d locally", cluster.ID)
+}
+
+func (m *clusterBrowserModel) reopenSelectedClusterLocally() {
+	cluster, ok := m.selectedCluster()
+	if !ok {
+		m.status = "No selected cluster"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local cluster reopen unavailable for this view"
+		return
+	}
+	if err := m.store.ReopenClusterLocally(m.ctx, m.repoID, cluster.ID); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Reopened cluster C%d locally", cluster.ID)
 }
 
 func (m clusterBrowserModel) menuVisibleCount() int {

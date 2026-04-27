@@ -1419,6 +1419,105 @@ func TestTUIReopenThreadLocallyRestoresThread(t *testing.T) {
 	}
 }
 
+func TestTUICloseClusterLocallyHidesCluster(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoID, 52, 502, "close cluster"); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		HideClosed: true,
+		MinSize:    1,
+		Clusters:   clusters,
+	})
+	model.openActionMenu()
+	if menuLabelIndex(model.menuItems, "Close cluster locally...") < 0 {
+		t.Fatalf("action menu missing cluster close: %+v", model.menuItems)
+	}
+	model.runAction("close-cluster-confirm")
+	if model.menuTitle != "Close Cluster" || !strings.Contains(model.menuItems[0].label, "Close cluster C52 locally") {
+		t.Fatalf("close cluster confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+
+	model.runAction("close-cluster-local")
+
+	if model.status != "Closed cluster C52 locally" {
+		t.Fatalf("close cluster status = %q", model.status)
+	}
+	if len(model.payload.Clusters) != 0 {
+		t.Fatalf("locally closed cluster should be hidden, got %#v", model.payload.Clusters)
+	}
+}
+
+func TestTUIReopenClusterLocallyRestoresCluster(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoID, 53, 503, "reopen cluster"); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	if err := st.CloseClusterLocally(ctx, repoID, 53, "test close"); err != nil {
+		t.Fatalf("close cluster: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   clusters,
+	})
+	model.openActionMenu()
+	if menuLabelIndex(model.menuItems, "Reopen cluster locally...") < 0 {
+		t.Fatalf("action menu missing cluster reopen: %+v", model.menuItems)
+	}
+	if menuLabelIndex(model.menuItems, "Close cluster locally...") >= 0 {
+		t.Fatalf("closed cluster should not offer close again: %+v", model.menuItems)
+	}
+	model.runAction("reopen-cluster-confirm")
+	if model.menuTitle != "Reopen Cluster" || !strings.Contains(model.menuItems[0].label, "Reopen cluster C53 locally") {
+		t.Fatalf("reopen cluster confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+
+	model.runAction("reopen-cluster-local")
+
+	if model.status != "Reopened cluster C53 locally" {
+		t.Fatalf("reopen cluster status = %q", model.status)
+	}
+	clusters, err = st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("list reopened clusters: %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].ClosedAt != "" {
+		t.Fatalf("reopened cluster should be visible, got %#v", clusters)
+	}
+}
+
 func TestTUIRepositoryPickerKeepsCurrentRepoVisible(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
