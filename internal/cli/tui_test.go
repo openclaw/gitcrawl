@@ -359,6 +359,38 @@ func TestTUIMouseCanClickActionMenuItems(t *testing.T) {
 	}
 }
 
+func TestTUIMouseWheelMovesActionMenu(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.openActionMenu()
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.detail.x + 2,
+		Y:      layout.detail.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelDown,
+	})
+	if model.menuIndex != 1 {
+		t.Fatalf("wheel down menu index = %d, want 1", model.menuIndex)
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.detail.x + 2,
+		Y:      layout.detail.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	})
+	if model.menuIndex != 0 {
+		t.Fatalf("wheel up menu index = %d, want 0", model.menuIndex)
+	}
+}
+
 func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
