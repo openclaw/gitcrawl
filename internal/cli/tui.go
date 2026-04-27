@@ -1015,6 +1015,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy markdown link", action: "copy-markdown"},
 			tuiMenuItem{label: "Copy selected detail", action: "copy-thread-detail"},
 			tuiMenuItem{label: "Load neighbors", action: "load-neighbors"},
+			tuiMenuItem{label: "Close locally...", action: "close-thread-confirm"},
 		)
 	}
 	if member, ok := m.selectedMember(); ok {
@@ -1259,6 +1260,12 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	case "load-neighbors":
 		m.loadSelectedThreadNeighbors(10, 0.2)
+		return true
+	case "close-thread-confirm":
+		m.openCloseThreadMenu()
+		return false
+	case "close-thread-local":
+		m.closeSelectedThreadLocally()
 		return true
 	case "copy-thread-detail":
 		if err := copyText(m.threadDetailClipboardText()); err != nil {
@@ -1592,6 +1599,41 @@ func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {
 	m.menuIndex = 0
 	m.menuOff = 0
 	m.status = m.menuTitle
+}
+
+func (m *clusterBrowserModel) openCloseThreadMenu() {
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return
+	}
+	m.menuTitle = "Close Locally"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Close #%d locally", thread.Number), action: "close-thread-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm local close for #%d", thread.Number)
+}
+
+func (m *clusterBrowserModel) closeSelectedThreadLocally() {
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local close unavailable for this view"
+		return
+	}
+	if err := m.store.CloseThreadLocally(m.ctx, m.repoID, thread.Number, "TUI manual close"); err != nil {
+		m.status = err.Error()
+		return
+	}
+	delete(m.neighborCache, thread.ID)
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Closed #%d locally", thread.Number)
 }
 
 func (m clusterBrowserModel) menuVisibleCount() int {

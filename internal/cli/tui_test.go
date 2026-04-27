@@ -1311,6 +1311,59 @@ func TestTUIRepositoryPickerSwitchesRepository(t *testing.T) {
 	}
 }
 
+func TestTUICloseThreadLocallyHidesCluster(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoID, 50, 500, "close me"); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		HideClosed: true,
+		MinSize:    1,
+		Clusters:   clusters,
+	})
+	model.openActionMenu()
+	if menuLabelIndex(model.menuItems, "Close locally...") < 0 {
+		t.Fatalf("action menu missing local close: %+v", model.menuItems)
+	}
+	model.runAction("close-thread-confirm")
+	if model.menuTitle != "Close Locally" || !strings.Contains(model.menuItems[0].label, "Close #500 locally") {
+		t.Fatalf("close confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+
+	model.runAction("close-thread-local")
+
+	if model.status != "Closed #500 locally" {
+		t.Fatalf("close status = %q", model.status)
+	}
+	if len(model.payload.Clusters) != 0 {
+		t.Fatalf("locally closed singleton cluster should be hidden, got %#v", model.payload.Clusters)
+	}
+	rows, err := st.ListThreads(ctx, repoID, false)
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("locally closed thread should be hidden, got %#v", rows)
+	}
+}
+
 func TestTUIRepositoryPickerKeepsCurrentRepoVisible(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

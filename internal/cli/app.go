@@ -440,7 +440,13 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	interactive := a.format == FormatText && a.canRunInteractiveTUI()
+	var rt localRuntime
+	if interactive {
+		rt, err = a.openLocalRuntime(ctx)
+	} else {
+		rt, err = a.openLocalRuntimeReadOnly(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -461,7 +467,6 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
 
-	interactive := a.format == FormatText && a.canRunInteractiveTUI()
 	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: !*hideClosed,
