@@ -181,7 +181,7 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 			return nil, fmt.Errorf("scan run cluster summary: %w", err)
 		}
 		summary.Source = ClusterSourceRun
-		summary.StableSlug = fmt.Sprintf("cluster-%d", summary.ID)
+		summary.StableSlug = clusterHumanName(options.RepoID, repThreadID.Int64, summary.ID)
 		summary.Status = "active"
 		if closeReason.Valid || closedMemberCount >= summary.MemberCount {
 			summary.Status = "closed"
@@ -1097,9 +1097,12 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 		select cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title,
 			count(cm.thread_id) as member_count,
-			cg.updated_at, cg.closed_at
+			cg.updated_at, coalesce(cc.updated_at, cg.closed_at) as closed_at,
+			sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) as closed_member_count
 		from cluster_groups cg
+		left join cluster_closures cc on cc.cluster_id = cg.id
 		left join cluster_memberships cm on cm.cluster_id = cg.id and cm.state = 'active'
+		left join threads t on t.id = cm.thread_id
 		left join threads rt on rt.id = cg.representative_thread_id
 		where `+where+`
 		group by cg.id
@@ -1108,13 +1111,17 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 	var title, closedAt, repKind, repTitle sql.NullString
 	var repThreadID sql.NullInt64
 	var repNumber sql.NullInt64
-	if err := row.Scan(&summary.ID, &summary.StableSlug, &summary.Status, &title, &repThreadID, &repNumber, &repKind, &repTitle, &summary.MemberCount, &summary.UpdatedAt, &closedAt); err != nil {
+	var closedMemberCount int
+	if err := row.Scan(&summary.ID, &summary.StableSlug, &summary.Status, &title, &repThreadID, &repNumber, &repKind, &repTitle, &summary.MemberCount, &summary.UpdatedAt, &closedAt, &closedMemberCount); err != nil {
 		if err == sql.ErrNoRows {
 			return ClusterSummary{}, fmt.Errorf("cluster %d was not found", clusterID)
 		}
 		return ClusterSummary{}, fmt.Errorf("scan cluster summary: %w", err)
 	}
 	summary.Source = ClusterSourceDurable
+	if summary.Status == "active" && summary.MemberCount > 0 && closedMemberCount >= summary.MemberCount {
+		summary.Status = "closed"
+	}
 	summary.Title = title.String
 	summary.ClosedAt = closedAt.String
 	summary.RepresentativeThreadID = repThreadID.Int64
@@ -1187,7 +1194,7 @@ func (s *Store) runClusterSummaryByID(ctx context.Context, repoID, clusterID int
 		return ClusterSummary{}, 0, fmt.Errorf("scan run cluster summary: %w", err)
 	}
 	summary.Source = ClusterSourceRun
-	summary.StableSlug = fmt.Sprintf("cluster-%d", summary.ID)
+	summary.StableSlug = clusterHumanName(repoID, repThreadID.Int64, summary.ID)
 	summary.Status = "active"
 	if closeReason.Valid || closedMemberCount >= summary.MemberCount {
 		summary.Status = "closed"
