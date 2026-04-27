@@ -26,11 +26,11 @@ func TestSearchDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("thread: %v", err)
 	}
-	if _, err := st.UpsertDocument(ctx, Document{ThreadID: threadID, Title: "download stalls", RawText: "artifact download stalls", DedupeText: "artifact download stalls", UpdatedAt: "2026-04-26T00:00:00Z"}); err != nil {
+	if _, err := st.UpsertDocument(ctx, Document{ThreadID: threadID, Title: "download stalls", RawText: "large file download stalls", DedupeText: "large file download stalls", UpdatedAt: "2026-04-26T00:00:00Z"}); err != nil {
 		t.Fatalf("document: %v", err)
 	}
 
-	hits, err := st.SearchDocuments(ctx, repoID, "artifact", 10)
+	hits, err := st.SearchDocuments(ctx, repoID, "file", 10)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

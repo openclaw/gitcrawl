@@ -11,7 +11,7 @@ func TestBuildIncludesTitleBodyAndLabels(t *testing.T) {
 	doc := BuildWithComments(store.Thread{
 		ID:         12,
 		Title:      "Download stalls",
-		Body:       "Large artifacts hang near the end.",
+		Body:       "Large downloads hang near the end.",
 		LabelsJSON: `[{"name":"bug"},{"name":"downloads"}]`,
 		UpdatedAt:  "2026-04-26T00:00:00Z",
 	}, []store.Comment{{AuthorLogin: "vincentkoc", Body: "same failure here"}})
@@ -24,7 +24,7 @@ func TestBuildIncludesTitleBodyAndLabels(t *testing.T) {
 	if !strings.Contains(doc.RawText, "vincentkoc: same failure here") {
 		t.Fatalf("raw text missing comment: %q", doc.RawText)
 	}
-	if doc.DedupeText != "download stalls large artifacts hang near the end. bug downloads same failure here" {
+	if doc.DedupeText != "download stalls large downloads hang near the end. bug downloads same failure here" {
 		t.Fatalf("dedupe text: %q", doc.DedupeText)
 	}
 }

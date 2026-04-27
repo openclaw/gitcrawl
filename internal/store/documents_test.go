@@ -29,15 +29,15 @@ func TestUpsertDocumentIndexesFTS(t *testing.T) {
 	if _, err := st.UpsertDocument(ctx, Document{
 		ThreadID:   threadID,
 		Title:      "download stalls",
-		RawText:    "download stalls on large artifacts",
-		DedupeText: "download stalls large artifacts",
+		RawText:    "download stalls on large files",
+		DedupeText: "download stalls large files",
 		UpdatedAt:  "2026-04-26T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("document: %v", err)
 	}
 
 	var count int
-	if err := st.DB().QueryRowContext(ctx, `select count(*) from documents_fts where documents_fts match 'artifacts'`).Scan(&count); err != nil {
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from documents_fts where documents_fts match 'files'`).Scan(&count); err != nil {
 		t.Fatalf("fts query: %v", err)
 	}
 	if count != 1 {

@@ -49,7 +49,7 @@ TUI guidance:
 - keyboard-first navigation is required
 - mouse support is optional polish
 - right-click must not be required for primary actions because terminal mouse support is inconsistent
-- avoid decorative glyph noise or transient artifacts in dense panes
+- avoid decorative glyph noise or transient rendering debris in dense panes
 
 ## Command Surface
 
