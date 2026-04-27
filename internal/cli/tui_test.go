@@ -79,7 +79,7 @@ func TestTUIInAppHelpMentionsMenuMouse(t *testing.T) {
 	})
 
 	help := strings.Join(model.helpLines(80), "\n")
-	for _, want := range []string{"left click menu row", "wheel in menu", "open link picker", "neighbors, sort, refresh, layout, quit"} {
+	for _, want := range []string{"left click menu row", "wheel in menu", "#: jump to issue/PR number", "open link picker", "neighbors, sort, refresh, layout, quit"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
 		}
@@ -525,6 +525,45 @@ func TestTUIActionMenuPagesWithKeyboard(t *testing.T) {
 	}
 }
 
+func TestTUIJumpToLoadedThreadNumber(t *testing.T) {
+	clusters := sampleTUIClusters()
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+	model.detailCache[1] = store.ClusterDetail{
+		Cluster: clusters[0],
+		Members: []store.ClusterMemberDetail{{
+			Thread: store.Thread{
+				ID:      99,
+				Number:  99,
+				Kind:    "issue",
+				State:   "open",
+				Title:   "Jump target",
+				HTMLURL: "https://github.com/openclaw/openclaw/issues/99",
+			},
+		}},
+	}
+
+	model.jumpToThreadNumber(99)
+
+	cluster, ok := model.selectedCluster()
+	if !ok || cluster.ID != 1 {
+		t.Fatalf("selected cluster = %#v, want cluster 1", cluster)
+	}
+	thread, ok := model.selectedThread()
+	if !ok || thread.Number != 99 {
+		t.Fatalf("selected thread = %#v, want #99", thread)
+	}
+	if model.focus != focusMembers {
+		t.Fatalf("focus = %q, want members", model.focus)
+	}
+	if model.status != "Jumped to #99" {
+		t.Fatalf("status = %q, want jump confirmation", model.status)
+	}
+}
+
 func TestTUIMouseClickUsesMenuOffset(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -796,7 +835,7 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Toggle layout", "Min size 1+", "Hide closed", "Help", "Quit"} {
+	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Jump to issue/PR", "Toggle layout", "Min size 1+", "Hide closed", "Help", "Quit"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
 		}
@@ -818,6 +857,11 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 	if model.status != "Refresh unavailable for this view" {
 		t.Fatalf("refresh menu action status = %q", model.status)
 	}
+	model.runAction("jump")
+	if !model.jumping || model.searchInput.Prompt != "# " {
+		t.Fatalf("jump action did not start jump input")
+	}
+	model.jumping = false
 	model.width = 160
 	model.height = 40
 	model.runAction("toggle-layout")

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,6 +89,7 @@ type clusterBrowserModel struct {
 	status        string
 	search        string
 	searching     bool
+	jumping       bool
 	showHelp      bool
 	menuOpen      bool
 	menuTitle     string
@@ -205,6 +207,12 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keepVisible()
 			return m, cmd
 		}
+		if m.jumping {
+			var cmd tea.Cmd
+			m, cmd = m.handleJumpKey(msg)
+			m.keepVisible()
+			return m, cmd
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -272,11 +280,25 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "/":
 			m.searching = true
+			m.jumping = false
 			m.showHelp = false
 			m.menuOpen = false
+			m.searchInput.Prompt = "/ "
+			m.searchInput.Placeholder = "filter clusters"
 			m.searchInput.SetValue(m.search)
 			cmd := m.searchInput.Focus()
 			m.status = "Filter: " + m.search
+			return m, cmd
+		case "#":
+			m.jumping = true
+			m.searching = false
+			m.showHelp = false
+			m.menuOpen = false
+			m.searchInput.Prompt = "# "
+			m.searchInput.Placeholder = "issue or PR number"
+			m.searchInput.SetValue("")
+			cmd := m.searchInput.Focus()
+			m.status = "Jump to issue/PR"
 			return m, cmd
 		case "esc":
 			if m.showHelp {
@@ -413,13 +435,16 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  header sort  wheel scroll  / filter  # jump  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
 	if width < 100 {
-		controls = "Tab focus  click select  right-click menu  / filter  ? help  q quit"
+		controls = "Tab focus  click select  right-click menu  / filter  # jump  ? help  q quit"
 	}
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
 		line = "Filter: " + m.searchInput.View()
+	}
+	if m.jumping {
+		line = "Jump: " + m.searchInput.View()
 	}
 	return lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#5bc0eb")).Foreground(lipgloss.Color("#05070d")).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
 }
@@ -550,6 +575,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  PageUp/PageDown: page the active pane",
 		"  Enter: drill into the next pane",
 		"  /: filter clusters",
+		"  #: jump to issue/PR number",
 		"  s: toggle cluster sort",
 		"  m: cycle member sort",
 		"  d: toggle compact/full detail",
@@ -684,6 +710,30 @@ func (m clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) (clusterBrowserMode
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		m.search = m.searchInput.Value()
 		m.applyClusterFilters()
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m clusterBrowserModel) handleJumpKey(msg tea.KeyMsg) (clusterBrowserModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.jumping = false
+		value := strings.TrimPrefix(strings.TrimSpace(m.searchInput.Value()), "#")
+		m.searchInput.Blur()
+		number, err := strconv.Atoi(value)
+		if err != nil || number <= 0 {
+			m.status = "Enter a positive issue or PR number"
+			return m, nil
+		}
+		m.jumpToThreadNumber(number)
+	case "esc":
+		m.jumping = false
+		m.searchInput.Blur()
+		m.status = "Jump cancelled"
+	default:
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -885,6 +935,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
 		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
 		tuiMenuItem{label: "Refresh from store", action: "refresh"},
+		tuiMenuItem{label: "Jump to issue/PR...", action: "jump"},
 		tuiMenuItem{label: "Toggle layout", action: "toggle-layout"},
 		tuiMenuItem{label: "Min size 1+", action: "min-size-1"},
 		tuiMenuItem{label: "Min size 5+", action: "min-size-5"},
@@ -943,6 +994,16 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	case "refresh":
 		m.refreshFromStore()
+		return true
+	case "jump":
+		m.jumping = true
+		m.searching = false
+		m.showHelp = false
+		m.searchInput.Prompt = "# "
+		m.searchInput.Placeholder = "issue or PR number"
+		m.searchInput.SetValue("")
+		_ = m.searchInput.Focus()
+		m.status = "Jump to issue/PR"
 		return true
 	case "toggle-layout":
 		m.toggleWideLayout()
@@ -1584,6 +1645,140 @@ func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
 	m.sortClusters()
 	m.loadSelectedCluster()
 	m.status = "Sort: " + m.payload.Sort
+}
+
+func (m *clusterBrowserModel) jumpToThreadNumber(number int) {
+	if number <= 0 {
+		m.status = "Enter a positive issue or PR number"
+		return
+	}
+	clusterID := m.findLoadedClusterIDForThreadNumber(number)
+	if clusterID == 0 && m.store != nil && m.repoID != 0 {
+		foundID, err := m.store.ClusterIDForThreadNumber(m.ctx, m.repoID, number, true)
+		if err != nil {
+			m.status = err.Error()
+			return
+		}
+		clusterID = foundID
+		if _, ok := m.detailCache[clusterID]; !ok {
+			detail, err := m.store.ClusterDetail(m.ctx, store.ClusterDetailOptions{
+				RepoID:        m.repoID,
+				ClusterID:     clusterID,
+				IncludeClosed: true,
+				MemberLimit:   200,
+				BodyChars:     1600,
+			})
+			if err != nil {
+				m.status = "Jump failed: " + err.Error()
+				return
+			}
+			m.detailCache[clusterID] = detail
+			m.ensureClusterInWorkingSet(detail.Cluster)
+		}
+	}
+	if clusterID == 0 {
+		m.status = fmt.Sprintf("Thread #%d was not found in loaded clusters", number)
+		return
+	}
+	if !m.selectClusterIDForJump(clusterID) {
+		m.status = fmt.Sprintf("Cluster %d is not available in this view", clusterID)
+		return
+	}
+	if m.selectMemberByNumber(number) {
+		m.focus = focusMembers
+		m.status = fmt.Sprintf("Jumped to #%d", number)
+		return
+	}
+	m.focus = focusMembers
+	m.status = fmt.Sprintf("Jumped to cluster %d; #%d is outside loaded members", clusterID, number)
+}
+
+func (m clusterBrowserModel) findLoadedClusterIDForThreadNumber(number int) int64 {
+	if m.hasDetail {
+		for _, member := range m.detail.Members {
+			if member.Thread.Number == number {
+				return m.detail.Cluster.ID
+			}
+		}
+	}
+	for _, detail := range m.detailCache {
+		for _, member := range detail.Members {
+			if member.Thread.Number == number {
+				return detail.Cluster.ID
+			}
+		}
+	}
+	for _, cluster := range m.allClusters {
+		if cluster.RepresentativeNumber == number {
+			return cluster.ID
+		}
+	}
+	return 0
+}
+
+func (m *clusterBrowserModel) ensureClusterInWorkingSet(cluster store.ClusterSummary) {
+	if cluster.ID == 0 {
+		return
+	}
+	for _, existing := range m.allClusters {
+		if existing.ID == cluster.ID {
+			return
+		}
+	}
+	m.allClusters = append(m.allClusters, cluster)
+}
+
+func (m *clusterBrowserModel) selectClusterIDForJump(clusterID int64) bool {
+	if m.selectVisibleClusterID(clusterID) {
+		return true
+	}
+	cluster, ok := m.clusterFromWorkingSet(clusterID)
+	if !ok {
+		return false
+	}
+	m.search = ""
+	if m.minSize > cluster.MemberCount {
+		m.minSize = 1
+	}
+	if cluster.Status != "active" || cluster.ClosedAt != "" {
+		m.showClosed = true
+	}
+	if m.payload.Limit > 0 && len(m.allClusters) > m.payload.Limit {
+		m.payload.Limit = len(m.allClusters)
+	}
+	m.applyClusterFilters()
+	return m.selectVisibleClusterID(clusterID)
+}
+
+func (m *clusterBrowserModel) selectVisibleClusterID(clusterID int64) bool {
+	for index, cluster := range m.payload.Clusters {
+		if cluster.ID == clusterID {
+			m.selected = index
+			m.loadSelectedCluster()
+			return true
+		}
+	}
+	return false
+}
+
+func (m clusterBrowserModel) clusterFromWorkingSet(clusterID int64) (store.ClusterSummary, bool) {
+	for _, cluster := range m.allClusters {
+		if cluster.ID == clusterID {
+			return cluster, true
+		}
+	}
+	return store.ClusterSummary{}, false
+}
+
+func (m *clusterBrowserModel) selectMemberByNumber(number int) bool {
+	for index, row := range m.memberRows {
+		if row.selectable && row.member.Thread.Number == number {
+			m.memberIndex = index
+			m.detailView.GotoTop()
+			return true
+		}
+	}
+	return false
 }
 
 func (m *clusterBrowserModel) refreshFromStore() {

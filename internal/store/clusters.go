@@ -173,6 +173,34 @@ func (s *Store) ClusterDetail(ctx context.Context, options ClusterDetailOptions)
 	return ClusterDetail{Cluster: summary, Members: members}, nil
 }
 
+func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, number int, includeClosed bool) (int64, error) {
+	where := `t.repo_id = ? and t.number = ?`
+	args := []any{repoID, number}
+	if !includeClosed {
+		where += ` and t.closed_at_local is null and cm.state = 'active' and cg.status = 'active' and cg.closed_at is null`
+	}
+	row := s.db.QueryRowContext(ctx, `
+		select cg.id
+		from threads t
+		join cluster_memberships cm on cm.thread_id = t.id
+		join cluster_groups cg on cg.id = cm.cluster_id
+		where `+where+`
+		order by case cm.state when 'active' then 0 else 1 end,
+			case cg.status when 'active' then 0 else 1 end,
+			coalesce(cg.updated_at, '') desc,
+			cg.id desc
+		limit 1
+	`, args...)
+	var clusterID int64
+	if err := row.Scan(&clusterID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, fmt.Errorf("thread #%d is not in a cluster", number)
+		}
+		return 0, fmt.Errorf("find thread cluster: %w", err)
+	}
+	return clusterID, nil
+}
+
 func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64, includeClosed bool) (ClusterSummary, error) {
 	where := `cg.repo_id = ? and cg.id = ?`
 	args := []any{repoID, clusterID}

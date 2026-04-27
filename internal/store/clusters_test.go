@@ -53,4 +53,12 @@ func TestListClusterSummaries(t *testing.T) {
 	if detail.Members[0].Thread.Number != 1 {
 		t.Fatalf("unexpected member thread: %#v", detail.Members[0].Thread)
 	}
+
+	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 1, true)
+	if err != nil {
+		t.Fatalf("thread cluster id: %v", err)
+	}
+	if clusterID != 10 {
+		t.Fatalf("thread cluster id = %d, want 10", clusterID)
+	}
 }
