@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
@@ -75,6 +78,10 @@ type clusterBrowserModel struct {
 	memberOff    int
 	memberIndex  int
 	detailScroll int
+	clusterTable table.Model
+	memberTable  table.Model
+	detailView   viewport.Model
+	searchInput  textinput.Model
 	detailCache  map[int64]store.ClusterDetail
 	detail       store.ClusterDetail
 	hasDetail    bool
@@ -111,19 +118,28 @@ func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int
 func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, payload clusterBrowserPayload) clusterBrowserModel {
 	clusters := append([]store.ClusterSummary(nil), payload.Clusters...)
 	payload.Clusters = clusters
+	search := textinput.New()
+	search.Prompt = "/ "
+	search.Placeholder = "filter clusters"
+	search.CharLimit = 80
+	search.Width = 40
 	model := clusterBrowserModel{
-		payload:     payload,
-		allClusters: clusters,
-		ctx:         ctx,
-		store:       st,
-		repoID:      repoID,
-		focus:       focusClusters,
-		status:      "Ready",
-		showClosed:  true,
-		minSize:     1,
-		memberSort:  memberSortKind,
-		memberIndex: -1,
-		detailCache: map[int64]store.ClusterDetail{},
+		payload:      payload,
+		allClusters:  clusters,
+		ctx:          ctx,
+		store:        st,
+		repoID:       repoID,
+		focus:        focusClusters,
+		status:       "Ready",
+		showClosed:   true,
+		minSize:      1,
+		memberSort:   memberSortKind,
+		memberIndex:  -1,
+		clusterTable: newTUITable(),
+		memberTable:  newTUITable(),
+		detailView:   viewport.New(1, 1),
+		searchInput:  search,
+		detailCache:  map[int64]store.ClusterDetail{},
 	}
 	model.applyClusterFilters()
 	model.loadSelectedCluster()
@@ -139,15 +155,17 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.syncComponents()
 		m.keepVisible()
 	case tea.KeyMsg:
 		if m.menuOpen {
 			return m.updateMenu(msg)
 		}
 		if m.searching {
-			m.handleSearchKey(msg)
+			var cmd tea.Cmd
+			m, cmd = m.handleSearchKey(msg)
 			m.keepVisible()
-			return m, nil
+			return m, cmd
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -207,7 +225,10 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searching = true
 			m.showHelp = false
 			m.menuOpen = false
+			m.searchInput.SetValue(m.search)
+			cmd := m.searchInput.Focus()
 			m.status = "Filter: " + m.search
+			return m, cmd
 		case "esc":
 			if m.showHelp {
 				m.showHelp = false
@@ -221,9 +242,11 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.keepVisible()
+		m.syncComponents()
 	case tea.MouseMsg:
 		m.handleMouse(msg)
 		m.keepVisible()
+		m.syncComponents()
 	}
 	return m, nil
 }
@@ -233,6 +256,7 @@ func (m clusterBrowserModel) View() string {
 		return "loading gitcrawl tui..."
 	}
 	layout := m.layout()
+	m.syncComponents()
 	header := m.renderHeader(layout.header.w)
 	clusters := m.renderClusters(layout.clusters)
 	members := m.renderMembers(layout.members)
@@ -322,53 +346,17 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 	controls := "Tab focus  click select  wheel scroll  / filter  s sort  m members  f min  x closed  ? help  q quit"
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
-		line = "Filter: " + m.search + "█"
+		line = "Filter: " + m.searchInput.View()
 	}
 	return lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#5bc0eb")).Foreground(lipgloss.Color("#05070d")).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
-	rows := []string{paneTitle(focusClusters, m.focus), m.clusterHeader(rect.w - 4)}
-	visible := maxInt(1, rect.h-5)
-	end := minInt(len(m.payload.Clusters), m.clusterOff+visible)
-	for i := m.clusterOff; i < end; i++ {
-		cluster := m.payload.Clusters[i]
-		style := lipgloss.NewStyle()
-		if i == m.selected {
-			style = style.Background(lipgloss.Color(selectedColor(m.focus == focusClusters))).Foreground(lipgloss.Color(selectedFG(m.focus == focusClusters))).Bold(true)
-		} else if cluster.Status != "" && cluster.Status != "active" {
-			style = style.Foreground(lipgloss.Color("#777777"))
-		} else {
-			style = style.Foreground(lipgloss.Color("#dfe7ef"))
-		}
-		rows = append(rows, style.Render(truncateCells(m.clusterRow(cluster, rect.w-4), rect.w-4)))
-	}
-	for len(rows) < visible+2 {
-		rows = append(rows, "")
-	}
-	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(strings.Join(rows, "\n"))
+	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus), m.clusterTable.View()))
 }
 
 func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
-	rows := []string{paneTitle(focusMembers, m.focus), truncateCells("number    state   updated  title", rect.w-4)}
-	visible := maxInt(1, rect.h-5)
-	end := minInt(len(m.memberRows), m.memberOff+visible)
-	for i := m.memberOff; i < end; i++ {
-		member := m.memberRows[i]
-		style := lipgloss.NewStyle()
-		if i == m.memberIndex {
-			style = style.Background(lipgloss.Color(selectedColor(m.focus == focusMembers))).Foreground(lipgloss.Color(selectedFG(m.focus == focusMembers))).Bold(true)
-		} else if member.thread().State != "open" {
-			style = style.Foreground(lipgloss.Color("#777777"))
-		} else {
-			style = style.Foreground(lipgloss.Color("#dfe7ef"))
-		}
-		rows = append(rows, style.Render(truncateCells(member.format(rect.w-4), rect.w-4)))
-	}
-	for len(rows) < visible+2 {
-		rows = append(rows, "")
-	}
-	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(strings.Join(rows, "\n"))
+	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus), m.memberTable.View()))
 }
 
 func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
@@ -379,26 +367,8 @@ func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
 	if m.menuOpen {
 		lines = append([]string{paneTitle(focusDetail, m.focus)}, m.menuLines(rect.w-4)...)
 	}
-	visible := maxInt(1, rect.h-3)
-	start := minInt(m.detailScroll, maxInt(0, len(lines)-visible))
-	end := minInt(len(lines), start+visible)
-	body := strings.Join(lines[start:end], "\n")
-	return paneStyle(focusDetail, m.focus, rect.w, rect.h).Render(body)
-}
-
-func (m clusterBrowserModel) clusterHeader(width int) string {
-	return truncateCells(fmt.Sprintf("%3s  %-20s  %-44s  %-9s %s", "cnt", "cluster", "title", "type", "updated"), width)
-}
-
-func (m clusterBrowserModel) clusterRow(cluster store.ClusterSummary, width int) string {
-	title := splitClusterTitle(cluster)
-	return truncateCells(fmt.Sprintf("%3d  %-20s  %-44s  %-9s %s",
-		cluster.MemberCount,
-		truncateCells(cluster.StableSlug, 20),
-		truncateCells(title, 44),
-		truncateCells(kindLabel(cluster.RepresentativeKind), 9),
-		formatRelativeTime(cluster.UpdatedAt),
-	), width)
+	m.detailView.SetContent(strings.Join(lines, "\n"))
+	return paneStyle(focusDetail, m.focus, rect.w, rect.h).Render(m.detailView.View())
 }
 
 func (m clusterBrowserModel) detailLines(width int) []string {
@@ -524,7 +494,11 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *clusterBrowserModel) move(delta int) {
 	if m.focus == focusDetail {
-		m.detailScroll = maxInt(0, m.detailScroll+delta)
+		if delta > 0 {
+			m.detailView.LineDown(delta)
+		} else {
+			m.detailView.LineUp(-delta)
+		}
 		return
 	}
 	if m.focus == focusMembers {
@@ -543,10 +517,12 @@ func (m *clusterBrowserModel) move(delta int) {
 	m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
 }
 
-func (m *clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) {
+func (m clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) (clusterBrowserModel, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		m.searching = false
+		m.search = m.searchInput.Value()
+		m.searchInput.Blur()
 		m.applyClusterFilters()
 		if m.search == "" {
 			m.status = "Filter cleared"
@@ -555,19 +531,16 @@ func (m *clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) {
 		}
 	case "esc":
 		m.searching = false
+		m.searchInput.Blur()
 		m.status = "Filter cancelled"
-	case "backspace", "ctrl+h":
-		if len(m.search) > 0 {
-			runes := []rune(m.search)
-			m.search = string(runes[:len(runes)-1])
-		}
-		m.applyClusterFilters()
 	default:
-		if len(msg.Runes) > 0 {
-			m.search += string(msg.Runes)
-			m.applyClusterFilters()
-		}
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		m.search = m.searchInput.Value()
+		m.applyClusterFilters()
+		return m, cmd
 	}
+	return m, nil
 }
 
 func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
@@ -717,9 +690,9 @@ func (m *clusterBrowserModel) mouseWheel(layout tuiLayout, msg tea.MouseMsg, del
 func (m *clusterBrowserModel) jumpEdge(end bool) {
 	if m.focus == focusDetail {
 		if end {
-			m.detailScroll = 9999
+			m.detailView.GotoBottom()
 		} else {
-			m.detailScroll = 0
+			m.detailView.GotoTop()
 		}
 		return
 	}
@@ -762,6 +735,107 @@ func (m *clusterBrowserModel) keepVisible() {
 		m.memberOff = m.memberIndex - memberRows + 1
 	}
 	m.memberOff = maxInt(0, m.memberOff)
+}
+
+func (m *clusterBrowserModel) syncComponents() {
+	layout := m.layout()
+	clusterW := maxInt(24, layout.clusters.w-4)
+	memberW := maxInt(24, layout.members.w-4)
+	detailW := maxInt(24, layout.detail.w-4)
+	detailH := maxInt(2, layout.detail.h-4)
+
+	m.clusterTable.SetWidth(clusterW)
+	m.clusterTable.SetHeight(maxInt(1, layout.clusters.h-6))
+	m.clusterTable.SetColumns(clusterColumns(clusterW))
+	m.clusterTable.SetRows(m.clusterRows())
+	m.clusterTable.SetCursor(clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1)))
+	if m.focus == focusClusters {
+		m.clusterTable.Focus()
+	} else {
+		m.clusterTable.Blur()
+	}
+
+	m.memberTable.SetWidth(memberW)
+	m.memberTable.SetHeight(maxInt(1, layout.members.h-6))
+	m.memberTable.SetColumns(memberColumns(memberW))
+	m.memberTable.SetRows(m.memberTableRows())
+	m.memberTable.SetCursor(clampInt(m.memberIndex, 0, maxInt(0, len(m.memberRows)-1)))
+	if m.focus == focusMembers {
+		m.memberTable.Focus()
+	} else {
+		m.memberTable.Blur()
+	}
+
+	m.detailView.Width = detailW
+	m.detailView.Height = detailH
+	m.detailView.MouseWheelEnabled = true
+	m.detailView.MouseWheelDelta = 3
+	m.searchInput.Width = maxInt(20, m.width-16)
+}
+
+func newTUITable() table.Model {
+	styles := table.DefaultStyles()
+	styles.Header = styles.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#4a5568")).
+		BorderBottom(true).
+		Bold(true).
+		Foreground(lipgloss.Color("#f7f7ff"))
+	styles.Cell = styles.Cell.Foreground(lipgloss.Color("#dfe7ef")).Padding(0, 1)
+	styles.Selected = styles.Selected.
+		Foreground(lipgloss.Color("#05070d")).
+		Background(lipgloss.Color("#f7f7ff")).
+		Bold(true)
+	return table.New(table.WithStyles(styles), table.WithFocused(false))
+}
+
+func clusterColumns(width int) []table.Column {
+	titleW := maxInt(14, width-36)
+	return []table.Column{
+		{Title: "cnt", Width: 4},
+		{Title: "cluster", Width: 20},
+		{Title: "title", Width: titleW},
+		{Title: "kind", Width: 6},
+		{Title: "age", Width: 8},
+	}
+}
+
+func memberColumns(width int) []table.Column {
+	titleW := maxInt(12, width-28)
+	return []table.Column{
+		{Title: "number", Width: 8},
+		{Title: "state", Width: 7},
+		{Title: "age", Width: 8},
+		{Title: "title", Width: titleW},
+	}
+}
+
+func (m clusterBrowserModel) clusterRows() []table.Row {
+	rows := make([]table.Row, 0, len(m.payload.Clusters))
+	for _, cluster := range m.payload.Clusters {
+		rows = append(rows, table.Row{
+			fmt.Sprintf("%d", cluster.MemberCount),
+			cluster.StableSlug,
+			splitClusterTitle(cluster),
+			kindLabel(cluster.RepresentativeKind),
+			formatRelativeTime(cluster.UpdatedAt),
+		})
+	}
+	return rows
+}
+
+func (m clusterBrowserModel) memberTableRows() []table.Row {
+	rows := make([]table.Row, 0, len(m.memberRows))
+	for _, member := range m.memberRows {
+		thread := member.thread()
+		rows = append(rows, table.Row{
+			fmt.Sprintf("#%d", thread.Number),
+			thread.State,
+			formatRelativeTime(thread.UpdatedAtGitHub),
+			thread.Title,
+		})
+	}
+	return rows
 }
 
 func (m clusterBrowserModel) pageStep() int {
