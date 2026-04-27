@@ -1328,7 +1328,16 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 	gitDir := filepath.Join(dir, ".git")
 	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
 		if err := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); err != nil {
-			return "", err
+			if !isDirtyPortablePullError(err) {
+				return "", err
+			}
+			if resetErr := runGit(ctx, "", "-C", dir, "reset", "--hard", "HEAD"); resetErr != nil {
+				return "", err
+			}
+			if retryErr := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); retryErr != nil {
+				return "", retryErr
+			}
+			return "reset-pulled", nil
 		}
 		return "pulled", nil
 	}
@@ -1344,6 +1353,11 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 		return "", err
 	}
 	return "cloned", nil
+}
+
+func isDirtyPortablePullError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "Your local changes") || strings.Contains(message, "would be overwritten by merge")
 }
 
 func runGit(ctx context.Context, workdir string, args ...string) error {
