@@ -475,7 +475,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	if interactive {
 		workingSet, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
 			RepoID:        repo.ID,
-			IncludeClosed: true,
+			IncludeClosed: !*hideClosed,
 			MinSize:       1,
 			Limit:         maxInt(defaultTUIWorkingSetLimit, limit),
 			Sort:          sort,

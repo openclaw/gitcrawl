@@ -305,13 +305,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyClusterFilters()
 			m.status = fmt.Sprintf("Min size: %s", minSizeLabel(m.minSize))
 		case "x":
-			m.showClosed = !m.showClosed
-			m.applyClusterFilters()
-			if m.showClosed {
-				m.status = "Showing closed clusters and members"
-			} else {
-				m.status = "Hiding closed clusters and members"
-			}
+			m.toggleClosedVisibility()
 		case "/":
 			cmd := m.startFilterInput()
 			return m, cmd
@@ -1238,13 +1232,7 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.setMinSizeFromMenu(10)
 		return true
 	case "toggle-closed":
-		m.showClosed = !m.showClosed
-		m.applyClusterFilters()
-		if m.showClosed {
-			m.status = "Showing closed clusters and members"
-		} else {
-			m.status = "Hiding closed clusters and members"
-		}
+		m.toggleClosedVisibility()
 		return true
 	case "show-help":
 		m.showHelp = true
@@ -1486,6 +1474,20 @@ func (m *clusterBrowserModel) setMinSizeFromMenu(value int) {
 	m.minSize = maxInt(1, value)
 	m.applyClusterFilters()
 	m.status = fmt.Sprintf("Min size: %s", minSizeLabel(m.minSize))
+}
+
+func (m *clusterBrowserModel) toggleClosedVisibility() {
+	m.showClosed = !m.showClosed
+	if m.store != nil && m.repoID != 0 {
+		m.refreshFromStore()
+	} else {
+		m.applyClusterFilters()
+	}
+	if m.showClosed {
+		m.status = "Showing closed clusters and members"
+	} else {
+		m.status = "Hiding closed clusters and members"
+	}
 }
 
 func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold float64) {
@@ -2196,7 +2198,7 @@ func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSu
 	}
 	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
-		IncludeClosed: true,
+		IncludeClosed: m.showClosed,
 		MinSize:       1,
 		Limit:         maxInt(defaultTUIWorkingSetLimit, maxInt(m.payload.Limit, len(m.allClusters))),
 		Sort:          m.payload.Sort,
@@ -2256,7 +2258,7 @@ func (m *clusterBrowserModel) switchRepository(fullName string) {
 	}
 	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: true,
+		IncludeClosed: m.showClosed,
 		MinSize:       1,
 		Limit:         maxInt(defaultTUIWorkingSetLimit, m.payload.Limit),
 		Sort:          m.payload.Sort,
