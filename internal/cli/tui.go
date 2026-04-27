@@ -558,9 +558,10 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
 	case "enter":
 		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
-			m.runAction(m.menuItems[m.menuIndex].action)
+			if m.runAction(m.menuItems[m.menuIndex].action) {
+				m.menuOpen = false
+			}
 		}
-		m.menuOpen = false
 	}
 	return m, nil
 }
@@ -706,8 +707,9 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		return
 	}
 	m.menuIndex = index
-	m.runAction(m.menuItems[m.menuIndex].action)
-	m.menuOpen = false
+	if m.runAction(m.menuItems[m.menuIndex].action) {
+		m.menuOpen = false
+	}
 }
 
 func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) {
@@ -775,10 +777,10 @@ func (m *clusterBrowserModel) openActionMenu() {
 	m.status = "Action menu"
 }
 
-func (m *clusterBrowserModel) runAction(action string) {
+func (m *clusterBrowserModel) runAction(action string) bool {
 	if action == "close-menu" {
 		m.status = "Menu closed"
-		return
+		return true
 	}
 	switch action {
 	case "copy-cluster":
@@ -787,31 +789,31 @@ func (m *clusterBrowserModel) runAction(action string) {
 		} else {
 			m.status = "Copied cluster summary"
 		}
-		return
+		return true
 	case "copy-visible-clusters":
 		if err := copyText(m.visibleClustersClipboardText()); err != nil {
 			m.status = err.Error()
 		} else {
 			m.status = "Copied visible clusters"
 		}
-		return
+		return true
 	case "copy-reference-links":
 		links := m.referenceLinks()
 		if len(links) == 0 {
 			m.status = "No body links found"
-			return
+			return true
 		}
 		if err := copyText(strings.Join(links, "\n")); err != nil {
 			m.status = err.Error()
 		} else {
 			m.status = "Copied body links"
 		}
-		return
+		return true
 	}
 	thread, ok := m.selectedThread()
 	if !ok {
 		m.status = "No selected thread"
-		return
+		return true
 	}
 	switch action {
 	case "open":
@@ -844,7 +846,7 @@ func (m *clusterBrowserModel) runAction(action string) {
 		link, ok := m.firstReferenceLink()
 		if !ok {
 			m.status = "No body link found"
-			return
+			return true
 		}
 		if err := openURL(link); err != nil {
 			m.status = err.Error()
@@ -855,7 +857,7 @@ func (m *clusterBrowserModel) runAction(action string) {
 		link, ok := m.firstReferenceLink()
 		if !ok {
 			m.status = "No body link found"
-			return
+			return true
 		}
 		if err := copyText(link); err != nil {
 			m.status = err.Error()
@@ -865,6 +867,7 @@ func (m *clusterBrowserModel) runAction(action string) {
 	case "close-menu":
 		m.status = "Menu closed"
 	}
+	return true
 }
 
 func isMouseWheel(button tea.MouseButton) bool {
