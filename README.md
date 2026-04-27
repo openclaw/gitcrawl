@@ -2,26 +2,27 @@
 
 `gitcrawl` is a local-first GitHub issue and pull request crawler for maintainer triage.
 
-Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and a future TUI. There is no local HTTP API.
+Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and the terminal UI. There is no local HTTP API.
 
 ## Status
 
 Early bootstrap. The implementation is being built in small commits.
 
-## Planned Commands
+## Commands
 
 ```bash
 gitcrawl init
 gitcrawl doctor
 gitcrawl sync owner/repo
 gitcrawl refresh owner/repo
-gitcrawl clusters owner/repo --json
-gitcrawl cluster-detail owner/repo --id 123 --json
-gitcrawl search owner/repo --query "download stalls" --json
+gitcrawl clusters owner/repo
+gitcrawl cluster-detail owner/repo --id 123
+gitcrawl search owner/repo --query "download stalls"
+gitcrawl tui
 gitcrawl tui owner/repo
 ```
 
-`serve` is intentionally not part of `gitcrawl`.
+`gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.
 
 ## Local Defaults
 

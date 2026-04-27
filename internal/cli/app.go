@@ -74,7 +74,14 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if *versionFlag {
 		return a.writeOutput("version", map[string]string{"version": version}, false)
 	}
-	if len(rest) == 0 || rest[0] == "help" || rest[0] == "--help" || rest[0] == "-h" {
+	if len(rest) == 0 || rest[0] == "--help" || rest[0] == "-h" {
+		a.printUsage()
+		return nil
+	}
+	if rest[0] == "help" {
+		if len(rest) > 1 {
+			return a.printCommandUsage(rest[1])
+		}
 		a.printUsage()
 		return nil
 	}
@@ -106,7 +113,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runNeighbors(ctx, rest[1:])
 	case "portable":
 		return a.runPortable(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "tui":
+		return a.runTUI(ctx, rest[1:])
+	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -383,6 +392,96 @@ func (a *App) runClusters(ctx context.Context, args []string) error {
 		"repository": repo.FullName,
 		"clusters":   clusters,
 	}, true)
+}
+
+func (a *App) runTUI(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	minSizeRaw := fs.String("min-size", "", "minimum active member count")
+	limitRaw := fs.String("limit", "20", "maximum cluster rows")
+	sortMode := fs.String("sort", "", "sort mode: recent|size")
+	hideClosed := fs.Bool("hide-closed", false, "hide non-active or closed clusters")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return a.printCommandUsage("tui")
+		}
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() > 1 {
+		return usageErr(fmt.Errorf("tui accepts at most one owner/repo"))
+	}
+
+	minSize, err := parseOptionalPositiveInt(*minSizeRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	repo, inferred, err := a.resolveOptionalRepository(ctx, rt, fs.Args())
+	if err != nil {
+		return err
+	}
+	sort := strings.TrimSpace(*sortMode)
+	if sort == "" {
+		sort = strings.TrimSpace(rt.Config.TUI.DefaultSort)
+	}
+	if sort == "" {
+		sort = "recent"
+	}
+	if sort != "recent" && sort != "size" {
+		return usageErr(fmt.Errorf("unsupported sort %q", sort))
+	}
+
+	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
+		RepoID:        repo.ID,
+		IncludeClosed: !*hideClosed,
+		MinSize:       minSize,
+		Limit:         limit,
+		Sort:          sort,
+	})
+	if err != nil {
+		return err
+	}
+	if clusters == nil {
+		clusters = []store.ClusterSummary{}
+	}
+	return a.writeOutput("tui", map[string]any{
+		"repository":          repo.FullName,
+		"inferred_repository": inferred,
+		"mode":                "cluster-browser",
+		"sort":                sort,
+		"clusters":            clusters,
+	}, true)
+}
+
+func (a *App) resolveOptionalRepository(ctx context.Context, rt localRuntime, args []string) (store.Repository, bool, error) {
+	if len(args) == 0 {
+		repo, err := rt.defaultRepository(ctx)
+		if err != nil {
+			return store.Repository{}, false, usageErr(fmt.Errorf("tui could not infer a repository: %w; run gitcrawl sync owner/repo or pass owner/repo explicitly", err))
+		}
+		return repo, true, nil
+	}
+	owner, repoName, err := parseOwnerRepo(args[0])
+	if err != nil {
+		return store.Repository{}, false, usageErr(err)
+	}
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return store.Repository{}, false, err
+	}
+	return repo, false, nil
 }
 
 func (a *App) runClusterDetail(ctx context.Context, args []string) error {
@@ -952,10 +1051,21 @@ func (a *App) printUsage() {
 	fmt.Fprint(a.Stdout, usageText)
 }
 
+func (a *App) printCommandUsage(command string) error {
+	switch command {
+	case "tui":
+		fmt.Fprint(a.Stdout, tuiUsageText)
+		return nil
+	default:
+		return usageErr(fmt.Errorf("unknown help topic %q", command))
+	}
+}
+
 const usageText = `gitcrawl mirrors GitHub issues and pull requests into local SQLite for maintainer triage.
 
 Usage:
   gitcrawl [global flags] <command> [command flags]
+  gitcrawl help <command>
 
 Global flags:
   --config <path>       config path
@@ -973,7 +1083,15 @@ Core commands:
   cluster-detail       dump one durable cluster
   search               search local thread documents
   portable prune       prune volatile payloads from a portable store
-  tui                  browse local clusters in a terminal UI
+  tui [owner/repo]     browse clusters in the terminal UI; repo is inferred when omitted
 
 No API server is provided. There is intentionally no serve command.
+`
+
+const tuiUsageText = `gitcrawl tui opens the local terminal cluster browser.
+
+Usage:
+  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--hide-closed]
+
+If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
 `

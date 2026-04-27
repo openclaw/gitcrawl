@@ -46,6 +46,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 
 TUI guidance:
 
+- `gitcrawl tui [owner/repo]` is a supported command; omit `owner/repo` to use the most recently updated local repository
 - keyboard-first navigation is required
 - mouse support is optional polish
 - right-click must not be required for primary actions because terminal mouse support is inconsistent
@@ -55,7 +56,7 @@ TUI guidance:
 
 No `serve` command.
 
-Planned public commands:
+Public commands:
 
 - `init`
 - `doctor`

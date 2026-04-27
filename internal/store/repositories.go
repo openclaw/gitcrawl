@@ -55,6 +55,35 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 	return repo, nil
 }
 
+func (s *Store) ListRepositories(ctx context.Context) ([]Repository, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, owner, name, full_name, github_repo_id, raw_json, updated_at
+		from repositories
+		order by coalesce(updated_at, '') desc, id desc
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list repositories: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []Repository
+	for rows.Next() {
+		var repo Repository
+		var githubRepoID sql.NullString
+		var rawJSON sql.NullString
+		if err := rows.Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName, &githubRepoID, &rawJSON, &repo.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan repository: %w", err)
+		}
+		repo.GitHubRepoID = githubRepoID.String
+		repo.RawJSON = rawJSON.String
+		repos = append(repos, repo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate repositories: %w", err)
+	}
+	return repos, nil
+}
+
 func nullString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: value != ""}
 }
