@@ -63,6 +63,90 @@ func TestListClusterSummaries(t *testing.T) {
 	}
 }
 
+func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	rawOne, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "101", Number: 101, Kind: "issue", State: "open",
+		Title: "raw first", HTMLURL: "https://github.com/openclaw/openclaw/issues/101",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "raw-101", UpdatedAt: "2026-04-26T01:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("raw first thread: %v", err)
+	}
+	rawTwo, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "102", Number: 102, Kind: "pull_request", State: "open",
+		Title: "raw second", HTMLURL: "https://github.com/openclaw/openclaw/pull/102",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "raw-102", UpdatedAt: "2026-04-26T02:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("raw second thread: %v", err)
+	}
+	durableID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "201", Number: 201, Kind: "issue", State: "open",
+		Title: "durable member", HTMLURL: "https://github.com/openclaw/openclaw/issues/201",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "durable-201", UpdatedAt: "2026-04-26T03:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("durable thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_runs(id, repo_id, scope, status, started_at, finished_at, stats_json)
+		values(7, ?, 'repo', 'completed', '2026-04-26T00:00:00Z', '2026-04-26T00:01:00Z', '{}');
+		insert into clusters(id, repo_id, cluster_run_id, representative_thread_id, member_count, created_at)
+		values(70, ?, 7, ?, 2, '2026-04-26T00:01:00Z');
+	`, repoID, repoID, rawOne); err != nil {
+		t.Fatalf("seed raw cluster: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_members(cluster_id, thread_id, score_to_representative, created_at)
+		values(70, ?, 1.0, '2026-04-26T00:01:00Z'),
+		      (70, ?, 0.91, '2026-04-26T00:01:00Z');
+	`, rawOne, rawTwo); err != nil {
+		t.Fatalf("seed raw members: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(700, ?, 'durable-key', 'durable-slug', 'active', ?, 'Durable title', '2026-04-26T00:00:00Z', '2026-04-26T00:03:00Z');
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(700, ?, 'member', 'active', 'system', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z');
+	`, repoID, durableID, durableID); err != nil {
+		t.Fatalf("seed durable cluster: %v", err)
+	}
+
+	display, err := st.ListDisplayClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "size"})
+	if err != nil {
+		t.Fatalf("list display clusters: %v", err)
+	}
+	if len(display) != 1 || display[0].ID != 70 || display[0].Source != ClusterSourceRun || display[0].MemberCount != 2 {
+		t.Fatalf("display clusters should prefer raw run, got %#v", display)
+	}
+	durable, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "size"})
+	if err != nil {
+		t.Fatalf("list durable clusters: %v", err)
+	}
+	if len(durable) != 1 || durable[0].ID != 700 || durable[0].Source != ClusterSourceDurable {
+		t.Fatalf("durable clusters should remain available, got %#v", durable)
+	}
+
+	detail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 70, IncludeClosed: true, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("raw detail: %v", err)
+	}
+	if detail.Cluster.Source != ClusterSourceRun || len(detail.Members) != 2 || detail.Members[0].Thread.Number != 101 {
+		t.Fatalf("unexpected raw detail: %#v", detail)
+	}
+}
+
 func TestCloseAndReopenClusterLocally(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

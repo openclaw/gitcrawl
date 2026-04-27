@@ -1025,9 +1025,9 @@ func (m *clusterBrowserModel) openActionMenu() {
 	if member, ok := m.selectedMember(); ok {
 		sectionAdded := false
 		if cluster, clusterOK := m.selectedCluster(); clusterOK {
-			if member.State == "excluded" {
+			if clusterSupportsDurableLocalActions(cluster) && member.State == "excluded" {
 				m.menuItems = append(m.menuItems, tuiMenuItem{label: fmt.Sprintf("Include #%d in C%d...", member.Thread.Number, cluster.ID), action: "include-member-confirm"})
-			} else {
+			} else if clusterSupportsDurableLocalActions(cluster) {
 				m.menuItems = append(m.menuItems,
 					tuiMenuItem{label: fmt.Sprintf("Exclude #%d from C%d...", member.Thread.Number, cluster.ID), action: "exclude-member-confirm"},
 					tuiMenuItem{label: fmt.Sprintf("Set #%d as canonical...", member.Thread.Number), action: "canonical-member-confirm"},
@@ -1071,10 +1071,12 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"},
 		)
 		cluster, _ := m.selectedCluster()
-		if cluster.Status == "closed" || cluster.ClosedAt != "" {
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Reopen cluster locally...", action: "reopen-cluster-confirm"})
-		} else {
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close cluster locally...", action: "close-cluster-confirm"})
+		if clusterSupportsDurableLocalActions(cluster) {
+			if cluster.Status == "closed" || cluster.ClosedAt != "" {
+				m.menuItems = append(m.menuItems, tuiMenuItem{label: "Reopen cluster locally...", action: "reopen-cluster-confirm"})
+			} else {
+				m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close cluster locally...", action: "close-cluster-confirm"})
+			}
 		}
 		if m.hasDetail {
 			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy member list", action: "copy-member-list"})
@@ -1815,6 +1817,10 @@ func (m *clusterBrowserModel) closeSelectedClusterLocally() {
 		m.status = "No selected cluster"
 		return
 	}
+	if !clusterSupportsDurableLocalActions(cluster) {
+		m.status = "Local cluster close is only available for durable clusters"
+		return
+	}
 	if m.store == nil || m.repoID == 0 {
 		m.status = "Local cluster close unavailable for this view"
 		return
@@ -1831,6 +1837,10 @@ func (m *clusterBrowserModel) reopenSelectedClusterLocally() {
 	cluster, ok := m.selectedCluster()
 	if !ok {
 		m.status = "No selected cluster"
+		return
+	}
+	if !clusterSupportsDurableLocalActions(cluster) {
+		m.status = "Local cluster reopen is only available for durable clusters"
 		return
 	}
 	if m.store == nil || m.repoID == 0 {
@@ -1850,6 +1860,10 @@ func (m *clusterBrowserModel) excludeSelectedClusterMemberLocally() {
 	member, memberOK := m.selectedMember()
 	if !clusterOK || !memberOK {
 		m.status = "No selected cluster member"
+		return
+	}
+	if !clusterSupportsDurableLocalActions(cluster) {
+		m.status = "Local member triage is only available for durable clusters"
 		return
 	}
 	if m.store == nil || m.repoID == 0 {
@@ -1872,6 +1886,10 @@ func (m *clusterBrowserModel) includeSelectedClusterMemberLocally() {
 		m.status = "No selected cluster member"
 		return
 	}
+	if !clusterSupportsDurableLocalActions(cluster) {
+		m.status = "Local member triage is only available for durable clusters"
+		return
+	}
 	if m.store == nil || m.repoID == 0 {
 		m.status = "Local member include unavailable for this view"
 		return
@@ -1889,6 +1907,10 @@ func (m *clusterBrowserModel) setSelectedClusterCanonicalLocally() {
 	member, memberOK := m.selectedMember()
 	if !clusterOK || !memberOK {
 		m.status = "No selected cluster member"
+		return
+	}
+	if !clusterSupportsDurableLocalActions(cluster) {
+		m.status = "Local member triage is only available for durable clusters"
 		return
 	}
 	if m.store == nil || m.repoID == 0 {
@@ -2495,7 +2517,7 @@ func (m clusterBrowserModel) currentClusterID() int64 {
 
 func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSummary, error) {
 	viewLimit := maxInt(20, m.payload.Limit)
-	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+	clusters, err := m.store.ListDisplayClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
 		IncludeClosed: m.showClosed,
 		MinSize:       m.minSize,
@@ -2505,7 +2527,7 @@ func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSu
 	if err != nil {
 		return nil, err
 	}
-	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+	workingSet, err := m.store.ListDisplayClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
 		IncludeClosed: m.showClosed,
 		MinSize:       1,
@@ -2554,7 +2576,7 @@ func (m *clusterBrowserModel) switchRepository(fullName string) {
 		m.status = "Repository switch failed: " + err.Error()
 		return
 	}
-	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+	clusters, err := m.store.ListDisplayClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: m.showClosed,
 		MinSize:       m.minSize,
@@ -2565,7 +2587,7 @@ func (m *clusterBrowserModel) switchRepository(fullName string) {
 		m.status = "Repository switch failed: " + err.Error()
 		return
 	}
-	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+	workingSet, err := m.store.ListDisplayClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: m.showClosed,
 		MinSize:       1,
@@ -2914,6 +2936,10 @@ func (m clusterBrowserModel) selectedCluster() (store.ClusterSummary, bool) {
 		return store.ClusterSummary{}, false
 	}
 	return m.payload.Clusters[m.selected], true
+}
+
+func clusterSupportsDurableLocalActions(cluster store.ClusterSummary) bool {
+	return cluster.Source == "" || cluster.Source == store.ClusterSourceDurable
 }
 
 func (m clusterBrowserModel) selectedClusterURL() (string, bool) {

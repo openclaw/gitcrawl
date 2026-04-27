@@ -141,7 +141,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "clusters":
 		return a.runClusters(ctx, rest[1:])
 	case "durable-clusters":
-		return a.runClusters(ctx, rest[1:])
+		return a.runDurableClusters(ctx, rest[1:])
 	case "cluster-detail":
 		return a.runClusterDetail(ctx, rest[1:])
 	case "cluster-explain":
@@ -462,6 +462,14 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 }
 
 func (a *App) runClusters(ctx context.Context, args []string) error {
+	return a.runClusterList(ctx, "clusters", args, false)
+}
+
+func (a *App) runDurableClusters(ctx context.Context, args []string) error {
+	return a.runClusterList(ctx, "durable-clusters", args, true)
+}
+
+func (a *App) runClusterList(ctx context.Context, command string, args []string, durable bool) error {
 	fs := flag.NewFlagSet("clusters", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
@@ -474,7 +482,7 @@ func (a *App) runClusters(ctx context.Context, args []string) error {
 	}
 	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("clusters requires owner/repo"))
+		return usageErr(fmt.Errorf("%s requires owner/repo", command))
 	}
 	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
 	if err != nil {
@@ -502,17 +510,23 @@ func (a *App) runClusters(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
+	options := store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: !*hideClosed,
 		MinSize:       minSize,
 		Limit:         limit,
 		Sort:          sort,
-	})
+	}
+	var clusters []store.ClusterSummary
+	if durable {
+		clusters, err = rt.Store.ListClusterSummaries(ctx, options)
+	} else {
+		clusters, err = rt.Store.ListDisplayClusterSummaries(ctx, options)
+	}
 	if err != nil {
 		return err
 	}
-	return a.writeOutput("clusters", map[string]any{
+	return a.writeOutput(command, map[string]any{
 		"repository": repo.FullName,
 		"clusters":   clusters,
 	}, true)
@@ -576,7 +590,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
 
-	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
+	clusters, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: !*hideClosed,
 		MinSize:       minSize,
@@ -587,7 +601,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return err
 	}
 	if interactive {
-		workingSet, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
+		workingSet, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
 			RepoID:        repo.ID,
 			IncludeClosed: !*hideClosed,
 			MinSize:       1,
@@ -1732,9 +1746,9 @@ Core commands:
                        restore one row to a durable cluster
   set-cluster-canonical
                        set the canonical row for a durable cluster
-  clusters             list cluster summaries
-  durable-clusters     alias for clusters
-  cluster-detail       dump one durable cluster
+  clusters             list latest run cluster summaries, with durable fallback
+  durable-clusters     list durable cluster groups
+  cluster-detail       dump one latest run cluster, with durable fallback
   cluster-explain      alias for cluster-detail
   neighbors            list vector-nearest local issue and pull request rows
   search               search local thread documents
