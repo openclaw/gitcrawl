@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/openclaw/gitcrawl/internal/config"
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 type App struct {
@@ -137,6 +138,15 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return err
 	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	storeStatus, err := st.Status(ctx)
+	if err != nil {
+		return err
+	}
 
 	githubToken := config.ResolveGitHubToken(cfg)
 	openAIKey := config.ResolveOpenAIKey(cfg)
@@ -149,6 +159,9 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"github_token_source":  githubToken.Source,
 		"openai_key_present":   openAIKey.Value != "",
 		"openai_key_source":    openAIKey.Source,
+		"repository_count":     storeStatus.RepositoryCount,
+		"thread_count":         storeStatus.ThreadCount,
+		"cluster_count":        storeStatus.ClusterCount,
 		"summary_model":        cfg.OpenAI.SummaryModel,
 		"embed_model":          cfg.OpenAI.EmbedModel,
 		"embedding_basis":      cfg.EmbeddingBasis,
