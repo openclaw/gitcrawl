@@ -26,6 +26,7 @@ var (
 	markdownHeadingRE = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
 	markdownListRE    = regexp.MustCompile(`^(\s*)([-*+]|\d+[.)])\s+(.+)$`)
 	terminalControlRE = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
+	summaryKeyOrder   = []string{"key_summary", "problem_summary", "solution_summary", "maintainer_signal_summary", "dedupe_summary"}
 )
 
 type clusterBrowserPayload struct {
@@ -404,28 +405,31 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		return lines
 	}
 	member := m.memberRows[clampInt(m.memberIndex, 0, len(m.memberRows)-1)]
+	thread := member.thread()
 	lines = append(lines,
-		bold(fmt.Sprintf("%s #%d", kindTitle(member.thread().Kind), member.thread().Number)),
+		dim(tuiRule(width)),
+		bold(fmt.Sprintf("%s #%d", kindTitle(thread.Kind), thread.Number)),
 	)
-	lines = append(lines, wrapPlain(member.thread().Title, width)...)
+	lines = append(lines, wrapPlain(thread.Title, width)...)
 	lines = append(lines,
 		"",
-		fmt.Sprintf("state: %s   updated: %s   author: %s", member.thread().State, formatRelativeTime(member.thread().UpdatedAtGitHub), firstNonEmpty(member.thread().AuthorLogin, "unknown")),
-		fmt.Sprintf("url: %s", member.thread().HTMLURL),
-		"",
+		fmt.Sprintf("closed: %s   updated: %s   author: %s", closedLabel(thread), formatRelativeTime(thread.UpdatedAtGitHub), firstNonEmpty(thread.AuthorLogin, "unknown")),
 	)
-	if labels := labelsFromJSON(member.thread().LabelsJSON); labels != "" {
+	if labels := labelsFromJSON(thread.LabelsJSON); labels != "" {
 		lines = append(lines, "labels: "+labels, "")
 	}
+	lines = append(lines, fmt.Sprintf("url: %s", thread.HTMLURL), "")
 	if len(member.member.Summaries) > 0 {
+		lines = append(lines, dim(tuiRule(width)))
 		lines = append(lines, bold("LLM Summary"))
 		for _, key := range sortedSummaryKeys(member.member.Summaries) {
-			lines = append(lines, dim(key+":"))
+			lines = append(lines, dim(formatSummaryLabel(key)+":"))
 			lines = append(lines, markdownLines(member.member.Summaries[key], width)...)
 			lines = append(lines, "")
 		}
 	}
 	if strings.TrimSpace(member.member.BodySnippet) != "" {
+		lines = append(lines, dim(tuiRule(width)))
 		lines = append(lines, bold("Main Preview"))
 		lines = append(lines, markdownLines(member.member.BodySnippet, width)...)
 	}
@@ -455,8 +459,6 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  c: copy selected thread URL",
 		"  ?: toggle this help",
 		"  q: quit",
-		"",
-		"This Go TUI intentionally avoids ghcrawl's old fragile right-click popover.",
 	}
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -1156,13 +1158,39 @@ func splitClusterTitle(cluster store.ClusterSummary) string {
 
 func sortedSummaryKeys(values map[string]string) []string {
 	keys := make([]string, 0, len(values))
-	for key, value := range values {
-		if strings.TrimSpace(value) != "" {
+	seen := map[string]bool{}
+	for _, key := range summaryKeyOrder {
+		if strings.TrimSpace(values[key]) != "" {
 			keys = append(keys, key)
+			seen[key] = true
 		}
 	}
-	sort.Strings(keys)
+	var extra []string
+	for key, value := range values {
+		if !seen[key] && strings.TrimSpace(value) != "" {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	keys = append(keys, extra...)
 	return keys
+}
+
+func formatSummaryLabel(key string) string {
+	switch key {
+	case "key_summary":
+		return "Key summary"
+	case "problem_summary":
+		return "Purpose"
+	case "solution_summary":
+		return "Solution"
+	case "maintainer_signal_summary":
+		return "Maintainer signal"
+	case "dedupe_summary":
+		return "Cluster signal"
+	default:
+		return strings.ReplaceAll(key, "_", " ")
+	}
 }
 
 func labelsFromJSON(raw string) string {
@@ -1205,6 +1233,21 @@ func kindTitle(kind string) string {
 		return "PR"
 	}
 	return "Issue"
+}
+
+func closedLabel(thread store.Thread) string {
+	if thread.State == "open" {
+		return "no"
+	}
+	closedAt := firstNonEmpty(thread.ClosedAtLocal, thread.ClosedAtGitHub, thread.State)
+	if thread.CloseReasonLocal != "" {
+		return closedAt + " (" + thread.CloseReasonLocal + ")"
+	}
+	return closedAt
+}
+
+func tuiRule(width int) string {
+	return strings.Repeat("-", minInt(72, maxInt(12, width)))
 }
 
 func threadRef(cluster store.ClusterSummary) string {
