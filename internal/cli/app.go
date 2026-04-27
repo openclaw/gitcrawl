@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
 	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -140,11 +144,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runClusterDetail(ctx, rest[1:])
 	case "neighbors":
 		return a.runNeighbors(ctx, rest[1:])
+	case "cluster":
+		return a.runCluster(ctx, rest[1:])
 	case "portable":
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "refresh", "summarize", "key-summaries", "embed", "cluster-experiment", "durable-clusters", "cluster-explain", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -363,6 +369,91 @@ func (a *App) runNeighbors(ctx context.Context, args []string) error {
 		"repository": repo.FullName,
 		"thread":     targetThread,
 		"neighbors":  neighbors,
+	}, true)
+}
+
+func (a *App) runCluster(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	thresholdRaw := fs.String("threshold", "0.82", "minimum cosine score")
+	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	limitRaw := fs.String("limit", "", "maximum vector rows to cluster")
+	model := fs.String("model", "", "embedding model")
+	basis := fs.String("basis", "", "embedding basis")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"threshold": true, "min-size": true, "limit": true, "model": true, "basis": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("cluster requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	threshold, err := parseOptionalFloat(*thresholdRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if threshold <= 0 || threshold > 1 {
+		return usageErr(fmt.Errorf("cluster requires --threshold between 0 and 1"))
+	}
+	minSize, err := parseOptionalPositiveInt(*minSizeRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if minSize <= 0 {
+		minSize = 2
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	query := store.ThreadVectorQuery{
+		RepoID: repo.ID,
+		Model:  firstNonEmpty(strings.TrimSpace(*model), rt.Config.OpenAI.EmbedModel),
+		Basis:  firstNonEmpty(strings.TrimSpace(*basis), rt.Config.EmbeddingBasis),
+	}
+	vectors, err := rt.Store.ListThreadVectorsFiltered(ctx, query)
+	if err != nil {
+		return err
+	}
+	if len(vectors) == 0 && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" {
+		vectors, err = rt.Store.ListThreadVectorsFiltered(ctx, store.ThreadVectorQuery{RepoID: repo.ID})
+		if err != nil {
+			return err
+		}
+	}
+	if limit > 0 && len(vectors) > limit {
+		vectors = vectors[:limit]
+	}
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, rt.Store, repo.ID, vectors, threshold, minSize)
+	if err != nil {
+		return err
+	}
+	saveResult, err := rt.Store.SaveDurableClusters(ctx, repo.ID, inputs)
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("cluster", map[string]any{
+		"repository":    repo.FullName,
+		"threshold":     threshold,
+		"min_size":      minSize,
+		"vector_count":  len(vectors),
+		"edge_count":    edgeCount,
+		"cluster_count": saveResult.ClusterCount,
+		"member_count":  saveResult.MemberCount,
+		"run_id":        saveResult.RunID,
 	}, true)
 }
 
@@ -1398,6 +1489,97 @@ func parseClusterMemberCommandIDs(command, clusterIDRaw, numberRaw string) (int,
 		return 0, 0, fmt.Errorf("%s requires --number", command)
 	}
 	return clusterID, number, nil
+}
+
+func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, threshold float64, minSize int) ([]store.DurableClusterInput, int, error) {
+	if minSize <= 0 {
+		minSize = 2
+	}
+	threadIDs := make([]int64, 0, len(storedVectors))
+	vectorByThreadID := make(map[int64][]float64, len(storedVectors))
+	for _, stored := range storedVectors {
+		threadIDs = append(threadIDs, stored.ThreadID)
+		vectorByThreadID[stored.ThreadID] = stored.Vector
+	}
+	threads, err := st.ThreadsByIDs(ctx, repoID, threadIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	nodes := make([]clusterer.Node, 0, len(storedVectors))
+	for _, stored := range storedVectors {
+		thread, ok := threads[stored.ThreadID]
+		if !ok {
+			continue
+		}
+		nodes = append(nodes, clusterer.Node{ThreadID: stored.ThreadID, Number: thread.Number, Title: thread.Title})
+	}
+	edges := make([]clusterer.Edge, 0)
+	pairScores := map[string]float64{}
+	for left := 0; left < len(nodes); left++ {
+		for right := left + 1; right < len(nodes); right++ {
+			leftID := nodes[left].ThreadID
+			rightID := nodes[right].ThreadID
+			score := vector.Cosine(vectorByThreadID[leftID], vectorByThreadID[rightID])
+			if score < threshold {
+				continue
+			}
+			edges = append(edges, clusterer.Edge{LeftThreadID: leftID, RightThreadID: rightID, Score: score})
+			pairScores[threadIDPairKey(leftID, rightID)] = score
+		}
+	}
+	built := clusterer.Build(nodes, edges)
+	inputs := make([]store.DurableClusterInput, 0, len(built))
+	for _, builtCluster := range built {
+		if len(builtCluster.Members) < minSize {
+			continue
+		}
+		sort.Slice(builtCluster.Members, func(i, j int) bool {
+			left := threads[builtCluster.Members[i]]
+			right := threads[builtCluster.Members[j]]
+			return left.Number < right.Number
+		})
+		rep := threads[builtCluster.RepresentativeThreadID]
+		input := store.DurableClusterInput{
+			StableKey:              durableClusterStableKey(builtCluster.Members),
+			StableSlug:             durableClusterSlug(builtCluster.Members),
+			RepresentativeThreadID: builtCluster.RepresentativeThreadID,
+			Title:                  rep.Title,
+			Members:                make([]store.DurableClusterMemberInput, 0, len(builtCluster.Members)),
+		}
+		for _, threadID := range builtCluster.Members {
+			role := "member"
+			var scorePtr *float64
+			if threadID == builtCluster.RepresentativeThreadID {
+				role = "representative"
+			} else if score, ok := pairScores[threadIDPairKey(threadID, builtCluster.RepresentativeThreadID)]; ok {
+				scoreCopy := score
+				scorePtr = &scoreCopy
+			}
+			input.Members = append(input.Members, store.DurableClusterMemberInput{ThreadID: threadID, Role: role, ScoreToRepresentative: scorePtr})
+		}
+		inputs = append(inputs, input)
+	}
+	return inputs, len(edges), nil
+}
+
+func durableClusterStableKey(threadIDs []int64) string {
+	parts := make([]string, 0, len(threadIDs))
+	for _, id := range threadIDs {
+		parts = append(parts, strconv.FormatInt(id, 10))
+	}
+	return "members:" + strings.Join(parts, ",")
+}
+
+func durableClusterSlug(threadIDs []int64) string {
+	sum := sha256.Sum256([]byte(durableClusterStableKey(threadIDs)))
+	return "cluster-" + hex.EncodeToString(sum[:])[:12]
+}
+
+func threadIDPairKey(left, right int64) string {
+	if left > right {
+		left, right = right, left
+	}
+	return strconv.FormatInt(left, 10) + ":" + strconv.FormatInt(right, 10)
 }
 
 func parseOptionalFloat(value string) (float64, error) {
