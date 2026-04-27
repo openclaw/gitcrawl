@@ -982,6 +982,13 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
 		}
 	}
+	model.search = "alpha"
+	model.openActionMenu()
+	filterIndex, clearIndex, quitIndex := menuLabelIndex(model.menuItems, "Filter clusters..."), menuLabelIndex(model.menuItems, "Clear filter"), menuLabelIndex(model.menuItems, "Quit")
+	if !(filterIndex >= 0 && clearIndex == filterIndex+1 && clearIndex < quitIndex) {
+		t.Fatalf("clear filter placement filter/clear/quit = %d/%d/%d", filterIndex, clearIndex, quitIndex)
+	}
+	model.search = ""
 
 	model.runAction("min-size-1")
 	if model.minSize != 1 {
@@ -1398,6 +1405,15 @@ func sampleTUIClusters() []store.ClusterSummary {
 			UpdatedAt:            "2026-04-27T11:00:00Z",
 		},
 	}
+}
+
+func menuLabelIndex(items []tuiMenuItem, label string) int {
+	for index, item := range items {
+		if item.label == label {
+			return index
+		}
+	}
+	return -1
 }
 
 func seedTUIThreadVector(ctx context.Context, st *store.Store, repoID int64, number int, title string, vector []float64) (int64, error) {

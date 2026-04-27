@@ -1015,13 +1015,18 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy all body links", action: "copy-reference-links"},
 		)
 	}
-	m.menuItems = append(m.menuItems,
+	viewItems := []tuiMenuItem{
 		tuiMenuSection("View"),
 		tuiMenuItem{label: "Sort clusters by size", action: "sort-size"},
 		tuiMenuItem{label: "Sort clusters by recent", action: "sort-recent"},
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
 		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
 		tuiMenuItem{label: "Filter clusters...", action: "filter"},
+	}
+	if strings.TrimSpace(m.search) != "" {
+		viewItems = append(viewItems, tuiMenuItem{label: "Clear filter", action: "clear-filter"})
+	}
+	viewItems = append(viewItems,
 		tuiMenuItem{label: "Refresh from store", action: "refresh"},
 		tuiMenuItem{label: "Switch repository...", action: "repository-picker"},
 		tuiMenuItem{label: "Jump to issue/PR...", action: "jump"},
@@ -1034,9 +1039,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Help", action: "show-help"},
 		tuiMenuItem{label: "Quit", action: "quit"},
 	)
-	if strings.TrimSpace(m.search) != "" {
-		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Clear filter", action: "clear-filter"})
-	}
+	m.menuItems = append(m.menuItems, viewItems...)
 	if len(m.menuItems) == 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
 	}
