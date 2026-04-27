@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -413,13 +414,13 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		lines = append(lines, bold("LLM Summary"))
 		for _, key := range sortedSummaryKeys(member.member.Summaries) {
 			lines = append(lines, dim(key+":"))
-			lines = append(lines, wrapPlain(member.member.Summaries[key], width)...)
+			lines = append(lines, markdownLines(member.member.Summaries[key], width)...)
 			lines = append(lines, "")
 		}
 	}
 	if strings.TrimSpace(member.member.BodySnippet) != "" {
 		lines = append(lines, bold("Main Preview"))
-		lines = append(lines, wrapPlain(member.member.BodySnippet, width)...)
+		lines = append(lines, markdownLines(member.member.BodySnippet, width)...)
 	}
 	return lines
 }
@@ -1243,6 +1244,28 @@ func wrapPlain(value string, width int) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func markdownLines(value string, width int) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(maxInt(24, width)),
+	)
+	if err != nil {
+		return wrapPlain(value, width)
+	}
+	rendered, err := renderer.Render(value)
+	if err != nil {
+		return wrapPlain(value, width)
+	}
+	rendered = strings.TrimRight(rendered, "\n")
+	if rendered == "" {
+		return nil
+	}
+	return strings.Split(rendered, "\n")
 }
 
 func truncateCells(value string, max int) string {
