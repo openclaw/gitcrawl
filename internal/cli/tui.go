@@ -983,6 +983,7 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 			index := m.memberVisibleStart() + row
 			if index >= 0 && index < len(m.memberRows) {
 				if !m.memberRows[index].selectable {
+					m.memberIndex = index
 					return
 				}
 				previous := m.memberIndex

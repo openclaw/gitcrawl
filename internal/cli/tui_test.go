@@ -465,6 +465,53 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	}
 }
 
+func TestTUIRightClickMemberHeaderOpensClusterActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.memberIndex = 1
+	model.memberRows = []memberRow{
+		{label: "ISSUES (1)"},
+		{
+			selectable: true,
+			member: store.ClusterMemberDetail{Thread: store.Thread{
+				Number:  42,
+				Kind:    "issue",
+				State:   "open",
+				Title:   "Selected issue",
+				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+			}},
+		},
+	}
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.members.x + 2,
+		Y:      layout.members.y + 3,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonRight,
+	})
+
+	if !model.menuOpen {
+		t.Fatal("expected right click to open action menu")
+	}
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	joinedLabels := strings.Join(labels, "\n")
+	if strings.Contains(joinedLabels, "Copy selected URL") {
+		t.Fatalf("member header menu should not use stale selected thread:\n%s", joinedLabels)
+	}
+	if !strings.Contains(joinedLabels, "Copy cluster summary") {
+		t.Fatalf("member header menu should keep cluster actions:\n%s", joinedLabels)
+	}
+}
+
 func TestTUIMouseCanClickActionMenuItems(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
