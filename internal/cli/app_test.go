@@ -199,6 +199,72 @@ func TestTUIRequiresInteractiveTerminalByDefault(t *testing.T) {
 	}
 }
 
+func TestCloseThreadCommandLocallyClosesThread(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "42",
+		Number:        42,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "Close me",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/42",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "close-thread", "openclaw/openclaw", "--number", "42", "--reason", "test close", "--json"}); err != nil {
+		t.Fatalf("close-thread: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"closed": true`) {
+		t.Fatalf("close-thread output = %q", stdout.String())
+	}
+
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	rows, err := st.ListThreads(ctx, repoID, false)
+	if err != nil {
+		t.Fatalf("list open threads: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("closed thread should be hidden, got %#v", rows)
+	}
+}
+
 func TestTUIHelp(t *testing.T) {
 	app := New()
 	var stdout bytes.Buffer

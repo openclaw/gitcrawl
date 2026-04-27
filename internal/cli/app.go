@@ -114,6 +114,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSync(ctx, rest[1:])
 	case "threads":
 		return a.runThreads(ctx, rest[1:])
+	case "close-thread":
+		return a.runCloseThread(ctx, rest[1:])
 	case "runs":
 		return a.runRuns(ctx, rest[1:])
 	case "search":
@@ -130,7 +132,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -707,6 +709,52 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runCloseThread(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("close-thread", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	numberRaw := fs.String("number", "", "issue or pull request number")
+	reason := fs.String("reason", "CLI manual close", "local close reason")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"number": true, "reason": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("close-thread requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	number, err := parseOptionalPositiveInt(*numberRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if number == 0 {
+		return usageErr(fmt.Errorf("close-thread requires --number"))
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	if err := rt.Store.CloseThreadLocally(ctx, repo.ID, number, *reason); err != nil {
+		return err
+	}
+	return a.writeOutput("close-thread", map[string]any{
+		"repository": repo.FullName,
+		"number":     number,
+		"reason":     strings.TrimSpace(*reason),
+		"closed":     true,
+	}, true)
+}
+
 func (a *App) runSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1179,6 +1227,7 @@ Core commands:
   sync                 sync GitHub issue and pull request metadata
   refresh              run sync, enrichment, embedding, and clustering pipeline
   threads              list local issue and pull request rows
+  close-thread         locally hide one issue or pull request row
   clusters             list cluster summaries
   cluster-detail       dump one durable cluster
   neighbors            list vector-nearest local issue and pull request rows
