@@ -2117,6 +2117,7 @@ func (m *clusterBrowserModel) refreshFromStore() {
 	m.allClusters = append([]store.ClusterSummary(nil), clusters...)
 	m.payload.Clusters = append([]store.ClusterSummary(nil), clusters...)
 	m.applyClusterFilters()
+	relaxedFilters := m.relaxFiltersIfEmpty()
 	if currentID != 0 {
 		for index, cluster := range m.payload.Clusters {
 			if cluster.ID == currentID {
@@ -2127,6 +2128,9 @@ func (m *clusterBrowserModel) refreshFromStore() {
 		}
 	}
 	m.status = fmt.Sprintf("Refreshed %d cluster(s)", len(m.payload.Clusters))
+	if relaxedFilters {
+		m.status += " (filters relaxed)"
+	}
 }
 
 func (m *clusterBrowserModel) switchRepository(fullName string) {
@@ -2186,18 +2190,22 @@ func (m *clusterBrowserModel) switchRepository(fullName string) {
 	m.hasDetail = false
 	m.detail = store.ClusterDetail{}
 	m.applyClusterFilters()
-	relaxedFilters := false
-	if len(m.payload.Clusters) == 0 && len(m.allClusters) > 0 {
-		m.showClosed = true
-		m.minSize = 1
-		m.applyClusterFilters()
-		relaxedFilters = true
-	}
+	relaxedFilters := m.relaxFiltersIfEmpty()
 	m.focus = focusClusters
 	m.status = "Repository: " + repo.FullName
 	if relaxedFilters {
 		m.status += " (filters relaxed)"
 	}
+}
+
+func (m *clusterBrowserModel) relaxFiltersIfEmpty() bool {
+	if len(m.payload.Clusters) > 0 || len(m.allClusters) == 0 {
+		return false
+	}
+	m.showClosed = true
+	m.minSize = 1
+	m.applyClusterFilters()
+	return len(m.payload.Clusters) > 0
 }
 
 func (m *clusterBrowserModel) applyClusterFilters() {

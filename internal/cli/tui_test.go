@@ -1497,6 +1497,39 @@ func TestTUIRefreshWithoutStoreReportsUnavailable(t *testing.T) {
 	}
 }
 
+func TestTUIRefreshRelaxesEmptyFilters(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoID, 30, 300, "singleton refresh cluster"); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   nil,
+	})
+	model.minSize = 10
+
+	model.refreshFromStore()
+
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 30 {
+		t.Fatalf("refresh clusters = %#v, want singleton cluster", model.payload.Clusters)
+	}
+	if model.minSize != 1 || !strings.Contains(model.status, "filters relaxed") {
+		t.Fatalf("refresh min/status = %d/%q", model.minSize, model.status)
+	}
+}
+
 func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
