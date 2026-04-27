@@ -1193,4 +1193,5 @@ If owner/repo is omitted, gitcrawl uses the most recently updated repository in 
 The TUI starts at --min-size 5 by default; pass --min-size 1 to show singleton clusters.
 Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter/jump controls.
 Press # to jump directly to an issue or PR number.
+Press p to switch between repositories already present in the local store.
 `
