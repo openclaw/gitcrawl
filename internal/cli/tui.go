@@ -760,7 +760,15 @@ func (m *clusterBrowserModel) openActionMenu() {
 		)
 	}
 	if m.hasSelectedCluster() {
-		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"})
+		m.menuItems = append(m.menuItems,
+			tuiMenuItem{label: "Copy cluster ID", action: "copy-cluster-id"},
+			tuiMenuItem{label: "Copy cluster name", action: "copy-cluster-name"},
+			tuiMenuItem{label: "Copy cluster title", action: "copy-cluster-title"},
+			tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"},
+		)
+		if m.hasDetail {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy member list", action: "copy-member-list"})
+		}
 	}
 	if len(m.payload.Clusters) > 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy visible clusters", action: "copy-visible-clusters"})
@@ -801,6 +809,49 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	}
 	switch action {
+	case "copy-cluster-id":
+		cluster, ok := m.selectedCluster()
+		if !ok {
+			m.status = "No selected cluster"
+			return true
+		}
+		if err := copyText(fmt.Sprintf("%d", cluster.ID)); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied cluster ID"
+		}
+		return true
+	case "copy-cluster-name":
+		cluster, ok := m.selectedCluster()
+		if !ok {
+			m.status = "No selected cluster"
+			return true
+		}
+		if err := copyText(cluster.StableSlug); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied cluster name"
+		}
+		return true
+	case "copy-cluster-title":
+		cluster, ok := m.selectedCluster()
+		if !ok {
+			m.status = "No selected cluster"
+			return true
+		}
+		if err := copyText(firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster")); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied cluster title"
+		}
+		return true
+	case "copy-member-list":
+		if err := copyText(m.memberListClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied member list"
+		}
+		return true
 	case "back-to-actions":
 		m.openActionMenu()
 		return false
@@ -1574,6 +1625,13 @@ func (m clusterBrowserModel) hasSelectedCluster() bool {
 	return len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters)
 }
 
+func (m clusterBrowserModel) selectedCluster() (store.ClusterSummary, bool) {
+	if !m.hasSelectedCluster() {
+		return store.ClusterSummary{}, false
+	}
+	return m.payload.Clusters[m.selected], true
+}
+
 func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) {
 	if len(m.memberRows) == 0 || m.memberIndex < 0 || m.memberIndex >= len(m.memberRows) {
 		return store.ClusterMemberDetail{}, false
@@ -1645,6 +1703,27 @@ func (m clusterBrowserModel) visibleClustersClipboardText() string {
 			cluster.StableSlug,
 			firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster"),
 			threadRef(cluster),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m clusterBrowserModel) memberListClipboardText() string {
+	if len(m.memberRows) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(m.memberRows))
+	for _, row := range m.memberRows {
+		if !row.selectable {
+			continue
+		}
+		thread := row.thread()
+		lines = append(lines, fmt.Sprintf("#%d [%s] %s %s %s",
+			thread.Number,
+			firstNonEmpty(thread.State, "unknown"),
+			kindTitle(thread.Kind),
+			thread.Title,
+			thread.HTMLURL,
 		))
 	}
 	return strings.Join(lines, "\n")

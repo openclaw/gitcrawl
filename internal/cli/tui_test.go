@@ -391,8 +391,10 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joinedLabels := strings.Join(labels, "\n")
-	if !strings.Contains(joinedLabels, "Copy cluster summary") {
-		t.Fatalf("expected cluster action menu items, got %+v", model.menuItems)
+	for _, want := range []string{"Copy cluster ID", "Copy cluster name", "Copy cluster title", "Copy cluster summary"} {
+		if !strings.Contains(joinedLabels, want) {
+			t.Fatalf("expected cluster action %q, got %+v", want, model.menuItems)
+		}
 	}
 	if !strings.Contains(joinedLabels, "Copy visible clusters") {
 		t.Fatalf("expected visible cluster action menu item, got %+v", model.menuItems)
@@ -563,6 +565,33 @@ func TestTUIVisibleClustersClipboardText(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("visible clusters clipboard missing %q in:\n%s", want, text)
 		}
+	}
+}
+
+func TestTUIMemberListClipboardText(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberRows = []memberRow{
+		{label: "ISSUES (1)"},
+		{
+			selectable: true,
+			member: store.ClusterMemberDetail{Thread: store.Thread{
+				Number:  42,
+				Kind:    "issue",
+				State:   "open",
+				Title:   "A useful bug",
+				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+			}},
+		},
+	}
+
+	text := model.memberListClipboardText()
+	want := "#42 [open] Issue A useful bug https://github.com/openclaw/openclaw/issues/42"
+	if text != want {
+		t.Fatalf("member list clipboard = %q, want %q", text, want)
 	}
 }
 
