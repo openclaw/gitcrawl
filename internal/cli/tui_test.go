@@ -99,10 +99,25 @@ func TestTUIInAppHelpMentionsMenuMouse(t *testing.T) {
 	})
 
 	help := strings.Join(model.helpLines(80), "\n")
-	for _, want := range []string{"left click menu row", "wheel in menu", "#: jump to issue/PR number", "p: switch repository", "n: load neighbors", "open link picker", "repos, filter, jump, sort"} {
+	for _, want := range []string{"left click menu row", "wheel in menu", "a: open action menu", "#: jump to issue/PR number", "p: switch repository", "n: load neighbors", "open link picker", "repos, filter, jump, sort"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
 		}
+	}
+}
+
+func TestTUIActionShortcutOpensMenu(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = updated.(clusterBrowserModel)
+
+	if !model.menuOpen || model.menuTitle != "Actions" {
+		t.Fatalf("action shortcut state menu=%v title=%q", model.menuOpen, model.menuTitle)
 	}
 }
 

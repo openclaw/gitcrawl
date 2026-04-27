@@ -262,6 +262,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.runAction("open")
 		case "c":
 			m.runAction("copy-url")
+		case "a":
+			m.openActionMenu()
 		case "s":
 			if m.payload.Sort == "recent" {
 				m.payload.Sort = "size"
@@ -447,9 +449,9 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  a actions  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
 	if width < 100 {
-		controls = "Tab focus click right-click menu / filter # jump p repos ? help q quit"
+		controls = "Tab focus click right-click menu a actions / filter # jump ? help q quit"
 	}
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
@@ -586,6 +588,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  arrows or j/k: move selection or scroll detail",
 		"  PageUp/PageDown: page the active pane",
 		"  Enter: drill into the next pane",
+		"  a: open action menu",
 		"  /: filter clusters",
 		"  #: jump to issue/PR number",
 		"  s: toggle cluster sort",
