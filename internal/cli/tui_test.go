@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,6 +63,92 @@ func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	})
 	if model.selected != 1 {
 		t.Fatalf("second row click selected %d, want 1", model.selected)
+	}
+}
+
+func TestTUIMouseSelectsVisibleClusterWindow(t *testing.T) {
+	clusters := make([]store.ClusterSummary, 0, 30)
+	for i := 0; i < 30; i++ {
+		clusters = append(clusters, store.ClusterSummary{
+			ID:                   int64(i + 1),
+			StableSlug:           fmt.Sprintf("cluster-%02d", i+1),
+			Status:               "active",
+			RepresentativeKind:   "issue",
+			RepresentativeTitle:  fmt.Sprintf("Issue %02d", i+1),
+			RepresentativeNumber: 100 + i,
+			MemberCount:          3,
+			UpdatedAt:            fmt.Sprintf("2026-04-27T%02d:00:00Z", i%24),
+		})
+	}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+	model.width = 140
+	model.height = 24
+	model.selected = 20
+	model.syncComponents()
+	start := model.clusterVisibleStart()
+	if start == 0 {
+		t.Fatalf("expected selected row to force a scrolled cluster window")
+	}
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.clusters.x + 2,
+		Y:      layout.clusters.y + 3,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.selected != start {
+		t.Fatalf("visible first row click selected %d, want %d", model.selected, start)
+	}
+}
+
+func TestTUIMouseSelectsVisibleMemberWindow(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 24
+	model.focus = focusMembers
+	model.memberRows = make([]memberRow, 0, 30)
+	for i := 0; i < 30; i++ {
+		model.memberRows = append(model.memberRows, memberRow{
+			selectable: true,
+			member: store.ClusterMemberDetail{
+				Thread: store.Thread{
+					ID:              int64(i + 1),
+					Number:          200 + i,
+					Kind:            "issue",
+					State:           "open",
+					Title:           fmt.Sprintf("Member %02d", i+1),
+					UpdatedAtGitHub: fmt.Sprintf("2026-04-27T%02d:00:00Z", i%24),
+				},
+			},
+		})
+	}
+	model.memberIndex = 20
+	model.syncComponents()
+	start := model.memberVisibleStart()
+	if start == 0 {
+		t.Fatalf("expected selected row to force a scrolled member window")
+	}
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.members.x + 2,
+		Y:      layout.members.y + 3,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.memberIndex != start {
+		t.Fatalf("visible first member row click selected %d, want %d", model.memberIndex, start)
 	}
 }
 

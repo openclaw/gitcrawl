@@ -643,7 +643,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			if row < 0 {
 				return
 			}
-			index := m.clusterOff + row
+			index := m.clusterVisibleStart() + row
 			if index >= 0 && index < len(m.payload.Clusters) {
 				m.selected = index
 				m.loadSelectedCluster()
@@ -659,7 +659,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			if row < 0 {
 				return
 			}
-			index := m.memberOff + row
+			index := m.memberVisibleStart() + row
 			if index >= 0 && index < len(m.memberRows) {
 				if !m.memberRows[index].selectable {
 					m.status = m.memberRows[index].label
@@ -686,7 +686,7 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 		m.focus = focusClusters
 		row := y - layout.clusters.y - 3
 		if row >= 0 {
-			index := m.clusterOff + row
+			index := m.clusterVisibleStart() + row
 			if index >= 0 && index < len(m.payload.Clusters) {
 				m.selected = index
 				m.loadSelectedCluster()
@@ -696,7 +696,7 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 		m.focus = focusMembers
 		row := y - layout.members.y - 3
 		if row >= 0 {
-			index := m.memberOff + row
+			index := m.memberVisibleStart() + row
 			if index >= 0 && index < len(m.memberRows) {
 				if !m.memberRows[index].selectable {
 					return
@@ -860,22 +860,42 @@ func (r tuiRect) contains(x, y int) bool {
 }
 
 func (m *clusterBrowserModel) keepVisible() {
-	clusterRows := maxInt(1, m.layout().clusters.h-5)
-	if m.selected < m.clusterOff {
-		m.clusterOff = m.selected
+	m.clusterOff = m.clusterVisibleStart()
+	m.memberOff = m.memberVisibleStart()
+}
+
+func (m clusterBrowserModel) clusterVisibleStart() int {
+	return tableVisibleStart(m.selected, len(m.payload.Clusters), m.clusterViewportHeight())
+}
+
+func (m clusterBrowserModel) memberVisibleStart() int {
+	return tableVisibleStart(m.memberIndex, len(m.memberRows), m.memberViewportHeight())
+}
+
+func (m clusterBrowserModel) clusterViewportHeight() int {
+	if height := m.clusterTable.Height(); height > 0 {
+		return height
 	}
-	if m.selected >= m.clusterOff+clusterRows {
-		m.clusterOff = m.selected - clusterRows + 1
+	return fallbackTableViewportHeight(m.layout().clusters)
+}
+
+func (m clusterBrowserModel) memberViewportHeight() int {
+	if height := m.memberTable.Height(); height > 0 {
+		return height
 	}
-	m.clusterOff = maxInt(0, m.clusterOff)
-	memberRows := maxInt(1, m.layout().members.h-5)
-	if m.memberIndex < m.memberOff {
-		m.memberOff = m.memberIndex
+	return fallbackTableViewportHeight(m.layout().members)
+}
+
+func fallbackTableViewportHeight(rect tuiRect) int {
+	return maxInt(1, maxInt(1, rect.h-6)-1)
+}
+
+func tableVisibleStart(cursor, rowCount, viewportHeight int) int {
+	if rowCount <= 0 || cursor < 0 {
+		return 0
 	}
-	if m.memberIndex >= m.memberOff+memberRows {
-		m.memberOff = m.memberIndex - memberRows + 1
-	}
-	m.memberOff = maxInt(0, m.memberOff)
+	cursor = clampInt(cursor, 0, rowCount-1)
+	return clampInt(cursor-maxInt(1, viewportHeight), 0, cursor)
 }
 
 func (m *clusterBrowserModel) syncComponents() {
