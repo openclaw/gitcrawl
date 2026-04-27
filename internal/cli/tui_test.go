@@ -254,6 +254,32 @@ func TestTUIMemberRowsGroupAndSkipHeaders(t *testing.T) {
 	}
 }
 
+func TestTUIMemberMovementHonorsStepSize(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detail = store.ClusterDetail{Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 10, Kind: "issue", State: "open", Title: "First"}},
+		{Thread: store.Thread{ID: 2, Number: 11, Kind: "issue", State: "open", Title: "Second"}},
+		{Thread: store.Thread{ID: 3, Number: 12, Kind: "issue", State: "open", Title: "Third"}},
+		{Thread: store.Thread{ID: 4, Number: 13, Kind: "pull_request", State: "open", Title: "Fourth"}},
+	}}
+	model.memberSort = memberSortKind
+	model.sortMembers()
+	model.focus = focusMembers
+
+	model.move(3)
+	if got := model.memberRows[model.memberIndex].thread().Number; got != 13 {
+		t.Fatalf("move(3) selected #%d, want #13", got)
+	}
+	model.move(-2)
+	if got := model.memberRows[model.memberIndex].thread().Number; got != 11 {
+		t.Fatalf("move(-2) selected #%d, want #11", got)
+	}
+}
+
 func TestTUICompactDetailLimitsBody(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

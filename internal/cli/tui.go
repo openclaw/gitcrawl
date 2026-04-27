@@ -1299,27 +1299,33 @@ func (m clusterBrowserModel) nextSelectableMemberIndex(current, delta int) int {
 	if len(m.memberRows) == 0 {
 		return -1
 	}
-	if current < 0 || current >= len(m.memberRows) || !m.memberRows[current].selectable {
-		return m.firstSelectableMemberIndex()
-	}
 	step := 1
 	if delta < 0 {
 		step = -1
 	}
+	steps := maxInt(1, absInt(delta))
+	if current < 0 || current >= len(m.memberRows) || !m.memberRows[current].selectable {
+		if step < 0 {
+			return m.lastSelectableMemberIndex()
+		}
+		return m.firstSelectableMemberIndex()
+	}
 	index := current
-	for attempts := 0; attempts < len(m.memberRows); attempts++ {
-		index += step
-		if index < 0 {
-			index = len(m.memberRows) - 1
-		}
-		if index >= len(m.memberRows) {
-			index = 0
-		}
-		if m.memberRows[index].selectable {
-			return index
+	for moved := 0; moved < steps; moved++ {
+		for attempts := 0; attempts < len(m.memberRows); attempts++ {
+			index += step
+			if index < 0 {
+				index = len(m.memberRows) - 1
+			}
+			if index >= len(m.memberRows) {
+				index = 0
+			}
+			if m.memberRows[index].selectable {
+				break
+			}
 		}
 	}
-	return current
+	return index
 }
 
 func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
@@ -1928,6 +1934,13 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func clampInt(value, minValue, maxValue int) int {
