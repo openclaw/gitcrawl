@@ -1140,11 +1140,12 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	since := fs.String("since", "", "GitHub since timestamp")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "limit": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -1182,6 +1183,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:           owner,
 		Repo:            repo,
+		State:           strings.TrimSpace(*state),
 		Since:           strings.TrimSpace(*since),
 		Limit:           limit,
 		IncludeComments: *includeComments,

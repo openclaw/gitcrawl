@@ -32,6 +32,7 @@ type Syncer struct {
 type Options struct {
 	Owner           string
 	Repo            string
+	State           string
 	Since           string
 	Limit           int
 	IncludeComments bool
@@ -65,6 +66,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	state, err := normalizeState(options.State)
+	if err != nil {
+		return Stats{}, err
+	}
 	repoRaw, err := s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
 	if err != nil {
 		return Stats{}, err
@@ -82,7 +87,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 
 	rows, err := s.client.ListRepositoryIssues(ctx, options.Owner, options.Repo, gh.ListIssuesOptions{
-		State: "open",
+		State: state,
 		Since: since,
 		Limit: options.Limit,
 	}, options.Reporter)
@@ -148,6 +153,19 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		return Stats{}, err
 	}
 	return stats, nil
+}
+
+func normalizeState(value string) (string, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "open", nil
+	}
+	switch value {
+	case "open", "closed", "all":
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid state %q: use open, closed, or all", value)
+	}
 }
 
 func normalizeSince(value string, now time.Time) (string, error) {

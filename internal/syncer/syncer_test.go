@@ -79,6 +79,16 @@ func (f *sinceCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, re
 	return nil, nil
 }
 
+type stateCaptureGitHub struct {
+	fakeGitHub
+	state string
+}
+
+func (f *stateCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	f.state = options.State
+	return nil, nil
+}
+
 func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -158,5 +168,37 @@ func TestSyncRejectsInvalidSince(t *testing.T) {
 	s := New(fakeGitHub{}, st)
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "yesterday"}); err == nil {
 		t.Fatal("expected invalid since to fail")
+	}
+}
+
+func TestSyncPassesRequestedState(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &stateCaptureGitHub{}
+	s := New(client, st)
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", State: "all"}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if client.state != "all" {
+		t.Fatalf("state = %q, want all", client.state)
+	}
+}
+
+func TestSyncRejectsInvalidState(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	s := New(fakeGitHub{}, st)
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", State: "merged"}); err == nil {
+		t.Fatal("expected invalid state to fail")
 	}
 }

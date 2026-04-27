@@ -193,6 +193,33 @@ func TestDocumentsFTSWorks(t *testing.T) {
 	}
 }
 
+func TestSearchFallsBackToThreadPayloadsWhenDocumentsArePruned(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	_, err = st.DB().ExecContext(ctx, `
+		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
+		values(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '{}', '2026-04-26T00:00:00Z');
+		insert into threads(repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
+		values(1, '1', 73038, 'pull_request', 'open', 'feat(providers): add DeepInfra provider plugin', 'DeepInfra provider plugin', 'https://github.com/openclaw/openclaw/pull/73038', '[]', '[]', '{}', 'hash', '2026-04-27T00:00:00Z');
+	`)
+	if err != nil {
+		t.Fatalf("seed threads: %v", err)
+	}
+
+	hits, err := st.SearchDocuments(ctx, 1, "DeepInfra", 10)
+	if err != nil {
+		t.Fatalf("search documents: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Number != 73038 {
+		t.Fatalf("hits = %#v, want PR 73038", hits)
+	}
+}
+
 func TestPrunePortablePayloads(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
