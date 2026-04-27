@@ -595,6 +595,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  o: open selected thread or representative",
 		"  c: copy selected thread or representative URL",
 		"  Enter in menu: run action or open link picker",
+		"  b in submenu: back to actions",
 		"  ?: toggle this help",
 		"  q: quit",
 	}
