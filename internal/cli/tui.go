@@ -633,8 +633,15 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 		lines = append(lines, truncateCells(prefix+key+item.label, width))
 	}
 	footer := "Enter/1-9 run  Esc close"
+	if m.inMenuSubmenu() {
+		footer = "Enter/1-9 run  b back  Esc close"
+	}
 	if len(m.menuItems) > visible {
-		footer = fmt.Sprintf("Enter/1-9 run  Esc close  Pg page  %d-%d/%d", start+1, end, len(m.menuItems))
+		if m.inMenuSubmenu() {
+			footer = fmt.Sprintf("Enter/1-9 run  b back  Esc close  Pg page  %d-%d/%d", start+1, end, len(m.menuItems))
+		} else {
+			footer = fmt.Sprintf("Enter/1-9 run  Esc close  Pg page  %d-%d/%d", start+1, end, len(m.menuItems))
+		}
 	}
 	lines = append(lines, "", dim(footer))
 	return lines
@@ -660,6 +667,10 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menuOpen = false
 		m.showHelp = true
 		m.status = "Help"
+	case "b", "left", "backspace":
+		if m.inMenuSubmenu() {
+			m.openActionMenu()
+		}
 	case "/":
 		cmd := m.startFilterInput()
 		return m, cmd
@@ -1127,6 +1138,11 @@ func (m *clusterBrowserModel) openRepositoryMenu() {
 
 func (m *clusterBrowserModel) runAction(action string) bool {
 	return m.runMenuItem(tuiMenuItem{action: action})
+}
+
+func (m clusterBrowserModel) inMenuSubmenu() bool {
+	title := strings.TrimSpace(m.menuTitle)
+	return title != "" && title != "Actions"
 }
 
 func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {

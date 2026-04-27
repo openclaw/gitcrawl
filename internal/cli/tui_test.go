@@ -1046,6 +1046,33 @@ func TestTUILinkPickerKeepsMenuOpen(t *testing.T) {
 			t.Fatalf("link picker missing %q in:\n%s", want, joined)
 		}
 	}
+	lines := strings.Join(model.menuLines(80), "\n")
+	if !strings.Contains(lines, "b back") {
+		t.Fatalf("link picker footer missing back hint:\n%s", lines)
+	}
+}
+
+func TestTUISubmenuBackKeyReturnsToActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{
+			BodySnippet: "See https://example.com/run.",
+		},
+	}}
+	model.openReferenceLinkMenu("copy")
+
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	model = updated.(clusterBrowserModel)
+
+	if !model.menuOpen || model.menuTitle != "Actions" {
+		t.Fatalf("back key menu=%v title=%q", model.menuOpen, model.menuTitle)
+	}
 }
 
 func TestTUIActionMenuIncludesViewControls(t *testing.T) {
