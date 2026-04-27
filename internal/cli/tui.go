@@ -31,6 +31,16 @@ const (
 	focusDetail   tuiFocus = "detail"
 )
 
+type tuiMemberSort string
+
+const (
+	memberSortKind   tuiMemberSort = "kind"
+	memberSortRecent tuiMemberSort = "recent"
+	memberSortNumber tuiMemberSort = "number"
+	memberSortState  tuiMemberSort = "state"
+	memberSortTitle  tuiMemberSort = "title"
+)
+
 type tuiRect struct {
 	x int
 	y int
@@ -40,6 +50,7 @@ type tuiRect struct {
 
 type clusterBrowserModel struct {
 	payload      clusterBrowserPayload
+	allClusters  []store.ClusterSummary
 	ctx          context.Context
 	store        *store.Store
 	repoID       int64
@@ -47,6 +58,12 @@ type clusterBrowserModel struct {
 	width        int
 	height       int
 	status       string
+	search       string
+	searching    bool
+	showHelp     bool
+	showClosed   bool
+	minSize      int
+	memberSort   tuiMemberSort
 	selected     int
 	clusterOff   int
 	memberRows   []memberRow
@@ -86,15 +103,19 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 	payload.Clusters = clusters
 	model := clusterBrowserModel{
 		payload:     payload,
+		allClusters: clusters,
 		ctx:         ctx,
 		store:       st,
 		repoID:      repoID,
 		focus:       focusClusters,
 		status:      "Ready",
+		showClosed:  true,
+		minSize:     1,
+		memberSort:  memberSortKind,
 		memberIndex: -1,
 		detailCache: map[int64]store.ClusterDetail{},
 	}
-	model.sortClusters()
+	model.applyClusterFilters()
 	model.loadSelectedCluster()
 	return model
 }
@@ -110,6 +131,11 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.keepVisible()
 	case tea.KeyMsg:
+		if m.searching {
+			m.handleSearchKey(msg)
+			m.keepVisible()
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -144,8 +170,36 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sortClusters()
 			m.loadSelectedCluster()
 			m.status = "Sort: " + m.payload.Sort
+		case "m":
+			m.memberSort = nextMemberSort(m.memberSort)
+			m.sortMembers()
+			m.status = "Member sort: " + string(m.memberSort)
+		case "f":
+			m.minSize = nextMinSize(m.minSize)
+			m.applyClusterFilters()
+			m.status = fmt.Sprintf("Min size: %s", minSizeLabel(m.minSize))
+		case "x":
+			m.showClosed = !m.showClosed
+			m.applyClusterFilters()
+			if m.showClosed {
+				m.status = "Showing closed clusters"
+			} else {
+				m.status = "Hiding closed clusters"
+			}
+		case "/":
+			m.searching = true
+			m.status = "Filter: " + m.search
+		case "esc":
+			if m.showHelp {
+				m.showHelp = false
+			}
 		case "h", "?":
-			m.status = "Tab focus  arrows move  s sort  Enter drill in  q quit"
+			m.showHelp = !m.showHelp
+			if m.showHelp {
+				m.status = "Help"
+			} else {
+				m.status = "Ready"
+			}
 		}
 		m.keepVisible()
 	case tea.MouseMsg:
@@ -227,7 +281,17 @@ func (m clusterBrowserModel) layout() tuiLayout {
 
 func (m clusterBrowserModel) renderHeader(width int) string {
 	openCounts := m.openCounts()
-	repoLine := fmt.Sprintf("%s  %d PR  %d issues  sort:%s  focus:%s", m.payload.Repository, openCounts.pulls, openCounts.issues, m.payload.Sort, m.focus)
+	repoLine := fmt.Sprintf("%s  %d PR  %d issues  clusters:%d  sort:%s  members:%s  min:%s  closed:%s  filter:%s",
+		m.payload.Repository,
+		openCounts.pulls,
+		openCounts.issues,
+		len(m.payload.Clusters),
+		m.payload.Sort,
+		m.memberSort,
+		minSizeLabel(m.minSize),
+		boolLabel(m.showClosed),
+		firstNonEmpty(m.search, "none"),
+	)
 	if m.payload.InferredRepository {
 		repoLine += "  inferred"
 	}
@@ -236,9 +300,12 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  arrows/jk move  Enter drill in  s sort  h help  q quit"
-	line := truncateCells(firstNonEmpty(m.status, "Ready"), width)
-	return lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#5bc0eb")).Foreground(lipgloss.Color("#05070d")).Padding(0, 1).Render(line + "\n" + truncateCells(controls, maxInt(1, width-2)))
+	controls := "Tab focus  click select  wheel scroll  / filter  s sort  m members  f min  x closed  ? help  q quit"
+	line := firstNonEmpty(m.status, "Ready")
+	if m.searching {
+		line = "Filter: " + m.search + "█"
+	}
+	return lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#5bc0eb")).Foreground(lipgloss.Color("#05070d")).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
@@ -287,6 +354,9 @@ func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
 
 func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
 	lines := append([]string{paneTitle(focusDetail, m.focus)}, m.detailLines(rect.w-4)...)
+	if m.showHelp {
+		lines = append([]string{paneTitle(focusDetail, m.focus)}, m.helpLines(rect.w-4)...)
+	}
 	visible := maxInt(1, rect.h-3)
 	start := minInt(m.detailScroll, maxInt(0, len(lines)-visible))
 	end := minInt(len(lines), start+visible)
@@ -362,6 +432,41 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 	return lines
 }
 
+func (m clusterBrowserModel) helpLines(width int) []string {
+	lines := []string{
+		bold("Gitcrawl TUI"),
+		"",
+		"Mouse",
+		"  left click: focus/select a pane row",
+		"  wheel: scroll the pane under the pointer",
+		"  right click: open a stable action menu",
+		"",
+		"Keyboard",
+		"  Tab / Shift-Tab: cycle focus",
+		"  arrows or j/k: move selection or scroll detail",
+		"  PageUp/PageDown: page the active pane",
+		"  Enter: drill into the next pane",
+		"  /: filter clusters",
+		"  s: toggle cluster sort",
+		"  m: cycle member sort",
+		"  f: cycle minimum cluster size",
+		"  x: show/hide closed clusters",
+		"  ?: toggle this help",
+		"  q: quit",
+		"",
+		"This Go TUI intentionally avoids ghcrawl's old fragile right-click popover.",
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "  ") {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, wrapPlain(line, width)...)
+	}
+	return out
+}
+
 func (m *clusterBrowserModel) move(delta int) {
 	if m.focus == focusDetail {
 		m.detailScroll = maxInt(0, m.detailScroll+delta)
@@ -381,6 +486,33 @@ func (m *clusterBrowserModel) move(delta int) {
 	m.selected = clampInt(m.selected+delta, 0, len(m.payload.Clusters)-1)
 	m.loadSelectedCluster()
 	m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
+}
+
+func (m *clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) {
+	switch msg.String() {
+	case "enter":
+		m.searching = false
+		m.applyClusterFilters()
+		if m.search == "" {
+			m.status = "Filter cleared"
+		} else {
+			m.status = "Filter: " + m.search
+		}
+	case "esc":
+		m.searching = false
+		m.status = "Filter cancelled"
+	case "backspace", "ctrl+h":
+		if len(m.search) > 0 {
+			runes := []rune(m.search)
+			m.search = string(runes[:len(runes)-1])
+		}
+		m.applyClusterFilters()
+	default:
+		if len(msg.Runes) > 0 {
+			m.search += string(msg.Runes)
+			m.applyClusterFilters()
+		}
+	}
 }
 
 func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
@@ -522,6 +654,40 @@ func (m *clusterBrowserModel) sortClusters() {
 	m.selected = clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1))
 }
 
+func (m *clusterBrowserModel) applyClusterFilters() {
+	currentID := int64(0)
+	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
+		currentID = m.payload.Clusters[m.selected].ID
+	}
+	query := strings.ToLower(strings.TrimSpace(m.search))
+	next := make([]store.ClusterSummary, 0, len(m.allClusters))
+	for _, cluster := range m.allClusters {
+		if !m.showClosed && (cluster.Status != "active" || cluster.ClosedAt != "") {
+			continue
+		}
+		if cluster.MemberCount < m.minSize {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(cluster.StableSlug+" "+cluster.Title+" "+cluster.RepresentativeTitle+" "+cluster.RepresentativeKind), query) {
+			continue
+		}
+		next = append(next, cluster)
+	}
+	m.payload.Clusters = next
+	m.sortClusters()
+	m.selected = 0
+	if currentID != 0 {
+		for index, cluster := range m.payload.Clusters {
+			if cluster.ID == currentID {
+				m.selected = index
+				break
+			}
+		}
+	}
+	m.clusterOff = 0
+	m.loadSelectedCluster()
+}
+
 func (m *clusterBrowserModel) loadSelectedCluster() {
 	m.detailScroll = 0
 	m.memberOff = 0
@@ -560,9 +726,36 @@ func (m *clusterBrowserModel) applyClusterDetail(detail store.ClusterDetail) {
 	for _, member := range detail.Members {
 		m.memberRows = append(m.memberRows, memberRow{member: member})
 	}
+	m.sortMembers()
 	if len(m.memberRows) > 0 {
 		m.memberIndex = 0
 	}
+}
+
+func (m *clusterBrowserModel) sortMembers() {
+	sort.SliceStable(m.memberRows, func(i, j int) bool {
+		left := m.memberRows[i].thread()
+		right := m.memberRows[j].thread()
+		switch m.memberSort {
+		case memberSortRecent:
+			return parseTime(left.UpdatedAtGitHub).After(parseTime(right.UpdatedAtGitHub))
+		case memberSortNumber:
+			return left.Number < right.Number
+		case memberSortState:
+			if left.State != right.State {
+				return left.State > right.State
+			}
+			return left.Number < right.Number
+		case memberSortTitle:
+			return strings.ToLower(left.Title) < strings.ToLower(right.Title)
+		default:
+			if left.Kind != right.Kind {
+				return left.Kind < right.Kind
+			}
+			return left.Number < right.Number
+		}
+	})
+	m.memberIndex = clampInt(m.memberIndex, 0, maxInt(0, len(m.memberRows)-1))
 }
 
 func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
@@ -633,6 +826,40 @@ func nextFocus(current tuiFocus, delta int) tuiFocus {
 	}
 	index = (index + delta + len(order)) % len(order)
 	return order[index]
+}
+
+func nextMemberSort(current tuiMemberSort) tuiMemberSort {
+	order := []tuiMemberSort{memberSortKind, memberSortRecent, memberSortNumber, memberSortState, memberSortTitle}
+	for index, item := range order {
+		if item == current {
+			return order[(index+1)%len(order)]
+		}
+	}
+	return memberSortKind
+}
+
+func nextMinSize(current int) int {
+	order := []int{1, 2, 5, 10, 20, 50}
+	for index, item := range order {
+		if item == current {
+			return order[(index+1)%len(order)]
+		}
+	}
+	return 1
+}
+
+func minSizeLabel(value int) string {
+	if value <= 1 {
+		return "all"
+	}
+	return fmt.Sprintf("%d+", value)
+}
+
+func boolLabel(value bool) string {
+	if value {
+		return "shown"
+	}
+	return "hidden"
 }
 
 func splitClusterTitle(cluster store.ClusterSummary) string {
