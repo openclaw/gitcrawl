@@ -98,9 +98,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runConfigure(rest[1:])
 	case "clusters":
 		return a.runClusters(ctx, rest[1:])
+	case "cluster-detail":
+		return a.runClusterDetail(ctx, rest[1:])
 	case "neighbors":
 		return a.runNeighbors(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-detail", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -376,6 +378,67 @@ func (a *App) runClusters(ctx context.Context, args []string) error {
 	return a.writeOutput("clusters", map[string]any{
 		"repository": repo.FullName,
 		"clusters":   clusters,
+	}, true)
+}
+
+func (a *App) runClusterDetail(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("cluster-detail", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	clusterIDRaw := fs.String("id", "", "cluster id")
+	memberLimitRaw := fs.String("member-limit", "", "maximum member rows")
+	bodyCharsRaw := fs.String("body-chars", "", "maximum body snippet characters")
+	includeClosed := fs.Bool("include-closed", false, "include closed clusters and members")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "member-limit": true, "body-chars": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("cluster-detail requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	clusterID, err := parseRequiredPositiveInt("id", *clusterIDRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	memberLimit, err := parseOptionalPositiveInt(*memberLimitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	bodyChars, err := parseOptionalPositiveInt(*bodyCharsRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if bodyChars <= 0 {
+		bodyChars = 280
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	detail, err := rt.Store.ClusterDetail(ctx, store.ClusterDetailOptions{
+		RepoID:        repo.ID,
+		ClusterID:     int64(clusterID),
+		IncludeClosed: *includeClosed,
+		MemberLimit:   memberLimit,
+		BodyChars:     bodyChars,
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("cluster-detail", map[string]any{
+		"repository": repo.FullName,
+		"cluster":    detail.Cluster,
+		"members":    detail.Members,
 	}, true)
 }
 

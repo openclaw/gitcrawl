@@ -42,4 +42,15 @@ func TestListClusterSummaries(t *testing.T) {
 	if len(summaries) != 1 || summaries[0].StableSlug != "slug" || summaries[0].MemberCount != 1 {
 		t.Fatalf("unexpected summaries: %#v", summaries)
 	}
+
+	detail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 10, MemberLimit: 5, BodyChars: 8})
+	if err != nil {
+		t.Fatalf("cluster detail: %v", err)
+	}
+	if detail.Cluster.ID != 10 || len(detail.Members) != 1 {
+		t.Fatalf("unexpected detail: %#v", detail)
+	}
+	if detail.Members[0].Thread.Number != 1 {
+		t.Fatalf("unexpected member thread: %#v", detail.Members[0].Thread)
+	}
 }
