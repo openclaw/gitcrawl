@@ -219,6 +219,9 @@ func TestTUIHelp(t *testing.T) {
 	if !strings.Contains(out, "Press p to switch") {
 		t.Fatalf("tui help should mention repository switching, got %q", out)
 	}
+	if !strings.Contains(out, "Press n to load neighbors") {
+		t.Fatalf("tui help should mention neighbor loading, got %q", out)
+	}
 	if strings.Contains(strings.ToLower(out), "future tui") {
 		t.Fatalf("tui help still implies future-only support: %q", out)
 	}
