@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -51,6 +52,14 @@ type ClusterMemberDetail struct {
 type ClusterDetail struct {
 	Cluster ClusterSummary        `json:"cluster"`
 	Members []ClusterMemberDetail `json:"members"`
+}
+
+type ClusterMemberOverride struct {
+	ClusterID int64  `json:"cluster_id"`
+	ThreadID  int64  `json:"thread_id"`
+	Number    int    `json:"number"`
+	Action    string `json:"action"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 func (s *Store) ListClusterSummaries(ctx context.Context, options ClusterSummaryOptions) ([]ClusterSummary, error) {
@@ -280,6 +289,230 @@ func (s *Store) ReopenClusterLocally(ctx context.Context, repoID, clusterID int6
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit reopen cluster: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ExcludeClusterMemberLocally(ctx context.Context, repoID, clusterID int64, number int, reason string) (ClusterMemberOverride, error) {
+	if repoID <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("repo id must be positive")
+	}
+	if clusterID <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("cluster id must be positive")
+	}
+	if number <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("thread number must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "local exclude"
+	}
+	var result ClusterMemberOverride
+	err := s.WithTx(ctx, func(tx *Store) error {
+		threadID, err := tx.clusterMemberThreadID(ctx, repoID, clusterID, number, false)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC().Format(timeLayout)
+		reasonJSON, err := json.Marshal(map[string]string{"reason": reason})
+		if err != nil {
+			return fmt.Errorf("encode override reason: %w", err)
+		}
+		if _, err := tx.q().ExecContext(ctx, `
+			update cluster_memberships
+			set state = 'excluded', removed_by = 'local', removed_reason_json = ?, removed_at = ?, updated_at = ?
+			where cluster_id = ? and thread_id = ?
+		`, string(reasonJSON), now, now, clusterID, threadID); err != nil {
+			return fmt.Errorf("exclude cluster member: %w", err)
+		}
+		if _, err := tx.q().ExecContext(ctx, `delete from cluster_overrides where cluster_id = ? and thread_id = ? and action in ('include', 'canonical')`, clusterID, threadID); err != nil {
+			return fmt.Errorf("clear stale member overrides: %w", err)
+		}
+		if err := tx.upsertClusterOverride(ctx, repoID, clusterID, threadID, "exclude", reason, now); err != nil {
+			return err
+		}
+		if err := tx.ensureActiveClusterRepresentative(ctx, repoID, clusterID, now); err != nil {
+			return err
+		}
+		result = ClusterMemberOverride{ClusterID: clusterID, ThreadID: threadID, Number: number, Action: "exclude", Reason: reason}
+		return nil
+	})
+	if err != nil {
+		return ClusterMemberOverride{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) IncludeClusterMemberLocally(ctx context.Context, repoID, clusterID int64, number int, reason string) (ClusterMemberOverride, error) {
+	if repoID <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("repo id must be positive")
+	}
+	if clusterID <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("cluster id must be positive")
+	}
+	if number <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("thread number must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "local include"
+	}
+	var result ClusterMemberOverride
+	err := s.WithTx(ctx, func(tx *Store) error {
+		threadID, err := tx.clusterMemberThreadID(ctx, repoID, clusterID, number, false)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC().Format(timeLayout)
+		update, err := tx.q().ExecContext(ctx, `
+			update cluster_memberships
+			set state = 'active', removed_by = null, removed_reason_json = null, removed_at = null, updated_at = ?
+			where cluster_id = ? and thread_id = ?
+		`, now, clusterID, threadID)
+		if err != nil {
+			return fmt.Errorf("include cluster member: %w", err)
+		}
+		if affected, err := update.RowsAffected(); err == nil && affected == 0 {
+			return fmt.Errorf("thread #%d is not in cluster %d", number, clusterID)
+		}
+		if _, err := tx.q().ExecContext(ctx, `delete from cluster_overrides where cluster_id = ? and thread_id = ? and action = 'exclude'`, clusterID, threadID); err != nil {
+			return fmt.Errorf("clear exclude override: %w", err)
+		}
+		if err := tx.upsertClusterOverride(ctx, repoID, clusterID, threadID, "include", reason, now); err != nil {
+			return err
+		}
+		if err := tx.ensureActiveClusterRepresentative(ctx, repoID, clusterID, now); err != nil {
+			return err
+		}
+		result = ClusterMemberOverride{ClusterID: clusterID, ThreadID: threadID, Number: number, Action: "include", Reason: reason}
+		return nil
+	})
+	if err != nil {
+		return ClusterMemberOverride{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) SetClusterCanonicalLocally(ctx context.Context, repoID, clusterID int64, number int, reason string) (ClusterMemberOverride, error) {
+	if repoID <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("repo id must be positive")
+	}
+	if clusterID <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("cluster id must be positive")
+	}
+	if number <= 0 {
+		return ClusterMemberOverride{}, fmt.Errorf("thread number must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "local canonical"
+	}
+	var result ClusterMemberOverride
+	err := s.WithTx(ctx, func(tx *Store) error {
+		threadID, err := tx.clusterMemberThreadID(ctx, repoID, clusterID, number, true)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC().Format(timeLayout)
+		if _, err := tx.q().ExecContext(ctx, `
+			update cluster_memberships
+			set role = case when thread_id = ? then 'canonical' else 'member' end,
+				updated_at = ?
+			where cluster_id = ? and state = 'active'
+		`, threadID, now, clusterID); err != nil {
+			return fmt.Errorf("set canonical member roles: %w", err)
+		}
+		update, err := tx.q().ExecContext(ctx, `
+			update cluster_groups
+			set representative_thread_id = ?, updated_at = ?
+			where repo_id = ? and id = ?
+		`, threadID, now, repoID, clusterID)
+		if err != nil {
+			return fmt.Errorf("set cluster canonical: %w", err)
+		}
+		if affected, err := update.RowsAffected(); err == nil && affected == 0 {
+			return fmt.Errorf("cluster %d was not found", clusterID)
+		}
+		if _, err := tx.q().ExecContext(ctx, `delete from cluster_overrides where cluster_id = ? and action = 'canonical'`, clusterID); err != nil {
+			return fmt.Errorf("clear canonical overrides: %w", err)
+		}
+		if _, err := tx.q().ExecContext(ctx, `delete from cluster_overrides where cluster_id = ? and thread_id = ? and action = 'exclude'`, clusterID, threadID); err != nil {
+			return fmt.Errorf("clear exclude override: %w", err)
+		}
+		if err := tx.upsertClusterOverride(ctx, repoID, clusterID, threadID, "canonical", reason, now); err != nil {
+			return err
+		}
+		result = ClusterMemberOverride{ClusterID: clusterID, ThreadID: threadID, Number: number, Action: "canonical", Reason: reason}
+		return nil
+	})
+	if err != nil {
+		return ClusterMemberOverride{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) clusterMemberThreadID(ctx context.Context, repoID, clusterID int64, number int, requireActive bool) (int64, error) {
+	where := `cg.repo_id = ? and cg.id = ? and t.repo_id = ? and t.number = ?`
+	if requireActive {
+		where += ` and cm.state = 'active'`
+	}
+	row := s.q().QueryRowContext(ctx, `
+		select t.id
+		from cluster_groups cg
+		join cluster_memberships cm on cm.cluster_id = cg.id
+		join threads t on t.id = cm.thread_id
+		where `+where+`
+		limit 1
+	`, repoID, clusterID, repoID, number)
+	var threadID int64
+	if err := row.Scan(&threadID); err != nil {
+		if err == sql.ErrNoRows {
+			if requireActive {
+				return 0, fmt.Errorf("active thread #%d is not in cluster %d", number, clusterID)
+			}
+			return 0, fmt.Errorf("thread #%d is not in cluster %d", number, clusterID)
+		}
+		return 0, fmt.Errorf("find cluster member: %w", err)
+	}
+	return threadID, nil
+}
+
+func (s *Store) upsertClusterOverride(ctx context.Context, repoID, clusterID, threadID int64, action, reason, now string) error {
+	if _, err := s.q().ExecContext(ctx, `
+		insert into cluster_overrides(repo_id, cluster_id, thread_id, action, reason, created_at)
+		values(?, ?, ?, ?, ?, ?)
+		on conflict(cluster_id, thread_id, action) do update set
+			reason = excluded.reason,
+			created_at = excluded.created_at
+	`, repoID, clusterID, threadID, action, reason, now); err != nil {
+		return fmt.Errorf("record cluster override: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureActiveClusterRepresentative(ctx context.Context, repoID, clusterID int64, now string) error {
+	if _, err := s.q().ExecContext(ctx, `
+		update cluster_groups
+		set representative_thread_id = (
+				select cm.thread_id
+				from cluster_memberships cm
+				join threads t on t.id = cm.thread_id
+				where cm.cluster_id = cluster_groups.id and cm.state = 'active'
+				order by case cm.role when 'canonical' then 0 when 'representative' then 1 else 2 end,
+					coalesce(cm.score_to_representative, 0) desc,
+					t.number asc
+				limit 1
+			),
+			updated_at = ?
+		where repo_id = ? and id = ?
+			and (
+				representative_thread_id is null
+				or representative_thread_id not in (
+					select thread_id from cluster_memberships where cluster_id = ? and state = 'active'
+				)
+			)
+	`, now, repoID, clusterID, clusterID); err != nil {
+		return fmt.Errorf("refresh cluster representative: %w", err)
 	}
 	return nil
 }

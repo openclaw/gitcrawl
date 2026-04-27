@@ -121,3 +121,103 @@ func TestCloseAndReopenClusterLocally(t *testing.T) {
 		t.Fatalf("reopened cluster not visible/cleared: %#v", active)
 	}
 }
+
+func TestClusterMemberLocalOverrides(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	firstID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "31", Number: 31, Kind: "issue", State: "open",
+		Title: "first member", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/31",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-31", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("first thread: %v", err)
+	}
+	secondID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "32", Number: 32, Kind: "issue", State: "open",
+		Title: "second member", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/32",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-32", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("second thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(30, ?, 'key-30', 'slug-30', 'active', ?, 'Cluster title', '2026-04-26T00:00:00Z', '2026-04-26T00:00:01Z')
+	`, repoID, firstID); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(30, ?, 'representative', 'active', 'system', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z')
+	`, firstID); err != nil {
+		t.Fatalf("seed first member: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(30, ?, 'member', 'active', 'system', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z')
+	`, secondID); err != nil {
+		t.Fatalf("seed second member: %v", err)
+	}
+
+	excluded, err := st.ExcludeClusterMemberLocally(ctx, repoID, 30, 31, "not related")
+	if err != nil {
+		t.Fatalf("exclude member: %v", err)
+	}
+	if excluded.ThreadID != firstID || excluded.Action != "exclude" {
+		t.Fatalf("unexpected exclude result: %#v", excluded)
+	}
+	detail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 30, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail after exclude: %v", err)
+	}
+	if len(detail.Members) != 1 || detail.Members[0].Thread.Number != 32 || detail.Cluster.RepresentativeThreadID != secondID {
+		t.Fatalf("excluded member should be hidden and representative refreshed: %#v", detail)
+	}
+
+	included, err := st.IncludeClusterMemberLocally(ctx, repoID, 30, 31, "belongs here")
+	if err != nil {
+		t.Fatalf("include member: %v", err)
+	}
+	if included.ThreadID != firstID || included.Action != "include" {
+		t.Fatalf("unexpected include result: %#v", included)
+	}
+	detail, err = st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 30, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail after include: %v", err)
+	}
+	if len(detail.Members) != 2 {
+		t.Fatalf("included member should be visible again: %#v", detail)
+	}
+
+	canonical, err := st.SetClusterCanonicalLocally(ctx, repoID, 30, 31, "best duplicate")
+	if err != nil {
+		t.Fatalf("set canonical: %v", err)
+	}
+	if canonical.ThreadID != firstID || canonical.Action != "canonical" {
+		t.Fatalf("unexpected canonical result: %#v", canonical)
+	}
+	detail, err = st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 30, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail after canonical: %v", err)
+	}
+	if detail.Cluster.RepresentativeThreadID != firstID || detail.Members[0].Thread.Number != 31 || detail.Members[0].Role != "canonical" {
+		t.Fatalf("canonical member should become representative and sort first: %#v", detail)
+	}
+	var excludeOverrides int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from cluster_overrides where cluster_id = 30 and action = 'exclude'`).Scan(&excludeOverrides); err != nil {
+		t.Fatalf("count exclude overrides: %v", err)
+	}
+	if excludeOverrides != 0 {
+		t.Fatalf("include/canonical should clear stale exclude overrides, got %d", excludeOverrides)
+	}
+}
