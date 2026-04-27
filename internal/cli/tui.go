@@ -255,6 +255,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.memberSort = nextMemberSort(m.memberSort)
 			m.sortMembers()
 			m.status = "Member sort: " + string(m.memberSort)
+		case "n":
+			m.loadSelectedThreadNeighbors(10, 0.2)
 		case "d":
 			m.toggleDetailMode()
 		case "l":
@@ -425,7 +427,7 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  header sort  wheel scroll  / filter  # jump  p repos  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
 	if width < 100 {
 		controls = "Tab focus click right-click menu / filter # jump p repos ? help q quit"
 	}
@@ -568,6 +570,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  #: jump to issue/PR number",
 		"  s: toggle cluster sort",
 		"  m: cycle member sort",
+		"  n: load neighbors for selected thread",
 		"  d: toggle compact/full detail",
 		"  r: refresh from local store",
 		"  p: switch repository",

@@ -99,7 +99,7 @@ func TestTUIInAppHelpMentionsMenuMouse(t *testing.T) {
 	})
 
 	help := strings.Join(model.helpLines(80), "\n")
-	for _, want := range []string{"left click menu row", "wheel in menu", "#: jump to issue/PR number", "p: switch repository", "open link picker", "neighbors, sort, refresh, layout, quit"} {
+	for _, want := range []string{"left click menu row", "wheel in menu", "#: jump to issue/PR number", "p: switch repository", "n: load neighbors", "open link picker", "neighbors, sort, refresh, layout, quit"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
 		}
@@ -829,6 +829,14 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(model.detailLines(80), "\n"), "Related issue") {
 		t.Fatalf("detail does not render loaded neighbors")
+	}
+
+	delete(model.neighborCache, targetID)
+	model.focus = focusMembers
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	model = updated.(clusterBrowserModel)
+	if len(model.neighborCache[targetID]) != 1 {
+		t.Fatalf("keyboard shortcut did not reload neighbors: %+v", model.neighborCache[targetID])
 	}
 }
 
