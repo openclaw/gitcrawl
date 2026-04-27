@@ -1141,6 +1141,7 @@ func (m *clusterBrowserModel) openRepositoryMenu() {
 	m.searching = false
 	m.jumping = false
 	m.status = "Repository picker"
+	m.keepMenuVisible()
 }
 
 func (m *clusterBrowserModel) runAction(action string) bool {

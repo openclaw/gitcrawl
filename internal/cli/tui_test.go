@@ -1214,6 +1214,49 @@ func TestTUIRepositoryPickerSwitchesRepository(t *testing.T) {
 	}
 }
 
+func TestTUIRepositoryPickerKeepsCurrentRepoVisible(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	var currentRepoID int64
+	for index := 0; index < 6; index++ {
+		fullName := fmt.Sprintf("openclaw/repo-%d", index)
+		repoID, err := st.UpsertRepository(ctx, store.Repository{
+			Owner:     "openclaw",
+			Name:      fmt.Sprintf("repo-%d", index),
+			FullName:  fullName,
+			RawJSON:   "{}",
+			UpdatedAt: fmt.Sprintf("2026-04-27T0%d:00:00Z", index),
+		})
+		if err != nil {
+			t.Fatalf("repo %d: %v", index, err)
+		}
+		if index == 0 {
+			currentRepoID = repoID
+		}
+	}
+
+	model := newClusterBrowserModel(ctx, st, currentRepoID, clusterBrowserPayload{
+		Repository: "openclaw/repo-0",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detailView.Height = 6
+	model.openRepositoryMenu()
+
+	visible := model.menuVisibleCount()
+	if model.menuIndex < model.menuOff || model.menuIndex >= model.menuOff+visible {
+		t.Fatalf("current repo index %d outside visible window [%d,%d)", model.menuIndex, model.menuOff, model.menuOff+visible)
+	}
+	if model.menuItems[model.menuIndex].value != "openclaw/repo-0" {
+		t.Fatalf("repository menu selected %q, want current repo", model.menuItems[model.menuIndex].value)
+	}
+}
+
 func TestTUIRepositorySwitchRelaxesEmptyFilters(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
