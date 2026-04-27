@@ -100,9 +100,11 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	includeClosed := fs.Bool("include-closed", false, "include locally closed rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
+	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() != 1 {
 		return usageErr(fmt.Errorf("threads requires owner/repo"))
 	}
@@ -140,11 +142,13 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	since := fs.String("since", "", "GitHub since timestamp")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
 	fs.Bool("include-comments", false, "accepted for compatibility; hydration is not implemented yet")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
+	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() != 1 {
 		return usageErr(fmt.Errorf("sync requires owner/repo"))
 	}
@@ -195,9 +199,11 @@ func (a *App) runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dbPath := fs.String("db", "", "database path")
+	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
+	a.applyCommandJSON(*jsonOut)
 
 	cfg := config.Default()
 	if strings.TrimSpace(*dbPath) != "" {
@@ -220,9 +226,11 @@ func (a *App) runInit(args []string) error {
 func (a *App) runDoctor(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
+	a.applyCommandJSON(*jsonOut)
 	_ = ctx
 
 	cfg, err := config.Load(a.configPath)
@@ -269,6 +277,12 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"embedding_basis":      cfg.EmbeddingBasis,
 		"api_supported":        false,
 	}, true)
+}
+
+func (a *App) applyCommandJSON(enabled bool) {
+	if enabled {
+		a.format = FormatJSON
+	}
 }
 
 func resolveOutputFormat(value string, jsonOut bool) (OutputFormat, error) {
