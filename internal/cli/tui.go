@@ -870,6 +870,8 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Sort clusters by recent", action: "sort-recent"},
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
 		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
+		tuiMenuItem{label: "Refresh from store", action: "refresh"},
+		tuiMenuItem{label: "Toggle layout", action: "toggle-layout"},
 		tuiMenuItem{label: "Min size 1+", action: "min-size-1"},
 		tuiMenuItem{label: "Min size 5+", action: "min-size-5"},
 		tuiMenuItem{label: "Min size 10+", action: "min-size-10"},
@@ -924,6 +926,12 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.memberSort = memberSortRecent
 		m.sortMembers()
 		m.status = "Member sort: recent"
+		return true
+	case "refresh":
+		m.refreshFromStore()
+		return true
+	case "toggle-layout":
+		m.toggleWideLayout()
 		return true
 	case "min-size-1":
 		m.setMinSizeFromMenu(1)
