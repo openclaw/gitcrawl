@@ -618,6 +618,40 @@ func TestTUIThreadDetailClipboardText(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuIncludesLoadedNeighborCopy(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{Thread: store.Thread{
+			ID:      42,
+			Number:  42,
+			Kind:    "issue",
+			State:   "open",
+			Title:   "Thread with neighbors",
+			HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+		}},
+	}}
+	model.neighborCache[42] = []tuiNeighbor{{Thread: store.Thread{Number: 43, Kind: "issue", Title: "Neighbor issue"}, Score: 0.91}}
+
+	model.openActionMenu()
+
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	if !strings.Contains(strings.Join(labels, "\n"), "Copy neighbors") {
+		t.Fatalf("menu missing Copy neighbors: %+v", model.menuItems)
+	}
+	if got := model.neighborsClipboardText(); !strings.Contains(got, "#43 Issue 91.0% Neighbor issue") {
+		t.Fatalf("neighbor clipboard text mismatch: %q", got)
+	}
+}
+
 func TestTUILoadNeighborsFromStore(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

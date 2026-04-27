@@ -826,6 +826,9 @@ func (m *clusterBrowserModel) openActionMenu() {
 		if len(member.Summaries) > 0 {
 			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy summaries", action: "copy-summaries"})
 		}
+		if _, ok := m.neighborCache[member.Thread.ID]; ok {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy neighbors", action: "copy-neighbors"})
+		}
 	}
 	if m.hasSelectedCluster() {
 		m.menuItems = append(m.menuItems,
@@ -960,6 +963,13 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 			m.status = err.Error()
 		} else {
 			m.status = "Copied summaries"
+		}
+		return true
+	case "copy-neighbors":
+		if err := copyText(m.neighborsClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied neighbors"
 		}
 		return true
 	case "copy-cluster-id":
@@ -1955,20 +1965,9 @@ func (m clusterBrowserModel) threadDetailClipboardText() string {
 	if links := m.referenceLinks(); len(links) > 0 {
 		lines = append(lines, "", "Links", strings.Join(links, "\n"))
 	}
-	if neighbors, ok := m.neighborCache[thread.ID]; ok {
+	if neighbors := m.neighborsClipboardText(); neighbors != "" {
 		lines = append(lines, "", "Neighbors")
-		if len(neighbors) == 0 {
-			lines = append(lines, "No neighbors above threshold.")
-		} else {
-			for _, neighbor := range neighbors {
-				lines = append(lines, fmt.Sprintf("#%d %s %.1f%% %s",
-					neighbor.Thread.Number,
-					kindTitle(neighbor.Thread.Kind),
-					neighbor.Score*100,
-					neighbor.Thread.Title,
-				))
-			}
-		}
+		lines = append(lines, neighbors)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1990,6 +1989,30 @@ func summariesClipboardText(summaries map[string]string) string {
 		lines = append(lines, formatSummaryLabel(key)+":", summaries[key], "")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func (m clusterBrowserModel) neighborsClipboardText() string {
+	member, ok := m.selectedMember()
+	if !ok {
+		return ""
+	}
+	neighbors, ok := m.neighborCache[member.Thread.ID]
+	if !ok {
+		return ""
+	}
+	if len(neighbors) == 0 {
+		return "No neighbors above threshold."
+	}
+	lines := make([]string, 0, len(neighbors))
+	for _, neighbor := range neighbors {
+		lines = append(lines, fmt.Sprintf("#%d %s %.1f%% %s",
+			neighbor.Thread.Number,
+			kindTitle(neighbor.Thread.Kind),
+			neighbor.Score*100,
+			neighbor.Thread.Title,
+		))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m clusterBrowserModel) clusterClipboardText() string {
