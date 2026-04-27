@@ -32,6 +32,10 @@ var (
 	summaryKeyOrder   = []string{"key_summary", "problem_summary", "solution_summary", "maintainer_signal_summary", "dedupe_summary"}
 )
 
+const tuiAutoRefreshInterval = 15 * time.Second
+
+type tuiAutoRefreshMsg struct{}
+
 type clusterBrowserPayload struct {
 	Repository         string                 `json:"repository"`
 	InferredRepository bool                   `json:"inferred_repository"`
@@ -207,11 +211,17 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 }
 
 func (m clusterBrowserModel) Init() tea.Cmd {
-	return nil
+	return m.autoRefreshCmd()
 }
 
 func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tuiAutoRefreshMsg:
+		if m.menuOpen || m.searching || m.jumping {
+			return m, m.autoRefreshCmd()
+		}
+		m.autoRefreshFromStore()
+		return m, m.autoRefreshCmd()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -2159,6 +2169,40 @@ func (m *clusterBrowserModel) refreshFromStore() {
 	if relaxedFilters {
 		m.status += " (filters relaxed)"
 	}
+}
+
+func (m clusterBrowserModel) autoRefreshCmd() tea.Cmd {
+	if m.store == nil || m.repoID == 0 {
+		return nil
+	}
+	return tea.Tick(tuiAutoRefreshInterval, func(time.Time) tea.Msg {
+		return tuiAutoRefreshMsg{}
+	})
+}
+
+func (m *clusterBrowserModel) autoRefreshFromStore() {
+	before := m.clusterSignature()
+	previousStatus := m.status
+	m.refreshFromStore()
+	if strings.HasPrefix(m.status, "Refresh failed:") {
+		return
+	}
+	if m.clusterSignature() == before {
+		m.status = previousStatus
+		return
+	}
+	m.status = fmt.Sprintf("Auto refreshed %d cluster(s)", len(m.payload.Clusters))
+}
+
+func (m clusterBrowserModel) clusterSignature() string {
+	if len(m.payload.Clusters) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(m.payload.Clusters))
+	for _, cluster := range m.payload.Clusters {
+		parts = append(parts, fmt.Sprintf("%d:%d:%s", cluster.ID, cluster.MemberCount, cluster.UpdatedAt))
+	}
+	return strings.Join(parts, "|")
 }
 
 func (m *clusterBrowserModel) switchRepository(fullName string) {

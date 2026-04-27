@@ -1668,6 +1668,46 @@ func TestTUIRefreshRelaxesEmptyFilters(t *testing.T) {
 	}
 }
 
+func TestTUIAutoRefreshIsQuietUntilClustersChange(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoID, 40, 400, "first cluster"); err != nil {
+		t.Fatalf("seed first cluster: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+	model.status = "Reading detail"
+	model.autoRefreshFromStore()
+	if model.status != "Reading detail" {
+		t.Fatalf("unchanged auto refresh status = %q", model.status)
+	}
+
+	if err := seedTUICluster(ctx, st, repoID, 41, 401, "second cluster"); err != nil {
+		t.Fatalf("seed second cluster: %v", err)
+	}
+	model.autoRefreshFromStore()
+	if model.status != "Auto refreshed 2 cluster(s)" {
+		t.Fatalf("changed auto refresh status = %q", model.status)
+	}
+}
+
 func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
