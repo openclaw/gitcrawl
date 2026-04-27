@@ -160,6 +160,28 @@ func (s *Store) CloseThreadLocally(ctx context.Context, repoID int64, number int
 	return nil
 }
 
+func (s *Store) ReopenThreadLocally(ctx context.Context, repoID int64, number int) error {
+	if repoID <= 0 {
+		return fmt.Errorf("repo id must be positive")
+	}
+	if number <= 0 {
+		return fmt.Errorf("thread number must be positive")
+	}
+	updatedAt := time.Now().UTC().Format(timeLayout)
+	result, err := s.q().ExecContext(ctx, `
+		update threads
+		set closed_at_local = null, close_reason_local = null, updated_at = ?
+		where repo_id = ? and number = ?
+	`, updatedAt, repoID, number)
+	if err != nil {
+		return fmt.Errorf("reopen thread locally: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("thread #%d was not found", number)
+	}
+	return nil
+}
+
 func scanThread(rows interface {
 	Scan(dest ...any) error
 }) (Thread, error) {

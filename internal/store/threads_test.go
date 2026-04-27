@@ -99,6 +99,17 @@ func TestCloseThreadLocallyHidesThreadAndSurvivesUpsert(t *testing.T) {
 	if len(openRows) != 0 {
 		t.Fatalf("upsert should preserve local close, got %#v", openRows)
 	}
+
+	if err := st.ReopenThreadLocally(ctx, repoID, 42); err != nil {
+		t.Fatalf("reopen thread locally: %v", err)
+	}
+	openRows, err = st.ListThreads(ctx, repoID, false)
+	if err != nil {
+		t.Fatalf("list reopened threads: %v", err)
+	}
+	if len(openRows) != 1 || openRows[0].ClosedAtLocal != "" || openRows[0].CloseReasonLocal != "" {
+		t.Fatalf("reopened thread not visible/cleared: %#v", openRows)
+	}
 }
 
 func TestCloseThreadLocallyRequiresExistingThread(t *testing.T) {
@@ -110,6 +121,19 @@ func TestCloseThreadLocallyRequiresExistingThread(t *testing.T) {
 	defer st.Close()
 
 	if err := st.CloseThreadLocally(ctx, 1, 404, "missing"); err == nil {
+		t.Fatal("expected missing thread error")
+	}
+}
+
+func TestReopenThreadLocallyRequiresExistingThread(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.ReopenThreadLocally(ctx, 1, 404); err == nil {
 		t.Fatal("expected missing thread error")
 	}
 }
