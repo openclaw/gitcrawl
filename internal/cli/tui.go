@@ -405,11 +405,11 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
-	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus, fmt.Sprintf("%d", len(m.payload.Clusters))), m.clusterTable.View()))
+	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus, m.clusterPositionLabel()), m.clusterTable.View()))
 }
 
 func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
-	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus, fmt.Sprintf("%d", m.selectableMemberCount())), m.memberTable.View()))
+	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus, m.memberPositionLabel()), m.memberTable.View()))
 }
 
 func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
@@ -1364,6 +1364,31 @@ func (m clusterBrowserModel) selectableMemberCount() int {
 		}
 	}
 	return count
+}
+
+func (m clusterBrowserModel) clusterPositionLabel() string {
+	total := len(m.payload.Clusters)
+	if total == 0 {
+		return "0"
+	}
+	return fmt.Sprintf("%d/%d", clampInt(m.selected+1, 1, total), total)
+}
+
+func (m clusterBrowserModel) memberPositionLabel() string {
+	total := m.selectableMemberCount()
+	if total == 0 {
+		return "0"
+	}
+	position := 0
+	for _, row := range m.memberRows[:clampInt(m.memberIndex+1, 0, len(m.memberRows))] {
+		if row.selectable {
+			position++
+		}
+	}
+	if position == 0 {
+		position = 1
+	}
+	return fmt.Sprintf("%d/%d", position, total)
 }
 
 func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {

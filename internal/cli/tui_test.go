@@ -382,6 +382,28 @@ func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 	}
 }
 
+func TestTUIPanePositionLabels(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detail = store.ClusterDetail{Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 10, Kind: "issue", State: "open", Title: "First"}},
+		{Thread: store.Thread{ID: 2, Number: 11, Kind: "issue", State: "open", Title: "Second"}},
+	}}
+	model.sortMembers()
+	model.selected = 1
+	model.memberIndex = 2
+
+	if got := model.clusterPositionLabel(); got != "2/2" {
+		t.Fatalf("cluster position = %q, want 2/2", got)
+	}
+	if got := model.memberPositionLabel(); got != "2/2" {
+		t.Fatalf("member position = %q, want 2/2", got)
+	}
+}
+
 func sampleTUIClusters() []store.ClusterSummary {
 	return []store.ClusterSummary{
 		{
