@@ -1188,4 +1188,5 @@ Usage:
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
 The TUI starts at --min-size 5 by default; pass --min-size 1 to show singleton clusters.
+Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter controls.
 `

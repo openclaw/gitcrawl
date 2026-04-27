@@ -196,6 +196,9 @@ func TestTUIHelp(t *testing.T) {
 	if !strings.Contains(out, "gitcrawl tui [owner/repo]") {
 		t.Fatalf("expected tui usage, got %q", out)
 	}
+	if !strings.Contains(out, "right-click for actions") {
+		t.Fatalf("tui help should mention mouse actions, got %q", out)
+	}
 	if strings.Contains(strings.ToLower(out), "future tui") {
 		t.Fatalf("tui help still implies future-only support: %q", out)
 	}
