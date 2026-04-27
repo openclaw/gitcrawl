@@ -580,7 +580,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  wheel: scroll the pane under the pointer",
 		"  wheel in menu: move the highlighted action",
 		"  right click: open a stable action menu",
-		"  menu actions: copy, links, neighbors, local close/reopen, repos, filter, jump, sort, refresh, layout, quit",
+		"  menu actions: copy, links, neighbors, member triage, local close/reopen, repos, filter, jump, sort, refresh, layout, quit",
 		"",
 		"Keyboard",
 		"  Tab / Shift-Tab: cycle focus",

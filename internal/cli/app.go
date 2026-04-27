@@ -1521,9 +1521,12 @@ Core commands:
   reopen-thread        clear a local hide for one issue or pull request row
   close-cluster        locally hide one durable cluster
   reopen-cluster       clear a local hide for one durable cluster
-  exclude-cluster-member locally remove one row from a durable cluster
-  include-cluster-member restore one row to a durable cluster
-  set-cluster-canonical set the canonical row for a durable cluster
+  exclude-cluster-member
+                       locally remove one row from a durable cluster
+  include-cluster-member
+                       restore one row to a durable cluster
+  set-cluster-canonical
+                       set the canonical row for a durable cluster
   clusters             list cluster summaries
   cluster-detail       dump one durable cluster
   neighbors            list vector-nearest local issue and pull request rows
@@ -1541,7 +1544,7 @@ Usage:
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
 The TUI starts at --min-size 5 by default; pass --min-size 1 to show singleton clusters.
-Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter/jump controls.
+Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter/jump/member triage controls.
 Press a to open the same action menu from the keyboard.
 Press # to jump directly to an issue or PR number.
 Press p to switch between repositories already present in the local store.
