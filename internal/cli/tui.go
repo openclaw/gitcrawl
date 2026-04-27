@@ -897,6 +897,13 @@ func (m *clusterBrowserModel) openActionMenu() {
 		}
 	}
 	if m.hasSelectedCluster() {
+		if url, ok := m.selectedClusterURL(); ok {
+			cluster, _ := m.selectedCluster()
+			m.menuItems = append(m.menuItems,
+				tuiMenuItem{label: fmt.Sprintf("Open representative #%d", cluster.RepresentativeNumber), action: "open-cluster-representative", value: url},
+				tuiMenuItem{label: "Copy representative URL", action: "copy-cluster-url", value: url},
+			)
+		}
 		m.menuItems = append(m.menuItems,
 			tuiMenuItem{label: "Copy cluster ID", action: "copy-cluster-id"},
 			tuiMenuItem{label: "Copy cluster name", action: "copy-cluster-name"},
@@ -1028,6 +1035,25 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 	case "show-help":
 		m.showHelp = true
 		m.status = "Help"
+		return true
+	case "open-cluster-representative":
+		if strings.TrimSpace(item.value) == "" {
+			m.status = "No representative URL"
+			return true
+		}
+		openURL(item.value)
+		m.status = "Opened " + item.value
+		return true
+	case "copy-cluster-url":
+		if strings.TrimSpace(item.value) == "" {
+			m.status = "No representative URL"
+			return true
+		}
+		if err := copyText(item.value); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied representative URL"
+		}
 		return true
 	case "load-neighbors":
 		m.loadSelectedThreadNeighbors(10, 0.2)
@@ -2132,6 +2158,18 @@ func (m clusterBrowserModel) selectedCluster() (store.ClusterSummary, bool) {
 		return store.ClusterSummary{}, false
 	}
 	return m.payload.Clusters[m.selected], true
+}
+
+func (m clusterBrowserModel) selectedClusterURL() (string, bool) {
+	cluster, ok := m.selectedCluster()
+	if !ok || cluster.RepresentativeNumber <= 0 || strings.TrimSpace(m.payload.Repository) == "" {
+		return "", false
+	}
+	path := "issues"
+	if cluster.RepresentativeKind == "pull_request" {
+		path = "pull"
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/%d", m.payload.Repository, path, cluster.RepresentativeNumber), true
 }
 
 func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) {

@@ -986,6 +986,14 @@ func TestTUIActionMenuOmitsThreadActionsWithoutSelectedThread(t *testing.T) {
 	if !strings.Contains(joined, "Copy cluster summary") {
 		t.Fatalf("menu should keep cluster action:\n%s", joined)
 	}
+	if !strings.Contains(joined, "Open representative #11") || !strings.Contains(joined, "Copy representative URL") {
+		t.Fatalf("menu should include representative actions:\n%s", joined)
+	}
+
+	url, ok := model.selectedClusterURL()
+	if !ok || url != "https://github.com/openclaw/openclaw/issues/11" {
+		t.Fatalf("selected cluster URL = %q/%v, want representative issue URL", url, ok)
+	}
 }
 
 func TestTUIMemberRowsGroupAndSkipHeaders(t *testing.T) {
