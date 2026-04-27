@@ -95,7 +95,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSearch(ctx, rest[1:])
 	case "configure":
 		return a.runConfigure(rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "clusters":
+		return a.runClusters(ctx, rest[1:])
+	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -194,6 +196,63 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 		"repository": repo.FullName,
 		"query":      strings.TrimSpace(*query),
 		"hits":       hits,
+	}, true)
+}
+
+func (a *App) runClusters(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("clusters", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	minSizeRaw := fs.String("min-size", "", "minimum active member count")
+	limitRaw := fs.String("limit", "", "maximum cluster rows")
+	sortMode := fs.String("sort", "recent", "sort mode: recent|size")
+	hideClosed := fs.Bool("hide-closed", false, "hide non-active or closed clusters")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("clusters requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	minSize, err := parseOptionalPositiveInt(*minSizeRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	sort := strings.TrimSpace(*sortMode)
+	if sort != "recent" && sort != "size" {
+		return usageErr(fmt.Errorf("unsupported sort %q", sort))
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
+		RepoID:        repo.ID,
+		IncludeClosed: !*hideClosed,
+		MinSize:       minSize,
+		Limit:         limit,
+		Sort:          sort,
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("clusters", map[string]any{
+		"repository": repo.FullName,
+		"clusters":   clusters,
 	}, true)
 }
 
