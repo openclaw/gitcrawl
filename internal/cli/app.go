@@ -88,12 +88,61 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSync(ctx, rest[1:])
 	case "threads":
 		return a.runThreads(ctx, rest[1:])
-	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "runs", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "runs":
+		return a.runRuns(ctx, rest[1:])
+	case "configure", "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "search", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
 		return usageErr(fmt.Errorf("unknown command %q", rest[0]))
 	}
+}
+
+func (a *App) runRuns(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("runs", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	kind := fs.String("kind", "sync", "run kind: sync|summary|embedding|cluster")
+	limitRaw := fs.String("limit", "", "maximum run rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(args); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("runs requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	repo, err := st.RepositoryByFullName(ctx, owner+"/"+repoName)
+	if err != nil {
+		return err
+	}
+	runs, err := st.ListRuns(ctx, repo.ID, strings.TrimSpace(*kind), limit)
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("runs", map[string]any{
+		"repository": repo.FullName,
+		"kind":       strings.TrimSpace(*kind),
+		"runs":       runs,
+	}, true)
 }
 
 func (a *App) runThreads(ctx context.Context, args []string) error {
