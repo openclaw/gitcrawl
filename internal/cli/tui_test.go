@@ -179,6 +179,27 @@ func TestTUIFiltersUseLoadedWorkingSet(t *testing.T) {
 	}
 }
 
+func TestTUIHideClosedUsesLoadedWorkingSet(t *testing.T) {
+	clusters := sampleTUIClusters()
+	clusters[0].Status = "closed"
+	clusters[0].ClosedAt = "2026-04-27T00:00:00Z"
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		HideClosed: true,
+		Clusters:   clusters,
+	})
+
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("hide-closed view mismatch: %+v", model.payload.Clusters)
+	}
+	model.showClosed = true
+	model.applyClusterFilters()
+	if len(model.payload.Clusters) != 2 {
+		t.Fatalf("showing closed should use loaded working set, got %+v", model.payload.Clusters)
+	}
+}
+
 func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

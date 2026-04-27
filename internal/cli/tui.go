@@ -37,6 +37,7 @@ type clusterBrowserPayload struct {
 	Sort               string                 `json:"sort"`
 	MinSize            int                    `json:"min_size"`
 	Limit              int                    `json:"limit,omitempty"`
+	HideClosed         bool                   `json:"hide_closed,omitempty"`
 	Clusters           []store.ClusterSummary `json:"clusters"`
 }
 
@@ -154,7 +155,7 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 		repoID:       repoID,
 		focus:        focusClusters,
 		status:       "Ready",
-		showClosed:   true,
+		showClosed:   !payload.HideClosed,
 		minSize:      maxInt(1, payload.MinSize),
 		memberSort:   memberSortKind,
 		wideLayout:   wideLayoutColumns,

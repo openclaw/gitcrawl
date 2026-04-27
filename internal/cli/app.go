@@ -464,13 +464,15 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	interactive := a.format == FormatText && a.canRunInteractiveTUI()
 	queryMinSize := minSize
 	queryLimit := limit
+	queryIncludeClosed := !*hideClosed
 	if interactive {
 		queryMinSize = 1
 		queryLimit = maxInt(defaultTUIWorkingSetLimit, limit)
+		queryIncludeClosed = true
 	}
 	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: !*hideClosed,
+		IncludeClosed: queryIncludeClosed,
 		MinSize:       queryMinSize,
 		Limit:         queryLimit,
 		Sort:          sort,
@@ -488,6 +490,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Sort:               sort,
 		MinSize:            minSize,
 		Limit:              limit,
+		HideClosed:         *hideClosed,
 		Clusters:           clusters,
 	}
 	if !interactive {
