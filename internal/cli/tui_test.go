@@ -631,6 +631,28 @@ func TestTUIActionMenuCanOpenHelp(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuQuickKeysStartInputs(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.openActionMenu()
+
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = updated.(clusterBrowserModel)
+	if model.menuOpen || !model.searching || model.searchInput.Prompt != "/ " {
+		t.Fatalf("menu filter key state menu=%v searching=%v prompt=%q", model.menuOpen, model.searching, model.searchInput.Prompt)
+	}
+
+	model.openActionMenu()
+	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'#'}})
+	model = updated.(clusterBrowserModel)
+	if model.menuOpen || !model.jumping || model.searchInput.Prompt != "# " {
+		t.Fatalf("menu jump key state menu=%v jumping=%v prompt=%q", model.menuOpen, model.jumping, model.searchInput.Prompt)
+	}
+}
+
 func TestTUIActionMenuSectionsAreNotSelectable(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

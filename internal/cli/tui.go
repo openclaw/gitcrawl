@@ -303,15 +303,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.startFilterInput()
 			return m, cmd
 		case "#":
-			m.jumping = true
-			m.searching = false
-			m.showHelp = false
-			m.menuOpen = false
-			m.searchInput.Prompt = "# "
-			m.searchInput.Placeholder = "issue or PR number"
-			m.searchInput.SetValue("")
-			cmd := m.searchInput.Focus()
-			m.status = "Jump to issue/PR"
+			cmd := m.startJumpInput()
 			return m, cmd
 		case "esc":
 			if m.showHelp {
@@ -668,6 +660,12 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menuOpen = false
 		m.showHelp = true
 		m.status = "Help"
+	case "/":
+		cmd := m.startFilterInput()
+		return m, cmd
+	case "#":
+		cmd := m.startJumpInput()
+		return m, cmd
 	case "up", "k":
 		m.menuIndex = m.nextSelectableMenuIndex(-1)
 		m.keepMenuVisible()
@@ -768,6 +766,18 @@ func (m *clusterBrowserModel) startFilterInput() tea.Cmd {
 	m.searchInput.Placeholder = "filter clusters"
 	m.searchInput.SetValue(m.search)
 	m.status = "Filter: " + m.search
+	return m.searchInput.Focus()
+}
+
+func (m *clusterBrowserModel) startJumpInput() tea.Cmd {
+	m.jumping = true
+	m.searching = false
+	m.showHelp = false
+	m.menuOpen = false
+	m.searchInput.Prompt = "# "
+	m.searchInput.Placeholder = "issue or PR number"
+	m.searchInput.SetValue("")
+	m.status = "Jump to issue/PR"
 	return m.searchInput.Focus()
 }
 
@@ -1141,14 +1151,7 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.openRepositoryMenu()
 		return false
 	case "jump":
-		m.jumping = true
-		m.searching = false
-		m.showHelp = false
-		m.searchInput.Prompt = "# "
-		m.searchInput.Placeholder = "issue or PR number"
-		m.searchInput.SetValue("")
-		_ = m.searchInput.Focus()
-		m.status = "Jump to issue/PR"
+		m.startJumpInput()
 		return true
 	case "toggle-layout":
 		m.toggleWideLayout()
