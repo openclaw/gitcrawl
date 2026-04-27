@@ -71,42 +71,45 @@ type tuiRect struct {
 }
 
 type clusterBrowserModel struct {
-	payload      clusterBrowserPayload
-	allClusters  []store.ClusterSummary
-	ctx          context.Context
-	store        *store.Store
-	repoID       int64
-	focus        tuiFocus
-	width        int
-	height       int
-	status       string
-	search       string
-	searching    bool
-	showHelp     bool
-	menuOpen     bool
-	menuIndex    int
-	menuItems    []tuiMenuItem
-	showClosed   bool
-	minSize      int
-	memberSort   tuiMemberSort
-	wideLayout   tuiWideLayout
-	selected     int
-	clusterOff   int
-	memberRows   []memberRow
-	memberOff    int
-	memberIndex  int
-	detailScroll int
-	clusterTable table.Model
-	memberTable  table.Model
-	detailView   viewport.Model
-	searchInput  textinput.Model
-	detailCache  map[int64]store.ClusterDetail
-	detail       store.ClusterDetail
-	hasDetail    bool
+	payload       clusterBrowserPayload
+	allClusters   []store.ClusterSummary
+	ctx           context.Context
+	store         *store.Store
+	repoID        int64
+	focus         tuiFocus
+	width         int
+	height        int
+	status        string
+	search        string
+	searching     bool
+	showHelp      bool
+	menuOpen      bool
+	menuIndex     int
+	menuItems     []tuiMenuItem
+	showClosed    bool
+	compactDetail bool
+	minSize       int
+	memberSort    tuiMemberSort
+	wideLayout    tuiWideLayout
+	selected      int
+	clusterOff    int
+	memberRows    []memberRow
+	memberOff     int
+	memberIndex   int
+	detailScroll  int
+	clusterTable  table.Model
+	memberTable   table.Model
+	detailView    viewport.Model
+	searchInput   textinput.Model
+	detailCache   map[int64]store.ClusterDetail
+	detail        store.ClusterDetail
+	hasDetail     bool
 }
 
 type memberRow struct {
-	member store.ClusterMemberDetail
+	member     store.ClusterMemberDetail
+	label      string
+	selectable bool
 }
 
 type tuiMenuItem struct {
@@ -228,6 +231,13 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.memberSort = nextMemberSort(m.memberSort)
 			m.sortMembers()
 			m.status = "Member sort: " + string(m.memberSort)
+		case "d":
+			m.compactDetail = !m.compactDetail
+			if m.compactDetail {
+				m.status = "Detail mode: compact"
+			} else {
+				m.status = "Detail mode: full"
+			}
 		case "l":
 			m.toggleWideLayout()
 		case "f":
@@ -238,9 +248,9 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showClosed = !m.showClosed
 			m.applyClusterFilters()
 			if m.showClosed {
-				m.status = "Showing closed clusters"
+				m.status = "Showing closed clusters and members"
 			} else {
-				m.status = "Hiding closed clusters"
+				m.status = "Hiding closed clusters and members"
 			}
 		case "/":
 			m.searching = true
@@ -382,7 +392,7 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  d detail  f min  l layout  x closed  ? help  q quit"
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
 		line = "Filter: " + m.searchInput.View()
@@ -430,12 +440,12 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		lines = append(lines, "Cluster details unavailable.", m.status)
 		return lines
 	}
-	if len(m.memberRows) == 0 {
+	member, ok := m.selectedMember()
+	if !ok {
 		lines = append(lines, "Select a cluster to inspect members.")
 		return lines
 	}
-	member := m.memberRows[clampInt(m.memberIndex, 0, len(m.memberRows)-1)]
-	thread := member.thread()
+	thread := member.Thread
 	lines = append(lines,
 		dim(tuiRule(width)),
 		bold(fmt.Sprintf("%s #%d", kindTitle(thread.Kind), thread.Number)),
@@ -449,19 +459,19 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		lines = append(lines, "labels: "+labels, "")
 	}
 	lines = append(lines, fmt.Sprintf("url: %s", thread.HTMLURL), "")
-	if len(member.member.Summaries) > 0 {
+	if len(member.Summaries) > 0 {
 		lines = append(lines, dim(tuiRule(width)))
 		lines = append(lines, bold("LLM Summary"))
-		for _, key := range sortedSummaryKeys(member.member.Summaries) {
+		for _, key := range sortedSummaryKeys(member.Summaries) {
 			lines = append(lines, dim(formatSummaryLabel(key)+":"))
-			lines = append(lines, markdownLines(member.member.Summaries[key], width)...)
+			lines = append(lines, markdownLines(member.Summaries[key], width)...)
 			lines = append(lines, "")
 		}
 	}
-	if strings.TrimSpace(member.member.BodySnippet) != "" {
+	if strings.TrimSpace(member.BodySnippet) != "" {
 		lines = append(lines, dim(tuiRule(width)))
 		lines = append(lines, bold("Main Preview"))
-		lines = append(lines, markdownLines(member.member.BodySnippet, width)...)
+		lines = appendLimitedLines(lines, markdownLines(member.BodySnippet, width), m.detailBodyLimit())
 	}
 	return lines
 }
@@ -483,6 +493,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  /: filter clusters",
 		"  s: toggle cluster sort",
 		"  m: cycle member sort",
+		"  d: toggle compact/full detail",
 		"  l: toggle wide layout",
 		"  f: cycle minimum cluster size",
 		"  x: show/hide closed clusters",
@@ -546,8 +557,10 @@ func (m *clusterBrowserModel) move(delta int) {
 		if len(m.memberRows) == 0 {
 			return
 		}
-		m.memberIndex = clampInt(m.memberIndex+delta, 0, len(m.memberRows)-1)
-		m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
+		m.memberIndex = m.nextSelectableMemberIndex(m.memberIndex, delta)
+		if thread, ok := m.selectedThread(); ok {
+			m.status = fmt.Sprintf("Selected #%d", thread.Number)
+		}
 		return
 	}
 	if len(m.payload.Clusters) == 0 {
@@ -627,6 +640,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			}
 			index := m.memberOff + row
 			if index >= 0 && index < len(m.memberRows) {
+				if !m.memberRows[index].selectable {
+					m.status = m.memberRows[index].label
+					return
+				}
 				m.memberIndex = index
 				m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
 			}
@@ -660,6 +677,9 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 		if row >= 0 {
 			index := m.memberOff + row
 			if index >= 0 && index < len(m.memberRows) {
+				if !m.memberRows[index].selectable {
+					return
+				}
 				m.memberIndex = index
 			}
 		}
@@ -792,9 +812,9 @@ func (m *clusterBrowserModel) jumpEdge(end bool) {
 	}
 	if m.focus == focusMembers && len(m.memberRows) > 0 {
 		if end {
-			m.memberIndex = len(m.memberRows) - 1
+			m.memberIndex = m.lastSelectableMemberIndex()
 		} else {
-			m.memberIndex = 0
+			m.memberIndex = m.firstSelectableMemberIndex()
 		}
 		return
 	}
@@ -966,6 +986,10 @@ func (m clusterBrowserModel) clusterRows() []table.Row {
 func (m clusterBrowserModel) memberTableRows() []table.Row {
 	rows := make([]table.Row, 0, len(m.memberRows))
 	for _, member := range m.memberRows {
+		if !member.selectable {
+			rows = append(rows, table.Row{"", "", "", member.label})
+			continue
+		}
 		thread := member.thread()
 		rows = append(rows, table.Row{
 			fmt.Sprintf("#%d", thread.Number),
@@ -1107,19 +1131,24 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 func (m *clusterBrowserModel) applyClusterDetail(detail store.ClusterDetail) {
 	m.detail = detail
 	m.hasDetail = true
-	for _, member := range detail.Members {
-		m.memberRows = append(m.memberRows, memberRow{member: member})
-	}
 	m.sortMembers()
-	if len(m.memberRows) > 0 {
-		m.memberIndex = 0
-	}
 }
 
 func (m *clusterBrowserModel) sortMembers() {
-	sort.SliceStable(m.memberRows, func(i, j int) bool {
-		left := m.memberRows[i].thread()
-		right := m.memberRows[j].thread()
+	selectedID := int64(0)
+	if member, ok := m.selectedMember(); ok {
+		selectedID = member.Thread.ID
+	}
+	members := make([]store.ClusterMemberDetail, 0, len(m.detail.Members))
+	for _, member := range m.detail.Members {
+		if !m.showClosed && member.Thread.State != "open" {
+			continue
+		}
+		members = append(members, member)
+	}
+	sort.SliceStable(members, func(i, j int) bool {
+		left := members[i].Thread
+		right := members[j].Thread
 		switch m.memberSort {
 		case memberSortRecent:
 			return parseTime(left.UpdatedAtGitHub).After(parseTime(right.UpdatedAtGitHub))
@@ -1139,7 +1168,98 @@ func (m *clusterBrowserModel) sortMembers() {
 			return left.Number < right.Number
 		}
 	})
-	m.memberIndex = clampInt(m.memberIndex, 0, maxInt(0, len(m.memberRows)-1))
+	m.memberRows = m.buildMemberRows(members)
+	m.memberIndex = m.firstSelectableMemberIndex()
+	if selectedID != 0 {
+		for index, row := range m.memberRows {
+			if row.selectable && row.member.Thread.ID == selectedID {
+				m.memberIndex = index
+				break
+			}
+		}
+	}
+}
+
+func (m clusterBrowserModel) buildMemberRows(members []store.ClusterMemberDetail) []memberRow {
+	if m.memberSort != memberSortKind {
+		rows := make([]memberRow, 0, len(members))
+		for _, member := range members {
+			rows = append(rows, memberRow{member: member, selectable: true})
+		}
+		return rows
+	}
+	issues := make([]store.ClusterMemberDetail, 0, len(members))
+	pulls := make([]store.ClusterMemberDetail, 0, len(members))
+	other := make([]store.ClusterMemberDetail, 0)
+	for _, member := range members {
+		switch member.Thread.Kind {
+		case "issue":
+			issues = append(issues, member)
+		case "pull_request":
+			pulls = append(pulls, member)
+		default:
+			other = append(other, member)
+		}
+	}
+	rows := make([]memberRow, 0, len(members)+3)
+	appendGroup := func(label string, group []store.ClusterMemberDetail) {
+		if len(group) == 0 {
+			return
+		}
+		rows = append(rows, memberRow{label: fmt.Sprintf("%s (%d)", label, len(group))})
+		for _, member := range group {
+			rows = append(rows, memberRow{member: member, selectable: true})
+		}
+	}
+	appendGroup("ISSUES", issues)
+	appendGroup("PULL REQUESTS", pulls)
+	appendGroup("OTHER", other)
+	return rows
+}
+
+func (m clusterBrowserModel) firstSelectableMemberIndex() int {
+	for index, row := range m.memberRows {
+		if row.selectable {
+			return index
+		}
+	}
+	return -1
+}
+
+func (m clusterBrowserModel) lastSelectableMemberIndex() int {
+	for index := len(m.memberRows) - 1; index >= 0; index-- {
+		if m.memberRows[index].selectable {
+			return index
+		}
+	}
+	return -1
+}
+
+func (m clusterBrowserModel) nextSelectableMemberIndex(current, delta int) int {
+	if len(m.memberRows) == 0 {
+		return -1
+	}
+	if current < 0 || current >= len(m.memberRows) || !m.memberRows[current].selectable {
+		return m.firstSelectableMemberIndex()
+	}
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+	index := current
+	for attempts := 0; attempts < len(m.memberRows); attempts++ {
+		index += step
+		if index < 0 {
+			index = len(m.memberRows) - 1
+		}
+		if index >= len(m.memberRows) {
+			index = 0
+		}
+		if m.memberRows[index].selectable {
+			return index
+		}
+	}
+	return current
 }
 
 func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
@@ -1159,6 +1279,9 @@ func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {
 	if len(m.memberRows) == 0 || m.memberIndex < 0 || m.memberIndex >= len(m.memberRows) {
 		return store.Thread{}, false
 	}
+	if !m.memberRows[m.memberIndex].selectable {
+		return store.Thread{}, false
+	}
 	thread := m.memberRows[m.memberIndex].thread()
 	if strings.TrimSpace(thread.HTMLURL) == "" {
 		return store.Thread{}, false
@@ -1168,6 +1291,9 @@ func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {
 
 func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) {
 	if len(m.memberRows) == 0 || m.memberIndex < 0 || m.memberIndex >= len(m.memberRows) {
+		return store.ClusterMemberDetail{}, false
+	}
+	if !m.memberRows[m.memberIndex].selectable {
 		return store.ClusterMemberDetail{}, false
 	}
 	return m.memberRows[m.memberIndex].member, true
@@ -1669,6 +1795,22 @@ func trimTrailingBlankLines(lines []string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+func (m clusterBrowserModel) detailBodyLimit() int {
+	if m.compactDetail {
+		return 18
+	}
+	return 240
+}
+
+func appendLimitedLines(out, lines []string, limit int) []string {
+	if limit <= 0 || len(lines) <= limit {
+		return append(out, lines...)
+	}
+	omitted := len(lines) - limit
+	out = append(out, lines[:limit]...)
+	return append(out, dim(fmt.Sprintf("... %d more line(s). Press d for full detail.", omitted)))
 }
 
 func truncateCells(value string, max int) string {

@@ -197,6 +197,7 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	model.hasDetail = true
 	model.memberIndex = 0
 	model.memberRows = []memberRow{{
+		selectable: true,
 		member: store.ClusterMemberDetail{
 			Thread: store.Thread{
 				Number:  42,
@@ -220,6 +221,59 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
 		}
+	}
+}
+
+func TestTUIMemberRowsGroupAndSkipHeaders(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detail = store.ClusterDetail{Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 10, Kind: "pull_request", State: "open", Title: "PR"}},
+		{Thread: store.Thread{ID: 2, Number: 11, Kind: "issue", State: "open", Title: "Issue"}},
+	}}
+	model.memberSort = memberSortKind
+	model.sortMembers()
+
+	if len(model.memberRows) != 4 {
+		t.Fatalf("member rows = %d, want grouped headers plus two members", len(model.memberRows))
+	}
+	if model.memberRows[0].selectable || model.memberRows[0].label != "ISSUES (1)" {
+		t.Fatalf("first row should be issue header, got %+v", model.memberRows[0])
+	}
+	if model.memberIndex != 1 {
+		t.Fatalf("member index = %d, want first selectable row 1", model.memberIndex)
+	}
+	model.focus = focusMembers
+	model.memberIndex = 0
+	model.move(1)
+	if model.memberIndex != 1 {
+		t.Fatalf("move from header selected %d, want 1", model.memberIndex)
+	}
+}
+
+func TestTUICompactDetailLimitsBody(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.hasDetail = true
+	model.compactDetail = true
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{
+			Thread:      store.Thread{Number: 42, Kind: "issue", State: "open", Title: "Long body", HTMLURL: "https://github.com/openclaw/openclaw/issues/42"},
+			BodySnippet: strings.Repeat("line\n", 30),
+		},
+	}}
+
+	lines := strings.Join(model.detailLines(80), "\n")
+	if !strings.Contains(lines, "Press d for full detail") {
+		t.Fatalf("compact detail did not include truncation hint:\n%s", lines)
 	}
 }
 
