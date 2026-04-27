@@ -2121,10 +2121,67 @@ func (m *clusterBrowserModel) refreshFromStore() {
 		m.status = "Refresh unavailable for this view"
 		return
 	}
-	currentID := int64(0)
-	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
-		currentID = m.payload.Clusters[m.selected].ID
+	clusters, err := m.loadClusterSummariesFromStore()
+	if err != nil {
+		m.status = "Refresh failed: " + err.Error()
+		return
 	}
+	relaxedFilters := m.applyClusterRefresh(clusters, m.currentClusterID())
+	m.status = fmt.Sprintf("Refreshed %d cluster(s)", len(m.payload.Clusters))
+	if relaxedFilters {
+		m.status += " (filters relaxed)"
+	}
+}
+
+func (m clusterBrowserModel) autoRefreshCmd() tea.Cmd {
+	if m.store == nil || m.repoID == 0 {
+		return nil
+	}
+	return tea.Tick(tuiAutoRefreshInterval, func(time.Time) tea.Msg {
+		return tuiAutoRefreshMsg{}
+	})
+}
+
+func (m *clusterBrowserModel) autoRefreshFromStore() {
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Refresh unavailable for this view"
+		return
+	}
+	clusters, err := m.loadClusterSummariesFromStore()
+	if err != nil {
+		m.status = "Refresh failed: " + err.Error()
+		return
+	}
+	if clusterSummariesSignature(clusters) == m.clusterSignature() {
+		return
+	}
+	m.applyClusterRefresh(clusters, m.currentClusterID())
+	m.status = fmt.Sprintf("Auto refreshed %d cluster(s)", len(m.payload.Clusters))
+}
+
+func (m clusterBrowserModel) clusterSignature() string {
+	return clusterSummariesSignature(m.payload.Clusters)
+}
+
+func clusterSummariesSignature(clusters []store.ClusterSummary) string {
+	if len(clusters) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(clusters))
+	for _, cluster := range clusters {
+		parts = append(parts, fmt.Sprintf("%d:%d:%s", cluster.ID, cluster.MemberCount, cluster.UpdatedAt))
+	}
+	return strings.Join(parts, "|")
+}
+
+func (m clusterBrowserModel) currentClusterID() int64 {
+	if len(m.payload.Clusters) == 0 || m.selected < 0 || m.selected >= len(m.payload.Clusters) {
+		return 0
+	}
+	return m.payload.Clusters[m.selected].ID
+}
+
+func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSummary, error) {
 	viewLimit := maxInt(20, m.payload.Limit)
 	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
@@ -2134,8 +2191,7 @@ func (m *clusterBrowserModel) refreshFromStore() {
 		Sort:          m.payload.Sort,
 	})
 	if err != nil {
-		m.status = "Refresh failed: " + err.Error()
-		return
+		return nil, err
 	}
 	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
@@ -2145,10 +2201,12 @@ func (m *clusterBrowserModel) refreshFromStore() {
 		Sort:          m.payload.Sort,
 	})
 	if err != nil {
-		m.status = "Refresh failed: " + err.Error()
-		return
+		return nil, err
 	}
-	clusters = mergeClusterSummaries(clusters, workingSet)
+	return mergeClusterSummaries(clusters, workingSet), nil
+}
+
+func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummary, currentID int64) bool {
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
 	}
@@ -2166,44 +2224,7 @@ func (m *clusterBrowserModel) refreshFromStore() {
 			}
 		}
 	}
-	m.status = fmt.Sprintf("Refreshed %d cluster(s)", len(m.payload.Clusters))
-	if relaxedFilters {
-		m.status += " (filters relaxed)"
-	}
-}
-
-func (m clusterBrowserModel) autoRefreshCmd() tea.Cmd {
-	if m.store == nil || m.repoID == 0 {
-		return nil
-	}
-	return tea.Tick(tuiAutoRefreshInterval, func(time.Time) tea.Msg {
-		return tuiAutoRefreshMsg{}
-	})
-}
-
-func (m *clusterBrowserModel) autoRefreshFromStore() {
-	before := m.clusterSignature()
-	previousStatus := m.status
-	m.refreshFromStore()
-	if strings.HasPrefix(m.status, "Refresh failed:") {
-		return
-	}
-	if m.clusterSignature() == before {
-		m.status = previousStatus
-		return
-	}
-	m.status = fmt.Sprintf("Auto refreshed %d cluster(s)", len(m.payload.Clusters))
-}
-
-func (m clusterBrowserModel) clusterSignature() string {
-	if len(m.payload.Clusters) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(m.payload.Clusters))
-	for _, cluster := range m.payload.Clusters {
-		parts = append(parts, fmt.Sprintf("%d:%d:%s", cluster.ID, cluster.MemberCount, cluster.UpdatedAt))
-	}
-	return strings.Join(parts, "|")
+	return relaxedFilters
 }
 
 func (m *clusterBrowserModel) switchRepository(fullName string) {

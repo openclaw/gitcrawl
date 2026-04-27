@@ -1694,9 +1694,13 @@ func TestTUIAutoRefreshIsQuietUntilClustersChange(t *testing.T) {
 		Clusters:   clusters,
 	})
 	model.status = "Reading detail"
+	model.detailCache[40] = store.ClusterDetail{Cluster: clusters[0]}
 	model.autoRefreshFromStore()
 	if model.status != "Reading detail" {
 		t.Fatalf("unchanged auto refresh status = %q", model.status)
+	}
+	if _, ok := model.detailCache[40]; !ok {
+		t.Fatal("unchanged auto refresh should not clear detail cache")
 	}
 
 	if err := seedTUICluster(ctx, st, repoID, 41, 401, "second cluster"); err != nil {
