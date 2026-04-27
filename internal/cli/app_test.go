@@ -213,6 +213,9 @@ func TestTUIHelp(t *testing.T) {
 	if !strings.Contains(out, "right-click for actions") {
 		t.Fatalf("tui help should mention mouse actions, got %q", out)
 	}
+	if !strings.Contains(out, "Press a to open") {
+		t.Fatalf("tui help should mention keyboard action menu, got %q", out)
+	}
 	if !strings.Contains(out, "Press # to jump") {
 		t.Fatalf("tui help should mention number jump, got %q", out)
 	}
