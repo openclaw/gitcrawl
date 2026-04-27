@@ -464,12 +464,14 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 	lines = append(lines, wrapPlain(thread.Title, width)...)
 	lines = append(lines,
 		"",
-		fmt.Sprintf("closed: %s   updated: %s   author: %s", closedLabel(thread), formatRelativeTime(thread.UpdatedAtGitHub), firstNonEmpty(thread.AuthorLogin, "unknown")),
 	)
+	lines = append(lines, wrapPlain(fmt.Sprintf("closed: %s   updated: %s   author: %s", closedLabel(thread), formatRelativeTime(thread.UpdatedAtGitHub), firstNonEmpty(thread.AuthorLogin, "unknown")), width)...)
 	if labels := labelsFromJSON(thread.LabelsJSON); labels != "" {
-		lines = append(lines, "labels: "+labels, "")
+		lines = append(lines, wrapPlain("labels: "+labels, width)...)
+		lines = append(lines, "")
 	}
-	lines = append(lines, fmt.Sprintf("url: %s", thread.HTMLURL), "")
+	lines = append(lines, wrapPlain(fmt.Sprintf("url: %s", thread.HTMLURL), width)...)
+	lines = append(lines, "")
 	if len(member.Summaries) > 0 {
 		lines = append(lines, dim(tuiRule(width)))
 		lines = append(lines, bold("LLM Summary"))
