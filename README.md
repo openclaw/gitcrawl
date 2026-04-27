@@ -21,6 +21,9 @@ gitcrawl close-thread owner/repo --number 123 --reason "duplicate handled"
 gitcrawl reopen-thread owner/repo --number 123
 gitcrawl close-cluster owner/repo --id 123 --reason "handled"
 gitcrawl reopen-cluster owner/repo --id 123
+gitcrawl exclude-cluster-member owner/repo --id 123 --number 456 --reason "not the same bug"
+gitcrawl include-cluster-member owner/repo --id 123 --number 456
+gitcrawl set-cluster-canonical owner/repo --id 123 --number 456
 gitcrawl neighbors owner/repo --number 123 --limit 10
 gitcrawl search owner/repo --query "download stalls"
 gitcrawl tui
