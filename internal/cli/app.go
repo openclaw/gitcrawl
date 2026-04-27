@@ -16,6 +16,7 @@ import (
 	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/openclaw/gitcrawl/internal/syncer"
+	"github.com/openclaw/gitcrawl/internal/vector"
 )
 
 type App struct {
@@ -97,7 +98,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runConfigure(rest[1:])
 	case "clusters":
 		return a.runClusters(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
+	case "neighbors":
+		return a.runNeighbors(ctx, rest[1:])
+	case "refresh", "summarize", "key-summaries", "embed", "cluster", "cluster-experiment", "durable-clusters", "cluster-detail", "cluster-explain", "close-thread", "close-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "tui", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -158,8 +161,9 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	query := fs.String("query", "", "search query")
 	limitRaw := fs.String("limit", "", "maximum hit rows")
+	mode := fs.String("mode", "keyword", "search mode: keyword|semantic|hybrid")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"query": true, "limit": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"query": true, "limit": true, "mode": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -176,6 +180,13 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {
 		return usageErr(err)
+	}
+	searchMode := strings.TrimSpace(*mode)
+	if searchMode == "" {
+		searchMode = "keyword"
+	}
+	if searchMode != "keyword" && searchMode != "semantic" && searchMode != "hybrid" {
+		return usageErr(fmt.Errorf("unsupported search mode %q", searchMode))
 	}
 
 	rt, err := a.openLocalRuntime(ctx)
@@ -195,7 +206,119 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	return a.writeOutput("search", map[string]any{
 		"repository": repo.FullName,
 		"query":      strings.TrimSpace(*query),
+		"mode":       searchMode,
 		"hits":       hits,
+	}, true)
+}
+
+func (a *App) runNeighbors(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("neighbors", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	numberRaw := fs.String("number", "", "issue or pull request number")
+	limitRaw := fs.String("limit", "", "maximum neighbor rows")
+	thresholdRaw := fs.String("threshold", "", "minimum cosine score")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"number": true, "limit": true, "threshold": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("neighbors requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	number, err := parseRequiredPositiveInt("number", *numberRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	threshold, err := parseOptionalFloat(*thresholdRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 {
+		threshold = 0.2
+	}
+
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	targetThread, targetVector, err := rt.Store.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{
+		RepoID: repo.ID,
+		Model:  rt.Config.OpenAI.EmbedModel,
+		Basis:  rt.Config.EmbeddingBasis,
+	}, number)
+	if err != nil {
+		var fallbackErr error
+		targetThread, targetVector, fallbackErr = rt.Store.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{RepoID: repo.ID}, number)
+		if fallbackErr != nil {
+			return err
+		}
+	}
+	vectors, err := rt.Store.ListThreadVectorsFiltered(ctx, store.ThreadVectorQuery{
+		RepoID:     repo.ID,
+		Model:      targetVector.Model,
+		Basis:      targetVector.Basis,
+		Dimensions: targetVector.Dimensions,
+	})
+	if err != nil {
+		return err
+	}
+	items := make([]vector.Item, 0, len(vectors))
+	for _, stored := range vectors {
+		items = append(items, vector.Item{ThreadID: stored.ThreadID, Vector: stored.Vector})
+	}
+	candidates := vector.Query(items, targetVector.Vector, limit*2, targetThread.ID)
+	filtered := make([]vector.Neighbor, 0, limit)
+	for _, candidate := range candidates {
+		if candidate.Score < threshold {
+			continue
+		}
+		filtered = append(filtered, candidate)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	ids := make([]int64, 0, len(filtered))
+	for _, candidate := range filtered {
+		ids = append(ids, candidate.ThreadID)
+	}
+	threads, err := rt.Store.ThreadsByIDs(ctx, repo.ID, ids)
+	if err != nil {
+		return err
+	}
+	neighbors := make([]map[string]any, 0, len(filtered))
+	for _, candidate := range filtered {
+		thread, ok := threads[candidate.ThreadID]
+		if !ok {
+			continue
+		}
+		neighbors = append(neighbors, map[string]any{
+			"thread_id": candidate.ThreadID,
+			"number":    thread.Number,
+			"kind":      thread.Kind,
+			"title":     thread.Title,
+			"score":     candidate.Score,
+		})
+	}
+	return a.writeOutput("neighbors", map[string]any{
+		"repository": repo.FullName,
+		"thread":     targetThread,
+		"neighbors":  neighbors,
 	}, true)
 }
 
@@ -540,6 +663,28 @@ func parseOptionalPositiveInt(value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("expected positive integer, got %q", value)
+	}
+	return parsed, nil
+}
+
+func parseRequiredPositiveInt(name, value string) (int, error) {
+	parsed, err := parseOptionalPositiveInt(value)
+	if err != nil {
+		return 0, err
+	}
+	if parsed == 0 {
+		return 0, fmt.Errorf("missing --%s", name)
+	}
+	return parsed, nil
+}
+
+func parseOptionalFloat(value string) (float64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("expected number, got %q", value)
 	}
 	return parsed, nil
 }
