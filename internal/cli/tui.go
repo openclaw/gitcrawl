@@ -602,11 +602,12 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 		if index == m.menuIndex {
 			prefix = "> "
 		}
-		lines = append(lines, truncateCells(prefix+item.label, width))
+		key := fmt.Sprintf("%d. ", index-start+1)
+		lines = append(lines, truncateCells(prefix+key+item.label, width))
 	}
-	footer := "Enter run  Esc close"
+	footer := "Enter/1-9 run  Esc close"
 	if len(m.menuItems) > visible {
-		footer = fmt.Sprintf("Enter run  Esc close  Pg page  %d-%d/%d", start+1, end, len(m.menuItems))
+		footer = fmt.Sprintf("Enter/1-9 run  Esc close  Pg page  %d-%d/%d", start+1, end, len(m.menuItems))
 	}
 	lines = append(lines, "", dim(footer))
 	return lines
@@ -614,6 +615,16 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 
 func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	page := maxInt(1, m.menuVisibleCount())
+	if index, ok := visibleMenuShortcutIndex(msg.String(), m.menuOff, len(m.menuItems)); ok {
+		m.menuIndex = index
+		if m.runMenuItem(m.menuItems[m.menuIndex]) {
+			m.menuOpen = false
+		}
+		if m.quitRequested {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc", "q":
 		m.menuOpen = false
@@ -1422,6 +1433,17 @@ func (m clusterBrowserModel) menuVisibleCount() int {
 		height = maxInt(1, m.layout().detail.h-2)
 	}
 	return maxInt(1, height-4)
+}
+
+func visibleMenuShortcutIndex(key string, menuOff, menuLen int) (int, bool) {
+	if len(key) != 1 || key[0] < '1' || key[0] > '9' {
+		return 0, false
+	}
+	index := menuOff + int(key[0]-'1')
+	if index < 0 || index >= menuLen {
+		return 0, false
+	}
+	return index, true
 }
 
 func (m *clusterBrowserModel) keepMenuVisible() {

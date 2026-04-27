@@ -509,6 +509,9 @@ func TestTUIActionMenuKeepsSelectionVisible(t *testing.T) {
 	if !strings.Contains(lines, "Pg page") {
 		t.Fatalf("expected menu footer to mention paging:\n%s", lines)
 	}
+	if !strings.Contains(lines, "1.") {
+		t.Fatalf("expected menu lines to show number shortcuts:\n%s", lines)
+	}
 }
 
 func TestTUIActionMenuPagesWithKeyboard(t *testing.T) {
@@ -542,6 +545,30 @@ func TestTUIActionMenuPagesWithKeyboard(t *testing.T) {
 	model = updated.(clusterBrowserModel)
 	if model.menuIndex != 0 || model.menuOff != 0 {
 		t.Fatalf("home menu index/off = %d/%d, want 0/0", model.menuIndex, model.menuOff)
+	}
+}
+
+func TestTUIActionMenuNumberShortcutRunsVisibleItem(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.menuOpen = true
+	model.menuItems = []tuiMenuItem{
+		{label: "Close menu", action: "close-menu"},
+		{label: "Sort clusters by size", action: "sort-size"},
+	}
+	model.menuOff = 1
+
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	model = updated.(clusterBrowserModel)
+
+	if model.payload.Sort != "size" {
+		t.Fatalf("number shortcut sort = %q, want size", model.payload.Sort)
+	}
+	if model.menuOpen {
+		t.Fatalf("number shortcut should close menu after running action")
 	}
 }
 
