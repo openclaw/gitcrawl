@@ -176,21 +176,17 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	cfg, err := config.Load(a.configPath)
+	rt, err := a.openLocalRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
+	defer rt.Store.Close()
 
-	repo, err := st.RepositoryByFullName(ctx, owner+"/"+repoName)
+	repo, err := rt.repository(ctx, owner, repoName)
 	if err != nil {
 		return err
 	}
-	hits, err := st.SearchDocuments(ctx, repo.ID, strings.TrimSpace(*query), limit)
+	hits, err := rt.Store.SearchDocuments(ctx, repo.ID, strings.TrimSpace(*query), limit)
 	if err != nil {
 		return err
 	}
@@ -223,21 +219,17 @@ func (a *App) runRuns(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	cfg, err := config.Load(a.configPath)
+	rt, err := a.openLocalRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
+	defer rt.Store.Close()
 
-	repo, err := st.RepositoryByFullName(ctx, owner+"/"+repoName)
+	repo, err := rt.repository(ctx, owner, repoName)
 	if err != nil {
 		return err
 	}
-	runs, err := st.ListRuns(ctx, repo.ID, strings.TrimSpace(*kind), limit)
+	runs, err := rt.Store.ListRuns(ctx, repo.ID, strings.TrimSpace(*kind), limit)
 	if err != nil {
 		return err
 	}
@@ -275,21 +267,17 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	cfg, err := config.Load(a.configPath)
+	rt, err := a.openLocalRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
+	defer rt.Store.Close()
 
-	repo, err := st.RepositoryByFullName(ctx, owner+"/"+repoName)
+	repo, err := rt.repository(ctx, owner, repoName)
 	if err != nil {
 		return err
 	}
-	threads, err := st.ListThreadsFiltered(ctx, store.ThreadListOptions{
+	threads, err := rt.Store.ListThreadsFiltered(ctx, store.ThreadListOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: *includeClosed,
 		Numbers:       numbers,
