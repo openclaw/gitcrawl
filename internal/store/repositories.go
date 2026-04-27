@@ -41,15 +41,17 @@ func (s *Store) UpsertRepository(ctx context.Context, repo Repository) (int64, e
 func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repository, error) {
 	var repo Repository
 	var githubRepoID sql.NullString
+	var rawJSON sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		select id, owner, name, full_name, github_repo_id, raw_json, updated_at
 		from repositories
 		where full_name = ?
-	`, fullName).Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName, &githubRepoID, &repo.RawJSON, &repo.UpdatedAt)
+	`, fullName).Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName, &githubRepoID, &rawJSON, &repo.UpdatedAt)
 	if err != nil {
 		return Repository{}, fmt.Errorf("select repository: %w", err)
 	}
 	repo.GitHubRepoID = githubRepoID.String
+	repo.RawJSON = rawJSON.String
 	return repo, nil
 }
 

@@ -117,10 +117,64 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
+	if err := s.ensureColumn(ctx, "repositories", "raw_json", "text"); err != nil {
+		return err
+	}
+	hadThreadBody := s.hasColumn(ctx, "threads", "body")
+	if err := s.ensureColumn(ctx, "threads", "body", "text"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "threads", "raw_json", "text"); err != nil {
+		return err
+	}
+	if !hadThreadBody && s.hasColumn(ctx, "threads", "body_excerpt") {
+		if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt where body is null and body_excerpt is not null`); err != nil {
+			return fmt.Errorf("backfill thread body from portable excerpt: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
+	if s.hasColumn(ctx, table, column) {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`alter table %s add column %s %s`, table, column, definition)); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+func (s *Store) hasColumn(ctx context.Context, table, column string) bool {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`pragma table_info(%s)`, table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) schemaVersion(ctx context.Context) (int, error) {

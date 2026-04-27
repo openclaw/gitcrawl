@@ -137,10 +137,10 @@ func scanThread(rows interface {
 	Scan(dest ...any) error
 }) (Thread, error) {
 	var thread Thread
-	var body, authorLogin, authorType, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
+	var body, authorLogin, authorType, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
 	var isDraft int
 	if err := rows.Scan(&thread.ID, &thread.RepoID, &thread.GitHubID, &thread.Number, &thread.Kind, &thread.State, &thread.Title,
-		&body, &authorLogin, &authorType, &thread.HTMLURL, &thread.LabelsJSON, &thread.AssigneesJSON, &thread.RawJSON,
+		&body, &authorLogin, &authorType, &thread.HTMLURL, &thread.LabelsJSON, &thread.AssigneesJSON, &rawJSON,
 		&thread.ContentHash, &isDraft, &createdAt, &updatedAtGH, &closedAt, &mergedAt, &firstPulled, &lastPulled, &thread.UpdatedAt,
 		&closedLocal, &closeReason); err != nil {
 		return Thread{}, fmt.Errorf("scan thread: %w", err)
@@ -156,6 +156,7 @@ func scanThread(rows interface {
 	thread.LastPulledAt = lastPulled.String
 	thread.ClosedAtLocal = closedLocal.String
 	thread.CloseReasonLocal = closeReason.String
+	thread.RawJSON = rawJSON.String
 	thread.IsDraft = isDraft != 0
 	return thread, nil
 }
