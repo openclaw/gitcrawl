@@ -469,7 +469,8 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 	lines = append(lines,
 		"",
 	)
-	lines = append(lines, wrapPlain(fmt.Sprintf("closed: %s   updated: %s   author: %s", closedLabel(thread), formatRelativeTime(thread.UpdatedAtGitHub), firstNonEmpty(thread.AuthorLogin, "unknown")), width)...)
+	lines = append(lines, wrapPlain(fmt.Sprintf("closed: %s", closedLabel(thread)), width)...)
+	lines = append(lines, wrapPlain(fmt.Sprintf("updated: %s   author: %s", formatRelativeTime(thread.UpdatedAtGitHub), firstNonEmpty(thread.AuthorLogin, "unknown")), width)...)
 	if labels := labelsFromJSON(thread.LabelsJSON); labels != "" {
 		lines = append(lines, wrapPlain("labels: "+labels, width)...)
 		lines = append(lines, "")
