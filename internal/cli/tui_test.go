@@ -188,6 +188,41 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.hasDetail = true
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		member: store.ClusterMemberDetail{
+			Thread: store.Thread{
+				Number:  42,
+				Kind:    "issue",
+				State:   "open",
+				Title:   "Thread with links",
+				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+			},
+			BodySnippet: "See [the repro](https://example.com/repro).",
+		},
+	}}
+
+	model.openActionMenu()
+
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	joined := strings.Join(labels, "\n")
+	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
 func sampleTUIClusters() []store.ClusterSummary {
 	return []store.ClusterSummary{
 		{

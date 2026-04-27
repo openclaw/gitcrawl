@@ -23,6 +23,7 @@ import (
 
 var (
 	markdownLinkRE    = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)\s]+)\)`)
+	bareLinkRE        = regexp.MustCompile(`(^|[\s(<])(https?://[^\s<>)]+)`)
 	markdownHeadingRE = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
 	markdownListRE    = regexp.MustCompile(`^(\s*)([-*+]|\d+[.)])\s+(.+)$`)
 	terminalControlRE = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
@@ -671,9 +672,19 @@ func (m *clusterBrowserModel) openActionMenu() {
 	m.menuItems = []tuiMenuItem{
 		{label: "Open selected thread", action: "open"},
 		{label: "Copy selected URL", action: "copy-url"},
+		{label: "Copy title", action: "copy-title"},
 		{label: "Copy markdown link", action: "copy-markdown"},
-		{label: "Close menu", action: "close-menu"},
 	}
+	if m.hasDetail {
+		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"})
+	}
+	if _, ok := m.firstReferenceLink(); ok {
+		m.menuItems = append(m.menuItems,
+			tuiMenuItem{label: "Open first body link", action: "open-first-link"},
+			tuiMenuItem{label: "Copy first body link", action: "copy-first-link"},
+		)
+	}
+	m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close menu", action: "close-menu"})
 	m.menuIndex = 0
 	m.menuOpen = true
 	m.showHelp = false
@@ -709,6 +720,41 @@ func (m *clusterBrowserModel) runAction(action string) {
 			m.status = err.Error()
 		} else {
 			m.status = "Copied markdown link"
+		}
+	case "copy-title":
+		title := fmt.Sprintf("#%d %s", thread.Number, thread.Title)
+		if err := copyText(title); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied title"
+		}
+	case "copy-cluster":
+		if err := copyText(m.clusterClipboardText()); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied cluster summary"
+		}
+	case "open-first-link":
+		link, ok := m.firstReferenceLink()
+		if !ok {
+			m.status = "No body link found"
+			return
+		}
+		if err := openURL(link); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Opened " + link
+		}
+	case "copy-first-link":
+		link, ok := m.firstReferenceLink()
+		if !ok {
+			m.status = "No body link found"
+			return
+		}
+		if err := copyText(link); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Copied first body link"
 		}
 	case "close-menu":
 		m.status = "Menu closed"
@@ -1120,6 +1166,47 @@ func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {
 	return thread, true
 }
 
+func (m clusterBrowserModel) selectedMember() (store.ClusterMemberDetail, bool) {
+	if len(m.memberRows) == 0 || m.memberIndex < 0 || m.memberIndex >= len(m.memberRows) {
+		return store.ClusterMemberDetail{}, false
+	}
+	return m.memberRows[m.memberIndex].member, true
+}
+
+func (m clusterBrowserModel) firstReferenceLink() (string, bool) {
+	member, ok := m.selectedMember()
+	if !ok {
+		return "", false
+	}
+	for _, value := range append([]string{member.BodySnippet}, sortedSummaryValues(member.Summaries)...) {
+		if link, ok := firstMarkdownLink(value); ok {
+			return link, true
+		}
+	}
+	return "", false
+}
+
+func (m clusterBrowserModel) clusterClipboardText() string {
+	if len(m.payload.Clusters) == 0 || m.selected < 0 || m.selected >= len(m.payload.Clusters) {
+		return ""
+	}
+	cluster := m.payload.Clusters[m.selected]
+	lines := []string{
+		fmt.Sprintf("Cluster %d", cluster.ID),
+		"Name: " + cluster.StableSlug,
+		"Title: " + firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster"),
+		fmt.Sprintf("State: %s", firstNonEmpty(cluster.Status, "unknown")),
+		fmt.Sprintf("Members: %d", cluster.MemberCount),
+		"Updated: " + firstNonEmpty(cluster.UpdatedAt, "unknown"),
+		"Representative: " + threadRef(cluster),
+	}
+	if member, ok := m.selectedMember(); ok {
+		thread := member.Thread
+		lines = append(lines, "", fmt.Sprintf("%s #%d: %s", kindTitle(thread.Kind), thread.Number, thread.Title), thread.HTMLURL)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (r memberRow) format(width int) string {
 	thread := r.thread()
 	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, thread.State, formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
@@ -1291,6 +1378,15 @@ func sortedSummaryKeys(values map[string]string) []string {
 	sort.Strings(extra)
 	keys = append(keys, extra...)
 	return keys
+}
+
+func sortedSummaryValues(values map[string]string) []string {
+	keys := sortedSummaryKeys(values)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, values[key])
+	}
+	return out
 }
 
 func formatSummaryLabel(key string) string {
@@ -1546,6 +1642,22 @@ func renderInlineMarkdown(value string) string {
 		"~~", "",
 	)
 	return strings.TrimSpace(replacer.Replace(value))
+}
+
+func firstMarkdownLink(value string) (string, bool) {
+	if match := markdownLinkRE.FindStringSubmatch(value); match != nil {
+		return stripTrailingURLPunctuation(match[2]), true
+	}
+	for _, match := range bareLinkRE.FindAllStringSubmatch(value, -1) {
+		if len(match) > 2 {
+			return stripTrailingURLPunctuation(match[2]), true
+		}
+	}
+	return "", false
+}
+
+func stripTrailingURLPunctuation(value string) string {
+	return strings.TrimRight(value, ".,;:!?")
 }
 
 func stripTerminalControls(value string) string {
