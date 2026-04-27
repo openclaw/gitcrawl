@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 	"github.com/openclaw/gitcrawl/internal/store"
+	"github.com/openclaw/gitcrawl/internal/vector"
 )
 
 var (
@@ -38,6 +39,8 @@ type clusterBrowserPayload struct {
 	MinSize            int                    `json:"min_size"`
 	Limit              int                    `json:"limit,omitempty"`
 	HideClosed         bool                   `json:"hide_closed,omitempty"`
+	EmbedModel         string                 `json:"embed_model,omitempty"`
+	EmbeddingBasis     string                 `json:"embedding_basis,omitempty"`
 	Clusters           []store.ClusterSummary `json:"clusters"`
 }
 
@@ -106,6 +109,7 @@ type clusterBrowserModel struct {
 	detailView    viewport.Model
 	searchInput   textinput.Model
 	detailCache   map[int64]store.ClusterDetail
+	neighborCache map[int64][]tuiNeighbor
 	detail        store.ClusterDetail
 	hasDetail     bool
 }
@@ -120,6 +124,11 @@ type tuiMenuItem struct {
 	label  string
 	action string
 	value  string
+}
+
+type tuiNeighbor struct {
+	Thread store.Thread
+	Score  float64
 }
 
 func (a *App) canRunInteractiveTUI() bool {
@@ -150,23 +159,24 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 	search.CharLimit = 80
 	search.Width = 40
 	model := clusterBrowserModel{
-		payload:      payload,
-		allClusters:  clusters,
-		ctx:          ctx,
-		store:        st,
-		repoID:       repoID,
-		focus:        focusClusters,
-		status:       "Ready",
-		showClosed:   !payload.HideClosed,
-		minSize:      maxInt(1, payload.MinSize),
-		memberSort:   memberSortKind,
-		wideLayout:   wideLayoutColumns,
-		memberIndex:  -1,
-		clusterTable: newTUITable(),
-		memberTable:  newTUITable(),
-		detailView:   viewport.New(1, 1),
-		searchInput:  search,
-		detailCache:  map[int64]store.ClusterDetail{},
+		payload:       payload,
+		allClusters:   clusters,
+		ctx:           ctx,
+		store:         st,
+		repoID:        repoID,
+		focus:         focusClusters,
+		status:        "Ready",
+		showClosed:    !payload.HideClosed,
+		minSize:       maxInt(1, payload.MinSize),
+		memberSort:    memberSortKind,
+		wideLayout:    wideLayoutColumns,
+		memberIndex:   -1,
+		clusterTable:  newTUITable(),
+		memberTable:   newTUITable(),
+		detailView:    viewport.New(1, 1),
+		searchInput:   search,
+		detailCache:   map[int64]store.ClusterDetail{},
+		neighborCache: map[int64][]tuiNeighbor{},
 	}
 	model.applyClusterFilters()
 	model.loadSelectedCluster()
@@ -484,6 +494,23 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 	}
 	lines = append(lines, wrapPlain(fmt.Sprintf("url: %s", thread.HTMLURL), width)...)
 	lines = append(lines, "")
+	if neighbors, ok := m.neighborCache[thread.ID]; ok {
+		lines = append(lines, dim(tuiRule(width)))
+		lines = append(lines, bold("Neighbors"))
+		if len(neighbors) == 0 {
+			lines = append(lines, "No neighbors above threshold.", "")
+		} else {
+			for _, neighbor := range neighbors {
+				lines = append(lines, truncateCells(fmt.Sprintf("#%d %s %.1f%%  %s",
+					neighbor.Thread.Number,
+					kindTitle(neighbor.Thread.Kind),
+					neighbor.Score*100,
+					neighbor.Thread.Title,
+				), width))
+			}
+			lines = append(lines, "")
+		}
+	}
 	if len(member.Summaries) > 0 {
 		lines = append(lines, dim(tuiRule(width)))
 		lines = append(lines, bold("LLM Summary"))
@@ -788,6 +815,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy selected URL", action: "copy-url"},
 			tuiMenuItem{label: "Copy title", action: "copy-title"},
 			tuiMenuItem{label: "Copy markdown link", action: "copy-markdown"},
+			tuiMenuItem{label: "Load neighbors", action: "load-neighbors"},
 		)
 	}
 	if m.hasSelectedCluster() {
@@ -895,6 +923,9 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 	case "show-help":
 		m.showHelp = true
 		m.status = "Help"
+		return true
+	case "load-neighbors":
+		m.loadSelectedThreadNeighbors(10, 0.2)
 		return true
 	case "copy-cluster-id":
 		cluster, ok := m.selectedCluster()
@@ -1053,6 +1084,83 @@ func (m *clusterBrowserModel) setMinSizeFromMenu(value int) {
 	m.minSize = maxInt(1, value)
 	m.applyClusterFilters()
 	m.status = fmt.Sprintf("Min size: %s", minSizeLabel(m.minSize))
+}
+
+func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold float64) {
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Neighbors unavailable for this view"
+		return
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 {
+		threshold = 0.2
+	}
+	targetThread, targetVector, err := m.store.ThreadVectorByNumber(m.ctx, store.ThreadVectorQuery{
+		RepoID: m.repoID,
+		Model:  m.payload.EmbedModel,
+		Basis:  m.payload.EmbeddingBasis,
+	}, thread.Number)
+	if err != nil {
+		var fallbackErr error
+		targetThread, targetVector, fallbackErr = m.store.ThreadVectorByNumber(m.ctx, store.ThreadVectorQuery{RepoID: m.repoID}, thread.Number)
+		if fallbackErr != nil {
+			m.status = err.Error()
+			return
+		}
+	}
+	vectors, err := m.store.ListThreadVectorsFiltered(m.ctx, store.ThreadVectorQuery{
+		RepoID:     m.repoID,
+		Model:      targetVector.Model,
+		Basis:      targetVector.Basis,
+		Dimensions: targetVector.Dimensions,
+	})
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	items := make([]vector.Item, 0, len(vectors))
+	for _, stored := range vectors {
+		items = append(items, vector.Item{ThreadID: stored.ThreadID, Vector: stored.Vector})
+	}
+	candidates := vector.Query(items, targetVector.Vector, limit*2, targetThread.ID)
+	filtered := make([]vector.Neighbor, 0, limit)
+	for _, candidate := range candidates {
+		if candidate.Score < threshold {
+			continue
+		}
+		filtered = append(filtered, candidate)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	ids := make([]int64, 0, len(filtered))
+	for _, candidate := range filtered {
+		ids = append(ids, candidate.ThreadID)
+	}
+	threads, err := m.store.ThreadsByIDs(m.ctx, m.repoID, ids)
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	neighbors := make([]tuiNeighbor, 0, len(filtered))
+	for _, candidate := range filtered {
+		neighborThread, ok := threads[candidate.ThreadID]
+		if !ok {
+			continue
+		}
+		neighbors = append(neighbors, tuiNeighbor{Thread: neighborThread, Score: candidate.Score})
+	}
+	m.neighborCache[targetThread.ID] = neighbors
+	m.focus = focusDetail
+	m.detailView.GotoTop()
+	m.status = fmt.Sprintf("Loaded %d neighbors for #%d", len(neighbors), targetThread.Number)
 }
 
 func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {

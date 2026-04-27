@@ -496,6 +496,8 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		MinSize:            minSize,
 		Limit:              limit,
 		HideClosed:         *hideClosed,
+		EmbedModel:         rt.Config.OpenAI.EmbedModel,
+		EmbeddingBasis:     rt.Config.EmbeddingBasis,
 		Clusters:           clusters,
 	}
 	if !interactive {

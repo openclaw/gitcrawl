@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -550,6 +551,7 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	})
 	model.hasDetail = true
 	model.memberIndex = 0
+	model.hasDetail = true
 	model.memberRows = []memberRow{{
 		selectable: true,
 		member: store.ClusterMemberDetail{
@@ -571,10 +573,67 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Copy title", "Copy cluster summary", "Open first body link", "Copy first body link", "Open body link...", "Copy body link...", "Copy all body links"} {
+	for _, want := range []string{"Copy title", "Copy cluster summary", "Load neighbors", "Open first body link", "Copy first body link", "Open body link...", "Copy body link...", "Copy all body links"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu labels missing %q in:\n%s", want, joined)
 		}
+	}
+}
+
+func TestTUILoadNeighborsFromStore(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	targetID, err := seedTUIThreadVector(ctx, st, repoID, 1, "Target issue", []float64{1, 0})
+	if err != nil {
+		t.Fatalf("target: %v", err)
+	}
+	neighborID, err := seedTUIThreadVector(ctx, st, repoID, 2, "Related issue", []float64{0.9, 0.1})
+	if err != nil {
+		t.Fatalf("neighbor: %v", err)
+	}
+	if _, err := seedTUIThreadVector(ctx, st, repoID, 3, "Unrelated issue", []float64{0, 1}); err != nil {
+		t.Fatalf("unrelated: %v", err)
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository:     "openclaw/openclaw",
+		Sort:           "recent",
+		EmbedModel:     "test",
+		EmbeddingBasis: "title_original",
+		Clusters:       sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.hasDetail = true
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{Thread: store.Thread{
+			ID:      targetID,
+			Number:  1,
+			Kind:    "issue",
+			State:   "open",
+			Title:   "Target issue",
+			HTMLURL: "https://github.com/openclaw/openclaw/issues/1",
+		}},
+	}}
+
+	model.loadSelectedThreadNeighbors(10, 0.2)
+
+	neighbors := model.neighborCache[targetID]
+	if len(neighbors) != 1 || neighbors[0].Thread.ID != neighborID {
+		t.Fatalf("neighbors = %+v, want related thread %d", neighbors, neighborID)
+	}
+	if model.focus != focusDetail {
+		t.Fatalf("focus = %s, want detail", model.focus)
+	}
+	if !strings.Contains(strings.Join(model.detailLines(80), "\n"), "Related issue") {
+		t.Fatalf("detail does not render loaded neighbors")
 	}
 }
 
@@ -941,4 +1000,35 @@ func sampleTUIClusters() []store.ClusterSummary {
 			UpdatedAt:            "2026-04-27T11:00:00Z",
 		},
 	}
+}
+
+func seedTUIThreadVector(ctx context.Context, st *store.Store, repoID int64, number int, title string, vector []float64) (int64, error) {
+	threadID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      fmt.Sprintf("%d", number),
+		Number:        number,
+		Kind:          "issue",
+		State:         "open",
+		Title:         title,
+		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   fmt.Sprintf("hash-%d", number),
+		UpdatedAt:     "2026-04-27T00:00:00Z",
+	})
+	if err != nil {
+		return 0, err
+	}
+	err = st.UpsertThreadVector(ctx, store.ThreadVector{
+		ThreadID:    threadID,
+		Basis:       "title_original",
+		Model:       "test",
+		Dimensions:  len(vector),
+		ContentHash: fmt.Sprintf("hash-%d", number),
+		Vector:      vector,
+		CreatedAt:   "2026-04-27T00:00:00Z",
+		UpdatedAt:   "2026-04-27T00:00:00Z",
+	})
+	return threadID, err
 }
