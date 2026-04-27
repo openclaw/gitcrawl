@@ -17,6 +17,8 @@ gitcrawl sync owner/repo
 gitcrawl refresh owner/repo
 gitcrawl clusters owner/repo
 gitcrawl cluster-detail owner/repo --id 123
+gitcrawl close-thread owner/repo --number 123 --reason "duplicate handled"
+gitcrawl reopen-thread owner/repo --number 123
 gitcrawl neighbors owner/repo --number 123 --limit 10
 gitcrawl search owner/repo --query "download stalls"
 gitcrawl tui
