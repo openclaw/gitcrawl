@@ -623,6 +623,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 	if msg.Button != tea.MouseButtonLeft && msg.Button != tea.MouseButtonRight && !isMouseWheel(msg.Button) {
 		return
 	}
+	if m.menuOpen {
+		m.handleMenuMouse(layout, msg)
+		return
+	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		m.mouseWheel(layout, msg, -3)
@@ -678,6 +682,24 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		m.selectByMousePosition(layout, msg.X, msg.Y)
 		m.openActionMenu()
 	}
+}
+
+func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg) {
+	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+		return
+	}
+	if !layout.detail.contains(msg.X, msg.Y) {
+		m.menuOpen = false
+		m.status = "Menu closed"
+		return
+	}
+	index := msg.Y - layout.detail.y - 4
+	if index < 0 || index >= len(m.menuItems) {
+		return
+	}
+	m.menuIndex = index
+	m.runAction(m.menuItems[m.menuIndex].action)
+	m.menuOpen = false
 }
 
 func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) {

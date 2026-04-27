@@ -332,6 +332,33 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	}
 }
 
+func TestTUIMouseCanClickActionMenuItems(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.openActionMenu()
+	layout := model.layout()
+	closeIndex := len(model.menuItems) - 1
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.detail.x + 2,
+		Y:      layout.detail.y + 4 + closeIndex,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.menuOpen {
+		t.Fatal("expected menu click to close action menu")
+	}
+	if model.status != "Menu closed" {
+		t.Fatalf("menu click status = %q, want Menu closed", model.status)
+	}
+}
+
 func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
