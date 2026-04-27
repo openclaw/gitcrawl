@@ -54,6 +54,26 @@ func TestTUIViewShowsRowsInDefaultTerminal(t *testing.T) {
 	}
 }
 
+func TestTUIHeaderShowsDetailMode(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 160
+	model.height = 32
+
+	header := model.renderHeader(160)
+	if !strings.Contains(header, "detail:full") {
+		t.Fatalf("header missing full detail mode:\n%s", header)
+	}
+	model.compactDetail = true
+	header = model.renderHeader(160)
+	if !strings.Contains(header, "detail:compact") {
+		t.Fatalf("header missing compact detail mode:\n%s", header)
+	}
+}
+
 func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

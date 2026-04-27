@@ -410,7 +410,7 @@ func (m clusterBrowserModel) layout() tuiLayout {
 
 func (m clusterBrowserModel) renderHeader(width int) string {
 	openCounts := m.openCounts()
-	line := fmt.Sprintf("%s  %d PR  %d issues  clusters:%d  sort:%s  members:%s  min:%s  layout:%s  closed:%s  filter:%s",
+	line := fmt.Sprintf("%s  %d PR  %d issues  clusters:%d  sort:%s  members:%s  min:%s  layout:%s  detail:%s  closed:%s  filter:%s",
 		m.payload.Repository,
 		openCounts.pulls,
 		openCounts.issues,
@@ -419,6 +419,7 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 		m.memberSort,
 		minSizeLabel(m.minSize),
 		layoutLabel(m.layout()),
+		detailModeLabel(m.compactDetail),
 		boolLabel(m.showClosed),
 		firstNonEmpty(m.search, "none"),
 	)
@@ -2504,6 +2505,13 @@ func detailModeToggleLabel(compact bool) string {
 		return "Show full detail"
 	}
 	return "Show compact detail"
+}
+
+func detailModeLabel(compact bool) string {
+	if compact {
+		return "compact"
+	}
+	return "full"
 }
 
 func layoutLabel(layout tuiLayout) string {
