@@ -65,6 +65,55 @@ func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	}
 }
 
+func TestTUIMouseHeaderSortsClusterRows(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.clusters.x + 2,
+		Y:      layout.clusters.y + 2,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.payload.Sort != "size" {
+		t.Fatalf("header click sort = %q, want size", model.payload.Sort)
+	}
+	if model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("size sort first cluster id = %d, want 2", model.payload.Clusters[0].ID)
+	}
+}
+
+func TestTUIWideLayoutToggle(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 160
+	model.height = 40
+
+	columns := model.layout()
+	model.toggleWideLayout()
+	rightStack := model.layout()
+
+	if columns.detail.y != columns.members.y {
+		t.Fatalf("columns layout should align detail and members: %+v", columns)
+	}
+	if rightStack.detail.y <= rightStack.members.y {
+		t.Fatalf("right-stack detail should sit below members: %+v", rightStack)
+	}
+	if rightStack.clusters.w <= columns.clusters.w {
+		t.Fatalf("right-stack should give clusters more width, columns=%+v rightStack=%+v", columns.clusters, rightStack.clusters)
+	}
+}
+
 func TestTUIMouseIgnoresRightClick(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

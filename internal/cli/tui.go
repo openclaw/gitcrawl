@@ -55,6 +55,13 @@ const (
 	memberSortTitle  tuiMemberSort = "title"
 )
 
+type tuiWideLayout string
+
+const (
+	wideLayoutColumns    tuiWideLayout = "columns"
+	wideLayoutRightStack tuiWideLayout = "right-stack"
+)
+
 type tuiRect struct {
 	x int
 	y int
@@ -81,6 +88,7 @@ type clusterBrowserModel struct {
 	showClosed   bool
 	minSize      int
 	memberSort   tuiMemberSort
+	wideLayout   tuiWideLayout
 	selected     int
 	clusterOff   int
 	memberRows   []memberRow
@@ -143,6 +151,7 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 		showClosed:   true,
 		minSize:      1,
 		memberSort:   memberSortKind,
+		wideLayout:   wideLayoutColumns,
 		memberIndex:  -1,
 		clusterTable: newTUITable(),
 		memberTable:  newTUITable(),
@@ -218,6 +227,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.memberSort = nextMemberSort(m.memberSort)
 			m.sortMembers()
 			m.status = "Member sort: " + string(m.memberSort)
+		case "l":
+			m.toggleWideLayout()
 		case "f":
 			m.minSize = nextMinSize(m.minSize)
 			m.applyClusterFilters()
@@ -272,6 +283,9 @@ func (m clusterBrowserModel) View() string {
 	detail := m.renderDetail(layout.detail)
 	footer := m.renderFooter(layout.footer.w)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, clusters, members, detail)
+	if !layout.stacked && layout.detail.y > layout.members.y {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, clusters, lipgloss.JoinVertical(lipgloss.Left, members, detail))
+	}
 	if layout.stacked {
 		if layout.members.x == 0 {
 			body = lipgloss.JoinVertical(lipgloss.Left, clusters, members, detail)
@@ -290,22 +304,34 @@ type tuiLayout struct {
 	detail   tuiRect
 	footer   tuiRect
 	stacked  bool
+	mode     string
 }
 
 func (m clusterBrowserModel) layout() tuiLayout {
 	width := maxInt(m.width, 80)
 	height := maxInt(m.height, 24)
-	headerH := 2
+	headerH := 1
 	footerH := 2
 	bodyH := maxInt(8, height-headerH-footerH)
 	layout := tuiLayout{
 		header: tuiRect{x: 0, y: 0, w: width, h: headerH},
 		footer: tuiRect{x: 0, y: headerH + bodyH, w: width, h: footerH},
 	}
-	if width >= 118 {
-		clusterW := minInt(50, maxInt(36, width*36/100))
-		memberW := minInt(42, maxInt(30, width*28/100))
-		detailW := maxInt(32, width-clusterW-memberW)
+	if width >= 140 {
+		if m.wideLayout == wideLayoutRightStack {
+			clusterW := maxInt(56, width*44/100)
+			rightW := width - clusterW
+			memberH := maxInt(8, bodyH*42/100)
+			layout.mode = string(wideLayoutRightStack)
+			layout.clusters = tuiRect{x: 0, y: headerH, w: clusterW, h: bodyH}
+			layout.members = tuiRect{x: clusterW, y: headerH, w: rightW, h: memberH}
+			layout.detail = tuiRect{x: clusterW, y: headerH + memberH, w: rightW, h: bodyH - memberH}
+			return layout
+		}
+		clusterW := maxInt(48, width*34/100)
+		memberW := maxInt(40, width*30/100)
+		detailW := maxInt(42, width-clusterW-memberW)
+		layout.mode = string(wideLayoutColumns)
 		layout.clusters = tuiRect{x: 0, y: headerH, w: clusterW, h: bodyH}
 		layout.members = tuiRect{x: clusterW, y: headerH, w: memberW, h: bodyH}
 		layout.detail = tuiRect{x: clusterW + memberW, y: headerH, w: detailW, h: bodyH}
@@ -313,6 +339,7 @@ func (m clusterBrowserModel) layout() tuiLayout {
 	}
 	if width < 100 {
 		layout.stacked = true
+		layout.mode = "stacked"
 		clusterH := maxInt(7, bodyH*36/100)
 		memberH := maxInt(6, bodyH*28/100)
 		detailH := maxInt(6, bodyH-clusterH-memberH)
@@ -322,6 +349,7 @@ func (m clusterBrowserModel) layout() tuiLayout {
 		return layout
 	}
 	layout.stacked = true
+	layout.mode = "split"
 	topH := maxInt(8, bodyH/2)
 	bottomH := bodyH - topH
 	clusterW := width / 2
@@ -333,7 +361,7 @@ func (m clusterBrowserModel) layout() tuiLayout {
 
 func (m clusterBrowserModel) renderHeader(width int) string {
 	openCounts := m.openCounts()
-	repoLine := fmt.Sprintf("%s  %d PR  %d issues  clusters:%d  sort:%s  members:%s  min:%s  closed:%s  filter:%s",
+	line := fmt.Sprintf("%s  %d PR  %d issues  clusters:%d  sort:%s  members:%s  min:%s  layout:%s  closed:%s  filter:%s",
 		m.payload.Repository,
 		openCounts.pulls,
 		openCounts.issues,
@@ -341,18 +369,19 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 		m.payload.Sort,
 		m.memberSort,
 		minSizeLabel(m.minSize),
+		layoutLabel(m.layout()),
 		boolLabel(m.showClosed),
 		firstNonEmpty(m.search, "none"),
 	)
 	if m.payload.InferredRepository {
-		repoLine += "  inferred"
+		line += "  inferred"
 	}
-	style := lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Padding(0, 1)
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, bold(repoLine), dim("local SQLite cluster browser")))
+	style := lipgloss.NewStyle().Width(width).Height(1).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Padding(0, 1)
+	return style.Render(truncateCells(bold(line), maxInt(1, width-2)))
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  wheel scroll  / filter  s sort  m members  f min  x closed  ? help  q quit"
+	controls := "Tab focus  click select  header sort  wheel scroll  / filter  s sort  m members  f min  l layout  x closed  ? help  q quit"
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
 		line = "Filter: " + m.searchInput.View()
@@ -453,6 +482,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  /: filter clusters",
 		"  s: toggle cluster sort",
 		"  m: cycle member sort",
+		"  l: toggle wide layout",
 		"  f: cycle minimum cluster size",
 		"  x: show/hide closed clusters",
 		"  o: open selected thread in browser",
@@ -571,6 +601,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		case layout.clusters.contains(msg.X, msg.Y):
 			m.focus = focusClusters
 			row := msg.Y - layout.clusters.y - 3
+			if row == -1 {
+				m.sortClustersFromHeader(msg.X - layout.clusters.x - 2)
+				return
+			}
 			if row < 0 {
 				return
 			}
@@ -583,6 +617,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		case layout.members.contains(msg.X, msg.Y):
 			m.focus = focusMembers
 			row := msg.Y - layout.members.y - 3
+			if row == -1 {
+				m.sortMembersFromHeader(msg.X - layout.members.x - 2)
+				return
+			}
 			if row < 0 {
 				return
 			}
@@ -757,7 +795,7 @@ func (m *clusterBrowserModel) syncComponents() {
 	m.clusterTable.SetWidth(clusterW)
 	m.clusterTable.SetHeight(maxInt(1, layout.clusters.h-6))
 	m.clusterTable.SetStyles(tuiTableStyles(m.focus == focusClusters, "#5bc0eb", "#23445c"))
-	m.clusterTable.SetColumns(clusterColumns(clusterW))
+	m.clusterTable.SetColumns(clusterColumns(clusterW, m.payload.Sort))
 	m.clusterTable.SetRows(m.clusterRows())
 	m.clusterTable.SetCursor(clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1)))
 	if m.focus == focusClusters {
@@ -769,7 +807,7 @@ func (m *clusterBrowserModel) syncComponents() {
 	m.memberTable.SetWidth(memberW)
 	m.memberTable.SetHeight(maxInt(1, layout.members.h-6))
 	m.memberTable.SetStyles(tuiTableStyles(m.focus == focusMembers, "#9bc53d", "#33521e"))
-	m.memberTable.SetColumns(memberColumns(memberW))
+	m.memberTable.SetColumns(memberColumns(memberW, m.memberSort))
 	m.memberTable.SetRows(m.memberTableRows())
 	m.memberTable.SetCursor(clampInt(m.memberIndex, 0, maxInt(0, len(m.memberRows)-1)))
 	if m.focus == focusMembers {
@@ -809,35 +847,59 @@ func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
 	return styles
 }
 
-func clusterColumns(width int) []table.Column {
+func clusterColumns(width int, sortMode string) []table.Column {
 	width = maxInt(28, width)
 	available := maxInt(23, width-5)
 	cntW := 4
-	kindW := 5
+	kindW := 3
 	ageW := 7
-	clusterW := clampInt(available/3, 12, 22)
+	clusterW := clampInt(available/3, 12, 18)
 	titleW := maxInt(8, available-cntW-clusterW-kindW-ageW)
+	cntTitle := "cnt"
+	ageTitle := "age"
+	if sortMode == "size" {
+		cntTitle = "cnt*"
+	}
+	if sortMode == "recent" {
+		ageTitle = "age*"
+	}
 	return []table.Column{
-		{Title: "cnt", Width: cntW},
+		{Title: cntTitle, Width: cntW},
 		{Title: "cluster", Width: clusterW},
 		{Title: "title", Width: titleW},
-		{Title: "kind", Width: kindW},
-		{Title: "age", Width: ageW},
+		{Title: "k", Width: kindW},
+		{Title: ageTitle, Width: ageW},
 	}
 }
 
-func memberColumns(width int) []table.Column {
+func memberColumns(width int, sortMode tuiMemberSort) []table.Column {
 	width = maxInt(28, width)
 	available := maxInt(24, width-4)
-	numberW := 7
-	stateW := 6
+	numberW := 8
+	stateW := 4
 	ageW := 7
 	titleW := maxInt(8, available-numberW-stateW-ageW)
+	numberTitle := "number"
+	stateTitle := "st"
+	ageTitle := "age"
+	titleTitle := "title"
+	if sortMode == memberSortNumber {
+		numberTitle = "number*"
+	}
+	if sortMode == memberSortState {
+		stateTitle = "st*"
+	}
+	if sortMode == memberSortRecent {
+		ageTitle = "age*"
+	}
+	if sortMode == memberSortTitle {
+		titleTitle = "title*"
+	}
 	return []table.Column{
-		{Title: "number", Width: numberW},
-		{Title: "state", Width: stateW},
-		{Title: "age", Width: ageW},
-		{Title: "title", Width: titleW},
+		{Title: numberTitle, Width: numberW},
+		{Title: stateTitle, Width: stateW},
+		{Title: ageTitle, Width: ageW},
+		{Title: titleTitle, Width: titleW},
 	}
 }
 
@@ -848,7 +910,7 @@ func (m clusterBrowserModel) clusterRows() []table.Row {
 			fmt.Sprintf("%d", cluster.MemberCount),
 			cluster.StableSlug,
 			splitClusterTitle(cluster),
-			kindLabel(cluster.RepresentativeKind),
+			kindGlyph(cluster.RepresentativeKind),
 			formatRelativeTime(cluster.UpdatedAt),
 		})
 	}
@@ -861,7 +923,7 @@ func (m clusterBrowserModel) memberTableRows() []table.Row {
 		thread := member.thread()
 		rows = append(rows, table.Row{
 			fmt.Sprintf("#%d", thread.Number),
-			thread.State,
+			stateGlyph(thread.State),
 			formatRelativeTime(thread.UpdatedAtGitHub),
 			thread.Title,
 		})
@@ -892,6 +954,22 @@ func (m *clusterBrowserModel) sortClusters() {
 		return parseTime(left.UpdatedAt).After(parseTime(right.UpdatedAt))
 	})
 	m.selected = clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1))
+}
+
+func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
+	columns := clusterColumns(maxInt(24, m.layout().clusters.w-4), m.payload.Sort)
+	if relativeX < columnRightEdge(columns, 0) {
+		m.payload.Sort = "size"
+	} else if relativeX >= columnLeftEdge(columns, len(columns)-1) {
+		m.payload.Sort = "recent"
+	} else if m.payload.Sort == "recent" {
+		m.payload.Sort = "size"
+	} else {
+		m.payload.Sort = "recent"
+	}
+	m.sortClusters()
+	m.loadSelectedCluster()
+	m.status = "Sort: " + m.payload.Sort
 }
 
 func (m *clusterBrowserModel) applyClusterFilters() {
@@ -926,6 +1004,26 @@ func (m *clusterBrowserModel) applyClusterFilters() {
 	}
 	m.clusterOff = 0
 	m.loadSelectedCluster()
+}
+
+func (m *clusterBrowserModel) sortMembersFromHeader(relativeX int) {
+	columns := memberColumns(maxInt(24, m.layout().members.w-4), m.memberSort)
+	switch {
+	case relativeX < columnRightEdge(columns, 0):
+		m.memberSort = memberSortNumber
+	case relativeX < columnRightEdge(columns, 1):
+		m.memberSort = memberSortState
+	case relativeX < columnRightEdge(columns, 2):
+		m.memberSort = memberSortRecent
+	default:
+		if m.memberSort == memberSortTitle {
+			m.memberSort = memberSortKind
+		} else {
+			m.memberSort = memberSortTitle
+		}
+	}
+	m.sortMembers()
+	m.status = "Member sort: " + string(m.memberSort)
 }
 
 func (m *clusterBrowserModel) loadSelectedCluster() {
@@ -1128,6 +1226,15 @@ func nextMemberSort(current tuiMemberSort) tuiMemberSort {
 	return memberSortKind
 }
 
+func (m *clusterBrowserModel) toggleWideLayout() {
+	if m.wideLayout == wideLayoutColumns {
+		m.wideLayout = wideLayoutRightStack
+	} else {
+		m.wideLayout = wideLayoutColumns
+	}
+	m.status = "Layout: " + string(m.wideLayout)
+}
+
 func nextMinSize(current int) int {
 	order := []int{1, 2, 5, 10, 20, 50}
 	for index, item := range order {
@@ -1150,6 +1257,16 @@ func boolLabel(value bool) string {
 		return "shown"
 	}
 	return "hidden"
+}
+
+func layoutLabel(layout tuiLayout) string {
+	if layout.mode != "" {
+		return layout.mode
+	}
+	if layout.stacked {
+		return "stacked"
+	}
+	return string(wideLayoutColumns)
 }
 
 func splitClusterTitle(cluster store.ClusterSummary) string {
@@ -1228,11 +1345,34 @@ func kindLabel(kind string) string {
 	return firstNonEmpty(kind, "thread")
 }
 
+func kindGlyph(kind string) string {
+	if kind == "pull_request" {
+		return "PR"
+	}
+	if kind == "issue" {
+		return "I"
+	}
+	return truncateCells(firstNonEmpty(kind, "?"), 2)
+}
+
 func kindTitle(kind string) string {
 	if kind == "pull_request" {
 		return "PR"
 	}
 	return "Issue"
+}
+
+func stateGlyph(state string) string {
+	switch state {
+	case "open":
+		return "opn"
+	case "closed":
+		return "cls"
+	case "merged":
+		return "mrg"
+	default:
+		return truncateCells(firstNonEmpty(state, "?"), 3)
+	}
 }
 
 func closedLabel(thread store.Thread) string {
@@ -1487,6 +1627,21 @@ func clampInt(value, minValue, maxValue int) int {
 		return maxValue
 	}
 	return value
+}
+
+func columnLeftEdge(columns []table.Column, index int) int {
+	left := 0
+	for i := 0; i < index && i < len(columns); i++ {
+		left += columns[i].Width + 1
+	}
+	return left
+}
+
+func columnRightEdge(columns []table.Column, index int) int {
+	if index < 0 || index >= len(columns) {
+		return 0
+	}
+	return columnLeftEdge(columns, index) + columns[index].Width
 }
 
 func firstNonEmpty(values ...string) string {
