@@ -89,6 +89,7 @@ type clusterBrowserModel struct {
 	menuOpen      bool
 	menuTitle     string
 	menuIndex     int
+	menuOff       int
 	menuItems     []tuiMenuItem
 	showClosed    bool
 	compactDetail bool
@@ -544,14 +545,22 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 
 func (m clusterBrowserModel) menuLines(width int) []string {
 	lines := []string{bold(firstNonEmpty(m.menuTitle, "Actions")), ""}
-	for index, item := range m.menuItems {
+	visible := m.menuVisibleCount()
+	start := clampInt(m.menuOff, 0, maxInt(0, len(m.menuItems)-visible))
+	end := minInt(len(m.menuItems), start+visible)
+	for index := start; index < end; index++ {
+		item := m.menuItems[index]
 		prefix := "  "
 		if index == m.menuIndex {
 			prefix = "> "
 		}
 		lines = append(lines, truncateCells(prefix+item.label, width))
 	}
-	lines = append(lines, "", dim("Enter run  Esc close"))
+	footer := "Enter run  Esc close"
+	if len(m.menuItems) > visible {
+		footer = fmt.Sprintf("Enter run  Esc close  %d-%d/%d", start+1, end, len(m.menuItems))
+	}
+	lines = append(lines, "", dim(footer))
 	return lines
 }
 
@@ -562,8 +571,10 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "Menu closed"
 	case "up", "k":
 		m.menuIndex = clampInt(m.menuIndex-1, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
 	case "down", "j":
 		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
 	case "enter":
 		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
 			if m.runMenuItem(m.menuItems[m.menuIndex]) {
@@ -697,9 +708,11 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		m.menuIndex = clampInt(m.menuIndex-1, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
 		return
 	case tea.MouseButtonWheelDown:
 		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
+		m.keepMenuVisible()
 		return
 	}
 	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
@@ -710,11 +723,12 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		m.status = "Menu closed"
 		return
 	}
-	index := msg.Y - layout.detail.y - 4
+	index := m.menuOff + msg.Y - layout.detail.y - 4
 	if index < 0 || index >= len(m.menuItems) {
 		return
 	}
 	m.menuIndex = index
+	m.keepMenuVisible()
 	if m.runMenuItem(m.menuItems[m.menuIndex]) {
 		m.menuOpen = false
 	}
@@ -804,6 +818,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 	m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close menu", action: "close-menu"})
 	m.menuTitle = "Actions"
 	m.menuIndex = 0
+	m.menuOff = 0
 	m.menuOpen = true
 	m.showHelp = false
 	m.status = "Action menu"
@@ -1046,7 +1061,32 @@ func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {
 	items = append(items, tuiMenuItem{label: "Back to actions", action: "back-to-actions"})
 	m.menuItems = items
 	m.menuIndex = 0
+	m.menuOff = 0
 	m.status = m.menuTitle
+}
+
+func (m clusterBrowserModel) menuVisibleCount() int {
+	height := m.detailView.Height
+	if height <= 0 {
+		height = maxInt(1, m.layout().detail.h-2)
+	}
+	return maxInt(1, height-4)
+}
+
+func (m *clusterBrowserModel) keepMenuVisible() {
+	if len(m.menuItems) == 0 {
+		m.menuOff = 0
+		return
+	}
+	visible := m.menuVisibleCount()
+	m.menuIndex = clampInt(m.menuIndex, 0, len(m.menuItems)-1)
+	if m.menuIndex < m.menuOff {
+		m.menuOff = m.menuIndex
+	}
+	if m.menuIndex >= m.menuOff+visible {
+		m.menuOff = m.menuIndex - visible + 1
+	}
+	m.menuOff = clampInt(m.menuOff, 0, maxInt(0, len(m.menuItems)-visible))
 }
 
 func isMouseWheel(button tea.MouseButton) bool {

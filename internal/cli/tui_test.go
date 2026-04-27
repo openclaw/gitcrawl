@@ -460,6 +460,62 @@ func TestTUIMouseWheelMovesActionMenu(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuKeepsSelectionVisible(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 16
+	model.syncComponents()
+	model.detailView.Height = 6
+	model.openActionMenu()
+
+	model.menuIndex = 12
+	model.keepMenuVisible()
+
+	if model.menuOff == 0 {
+		t.Fatalf("expected long menu to scroll selected action into view")
+	}
+	lines := strings.Join(model.menuLines(80), "\n")
+	if !strings.Contains(lines, model.menuItems[model.menuIndex].label) {
+		t.Fatalf("visible menu lines do not include selected item %q:\n%s", model.menuItems[model.menuIndex].label, lines)
+	}
+	if !strings.Contains(lines, "/") {
+		t.Fatalf("expected menu footer to show visible range:\n%s", lines)
+	}
+}
+
+func TestTUIMouseClickUsesMenuOffset(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 16
+	model.syncComponents()
+	model.menuOpen = true
+	model.menuOff = 5
+	model.menuItems = make([]tuiMenuItem, 8)
+	for index := range model.menuItems {
+		model.menuItems[index] = tuiMenuItem{label: fmt.Sprintf("Item %d", index), action: "close-menu"}
+	}
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.detail.x + 2,
+		Y:      layout.detail.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.menuIndex != 5 {
+		t.Fatalf("menu click selected %d, want offset row 5", model.menuIndex)
+	}
+}
+
 func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
