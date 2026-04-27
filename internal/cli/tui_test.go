@@ -179,6 +179,19 @@ func TestTUIFiltersUseLoadedWorkingSet(t *testing.T) {
 	}
 }
 
+func TestMergeClusterSummariesKeepsPrimaryView(t *testing.T) {
+	primary := []store.ClusterSummary{{ID: 20}, {ID: 10}}
+	secondary := []store.ClusterSummary{{ID: 10}, {ID: 30}}
+	merged := mergeClusterSummaries(primary, secondary)
+
+	if len(merged) != 3 {
+		t.Fatalf("merged length = %d, want 3", len(merged))
+	}
+	if merged[0].ID != 20 || merged[1].ID != 10 || merged[2].ID != 30 {
+		t.Fatalf("merged order mismatch: %+v", merged)
+	}
+}
+
 func TestTUIHideClosedUsesLoadedWorkingSet(t *testing.T) {
 	clusters := sampleTUIClusters()
 	clusters[0].Status = "closed"

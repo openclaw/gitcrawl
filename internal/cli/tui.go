@@ -1084,18 +1084,30 @@ func (m *clusterBrowserModel) refreshFromStore() {
 	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
 		currentID = m.payload.Clusters[m.selected].ID
 	}
-	limit := maxInt(defaultTUIWorkingSetLimit, maxInt(m.payload.Limit, len(m.allClusters)))
+	viewLimit := maxInt(20, m.payload.Limit)
 	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
-		IncludeClosed: true,
-		MinSize:       1,
-		Limit:         limit,
+		IncludeClosed: m.showClosed,
+		MinSize:       m.minSize,
+		Limit:         viewLimit,
 		Sort:          m.payload.Sort,
 	})
 	if err != nil {
 		m.status = "Refresh failed: " + err.Error()
 		return
 	}
+	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+		RepoID:        m.repoID,
+		IncludeClosed: true,
+		MinSize:       1,
+		Limit:         maxInt(defaultTUIWorkingSetLimit, maxInt(m.payload.Limit, len(m.allClusters))),
+		Sort:          m.payload.Sort,
+	})
+	if err != nil {
+		m.status = "Refresh failed: " + err.Error()
+		return
+	}
+	clusters = mergeClusterSummaries(clusters, workingSet)
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
 	}

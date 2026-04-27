@@ -462,23 +462,28 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	}
 
 	interactive := a.format == FormatText && a.canRunInteractiveTUI()
-	queryMinSize := minSize
-	queryLimit := limit
-	queryIncludeClosed := !*hideClosed
-	if interactive {
-		queryMinSize = 1
-		queryLimit = maxInt(defaultTUIWorkingSetLimit, limit)
-		queryIncludeClosed = true
-	}
 	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: queryIncludeClosed,
-		MinSize:       queryMinSize,
-		Limit:         queryLimit,
+		IncludeClosed: !*hideClosed,
+		MinSize:       minSize,
+		Limit:         limit,
 		Sort:          sort,
 	})
 	if err != nil {
 		return err
+	}
+	if interactive {
+		workingSet, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
+			RepoID:        repo.ID,
+			IncludeClosed: true,
+			MinSize:       1,
+			Limit:         maxInt(defaultTUIWorkingSetLimit, limit),
+			Sort:          sort,
+		})
+		if err != nil {
+			return err
+		}
+		clusters = mergeClusterSummaries(clusters, workingSet)
 	}
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
@@ -519,6 +524,24 @@ func (a *App) resolveOptionalRepository(ctx context.Context, rt localRuntime, ar
 		return store.Repository{}, false, err
 	}
 	return repo, false, nil
+}
+
+func mergeClusterSummaries(primary, secondary []store.ClusterSummary) []store.ClusterSummary {
+	if len(primary) == 0 {
+		return append([]store.ClusterSummary(nil), secondary...)
+	}
+	out := append([]store.ClusterSummary(nil), primary...)
+	seen := make(map[int64]bool, len(out)+len(secondary))
+	for _, cluster := range out {
+		seen[cluster.ID] = true
+	}
+	for _, cluster := range secondary {
+		if !seen[cluster.ID] {
+			out = append(out, cluster)
+			seen[cluster.ID] = true
+		}
+	}
+	return out
 }
 
 func (a *App) runClusterDetail(ctx context.Context, args []string) error {
