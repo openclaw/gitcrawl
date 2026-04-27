@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -83,7 +85,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "serve":
 		return usageErr(fmt.Errorf("serve is not supported in gitcrawl"))
 	case "init":
-		return a.runInit(rest[1:])
+		return a.runInit(ctx, rest[1:])
 	case "doctor":
 		return a.runDoctor(ctx, rest[1:])
 	case "sync":
@@ -596,17 +598,45 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	return a.writeOutput("sync", stats, true)
 }
 
-func (a *App) runInit(args []string) error {
+func (a *App) runInit(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dbPath := fs.String("db", "", "database path")
+	portableStore := fs.String("portable-store", "", "HTTPS git URL for a portable gitcrawl store")
+	portableDB := fs.String("portable-db", "data/openclaw__openclaw.sync.db", "database path inside portable store")
+	storeDir := fs.String("store-dir", "", "local portable store checkout directory")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true, "portable-store": true, "portable-db": true, "store-dir": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
+	if strings.TrimSpace(*dbPath) != "" && strings.TrimSpace(*portableStore) != "" {
+		return usageErr(fmt.Errorf("use either --db or --portable-store, not both"))
+	}
 
 	cfg := config.Default()
+	portableStoreURL := strings.TrimSpace(*portableStore)
+	portableStoreDir := ""
+	portableStoreAction := ""
+	if portableStoreURL != "" {
+		portableStoreDir = strings.TrimSpace(*storeDir)
+		if portableStoreDir == "" {
+			portableStoreDir = defaultPortableStoreDir(config.ResolvePath(a.configPath), portableStoreURL)
+		}
+		action, err := syncPortableStore(ctx, portableStoreURL, portableStoreDir)
+		if err != nil {
+			return err
+		}
+		portableStoreAction = action
+		relativeDB := filepath.Clean(filepath.FromSlash(strings.TrimLeft(strings.TrimSpace(*portableDB), "/")))
+		if relativeDB == "." || filepath.IsAbs(relativeDB) || strings.HasPrefix(relativeDB, ".."+string(os.PathSeparator)) || relativeDB == ".." {
+			return usageErr(fmt.Errorf("invalid --portable-db %q", *portableDB))
+		}
+		cfg.DBPath = filepath.Join(portableStoreDir, relativeDB)
+		if _, err := os.Stat(cfg.DBPath); err != nil {
+			return fmt.Errorf("portable database not found at %s: %w", cfg.DBPath, err)
+		}
+	}
 	if strings.TrimSpace(*dbPath) != "" {
 		cfg.DBPath = strings.TrimSpace(*dbPath)
 	}
@@ -617,11 +647,82 @@ func (a *App) runInit(args []string) error {
 		return err
 	}
 	return a.writeOutput("init", map[string]any{
-		"config_path": config.ResolvePath(a.configPath),
-		"db_path":     cfg.DBPath,
-		"cache_dir":   cfg.CacheDir,
-		"vector_dir":  cfg.VectorDir,
+		"config_path":        config.ResolvePath(a.configPath),
+		"db_path":            cfg.DBPath,
+		"cache_dir":          cfg.CacheDir,
+		"vector_dir":         cfg.VectorDir,
+		"portable_store_url": portableStoreURL,
+		"portable_store_dir": portableStoreDir,
+		"portable_store":     portableStoreAction,
 	}, true)
+}
+
+func defaultPortableStoreDir(configPath, remoteURL string) string {
+	base := filepath.Join(filepath.Dir(configPath), "stores")
+	name := strings.TrimSuffix(remoteURL, ".git")
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = safePathName(name)
+	if name == "" {
+		name = "portable-store"
+	}
+	return filepath.Join(base, name)
+}
+
+func safePathName(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-.")
+}
+
+func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, error) {
+	if strings.TrimSpace(remoteURL) == "" {
+		return "", fmt.Errorf("portable store URL is required")
+	}
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("portable store directory is required")
+	}
+	gitDir := filepath.Join(dir, ".git")
+	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+		if err := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); err != nil {
+			return "", err
+		}
+		return "pulled", nil
+	}
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return "", fmt.Errorf("portable store directory %s exists but is not a git checkout", dir)
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read portable store directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", fmt.Errorf("create portable store parent: %w", err)
+	}
+	if err := runGit(ctx, "", "clone", "--depth", "1", remoteURL, dir); err != nil {
+		return "", err
+	}
+	return "cloned", nil
+}
+
+func runGit(ctx context.Context, workdir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workdir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (a *App) runDoctor(ctx context.Context, args []string) error {
@@ -813,7 +914,7 @@ Global flags:
   --version            print version
 
 Core commands:
-  init                 create config
+  init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
   refresh              run sync, enrichment, embedding, and clustering pipeline

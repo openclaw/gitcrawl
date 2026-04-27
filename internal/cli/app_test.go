@@ -25,6 +25,31 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 }
 
+func TestInitRejectsDBAndPortableStore(t *testing.T) {
+	dir := t.TempDir()
+	app := New()
+	err := app.Run(context.Background(), []string{
+		"--config", filepath.Join(dir, "config.toml"),
+		"init",
+		"--db", filepath.Join(dir, "gitcrawl.db"),
+		"--portable-store", "https://github.com/openclaw/gitcrawl-store.git",
+	})
+	if err == nil {
+		t.Fatal("expected init to reject conflicting database options")
+	}
+	if ExitCode(err) != 2 {
+		t.Fatalf("exit code: got %d want 2", ExitCode(err))
+	}
+}
+
+func TestDefaultPortableStoreDir(t *testing.T) {
+	got := defaultPortableStoreDir("/tmp/gitcrawl/config.toml", "https://github.com/openclaw/gitcrawl-store.git")
+	want := filepath.Join("/tmp/gitcrawl", "stores", "gitcrawl-store")
+	if got != want {
+		t.Fatalf("store dir: got %q want %q", got, want)
+	}
+}
+
 func TestServeIsUnsupported(t *testing.T) {
 	app := New()
 	err := app.Run(context.Background(), []string{"serve"})
