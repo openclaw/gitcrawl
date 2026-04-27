@@ -205,6 +205,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "/":
 			m.searching = true
+			m.showHelp = false
+			m.menuOpen = false
 			m.status = "Filter: " + m.search
 		case "esc":
 			if m.showHelp {
