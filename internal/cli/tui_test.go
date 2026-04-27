@@ -1364,6 +1364,61 @@ func TestTUICloseThreadLocallyHidesCluster(t *testing.T) {
 	}
 }
 
+func TestTUIReopenThreadLocallyRestoresThread(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoID, 51, 501, "reopen me"); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	if err := st.CloseThreadLocally(ctx, repoID, 501, "test close"); err != nil {
+		t.Fatalf("close thread: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   clusters,
+	})
+	model.openActionMenu()
+	if menuLabelIndex(model.menuItems, "Reopen locally...") < 0 {
+		t.Fatalf("action menu missing local reopen: %+v", model.menuItems)
+	}
+	if menuLabelIndex(model.menuItems, "Close locally...") >= 0 {
+		t.Fatalf("locally closed thread should not offer close again: %+v", model.menuItems)
+	}
+	model.runAction("reopen-thread-confirm")
+	if model.menuTitle != "Reopen Locally" || !strings.Contains(model.menuItems[0].label, "Reopen #501 locally") {
+		t.Fatalf("reopen confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+
+	model.runAction("reopen-thread-local")
+
+	if model.status != "Reopened #501 locally" {
+		t.Fatalf("reopen status = %q", model.status)
+	}
+	rows, err := st.ListThreads(ctx, repoID, false)
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ClosedAtLocal != "" {
+		t.Fatalf("reopened thread should be visible, got %#v", rows)
+	}
+}
+
 func TestTUIRepositoryPickerKeepsCurrentRepoVisible(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

@@ -1015,8 +1015,12 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy markdown link", action: "copy-markdown"},
 			tuiMenuItem{label: "Copy selected detail", action: "copy-thread-detail"},
 			tuiMenuItem{label: "Load neighbors", action: "load-neighbors"},
-			tuiMenuItem{label: "Close locally...", action: "close-thread-confirm"},
 		)
+		if thread.ClosedAtLocal != "" {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Reopen locally...", action: "reopen-thread-confirm"})
+		} else {
+			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close locally...", action: "close-thread-confirm"})
+		}
 	}
 	if member, ok := m.selectedMember(); ok {
 		sectionAdded := false
@@ -1266,6 +1270,12 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return false
 	case "close-thread-local":
 		m.closeSelectedThreadLocally()
+		return true
+	case "reopen-thread-confirm":
+		m.openReopenThreadMenu()
+		return false
+	case "reopen-thread-local":
+		m.reopenSelectedThreadLocally()
 		return true
 	case "copy-thread-detail":
 		if err := copyText(m.threadDetailClipboardText()); err != nil {
@@ -1617,6 +1627,22 @@ func (m *clusterBrowserModel) openCloseThreadMenu() {
 	m.status = fmt.Sprintf("Confirm local close for #%d", thread.Number)
 }
 
+func (m *clusterBrowserModel) openReopenThreadMenu() {
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return
+	}
+	m.menuTitle = "Reopen Locally"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Reopen #%d locally", thread.Number), action: "reopen-thread-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm local reopen for #%d", thread.Number)
+}
+
 func (m *clusterBrowserModel) closeSelectedThreadLocally() {
 	thread, ok := m.selectedThread()
 	if !ok {
@@ -1634,6 +1660,24 @@ func (m *clusterBrowserModel) closeSelectedThreadLocally() {
 	delete(m.neighborCache, thread.ID)
 	m.refreshFromStore()
 	m.status = fmt.Sprintf("Closed #%d locally", thread.Number)
+}
+
+func (m *clusterBrowserModel) reopenSelectedThreadLocally() {
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local reopen unavailable for this view"
+		return
+	}
+	if err := m.store.ReopenThreadLocally(m.ctx, m.repoID, thread.Number); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Reopened #%d locally", thread.Number)
 }
 
 func (m clusterBrowserModel) menuVisibleCount() int {
