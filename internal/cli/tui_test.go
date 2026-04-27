@@ -331,6 +331,34 @@ func TestTUIFiltersClusters(t *testing.T) {
 	}
 }
 
+func TestTUIFilterCancelRestoresPreviousSearch(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.search = "first"
+	model.applyClusterFilters()
+	model.startFilterInput()
+
+	model.searchInput.SetValue("second")
+	model.search = "second"
+	model.applyClusterFilters()
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("live filter setup mismatch: %+v", model.payload.Clusters)
+	}
+
+	updated, _ := model.handleSearchKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated
+
+	if model.search != "first" || model.status != "Filter cancelled" {
+		t.Fatalf("cancel search/status = %q/%q", model.search, model.status)
+	}
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 1 {
+		t.Fatalf("cancel did not restore previous filtered clusters: %+v", model.payload.Clusters)
+	}
+}
+
 func TestTUIFiltersUseLoadedWorkingSet(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

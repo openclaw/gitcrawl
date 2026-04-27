@@ -78,43 +78,44 @@ type tuiRect struct {
 }
 
 type clusterBrowserModel struct {
-	payload       clusterBrowserPayload
-	allClusters   []store.ClusterSummary
-	ctx           context.Context
-	store         *store.Store
-	repoID        int64
-	focus         tuiFocus
-	width         int
-	height        int
-	status        string
-	search        string
-	searching     bool
-	jumping       bool
-	showHelp      bool
-	menuOpen      bool
-	menuTitle     string
-	menuIndex     int
-	menuOff       int
-	menuItems     []tuiMenuItem
-	quitRequested bool
-	showClosed    bool
-	compactDetail bool
-	minSize       int
-	memberSort    tuiMemberSort
-	wideLayout    tuiWideLayout
-	selected      int
-	clusterOff    int
-	memberRows    []memberRow
-	memberOff     int
-	memberIndex   int
-	clusterTable  table.Model
-	memberTable   table.Model
-	detailView    viewport.Model
-	searchInput   textinput.Model
-	detailCache   map[int64]store.ClusterDetail
-	neighborCache map[int64][]tuiNeighbor
-	detail        store.ClusterDetail
-	hasDetail     bool
+	payload          clusterBrowserPayload
+	allClusters      []store.ClusterSummary
+	ctx              context.Context
+	store            *store.Store
+	repoID           int64
+	focus            tuiFocus
+	width            int
+	height           int
+	status           string
+	search           string
+	searching        bool
+	searchBeforeEdit string
+	jumping          bool
+	showHelp         bool
+	menuOpen         bool
+	menuTitle        string
+	menuIndex        int
+	menuOff          int
+	menuItems        []tuiMenuItem
+	quitRequested    bool
+	showClosed       bool
+	compactDetail    bool
+	minSize          int
+	memberSort       tuiMemberSort
+	wideLayout       tuiWideLayout
+	selected         int
+	clusterOff       int
+	memberRows       []memberRow
+	memberOff        int
+	memberIndex      int
+	clusterTable     table.Model
+	memberTable      table.Model
+	detailView       viewport.Model
+	searchInput      textinput.Model
+	detailCache      map[int64]store.ClusterDetail
+	neighborCache    map[int64][]tuiNeighbor
+	detail           store.ClusterDetail
+	hasDetail        bool
 }
 
 type memberRow struct {
@@ -740,7 +741,9 @@ func (m clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) (clusterBrowserMode
 		}
 	case "esc":
 		m.searching = false
+		m.search = m.searchBeforeEdit
 		m.searchInput.Blur()
+		m.applyClusterFilters()
 		m.status = "Filter cancelled"
 	default:
 		var cmd tea.Cmd
@@ -754,6 +757,7 @@ func (m clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) (clusterBrowserMode
 
 func (m *clusterBrowserModel) startFilterInput() tea.Cmd {
 	m.searching = true
+	m.searchBeforeEdit = m.search
 	m.jumping = false
 	m.showHelp = false
 	m.menuOpen = false
