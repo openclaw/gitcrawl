@@ -714,6 +714,12 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
 		m.keepMenuVisible()
 		return
+	case tea.MouseButtonRight:
+		if msg.Action == tea.MouseActionPress {
+			m.menuOpen = false
+			m.status = "Menu closed"
+		}
+		return
 	}
 	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
 		return

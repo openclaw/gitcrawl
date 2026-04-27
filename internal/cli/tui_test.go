@@ -516,6 +516,32 @@ func TestTUIMouseClickUsesMenuOffset(t *testing.T) {
 	}
 }
 
+func TestTUIRightClickClosesOpenMenu(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.openActionMenu()
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.detail.x + 2,
+		Y:      layout.detail.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonRight,
+	})
+
+	if model.menuOpen {
+		t.Fatal("expected right click to close open menu")
+	}
+	if model.status != "Menu closed" {
+		t.Fatalf("right click close status = %q, want Menu closed", model.status)
+	}
+}
+
 func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
