@@ -1092,11 +1092,12 @@ func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
 func clusterColumns(width int, sortMode string) []table.Column {
 	width = maxInt(28, width)
 	available := maxInt(23, width-5)
+	idW := 7
 	cntW := 4
 	kindW := 3
 	ageW := 7
-	clusterW := clampInt(available/3, 12, 18)
-	titleW := maxInt(8, available-cntW-clusterW-kindW-ageW)
+	clusterW := clampInt(available/3, 10, 16)
+	titleW := maxInt(8, available-idW-cntW-clusterW-kindW-ageW)
 	cntTitle := "cnt"
 	ageTitle := "age"
 	if sortMode == "size" {
@@ -1106,6 +1107,7 @@ func clusterColumns(width int, sortMode string) []table.Column {
 		ageTitle = "age*"
 	}
 	return []table.Column{
+		{Title: "id", Width: idW},
 		{Title: cntTitle, Width: cntW},
 		{Title: "cluster", Width: clusterW},
 		{Title: "title", Width: titleW},
@@ -1147,11 +1149,12 @@ func memberColumns(width int, sortMode tuiMemberSort) []table.Column {
 
 func (m clusterBrowserModel) clusterRows() []table.Row {
 	if len(m.payload.Clusters) == 0 {
-		return []table.Row{{"", "", "No clusters visible. Press f, /, x, or r.", "", ""}}
+		return []table.Row{{"", "", "", "No clusters visible. Press f, /, x, or r.", "", ""}}
 	}
 	rows := make([]table.Row, 0, len(m.payload.Clusters))
 	for _, cluster := range m.payload.Clusters {
 		rows = append(rows, table.Row{
+			fmt.Sprintf("C%d", cluster.ID),
 			fmt.Sprintf("%d", cluster.MemberCount),
 			cluster.StableSlug,
 			splitClusterTitle(cluster),
@@ -1210,7 +1213,7 @@ func (m *clusterBrowserModel) sortClusters() {
 
 func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
 	columns := clusterColumns(maxInt(24, m.layout().clusters.w-4), m.payload.Sort)
-	if relativeX < columnRightEdge(columns, 0) {
+	if relativeX < columnRightEdge(columns, 1) {
 		m.payload.Sort = "size"
 	} else if relativeX >= columnLeftEdge(columns, len(columns)-1) {
 		m.payload.Sort = "recent"

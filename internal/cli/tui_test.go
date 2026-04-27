@@ -227,6 +227,19 @@ func TestTUIMouseHeaderSortsClusterRows(t *testing.T) {
 	}
 }
 
+func TestTUIClusterRowsShowClusterIDs(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	rows := model.clusterRows()
+	if len(rows) == 0 || rows[0][0] != "C2" {
+		t.Fatalf("cluster id cell = %q, want C2 in first row: %+v", rows[0][0], rows)
+	}
+}
+
 func TestTUIWideLayoutToggle(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -683,7 +696,7 @@ func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 		t.Fatalf("detail empty state missing recovery actions:\n%s", detail)
 	}
 	rows := model.clusterRows()
-	if len(rows) != 1 || !strings.Contains(rows[0][2], "No clusters visible") {
+	if len(rows) != 1 || !strings.Contains(rows[0][3], "No clusters visible") {
 		t.Fatalf("cluster empty row mismatch: %+v", rows)
 	}
 }
