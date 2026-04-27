@@ -835,7 +835,7 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Jump to issue/PR", "Toggle layout", "Min size 1+", "Hide closed", "Help", "Quit"} {
+	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Jump to issue/PR", "Toggle layout", "Show compact detail", "Min size 1+", "Hide closed", "Help", "Quit"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
 		}
@@ -867,6 +867,10 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 	model.runAction("toggle-layout")
 	if model.wideLayout != wideLayoutRightStack {
 		t.Fatalf("layout menu action set %q, want right-stack", model.wideLayout)
+	}
+	model.runAction("toggle-detail")
+	if !model.compactDetail || model.status != "Detail mode: compact" {
+		t.Fatalf("detail menu action compact=%v status=%q", model.compactDetail, model.status)
 	}
 	model.runAction("show-help")
 	if !model.showHelp {

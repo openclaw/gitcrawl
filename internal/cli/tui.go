@@ -256,12 +256,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sortMembers()
 			m.status = "Member sort: " + string(m.memberSort)
 		case "d":
-			m.compactDetail = !m.compactDetail
-			if m.compactDetail {
-				m.status = "Detail mode: compact"
-			} else {
-				m.status = "Detail mode: full"
-			}
+			m.toggleDetailMode()
 		case "l":
 			m.toggleWideLayout()
 		case "r":
@@ -937,6 +932,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Refresh from store", action: "refresh"},
 		tuiMenuItem{label: "Jump to issue/PR...", action: "jump"},
 		tuiMenuItem{label: "Toggle layout", action: "toggle-layout"},
+		tuiMenuItem{label: detailModeToggleLabel(m.compactDetail), action: "toggle-detail"},
 		tuiMenuItem{label: "Min size 1+", action: "min-size-1"},
 		tuiMenuItem{label: "Min size 5+", action: "min-size-5"},
 		tuiMenuItem{label: "Min size 10+", action: "min-size-10"},
@@ -1007,6 +1003,9 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	case "toggle-layout":
 		m.toggleWideLayout()
+		return true
+	case "toggle-detail":
+		m.toggleDetailMode()
 		return true
 	case "min-size-1":
 		m.setMinSizeFromMenu(1)
@@ -2422,6 +2421,15 @@ func (m *clusterBrowserModel) toggleWideLayout() {
 	m.status = "Layout: " + string(m.wideLayout)
 }
 
+func (m *clusterBrowserModel) toggleDetailMode() {
+	m.compactDetail = !m.compactDetail
+	if m.compactDetail {
+		m.status = "Detail mode: compact"
+		return
+	}
+	m.status = "Detail mode: full"
+}
+
 func nextMinSize(current int) int {
 	order := []int{1, 2, 5, 10, 20, 50}
 	for index, item := range order {
@@ -2451,6 +2459,13 @@ func closedToggleLabel(showClosed bool) string {
 		return "Hide closed"
 	}
 	return "Show closed"
+}
+
+func detailModeToggleLabel(compact bool) string {
+	if compact {
+		return "Show full detail"
+	}
+	return "Show compact detail"
 }
 
 func layoutLabel(layout tuiLayout) string {
