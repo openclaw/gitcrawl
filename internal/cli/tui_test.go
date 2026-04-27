@@ -691,6 +691,32 @@ func TestTUIActionMenuQuickKeysRunViewActions(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuRepositoryShortcutOpensPicker(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.openActionMenu()
+
+	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	model = updated.(clusterBrowserModel)
+
+	if !model.menuOpen || model.menuTitle != "Repositories" {
+		t.Fatalf("repository shortcut menu=%v title=%q", model.menuOpen, model.menuTitle)
+	}
+}
+
 func TestTUIActionMenuSectionsAreNotSelectable(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
