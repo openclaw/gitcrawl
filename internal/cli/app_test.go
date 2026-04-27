@@ -380,6 +380,125 @@ func TestCloseClusterCommandLocallyClosesCluster(t *testing.T) {
 	}
 }
 
+func TestClusterMemberOverrideCommands(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	firstID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "81",
+		Number:        81,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "First member",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/81",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-81",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed first thread: %v", err)
+	}
+	secondID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "82",
+		Number:        82,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "Second member",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/82",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-82",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed second thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(81, ?, 'cluster-81', 'cluster-81', 'active', ?, 'Cluster 81', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, repoID, firstID); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(81, ?, 'representative', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, firstID); err != nil {
+		t.Fatalf("seed first member: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(81, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, secondID); err != nil {
+		t.Fatalf("seed second member: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "exclude-cluster-member", "openclaw/openclaw", "--id", "81", "--number", "81", "--reason", "bad match", "--json"}); err != nil {
+		t.Fatalf("exclude-cluster-member: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"excluded": true`) {
+		t.Fatalf("exclude-cluster-member output = %q", stdout.String())
+	}
+	stdout.Reset()
+	run = New()
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "include-cluster-member", "openclaw/openclaw", "--id", "81", "--number", "81", "--json"}); err != nil {
+		t.Fatalf("include-cluster-member: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"included": true`) {
+		t.Fatalf("include-cluster-member output = %q", stdout.String())
+	}
+	stdout.Reset()
+	run = New()
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "set-cluster-canonical", "openclaw/openclaw", "--id", "81", "--number", "82", "--json"}); err != nil {
+		t.Fatalf("set-cluster-canonical: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"canonical": true`) {
+		t.Fatalf("set-cluster-canonical output = %q", stdout.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	detail, err := st.ClusterDetail(ctx, store.ClusterDetailOptions{RepoID: repoID, ClusterID: 81, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail: %v", err)
+	}
+	if detail.Cluster.RepresentativeThreadID != secondID || detail.Members[0].Thread.Number != 82 || detail.Members[0].Role != "canonical" {
+		t.Fatalf("canonical command did not update cluster detail: %#v", detail)
+	}
+}
+
 func TestTUIHelp(t *testing.T) {
 	app := New()
 	var stdout bytes.Buffer
