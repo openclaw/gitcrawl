@@ -79,7 +79,7 @@ func TestTUIInAppHelpMentionsMenuMouse(t *testing.T) {
 	})
 
 	help := strings.Join(model.helpLines(80), "\n")
-	for _, want := range []string{"left click menu row", "wheel in menu", "open link picker"} {
+	for _, want := range []string{"left click menu row", "wheel in menu", "open link picker", "neighbors, sort, refresh, layout, quit"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
 		}
