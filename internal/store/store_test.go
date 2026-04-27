@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -38,6 +40,53 @@ func TestStatusOnEmptyStore(t *testing.T) {
 	}
 	if status.RepositoryCount != 0 || status.ThreadCount != 0 || status.ClusterCount != 0 {
 		t.Fatalf("expected empty status, got %#v", status)
+	}
+}
+
+func TestOpenReadOnlyDoesNotMutateStore(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-04-27T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	readOnly, err := OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open readonly: %v", err)
+	}
+	status, err := readOnly.Status(ctx)
+	if err != nil {
+		t.Fatalf("readonly status: %v", err)
+	}
+	if status.RepositoryCount != 1 {
+		t.Fatalf("repository count: got %d want 1", status.RepositoryCount)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatalf("close readonly: %v", err)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("readonly open mutated database bytes")
 	}
 }
 

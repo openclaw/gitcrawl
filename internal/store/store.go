@@ -71,6 +71,37 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return st, nil
 }
 
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("stat db file: %w", err)
+	}
+	dsn := fmt.Sprintf(
+		"file:%s?mode=ro&_pragma=query_only(1)&_pragma=foreign_keys(1)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)&_pragma=busy_timeout(5000)",
+		path,
+	)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite readonly: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ping sqlite readonly: %w", err)
+	}
+	st := &Store{db: db, path: path}
+	current, err := st.schemaVersion(ctx)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if current > schemaVersion {
+		_ = db.Close()
+		return nil, fmt.Errorf("database schema version %d is newer than supported version %d", current, schemaVersion)
+	}
+	return st, nil
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil

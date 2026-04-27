@@ -25,6 +25,18 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	return localRuntime{Config: cfg, Store: st}, nil
 }
 
+func (a *App) openLocalRuntimeReadOnly(ctx context.Context) (localRuntime, error) {
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return localRuntime{}, err
+	}
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath)
+	if err != nil {
+		return localRuntime{}, err
+	}
+	return localRuntime{Config: cfg, Store: st}, nil
+}
+
 func (rt localRuntime) repository(ctx context.Context, owner, repo string) (store.Repository, error) {
 	return rt.Store.RepositoryByFullName(ctx, owner+"/"+repo)
 }

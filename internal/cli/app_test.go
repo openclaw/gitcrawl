@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,6 +92,10 @@ func TestTUIInfersRepository(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before tui: %v", err)
+	}
 
 	run := New()
 	var stdout bytes.Buffer
@@ -104,6 +109,13 @@ func TestTUIInfersRepository(t *testing.T) {
 	}
 	if !strings.Contains(out, `"inferred_repository": true`) {
 		t.Fatalf("expected inferred flag, got %q", out)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after tui: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("tui mutated database bytes")
 	}
 }
 

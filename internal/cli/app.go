@@ -204,7 +204,7 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("unsupported search mode %q", searchMode))
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func (a *App) runNeighbors(ctx context.Context, args []string) error {
 		threshold = 0.2
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ func (a *App) runClusters(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -422,7 +422,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -519,7 +519,7 @@ func (a *App) runClusterDetail(ctx context.Context, args []string) error {
 		bodyChars = 280
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -567,7 +567,7 @@ func (a *App) runRuns(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -615,7 +615,7 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	rt, err := a.openLocalRuntime(ctx)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
 	}
@@ -899,14 +899,18 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
+	storeStatus := store.Status{DBPath: cfg.DBPath}
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath)
 	if err != nil {
-		return err
-	}
-	defer st.Close()
-	storeStatus, err := st.Status(ctx)
-	if err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else {
+		defer st.Close()
+		storeStatus, err = st.Status(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	githubToken := config.ResolveGitHubToken(cfg)
