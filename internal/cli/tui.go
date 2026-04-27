@@ -36,6 +36,7 @@ type clusterBrowserPayload struct {
 	Mode               string                 `json:"mode"`
 	Sort               string                 `json:"sort"`
 	MinSize            int                    `json:"min_size"`
+	Limit              int                    `json:"limit,omitempty"`
 	Clusters           []store.ClusterSummary `json:"clusters"`
 }
 
@@ -1082,7 +1083,7 @@ func (m *clusterBrowserModel) refreshFromStore() {
 	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
 		currentID = m.payload.Clusters[m.selected].ID
 	}
-	limit := maxInt(20, len(m.allClusters))
+	limit := maxInt(defaultTUIWorkingSetLimit, maxInt(m.payload.Limit, len(m.allClusters)))
 	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
 		IncludeClosed: true,
@@ -1134,6 +1135,9 @@ func (m *clusterBrowserModel) applyClusterFilters() {
 	}
 	m.payload.Clusters = next
 	m.sortClusters()
+	if m.payload.Limit > 0 && len(m.payload.Clusters) > m.payload.Limit {
+		m.payload.Clusters = m.payload.Clusters[:m.payload.Limit]
+	}
 	m.selected = 0
 	if currentID != 0 {
 		for index, cluster := range m.payload.Clusters {

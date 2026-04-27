@@ -21,7 +21,10 @@ import (
 	"github.com/openclaw/gitcrawl/internal/vector"
 )
 
-const defaultTUIMinSize = 5
+const (
+	defaultTUIMinSize         = 5
+	defaultTUIWorkingSetLimit = 500
+)
 
 type App struct {
 	Stdout io.Writer
@@ -458,11 +461,18 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
 
+	interactive := a.format == FormatText && a.canRunInteractiveTUI()
+	queryMinSize := minSize
+	queryLimit := limit
+	if interactive {
+		queryMinSize = 1
+		queryLimit = maxInt(defaultTUIWorkingSetLimit, limit)
+	}
 	clusters, err := rt.Store.ListClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
 		IncludeClosed: !*hideClosed,
-		MinSize:       minSize,
-		Limit:         limit,
+		MinSize:       queryMinSize,
+		Limit:         queryLimit,
 		Sort:          sort,
 	})
 	if err != nil {
@@ -477,9 +487,10 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Mode:               "cluster-browser",
 		Sort:               sort,
 		MinSize:            minSize,
+		Limit:              limit,
 		Clusters:           clusters,
 	}
-	if a.format != FormatText || !a.canRunInteractiveTUI() {
+	if !interactive {
 		if a.format == FormatText {
 			return usageErr(fmt.Errorf("tui requires an interactive terminal; run it from a TTY or pass --json for machine-readable cluster data"))
 		}

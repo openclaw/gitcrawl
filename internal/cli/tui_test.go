@@ -160,6 +160,25 @@ func TestTUIFiltersClusters(t *testing.T) {
 	}
 }
 
+func TestTUIFiltersUseLoadedWorkingSet(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    5,
+		Limit:      20,
+		Clusters:   sampleTUIClusters(),
+	})
+
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("default min-size view mismatch: %+v", model.payload.Clusters)
+	}
+	model.minSize = 1
+	model.applyClusterFilters()
+	if len(model.payload.Clusters) != 2 {
+		t.Fatalf("lowered min-size should use loaded working set, got %+v", model.payload.Clusters)
+	}
+}
+
 func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
