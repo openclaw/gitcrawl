@@ -23,6 +23,7 @@ gitcrawl tui owner/repo
 ```
 
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.
+The TUI starts at `--min-size 5` so maintainer-significant clusters are visible first; pass `--min-size 1` to include singletons.
 
 ## Local Defaults
 

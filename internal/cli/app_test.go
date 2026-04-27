@@ -131,6 +131,9 @@ func TestTUIInfersRepository(t *testing.T) {
 	if !strings.Contains(out, `"inferred_repository": true`) {
 		t.Fatalf("expected inferred flag, got %q", out)
 	}
+	if !strings.Contains(out, `"min_size": 5`) {
+		t.Fatalf("expected default tui min size, got %q", out)
+	}
 	after, err := os.ReadFile(dbPath)
 	if err != nil {
 		t.Fatalf("read db after tui: %v", err)

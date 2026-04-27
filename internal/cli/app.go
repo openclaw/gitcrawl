@@ -21,6 +21,8 @@ import (
 	"github.com/openclaw/gitcrawl/internal/vector"
 )
 
+const defaultTUIMinSize = 5
+
 type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
@@ -427,6 +429,9 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
+	if strings.TrimSpace(*minSizeRaw) == "" {
+		minSize = defaultTUIMinSize
+	}
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {
 		return usageErr(err)
@@ -471,6 +476,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		InferredRepository: inferred,
 		Mode:               "cluster-browser",
 		Sort:               sort,
+		MinSize:            minSize,
 		Clusters:           clusters,
 	}
 	if a.format != FormatText || !a.canRunInteractiveTUI() {
@@ -1144,4 +1150,5 @@ Usage:
   gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--hide-closed]
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
+The TUI starts at --min-size 5 by default; pass --min-size 1 to show singleton clusters.
 `

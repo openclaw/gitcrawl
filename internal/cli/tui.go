@@ -35,6 +35,7 @@ type clusterBrowserPayload struct {
 	InferredRepository bool                   `json:"inferred_repository"`
 	Mode               string                 `json:"mode"`
 	Sort               string                 `json:"sort"`
+	MinSize            int                    `json:"min_size"`
 	Clusters           []store.ClusterSummary `json:"clusters"`
 }
 
@@ -153,7 +154,7 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 		focus:        focusClusters,
 		status:       "Ready",
 		showClosed:   true,
-		minSize:      1,
+		minSize:      maxInt(1, payload.MinSize),
 		memberSort:   memberSortKind,
 		wideLayout:   wideLayoutColumns,
 		memberIndex:  -1,
