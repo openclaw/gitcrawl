@@ -48,6 +48,27 @@ func (fakeGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, 
 	}, nil
 }
 
+func (fakeGitHub) ListIssueComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	if number != 7 {
+		return nil, nil
+	}
+	return []map[string]any{{
+		"id":         11,
+		"body":       "same bug here",
+		"created_at": "2026-04-26T00:00:00Z",
+		"updated_at": "2026-04-26T00:00:00Z",
+		"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+	}}, nil
+}
+
+func (fakeGitHub) ListPullReviews(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (fakeGitHub) ListPullReviewComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -58,12 +79,15 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 
 	s := New(fakeGitHub{}, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
-	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stats.ThreadsSynced != 2 || stats.IssuesSynced != 1 || stats.PullRequestsSynced != 1 {
 		t.Fatalf("unexpected stats: %#v", stats)
+	}
+	if stats.CommentsSynced != 1 {
+		t.Fatalf("comments synced: got %d want 1", stats.CommentsSynced)
 	}
 
 	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")

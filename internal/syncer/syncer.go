@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/documents"
@@ -17,6 +18,9 @@ import (
 type GitHubClient interface {
 	GetRepo(ctx context.Context, owner, repo string, reporter gh.Reporter) (map[string]any, error)
 	ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error)
+	ListIssueComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error)
+	ListPullReviews(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error)
+	ListPullReviewComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error)
 }
 
 type Syncer struct {
@@ -26,11 +30,12 @@ type Syncer struct {
 }
 
 type Options struct {
-	Owner    string
-	Repo     string
-	Since    string
-	Limit    int
-	Reporter gh.Reporter
+	Owner           string
+	Repo            string
+	Since           string
+	Limit           int
+	IncludeComments bool
+	Reporter        gh.Reporter
 }
 
 type Stats struct {
@@ -38,6 +43,7 @@ type Stats struct {
 	ThreadsSynced      int    `json:"threads_synced"`
 	IssuesSynced       int    `json:"issues_synced"`
 	PullRequestsSynced int    `json:"pull_requests_synced"`
+	CommentsSynced     int    `json:"comments_synced"`
 	RequestedSince     string `json:"requested_since,omitempty"`
 	Limit              int    `json:"limit,omitempty"`
 	MetadataOnly       bool   `json:"metadata_only"`
@@ -96,6 +102,13 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		thread.ID = threadID
 		if _, err := s.store.UpsertDocument(ctx, documents.Build(thread)); err != nil {
 			return Stats{}, err
+		}
+		if options.IncludeComments {
+			count, err := s.syncComments(ctx, options, thread)
+			if err != nil {
+				return Stats{}, err
+			}
+			stats.CommentsSynced += count
 		}
 		stats.ThreadsSynced++
 		if thread.Kind == "pull_request" {
@@ -156,6 +169,71 @@ func mapIssueToThread(repoID int64, row map[string]any, pulledAt string) store.T
 		LastPulledAt:    pulledAt,
 		UpdatedAt:       pulledAt,
 	}
+}
+
+func (s *Syncer) syncComments(ctx context.Context, options Options, thread store.Thread) (int, error) {
+	var rows []commentRow
+	issueComments, err := s.client.ListIssueComments(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range issueComments {
+		rows = append(rows, commentRow{kind: "issue_comment", raw: row})
+	}
+	if thread.Kind == "pull_request" {
+		reviews, err := s.client.ListPullReviews(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
+		if err != nil {
+			return 0, err
+		}
+		for _, row := range reviews {
+			rows = append(rows, commentRow{kind: "pull_review", raw: row})
+		}
+		reviewComments, err := s.client.ListPullReviewComments(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
+		if err != nil {
+			return 0, err
+		}
+		for _, row := range reviewComments {
+			rows = append(rows, commentRow{kind: "pull_review_comment", raw: row})
+		}
+	}
+	count := 0
+	for _, row := range rows {
+		comment := mapComment(thread.ID, row.kind, row.raw)
+		if comment.Body == "" {
+			continue
+		}
+		if _, err := s.store.UpsertComment(ctx, comment); err != nil {
+			return 0, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+type commentRow struct {
+	kind string
+	raw  map[string]any
+}
+
+func mapComment(threadID int64, kind string, row map[string]any) store.Comment {
+	authorLogin := loginFromUser(row["user"])
+	authorType := typeFromUser(row["user"])
+	return store.Comment{
+		ThreadID:        threadID,
+		GitHubID:        jsonID(row["id"]),
+		CommentType:     kind,
+		AuthorLogin:     authorLogin,
+		AuthorType:      authorType,
+		Body:            stringValue(row["body"]),
+		IsBot:           isBot(authorLogin, authorType),
+		RawJSON:         mustJSON(row),
+		CreatedAtGitHub: stringValue(row["created_at"]),
+		UpdatedAtGitHub: stringValue(row["updated_at"]),
+	}
+}
+
+func isBot(login, authorType string) bool {
+	return strings.EqualFold(authorType, "Bot") || strings.HasSuffix(strings.ToLower(login), "[bot]")
 }
 
 func loginFromUser(value any) string {
