@@ -17,7 +17,7 @@ type Document struct {
 
 func (s *Store) UpsertDocument(ctx context.Context, doc Document) (int64, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.q().QueryRowContext(ctx, `
 		insert into documents(thread_id, title, body, raw_text, dedupe_text, updated_at)
 		values(?, ?, ?, ?, ?, ?)
 		on conflict(thread_id) do update set

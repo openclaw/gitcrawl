@@ -21,7 +21,7 @@ type Comment struct {
 
 func (s *Store) UpsertComment(ctx context.Context, comment Comment) (int64, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.q().QueryRowContext(ctx, `
 		insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh)
 		values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(thread_id, comment_type, github_id) do update set

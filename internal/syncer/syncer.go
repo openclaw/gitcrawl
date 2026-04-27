@@ -94,45 +94,57 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		Repository:     options.Owner + "/" + options.Repo,
 		RequestedSince: since,
 		Limit:          options.Limit,
-		MetadataOnly:   true,
+		MetadataOnly:   !options.IncludeComments,
 		StartedAt:      started,
 	}
-	for _, row := range rows {
-		thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
-		threadID, err := s.store.UpsertThread(ctx, thread)
-		if err != nil {
-			return Stats{}, err
-		}
-		thread.ID = threadID
-		var comments []store.Comment
-		if options.IncludeComments {
-			var err error
-			comments, err = s.syncComments(ctx, options, thread)
+	persist := func(st *store.Store) error {
+		for _, row := range rows {
+			thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
+			threadID, err := st.UpsertThread(ctx, thread)
 			if err != nil {
-				return Stats{}, err
+				return err
 			}
-			stats.CommentsSynced += len(comments)
+			thread.ID = threadID
+			var comments []store.Comment
+			if options.IncludeComments {
+				var err error
+				comments, err = s.syncComments(ctx, options, thread)
+				if err != nil {
+					return err
+				}
+				stats.CommentsSynced += len(comments)
+			}
+			if _, err := st.UpsertDocument(ctx, documents.BuildWithComments(thread, comments)); err != nil {
+				return err
+			}
+			stats.ThreadsSynced++
+			if thread.Kind == "pull_request" {
+				stats.PullRequestsSynced++
+			} else {
+				stats.IssuesSynced++
+			}
 		}
-		if _, err := s.store.UpsertDocument(ctx, documents.BuildWithComments(thread, comments)); err != nil {
+		stats.FinishedAt = s.now().Format(time.RFC3339Nano)
+		if _, err := st.RecordRun(ctx, store.RunRecord{
+			RepoID:     repoID,
+			Kind:       "sync",
+			Scope:      "open",
+			Status:     "success",
+			StartedAt:  stats.StartedAt,
+			FinishedAt: stats.FinishedAt,
+			StatsJSON:  mustJSON(stats),
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
+	if !options.IncludeComments {
+		if err := s.store.WithTx(ctx, persist); err != nil {
 			return Stats{}, err
 		}
-		stats.ThreadsSynced++
-		if thread.Kind == "pull_request" {
-			stats.PullRequestsSynced++
-		} else {
-			stats.IssuesSynced++
-		}
+		return stats, nil
 	}
-	stats.FinishedAt = s.now().Format(time.RFC3339Nano)
-	if _, err := s.store.RecordRun(ctx, store.RunRecord{
-		RepoID:     repoID,
-		Kind:       "sync",
-		Scope:      "open",
-		Status:     "success",
-		StartedAt:  stats.StartedAt,
-		FinishedAt: stats.FinishedAt,
-		StatsJSON:  mustJSON(stats),
-	}); err != nil {
+	if err := persist(s.store); err != nil {
 		return Stats{}, err
 	}
 	return stats, nil

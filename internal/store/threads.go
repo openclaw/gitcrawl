@@ -37,7 +37,7 @@ type Thread struct {
 
 func (s *Store) UpsertThread(ctx context.Context, thread Thread) (int64, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.q().QueryRowContext(ctx, `
 		insert into threads(
 			repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
 			labels_json, assignees_json, raw_json, content_hash, is_draft,
@@ -106,7 +106,7 @@ func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptio
 		limitSQL = ` limit ?`
 		args = append(args, options.Limit)
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type,
 			html_url, labels_json, assignees_json, raw_json, content_hash, is_draft,
 			created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,

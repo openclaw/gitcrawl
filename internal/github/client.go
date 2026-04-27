@@ -64,9 +64,6 @@ func New(options Options) *Client {
 		userAgent = "gitcrawl"
 	}
 	pageDelay := options.PageDelay
-	if pageDelay == 0 {
-		pageDelay = 250 * time.Millisecond
-	}
 	return &Client{
 		httpClient: httpClient,
 		baseURL:    baseURL,

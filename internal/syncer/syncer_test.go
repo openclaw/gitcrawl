@@ -99,6 +99,9 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	if stats.CommentsSynced != 1 {
 		t.Fatalf("comments synced: got %d want 1", stats.CommentsSynced)
 	}
+	if stats.MetadataOnly {
+		t.Fatal("metadata only: got true want false")
+	}
 
 	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
 	if err != nil {

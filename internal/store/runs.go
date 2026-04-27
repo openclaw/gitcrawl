@@ -24,7 +24,7 @@ func (s *Store) RecordRun(ctx context.Context, run RunRecord) (int64, error) {
 		return 0, err
 	}
 	var id int64
-	err = s.db.QueryRowContext(ctx, `
+	err = s.q().QueryRowContext(ctx, `
 		insert into `+table+`(repo_id, scope, status, started_at, finished_at, stats_json, error_text)
 		values(?, ?, ?, ?, ?, ?, ?)
 		returning id
@@ -43,7 +43,7 @@ func (s *Store) ListRuns(ctx context.Context, repoID int64, kind string, limit i
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select id, repo_id, scope, status, started_at, finished_at, stats_json, error_text
 		from `+table+`
 		where repo_id = ?

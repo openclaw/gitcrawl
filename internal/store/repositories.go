@@ -21,7 +21,7 @@ func (s *Store) UpsertRepository(ctx context.Context, repo Repository) (int64, e
 		repo.FullName = repo.Owner + "/" + repo.Name
 	}
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.q().QueryRowContext(ctx, `
 		insert into repositories(owner, name, full_name, github_repo_id, raw_json, updated_at)
 		values(?, ?, ?, ?, ?, ?)
 		on conflict(full_name) do update set
@@ -42,7 +42,7 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 	var repo Repository
 	var githubRepoID sql.NullString
 	var rawJSON sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err := s.q().QueryRowContext(ctx, `
 		select id, owner, name, full_name, github_repo_id, raw_json, updated_at
 		from repositories
 		where full_name = ?

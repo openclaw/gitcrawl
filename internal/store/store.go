@@ -18,8 +18,15 @@ const (
 )
 
 type Store struct {
-	db   *sql.DB
-	path string
+	db      *sql.DB
+	queries dbQueries
+	path    string
+}
+
+type dbQueries interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type Status struct {
@@ -77,6 +84,29 @@ func (s *Store) DB() *sql.DB {
 
 func (s *Store) Path() string {
 	return s.path
+}
+
+func (s *Store) q() dbQueries {
+	if s.queries != nil {
+		return s.queries
+	}
+	return s.db
+}
+
+func (s *Store) WithTx(ctx context.Context, fn func(*Store) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	txStore := &Store{db: s.db, queries: tx, path: s.path}
+	if err := fn(txStore); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
