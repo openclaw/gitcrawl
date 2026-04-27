@@ -276,15 +276,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Hiding closed clusters and members"
 			}
 		case "/":
-			m.searching = true
-			m.jumping = false
-			m.showHelp = false
-			m.menuOpen = false
-			m.searchInput.Prompt = "/ "
-			m.searchInput.Placeholder = "filter clusters"
-			m.searchInput.SetValue(m.search)
-			cmd := m.searchInput.Focus()
-			m.status = "Filter: " + m.search
+			cmd := m.startFilterInput()
 			return m, cmd
 		case "#":
 			m.jumping = true
@@ -714,6 +706,18 @@ func (m clusterBrowserModel) handleSearchKey(msg tea.KeyMsg) (clusterBrowserMode
 	return m, nil
 }
 
+func (m *clusterBrowserModel) startFilterInput() tea.Cmd {
+	m.searching = true
+	m.jumping = false
+	m.showHelp = false
+	m.menuOpen = false
+	m.searchInput.Prompt = "/ "
+	m.searchInput.Placeholder = "filter clusters"
+	m.searchInput.SetValue(m.search)
+	m.status = "Filter: " + m.search
+	return m.searchInput.Focus()
+}
+
 func (m clusterBrowserModel) handleJumpKey(msg tea.KeyMsg) (clusterBrowserModel, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
@@ -940,6 +944,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Sort clusters by recent", action: "sort-recent"},
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
 		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
+		tuiMenuItem{label: "Filter clusters...", action: "filter"},
 		tuiMenuItem{label: "Refresh from store", action: "refresh"},
 		tuiMenuItem{label: "Switch repository...", action: "repository-picker"},
 		tuiMenuItem{label: "Jump to issue/PR...", action: "jump"},
@@ -952,6 +957,9 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Help", action: "show-help"},
 		tuiMenuItem{label: "Quit", action: "quit"},
 	)
+	if strings.TrimSpace(m.search) != "" {
+		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Clear filter", action: "clear-filter"})
+	}
 	if len(m.menuItems) == 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
 	}
@@ -1036,6 +1044,15 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	case "refresh":
 		m.refreshFromStore()
+		return true
+	case "filter":
+		m.startFilterInput()
+		return true
+	case "clear-filter":
+		m.search = ""
+		m.searchInput.SetValue("")
+		m.applyClusterFilters()
+		m.status = "Filter cleared"
 		return true
 	case "repository-picker":
 		m.openRepositoryMenu()

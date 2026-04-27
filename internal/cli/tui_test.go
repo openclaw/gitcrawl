@@ -855,7 +855,7 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Switch repository", "Jump to issue/PR", "Toggle layout", "Show compact detail", "Min size 1+", "Hide closed", "Help", "Quit"} {
+	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Filter clusters", "Refresh from store", "Switch repository", "Jump to issue/PR", "Toggle layout", "Show compact detail", "Min size 1+", "Hide closed", "Help", "Quit"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
 		}
@@ -876,6 +876,17 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 	model.runAction("refresh")
 	if model.status != "Refresh unavailable for this view" {
 		t.Fatalf("refresh menu action status = %q", model.status)
+	}
+	model.runAction("filter")
+	if !model.searching || model.searchInput.Prompt != "/ " {
+		t.Fatalf("filter menu action did not start filter input")
+	}
+	model.searching = false
+	model.search = "alpha"
+	model.applyClusterFilters()
+	model.runAction("clear-filter")
+	if model.search != "" || model.status != "Filter cleared" {
+		t.Fatalf("clear filter action search/status = %q/%q", model.search, model.status)
 	}
 	model.runAction("jump")
 	if !model.jumping || model.searchInput.Prompt != "# " {
