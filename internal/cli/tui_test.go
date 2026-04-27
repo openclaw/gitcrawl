@@ -466,8 +466,8 @@ func TestTUIMouseWheelMovesActionMenu(t *testing.T) {
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonWheelDown,
 	})
-	if model.menuIndex != 1 {
-		t.Fatalf("wheel down menu index = %d, want 1", model.menuIndex)
+	if model.menuIndex != 2 {
+		t.Fatalf("wheel down menu index = %d, want 2", model.menuIndex)
 	}
 
 	model.handleMouse(tea.MouseMsg{
@@ -476,8 +476,8 @@ func TestTUIMouseWheelMovesActionMenu(t *testing.T) {
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonWheelUp,
 	})
-	if model.menuIndex != 0 {
-		t.Fatalf("wheel up menu index = %d, want 0", model.menuIndex)
+	if model.menuIndex != 1 {
+		t.Fatalf("wheel up menu index = %d, want 1", model.menuIndex)
 	}
 }
 
@@ -528,8 +528,8 @@ func TestTUIActionMenuPagesWithKeyboard(t *testing.T) {
 
 	updated, _ := model.updateMenu(tea.KeyMsg{Type: tea.KeyPgDown})
 	model = updated.(clusterBrowserModel)
-	if model.menuIndex != 2 {
-		t.Fatalf("page down menu index = %d, want 2", model.menuIndex)
+	if model.menuIndex != 3 {
+		t.Fatalf("page down menu index = %d, want 3", model.menuIndex)
 	}
 	if model.menuOff == 0 {
 		t.Fatalf("expected page down to scroll menu offset")
@@ -543,8 +543,8 @@ func TestTUIActionMenuPagesWithKeyboard(t *testing.T) {
 
 	updated, _ = model.updateMenu(tea.KeyMsg{Type: tea.KeyHome})
 	model = updated.(clusterBrowserModel)
-	if model.menuIndex != 0 || model.menuOff != 0 {
-		t.Fatalf("home menu index/off = %d/%d, want 0/0", model.menuIndex, model.menuOff)
+	if model.menuIndex != 1 || model.menuOff != 0 {
+		t.Fatalf("home menu index/off = %d/%d, want 1/0", model.menuIndex, model.menuOff)
 	}
 }
 
@@ -569,6 +569,34 @@ func TestTUIActionMenuNumberShortcutRunsVisibleItem(t *testing.T) {
 	}
 	if model.menuOpen {
 		t.Fatalf("number shortcut should close menu after running action")
+	}
+}
+
+func TestTUIActionMenuSectionsAreNotSelectable(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.menuOpen = true
+	model.menuItems = []tuiMenuItem{
+		tuiMenuSection("View"),
+		{label: "Sort clusters by size", action: "sort-size"},
+		{label: "Close menu", action: "close-menu"},
+	}
+	model.detailView.Height = 8
+	model.menuIndex = 0
+	model.keepMenuVisible()
+	if model.menuIndex != 1 {
+		t.Fatalf("menu selected section index %d, want first action", model.menuIndex)
+	}
+	if index, ok := visibleMenuShortcutIndex("1", model.menuItems, 0, 3); !ok || index != 1 {
+		t.Fatalf("shortcut index = %d/%v, want first selectable action", index, ok)
+	}
+
+	lines := strings.Join(model.menuLines(80), "\n")
+	if !strings.Contains(lines, "View") || strings.Contains(lines, "1. View") {
+		t.Fatalf("section rendered as selectable:\n%s", lines)
 	}
 }
 

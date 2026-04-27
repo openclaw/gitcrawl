@@ -129,6 +129,25 @@ type tuiMenuItem struct {
 	value  string
 }
 
+const tuiMenuSeparatorAction = "separator"
+
+func (item tuiMenuItem) selectable() bool {
+	return item.action != "" && item.action != tuiMenuSeparatorAction
+}
+
+func tuiMenuSection(label string) tuiMenuItem {
+	return tuiMenuItem{label: label, action: tuiMenuSeparatorAction}
+}
+
+func menuHasSection(items []tuiMenuItem, label string) bool {
+	for _, item := range items {
+		if item.action == tuiMenuSeparatorAction && item.label == label {
+			return true
+		}
+	}
+	return false
+}
+
 type tuiNeighbor struct {
 	Thread store.Thread
 	Score  float64
@@ -599,13 +618,22 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 	visible := m.menuVisibleCount()
 	start := clampInt(m.menuOff, 0, maxInt(0, len(m.menuItems)-visible))
 	end := minInt(len(m.menuItems), start+visible)
+	shortcut := 0
 	for index := start; index < end; index++ {
 		item := m.menuItems[index]
+		if !item.selectable() {
+			lines = append(lines, truncateCells("  "+dim(item.label), width))
+			continue
+		}
+		shortcut++
 		prefix := "  "
 		if index == m.menuIndex {
 			prefix = "> "
 		}
-		key := fmt.Sprintf("%d. ", index-start+1)
+		key := "   "
+		if shortcut <= 9 {
+			key = fmt.Sprintf("%d. ", shortcut)
+		}
 		lines = append(lines, truncateCells(prefix+key+item.label, width))
 	}
 	footer := "Enter/1-9 run  Esc close"
@@ -618,7 +646,7 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 
 func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	page := maxInt(1, m.menuVisibleCount())
-	if index, ok := visibleMenuShortcutIndex(msg.String(), m.menuOff, len(m.menuItems)); ok {
+	if index, ok := visibleMenuShortcutIndex(msg.String(), m.menuItems, m.menuOff, page); ok {
 		m.menuIndex = index
 		if m.runMenuItem(m.menuItems[m.menuIndex]) {
 			m.menuOpen = false
@@ -633,22 +661,22 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menuOpen = false
 		m.status = "Menu closed"
 	case "up", "k":
-		m.menuIndex = clampInt(m.menuIndex-1, 0, maxInt(0, len(m.menuItems)-1))
+		m.menuIndex = m.nextSelectableMenuIndex(-1)
 		m.keepMenuVisible()
 	case "down", "j":
-		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
+		m.menuIndex = m.nextSelectableMenuIndex(1)
 		m.keepMenuVisible()
 	case "pgup", "ctrl+b":
-		m.menuIndex = clampInt(m.menuIndex-page, 0, maxInt(0, len(m.menuItems)-1))
+		m.menuIndex = m.nearestSelectableMenuIndex(m.menuIndex-page, -1)
 		m.keepMenuVisible()
 	case "pgdown", "ctrl+f":
-		m.menuIndex = clampInt(m.menuIndex+page, 0, maxInt(0, len(m.menuItems)-1))
+		m.menuIndex = m.nearestSelectableMenuIndex(m.menuIndex+page, 1)
 		m.keepMenuVisible()
 	case "home", "g":
-		m.menuIndex = 0
+		m.menuIndex = m.firstSelectableMenuIndex()
 		m.keepMenuVisible()
 	case "end", "G":
-		m.menuIndex = maxInt(0, len(m.menuItems)-1)
+		m.menuIndex = m.lastSelectableMenuIndex()
 		m.keepMenuVisible()
 	case "enter":
 		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
@@ -829,11 +857,11 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg) {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
-		m.menuIndex = clampInt(m.menuIndex-1, 0, maxInt(0, len(m.menuItems)-1))
+		m.menuIndex = m.nextSelectableMenuIndex(-1)
 		m.keepMenuVisible()
 		return
 	case tea.MouseButtonWheelDown:
-		m.menuIndex = clampInt(m.menuIndex+1, 0, maxInt(0, len(m.menuItems)-1))
+		m.menuIndex = m.nextSelectableMenuIndex(1)
 		m.keepMenuVisible()
 		return
 	case tea.MouseButtonRight:
@@ -853,6 +881,11 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 	}
 	index := m.menuOff + msg.Y - layout.detail.y - 4
 	if index < 0 || index >= len(m.menuItems) {
+		return
+	}
+	if !m.menuItems[index].selectable() {
+		m.menuIndex = m.nearestSelectableMenuIndex(index, 1)
+		m.keepMenuVisible()
 		return
 	}
 	m.menuIndex = index
@@ -899,6 +932,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 	m.menuItems = nil
 	if thread, ok := m.selectedThread(); ok {
 		m.menuItems = append(m.menuItems,
+			tuiMenuSection("Thread"),
 			tuiMenuItem{label: fmt.Sprintf("Open #%d in browser", thread.Number), action: "open"},
 			tuiMenuItem{label: "Copy selected URL", action: "copy-url"},
 			tuiMenuItem{label: "Copy title", action: "copy-title"},
@@ -908,17 +942,30 @@ func (m *clusterBrowserModel) openActionMenu() {
 		)
 	}
 	if member, ok := m.selectedMember(); ok {
+		sectionAdded := false
 		if strings.TrimSpace(member.BodySnippet) != "" {
+			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
+				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
+				sectionAdded = true
+			}
 			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy body preview", action: "copy-body-preview"})
 		}
 		if len(member.Summaries) > 0 {
+			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
+				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
+				sectionAdded = true
+			}
 			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy summaries", action: "copy-summaries"})
 		}
 		if _, ok := m.neighborCache[member.Thread.ID]; ok {
+			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
+				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
+			}
 			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy neighbors", action: "copy-neighbors"})
 		}
 	}
 	if m.hasSelectedCluster() {
+		m.menuItems = append(m.menuItems, tuiMenuSection("Cluster"))
 		if url, ok := m.selectedClusterURL(); ok {
 			cluster, _ := m.selectedCluster()
 			m.menuItems = append(m.menuItems,
@@ -937,11 +984,15 @@ func (m *clusterBrowserModel) openActionMenu() {
 		}
 	}
 	if len(m.payload.Clusters) > 0 {
+		if !menuHasSection(m.menuItems, "Cluster") {
+			m.menuItems = append(m.menuItems, tuiMenuSection("Cluster"))
+		}
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy visible clusters", action: "copy-visible-clusters"})
 	}
 	referenceLinks := m.referenceLinks()
 	if len(referenceLinks) > 0 {
 		m.menuItems = append(m.menuItems,
+			tuiMenuSection("Links"),
 			tuiMenuItem{label: "Open first body link", action: "open-first-link"},
 			tuiMenuItem{label: "Copy first body link", action: "copy-first-link"},
 		)
@@ -954,6 +1005,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		)
 	}
 	m.menuItems = append(m.menuItems,
+		tuiMenuSection("View"),
 		tuiMenuItem{label: "Sort clusters by size", action: "sort-size"},
 		tuiMenuItem{label: "Sort clusters by recent", action: "sort-recent"},
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
@@ -979,7 +1031,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 	}
 	m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close menu", action: "close-menu"})
 	m.menuTitle = "Actions"
-	m.menuIndex = 0
+	m.menuIndex = m.firstSelectableMenuIndex()
 	m.menuOff = 0
 	m.menuOpen = true
 	m.showHelp = false
@@ -1025,6 +1077,9 @@ func (m *clusterBrowserModel) runAction(action string) bool {
 }
 
 func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
+	if !item.selectable() {
+		return false
+	}
 	action := item.action
 	if action == "close-menu" {
 		m.status = "Menu closed"
@@ -1438,15 +1493,75 @@ func (m clusterBrowserModel) menuVisibleCount() int {
 	return maxInt(1, height-4)
 }
 
-func visibleMenuShortcutIndex(key string, menuOff, menuLen int) (int, bool) {
+func visibleMenuShortcutIndex(key string, items []tuiMenuItem, menuOff, visible int) (int, bool) {
 	if len(key) != 1 || key[0] < '1' || key[0] > '9' {
 		return 0, false
 	}
-	index := menuOff + int(key[0]-'1')
-	if index < 0 || index >= menuLen {
-		return 0, false
+	want := int(key[0] - '0')
+	seen := 0
+	end := minInt(len(items), menuOff+maxInt(1, visible))
+	for index := menuOff; index < end; index++ {
+		if !items[index].selectable() {
+			continue
+		}
+		seen++
+		if seen == want {
+			return index, true
+		}
 	}
-	return index, true
+	return 0, false
+}
+
+func (m clusterBrowserModel) firstSelectableMenuIndex() int {
+	for index, item := range m.menuItems {
+		if item.selectable() {
+			return index
+		}
+	}
+	return 0
+}
+
+func (m clusterBrowserModel) lastSelectableMenuIndex() int {
+	for index := len(m.menuItems) - 1; index >= 0; index-- {
+		if m.menuItems[index].selectable() {
+			return index
+		}
+	}
+	return maxInt(0, len(m.menuItems)-1)
+}
+
+func (m clusterBrowserModel) nextSelectableMenuIndex(delta int) int {
+	if delta == 0 || len(m.menuItems) == 0 {
+		return m.menuIndex
+	}
+	for index := m.menuIndex + delta; index >= 0 && index < len(m.menuItems); index += delta {
+		if m.menuItems[index].selectable() {
+			return index
+		}
+	}
+	return m.menuIndex
+}
+
+func (m clusterBrowserModel) nearestSelectableMenuIndex(index, direction int) int {
+	if len(m.menuItems) == 0 {
+		return 0
+	}
+	index = clampInt(index, 0, len(m.menuItems)-1)
+	if m.menuItems[index].selectable() {
+		return index
+	}
+	if direction == 0 {
+		direction = 1
+	}
+	for next := index + direction; next >= 0 && next < len(m.menuItems); next += direction {
+		if m.menuItems[next].selectable() {
+			return next
+		}
+	}
+	if direction > 0 {
+		return m.lastSelectableMenuIndex()
+	}
+	return m.firstSelectableMenuIndex()
 }
 
 func (m *clusterBrowserModel) keepMenuVisible() {
@@ -1455,8 +1570,10 @@ func (m *clusterBrowserModel) keepMenuVisible() {
 		return
 	}
 	visible := m.menuVisibleCount()
-	m.menuIndex = clampInt(m.menuIndex, 0, len(m.menuItems)-1)
-	if m.menuIndex < m.menuOff {
+	m.menuIndex = m.nearestSelectableMenuIndex(m.menuIndex, 1)
+	if m.menuIndex > 0 && !m.menuItems[m.menuIndex-1].selectable() && m.menuIndex-1 < m.menuOff {
+		m.menuOff = m.menuIndex - 1
+	} else if m.menuIndex < m.menuOff {
 		m.menuOff = m.menuIndex
 	}
 	if m.menuIndex >= m.menuOff+visible {
