@@ -29,6 +29,27 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 }
 
+func TestInitDefaultOutputIsHumanReadable(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+
+	err := app.Run(context.Background(), []string{"--config", configPath, "init", "--db", dbPath})
+	if err != nil {
+		t.Fatalf("run init: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "gitcrawl init") {
+		t.Fatalf("expected human init output, got %q", out)
+	}
+	if strings.Contains(out, `"config_path"`) || strings.Contains(out, "{") {
+		t.Fatalf("default init output should not be json, got %q", out)
+	}
+}
+
 func TestInitRejectsDBAndPortableStore(t *testing.T) {
 	dir := t.TempDir()
 	app := New()
@@ -116,6 +137,48 @@ func TestTUIInfersRepository(t *testing.T) {
 	}
 	if !bytes.Equal(after, before) {
 		t.Fatal("tui mutated database bytes")
+	}
+}
+
+func TestTUIRequiresInteractiveTerminalByDefault(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	var initOut bytes.Buffer
+	app.Stdout = &initOut
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	err = run.Run(ctx, []string{"--config", configPath, "tui"})
+	if err == nil {
+		t.Fatal("expected tui to require a tty")
+	}
+	if ExitCode(err) != 2 {
+		t.Fatalf("exit code: got %d want 2", ExitCode(err))
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("tui should not dump json by default, got %q", stdout.String())
 	}
 }
 

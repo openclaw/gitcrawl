@@ -29,6 +29,16 @@ type App struct {
 	format     OutputFormat
 }
 
+type initResult struct {
+	ConfigPath       string `json:"config_path"`
+	DBPath           string `json:"db_path"`
+	CacheDir         string `json:"cache_dir"`
+	VectorDir        string `json:"vector_dir"`
+	PortableStoreURL string `json:"portable_store_url,omitempty"`
+	PortableStoreDir string `json:"portable_store_dir,omitempty"`
+	PortableStore    string `json:"portable_store,omitempty"`
+}
+
 type OutputFormat string
 
 const (
@@ -464,6 +474,9 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Clusters:           clusters,
 	}
 	if a.format != FormatText || !a.canRunInteractiveTUI() {
+		if a.format == FormatText {
+			return usageErr(fmt.Errorf("tui requires an interactive terminal; run it from a TTY or pass --json for machine-readable cluster data"))
+		}
 		return a.writeOutput("tui", payload, true)
 	}
 	return a.runInteractiveTUI(payload)
@@ -751,15 +764,15 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return err
 	}
-	return a.writeOutput("init", map[string]any{
-		"config_path":        config.ResolvePath(a.configPath),
-		"db_path":            cfg.DBPath,
-		"cache_dir":          cfg.CacheDir,
-		"vector_dir":         cfg.VectorDir,
-		"portable_store_url": portableStoreURL,
-		"portable_store_dir": portableStoreDir,
-		"portable_store":     portableStoreAction,
-	}, true)
+	return a.writeInitOutput(initResult{
+		ConfigPath:       config.ResolvePath(a.configPath),
+		DBPath:           cfg.DBPath,
+		CacheDir:         cfg.CacheDir,
+		VectorDir:        cfg.VectorDir,
+		PortableStoreURL: portableStoreURL,
+		PortableStoreDir: portableStoreDir,
+		PortableStore:    portableStoreAction,
+	})
 }
 
 func (a *App) runPortable(ctx context.Context, args []string) error {
@@ -1051,6 +1064,35 @@ func (a *App) writeOutput(title string, payload any, allowLog bool) error {
 			return err
 		}
 		_, err = fmt.Fprintf(a.Stdout, "%s\n%s\n", title, data)
+		return err
+	}
+}
+
+func (a *App) writeInitOutput(result initResult) error {
+	switch a.format {
+	case FormatJSON:
+		return a.writeOutput("init", result, true)
+	case FormatLog:
+		_, err := fmt.Fprintf(a.Stdout, "init config_path=%s db_path=%s portable_store=%s\n", result.ConfigPath, result.DBPath, result.PortableStore)
+		return err
+	default:
+		lines := []string{
+			"gitcrawl init",
+			"config path: " + result.ConfigPath,
+			"db path: " + result.DBPath,
+			"cache dir: " + result.CacheDir,
+			"vector dir: " + result.VectorDir,
+		}
+		if result.PortableStoreURL != "" {
+			lines = append(lines,
+				"",
+				"Portable store",
+				"  url: "+result.PortableStoreURL,
+				"  checkout: "+result.PortableStoreDir,
+				"  state: "+firstNonEmpty(result.PortableStore, "ready"),
+			)
+		}
+		_, err := fmt.Fprintln(a.Stdout, strings.Join(lines, "\n"))
 		return err
 	}
 }
