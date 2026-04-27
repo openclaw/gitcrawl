@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -204,6 +205,83 @@ func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, numb
 		return 0, fmt.Errorf("find thread cluster: %w", err)
 	}
 	return clusterID, nil
+}
+
+func (s *Store) CloseClusterLocally(ctx context.Context, repoID, clusterID int64, reason string) error {
+	if repoID <= 0 {
+		return fmt.Errorf("repo id must be positive")
+	}
+	if clusterID <= 0 {
+		return fmt.Errorf("cluster id must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "local close"
+	}
+	now := time.Now().UTC().Format(timeLayout)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin close cluster: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		update cluster_groups
+		set status = 'closed', closed_at = ?, updated_at = ?
+		where repo_id = ? and id = ?
+	`, now, now, repoID, clusterID)
+	if err != nil {
+		return fmt.Errorf("close cluster locally: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("cluster %d was not found", clusterID)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		insert into cluster_closures(cluster_id, reason, actor_kind, created_at, updated_at)
+		values(?, ?, 'local', ?, ?)
+		on conflict(cluster_id) do update set
+			reason = excluded.reason,
+			actor_kind = excluded.actor_kind,
+			updated_at = excluded.updated_at
+	`, clusterID, reason, now, now); err != nil {
+		return fmt.Errorf("record cluster closure: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit close cluster: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ReopenClusterLocally(ctx context.Context, repoID, clusterID int64) error {
+	if repoID <= 0 {
+		return fmt.Errorf("repo id must be positive")
+	}
+	if clusterID <= 0 {
+		return fmt.Errorf("cluster id must be positive")
+	}
+	now := time.Now().UTC().Format(timeLayout)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin reopen cluster: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		update cluster_groups
+		set status = 'active', closed_at = null, updated_at = ?
+		where repo_id = ? and id = ?
+	`, now, repoID, clusterID)
+	if err != nil {
+		return fmt.Errorf("reopen cluster locally: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("cluster %d was not found", clusterID)
+	}
+	if _, err := tx.ExecContext(ctx, `delete from cluster_closures where cluster_id = ?`, clusterID); err != nil {
+		return fmt.Errorf("clear cluster closure: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reopen cluster: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64, includeClosed bool) (ClusterSummary, error) {
