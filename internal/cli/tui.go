@@ -404,20 +404,24 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
-	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus), m.clusterTable.View()))
+	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus, fmt.Sprintf("%d", len(m.payload.Clusters))), m.clusterTable.View()))
 }
 
 func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
-	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus), m.memberTable.View()))
+	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus, fmt.Sprintf("%d", m.selectableMemberCount())), m.memberTable.View()))
 }
 
 func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
-	lines := append([]string{paneTitle(focusDetail, m.focus)}, m.detailLines(rect.w-4)...)
+	mode := "full"
+	if m.compactDetail {
+		mode = "compact"
+	}
+	lines := append([]string{paneTitle(focusDetail, m.focus, mode)}, m.detailLines(rect.w-4)...)
 	if m.showHelp {
-		lines = append([]string{paneTitle(focusDetail, m.focus)}, m.helpLines(rect.w-4)...)
+		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.helpLines(rect.w-4)...)
 	}
 	if m.menuOpen {
-		lines = append([]string{paneTitle(focusDetail, m.focus)}, m.menuLines(rect.w-4)...)
+		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.menuLines(rect.w-4)...)
 	}
 	m.detailView.SetContent(strings.Join(lines, "\n"))
 	return paneStyle(focusDetail, m.focus, rect.w, rect.h).Render(m.detailView.View())
@@ -1347,6 +1351,16 @@ func (m clusterBrowserModel) openCounts() struct{ pulls, issues int } {
 	return out
 }
 
+func (m clusterBrowserModel) selectableMemberCount() int {
+	count := 0
+	for _, row := range m.memberRows {
+		if row.selectable {
+			count++
+		}
+	}
+	return count
+}
+
 func (m clusterBrowserModel) selectedThread() (store.Thread, bool) {
 	if len(m.memberRows) == 0 || m.memberIndex < 0 || m.memberIndex >= len(m.memberRows) {
 		return store.Thread{}, false
@@ -1479,12 +1493,15 @@ func paneStyle(pane, focus tuiFocus, width, height int) lipgloss.Style {
 		Padding(0, 1)
 }
 
-func paneTitle(pane, focus tuiFocus) string {
+func paneTitle(pane, focus tuiFocus, suffix string) string {
 	label := map[tuiFocus]string{
 		focusClusters: "Clusters",
 		focusMembers:  "Members",
 		focusDetail:   "Detail",
 	}[pane]
+	if strings.TrimSpace(suffix) != "" {
+		label += " " + suffix
+	}
 	prefix := "[ ] "
 	if pane == focus {
 		prefix = "[*] "
