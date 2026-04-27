@@ -1140,7 +1140,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	since := fs.String("since", "", "GitHub since timestamp")
-	state := fs.String("state", "", "GitHub issue state: open|closed|all")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all; default all")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")

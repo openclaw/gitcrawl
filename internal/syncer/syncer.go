@@ -158,7 +158,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 func normalizeState(value string) (string, error) {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {
-		return "open", nil
+		return "all", nil
 	}
 	switch value {
 	case "open", "closed", "all":

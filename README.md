@@ -14,6 +14,7 @@ Early bootstrap. The implementation is being built in small commits.
 gitcrawl init
 gitcrawl doctor
 gitcrawl sync owner/repo
+gitcrawl sync owner/repo --state open
 gitcrawl refresh owner/repo
 gitcrawl cluster owner/repo --threshold 0.82
 gitcrawl clusters owner/repo
@@ -34,6 +35,7 @@ gitcrawl tui owner/repo
 ```
 
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.
+`gitcrawl sync` fetches issues and pull requests in every GitHub state by default. Pass `--state open` or `--state closed` to limit a sync to one state.
 The TUI starts at `--min-size 5` so maintainer-significant clusters are visible first; pass `--min-size 1` to include singletons. Mouse support is built in: click rows, wheel panes, and right-click for copy, sort, filter, jump, link, neighbor, local close/reopen, and member triage actions. Press `a` to open the same action menu from the keyboard, `#` to jump directly to an issue or PR number, `p` to switch between repositories already present in the local store, or `n` to load neighbors for the selected issue or PR. Enter from the members pane also loads neighbors before opening detail. The TUI quietly refreshes from the local store every 15 seconds.
 
 ## Local Defaults

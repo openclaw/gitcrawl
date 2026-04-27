@@ -189,6 +189,24 @@ func TestSyncPassesRequestedState(t *testing.T) {
 	}
 }
 
+func TestSyncDefaultsToAllStates(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &stateCaptureGitHub{}
+	s := New(client, st)
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if client.state != "all" {
+		t.Fatalf("default state = %q, want all", client.state)
+	}
+}
+
 func TestSyncRejectsInvalidState(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
