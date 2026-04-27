@@ -259,6 +259,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toggleDetailMode()
 		case "l":
 			m.toggleWideLayout()
+		case "p":
+			m.openRepositoryMenu()
 		case "r":
 			m.refreshFromStore()
 		case "f":
@@ -431,9 +433,9 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  header sort  wheel scroll  / filter  # jump  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  header sort  wheel scroll  / filter  # jump  p repos  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
 	if width < 100 {
-		controls = "Tab focus  click select  right-click menu  / filter  # jump  ? help  q quit"
+		controls = "Tab focus click right-click menu / filter # jump p repos ? help q quit"
 	}
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
@@ -576,6 +578,7 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 		"  m: cycle member sort",
 		"  d: toggle compact/full detail",
 		"  r: refresh from local store",
+		"  p: switch repository",
 		"  l: toggle wide layout",
 		"  f: cycle minimum cluster size",
 		"  x: show/hide closed clusters",
@@ -938,6 +941,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
 		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
 		tuiMenuItem{label: "Refresh from store", action: "refresh"},
+		tuiMenuItem{label: "Switch repository...", action: "repository-picker"},
 		tuiMenuItem{label: "Jump to issue/PR...", action: "jump"},
 		tuiMenuItem{label: "Toggle layout", action: "toggle-layout"},
 		tuiMenuItem{label: detailModeToggleLabel(m.compactDetail), action: "toggle-detail"},
@@ -958,6 +962,40 @@ func (m *clusterBrowserModel) openActionMenu() {
 	m.menuOpen = true
 	m.showHelp = false
 	m.status = "Action menu"
+}
+
+func (m *clusterBrowserModel) openRepositoryMenu() {
+	if m.store == nil {
+		m.status = "Repository picker unavailable for this view"
+		return
+	}
+	repos, err := m.store.ListRepositories(m.ctx)
+	if err != nil {
+		m.status = "Repository picker failed: " + err.Error()
+		return
+	}
+	if len(repos) == 0 {
+		m.status = "No local repositories found"
+		return
+	}
+	items := make([]tuiMenuItem, 0, len(repos)+1)
+	for _, repo := range repos {
+		label := repo.FullName
+		if repo.FullName == m.payload.Repository {
+			label = "* " + label
+		}
+		items = append(items, tuiMenuItem{label: label, action: "select-repo", value: repo.FullName})
+	}
+	items = append(items, tuiMenuItem{label: "Back to actions", action: "back-to-actions"})
+	m.menuItems = items
+	m.menuTitle = "Repositories"
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.menuOpen = true
+	m.showHelp = false
+	m.searching = false
+	m.jumping = false
+	m.status = "Repository picker"
 }
 
 func (m *clusterBrowserModel) runAction(action string) bool {
@@ -999,6 +1037,9 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 	case "refresh":
 		m.refreshFromStore()
 		return true
+	case "repository-picker":
+		m.openRepositoryMenu()
+		return false
 	case "jump":
 		m.jumping = true
 		m.searching = false
@@ -1138,6 +1179,9 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 	case "back-to-actions":
 		m.openActionMenu()
 		return false
+	case "select-repo":
+		m.switchRepository(item.value)
+		return true
 	case "open-link-picker":
 		m.openReferenceLinkMenu("open")
 		return false
@@ -1857,6 +1901,67 @@ func (m *clusterBrowserModel) refreshFromStore() {
 		}
 	}
 	m.status = fmt.Sprintf("Refreshed %d cluster(s)", len(m.payload.Clusters))
+}
+
+func (m *clusterBrowserModel) switchRepository(fullName string) {
+	if m.store == nil {
+		m.status = "Repository picker unavailable for this view"
+		return
+	}
+	fullName = strings.TrimSpace(fullName)
+	if fullName == "" {
+		m.status = "No repository selected"
+		return
+	}
+	repo, err := m.store.RepositoryByFullName(m.ctx, fullName)
+	if err != nil {
+		m.status = "Repository switch failed: " + err.Error()
+		return
+	}
+	clusters, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+		RepoID:        repo.ID,
+		IncludeClosed: m.showClosed,
+		MinSize:       m.minSize,
+		Limit:         maxInt(20, m.payload.Limit),
+		Sort:          m.payload.Sort,
+	})
+	if err != nil {
+		m.status = "Repository switch failed: " + err.Error()
+		return
+	}
+	workingSet, err := m.store.ListClusterSummaries(m.ctx, store.ClusterSummaryOptions{
+		RepoID:        repo.ID,
+		IncludeClosed: true,
+		MinSize:       1,
+		Limit:         maxInt(defaultTUIWorkingSetLimit, m.payload.Limit),
+		Sort:          m.payload.Sort,
+	})
+	if err != nil {
+		m.status = "Repository switch failed: " + err.Error()
+		return
+	}
+	clusters = mergeClusterSummaries(clusters, workingSet)
+	if clusters == nil {
+		clusters = []store.ClusterSummary{}
+	}
+	m.repoID = repo.ID
+	m.payload.Repository = repo.FullName
+	m.payload.InferredRepository = false
+	m.detailCache = map[int64]store.ClusterDetail{}
+	m.neighborCache = map[int64][]tuiNeighbor{}
+	m.allClusters = append([]store.ClusterSummary(nil), clusters...)
+	m.payload.Clusters = append([]store.ClusterSummary(nil), clusters...)
+	m.search = ""
+	m.searchInput.SetValue("")
+	m.selected = 0
+	m.clusterOff = 0
+	m.memberOff = 0
+	m.memberIndex = -1
+	m.hasDetail = false
+	m.detail = store.ClusterDetail{}
+	m.applyClusterFilters()
+	m.focus = focusClusters
+	m.status = "Repository: " + repo.FullName
 }
 
 func (m *clusterBrowserModel) applyClusterFilters() {

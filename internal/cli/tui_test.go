@@ -99,7 +99,7 @@ func TestTUIInAppHelpMentionsMenuMouse(t *testing.T) {
 	})
 
 	help := strings.Join(model.helpLines(80), "\n")
-	for _, want := range []string{"left click menu row", "wheel in menu", "#: jump to issue/PR number", "open link picker", "neighbors, sort, refresh, layout, quit"} {
+	for _, want := range []string{"left click menu row", "wheel in menu", "#: jump to issue/PR number", "p: switch repository", "open link picker", "neighbors, sort, refresh, layout, quit"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
 		}
@@ -855,7 +855,7 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 		labels = append(labels, item.label)
 	}
 	joined := strings.Join(labels, "\n")
-	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Jump to issue/PR", "Toggle layout", "Show compact detail", "Min size 1+", "Hide closed", "Help", "Quit"} {
+	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Refresh from store", "Switch repository", "Jump to issue/PR", "Toggle layout", "Show compact detail", "Min size 1+", "Hide closed", "Help", "Quit"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
 		}
@@ -899,6 +899,55 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 	model.runAction("quit")
 	if !model.quitRequested {
 		t.Fatal("quit menu action did not request quit")
+	}
+}
+
+func TestTUIRepositoryPickerSwitchesRepository(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoOneID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "one", FullName: "openclaw/one", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo one: %v", err)
+	}
+	repoTwoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "two", FullName: "openclaw/two", RawJSON: "{}", UpdatedAt: "2026-04-27T01:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo two: %v", err)
+	}
+	if err := seedTUICluster(ctx, st, repoTwoID, 20, 200, "repo two cluster"); err != nil {
+		t.Fatalf("seed repo two cluster: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoOneID, clusterBrowserPayload{
+		Repository: "openclaw/one",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.openRepositoryMenu()
+
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	joined := strings.Join(labels, "\n")
+	if !strings.Contains(joined, "openclaw/two") {
+		t.Fatalf("repository menu missing repo two:\n%s", joined)
+	}
+
+	model.runMenuItem(tuiMenuItem{action: "select-repo", value: "openclaw/two"})
+
+	if model.repoID != repoTwoID || model.payload.Repository != "openclaw/two" {
+		t.Fatalf("selected repo id/name = %d/%q, want %d/openclaw/two", model.repoID, model.payload.Repository, repoTwoID)
+	}
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 20 {
+		t.Fatalf("switched clusters = %#v, want cluster 20", model.payload.Clusters)
+	}
+	if model.status != "Repository: openclaw/two" {
+		t.Fatalf("switch status = %q", model.status)
 	}
 }
 
@@ -1247,4 +1296,35 @@ func seedTUIThreadVector(ctx context.Context, st *store.Store, repoID int64, num
 		UpdatedAt:   "2026-04-27T00:00:00Z",
 	})
 	return threadID, err
+}
+
+func seedTUICluster(ctx context.Context, st *store.Store, repoID, clusterID int64, threadNumber int, title string) error {
+	threadID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      fmt.Sprintf("%d", threadNumber),
+		Number:        threadNumber,
+		Kind:          "issue",
+		State:         "open",
+		Title:         title,
+		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/two/issues/%d", threadNumber),
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   fmt.Sprintf("cluster-hash-%d", threadNumber),
+		UpdatedAt:     "2026-04-27T00:00:00Z",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(?, ?, ?, ?, 'active', ?, ?, '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, clusterID, repoID, fmt.Sprintf("cluster-%d", clusterID), fmt.Sprintf("repo-%d", clusterID), threadID, title); err != nil {
+		return err
+	}
+	_, err = st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(?, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, clusterID, threadID)
+	return err
 }
