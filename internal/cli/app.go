@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/openclaw/gitcrawl/internal/config"
 	gh "github.com/openclaw/gitcrawl/internal/github"
@@ -423,7 +424,9 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"openai_key_source":    openAIKey.Source,
 		"repository_count":     storeStatus.RepositoryCount,
 		"thread_count":         storeStatus.ThreadCount,
+		"open_thread_count":    storeStatus.OpenThreadCount,
 		"cluster_count":        storeStatus.ClusterCount,
+		"last_sync_at":         formatOptionalTime(storeStatus.LastSyncAt),
 		"summary_model":        cfg.OpenAI.SummaryModel,
 		"embed_model":          cfg.OpenAI.EmbedModel,
 		"embedding_basis":      cfg.EmbeddingBasis,
@@ -435,6 +438,13 @@ func (a *App) applyCommandJSON(enabled bool) {
 	if enabled {
 		a.format = FormatJSON
 	}
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339Nano)
 }
 
 func resolveOutputFormat(value string, jsonOut bool) (OutputFormat, error) {

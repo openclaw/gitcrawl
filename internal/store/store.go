@@ -94,7 +94,7 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("count clusters: %w", err)
 	}
 	var lastSync string
-	if err := s.db.QueryRowContext(ctx, `select coalesce(max(finished_at), '') from sync_runs where status = 'success'`).Scan(&lastSync); err != nil {
+	if err := s.db.QueryRowContext(ctx, `select coalesce(max(finished_at), '') from sync_runs where status in ('success', 'completed')`).Scan(&lastSync); err != nil {
 		return Status{}, fmt.Errorf("read last sync: %w", err)
 	}
 	if lastSync != "" {
