@@ -1024,6 +1024,16 @@ func (m *clusterBrowserModel) openActionMenu() {
 	}
 	if member, ok := m.selectedMember(); ok {
 		sectionAdded := false
+		if cluster, clusterOK := m.selectedCluster(); clusterOK {
+			if member.State == "excluded" {
+				m.menuItems = append(m.menuItems, tuiMenuItem{label: fmt.Sprintf("Include #%d in C%d...", member.Thread.Number, cluster.ID), action: "include-member-confirm"})
+			} else {
+				m.menuItems = append(m.menuItems,
+					tuiMenuItem{label: fmt.Sprintf("Exclude #%d from C%d...", member.Thread.Number, cluster.ID), action: "exclude-member-confirm"},
+					tuiMenuItem{label: fmt.Sprintf("Set #%d as canonical...", member.Thread.Number), action: "canonical-member-confirm"},
+				)
+			}
+		}
 		if strings.TrimSpace(member.BodySnippet) != "" {
 			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
 				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
@@ -1279,6 +1289,24 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return false
 	case "reopen-cluster-local":
 		m.reopenSelectedClusterLocally()
+		return true
+	case "exclude-member-confirm":
+		m.openExcludeMemberMenu()
+		return false
+	case "exclude-member-local":
+		m.excludeSelectedClusterMemberLocally()
+		return true
+	case "include-member-confirm":
+		m.openIncludeMemberMenu()
+		return false
+	case "include-member-local":
+		m.includeSelectedClusterMemberLocally()
+		return true
+	case "canonical-member-confirm":
+		m.openCanonicalMemberMenu()
+		return false
+	case "canonical-member-local":
+		m.setSelectedClusterCanonicalLocally()
 		return true
 	case "load-neighbors":
 		m.loadSelectedThreadNeighbors(10, 0.2)
@@ -1693,6 +1721,57 @@ func (m *clusterBrowserModel) openReopenClusterMenu() {
 	m.status = fmt.Sprintf("Confirm local reopen for cluster C%d", cluster.ID)
 }
 
+func (m *clusterBrowserModel) openExcludeMemberMenu() {
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return
+	}
+	m.menuTitle = "Exclude Member"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Exclude #%d from C%d", member.Thread.Number, cluster.ID), action: "exclude-member-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm local exclude for #%d", member.Thread.Number)
+}
+
+func (m *clusterBrowserModel) openIncludeMemberMenu() {
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return
+	}
+	m.menuTitle = "Include Member"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Include #%d in C%d", member.Thread.Number, cluster.ID), action: "include-member-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm local include for #%d", member.Thread.Number)
+}
+
+func (m *clusterBrowserModel) openCanonicalMemberMenu() {
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return
+	}
+	m.menuTitle = "Canonical Member"
+	m.menuItems = []tuiMenuItem{
+		{label: fmt.Sprintf("Set #%d as canonical for C%d", member.Thread.Number, cluster.ID), action: "canonical-member-local"},
+		{label: "Back to actions", action: "back-to-actions"},
+	}
+	m.menuIndex = 0
+	m.menuOff = 0
+	m.status = fmt.Sprintf("Confirm canonical member #%d", member.Thread.Number)
+}
+
 func (m *clusterBrowserModel) closeSelectedThreadLocally() {
 	thread, ok := m.selectedThread()
 	if !ok {
@@ -1764,6 +1843,64 @@ func (m *clusterBrowserModel) reopenSelectedClusterLocally() {
 	}
 	m.refreshFromStore()
 	m.status = fmt.Sprintf("Reopened cluster C%d locally", cluster.ID)
+}
+
+func (m *clusterBrowserModel) excludeSelectedClusterMemberLocally() {
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local member exclude unavailable for this view"
+		return
+	}
+	if _, err := m.store.ExcludeClusterMemberLocally(m.ctx, m.repoID, cluster.ID, member.Thread.Number, "TUI manual exclude"); err != nil {
+		m.status = err.Error()
+		return
+	}
+	delete(m.neighborCache, member.Thread.ID)
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Excluded #%d from C%d locally", member.Thread.Number, cluster.ID)
+}
+
+func (m *clusterBrowserModel) includeSelectedClusterMemberLocally() {
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local member include unavailable for this view"
+		return
+	}
+	if _, err := m.store.IncludeClusterMemberLocally(m.ctx, m.repoID, cluster.ID, member.Thread.Number, "TUI manual include"); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Included #%d in C%d locally", member.Thread.Number, cluster.ID)
+}
+
+func (m *clusterBrowserModel) setSelectedClusterCanonicalLocally() {
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = "Local canonical unavailable for this view"
+		return
+	}
+	if _, err := m.store.SetClusterCanonicalLocally(m.ctx, m.repoID, cluster.ID, member.Thread.Number, "TUI manual canonical"); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.refreshFromStore()
+	m.status = fmt.Sprintf("Set #%d as canonical for C%d", member.Thread.Number, cluster.ID)
 }
 
 func (m clusterBrowserModel) menuVisibleCount() int {
@@ -2108,7 +2245,7 @@ func (m clusterBrowserModel) memberTableRows() []table.Row {
 		thread := member.thread()
 		rows = append(rows, table.Row{
 			fmt.Sprintf("#%d", thread.Number),
-			stateGlyph(threadDisplayState(thread)),
+			stateGlyph(memberDisplayState(member.member)),
 			formatRelativeTime(thread.UpdatedAtGitHub),
 			thread.Title,
 		})
@@ -2579,7 +2716,7 @@ func (m *clusterBrowserModel) sortMembers() {
 	}
 	members := make([]store.ClusterMemberDetail, 0, len(m.detail.Members))
 	for _, member := range m.detail.Members {
-		if !threadVisible(member.Thread, m.showClosed) {
+		if !memberVisible(member, m.showClosed) {
 			continue
 		}
 		members = append(members, member)
@@ -2842,7 +2979,7 @@ func (m clusterBrowserModel) threadDetailClipboardText() string {
 	thread := member.Thread
 	lines := []string{
 		fmt.Sprintf("%s #%d: %s", kindTitle(thread.Kind), thread.Number, thread.Title),
-		"State: " + threadDisplayState(thread),
+		"State: " + memberDisplayState(member),
 		"Author: " + firstNonEmpty(thread.AuthorLogin, "unknown"),
 		"Updated: " + firstNonEmpty(thread.UpdatedAtGitHub, thread.UpdatedAt, "unknown"),
 		"URL: " + thread.HTMLURL,
@@ -2958,7 +3095,7 @@ func (m clusterBrowserModel) memberListClipboardText() string {
 		thread := row.thread()
 		lines = append(lines, fmt.Sprintf("#%d [%s] %s %s %s",
 			thread.Number,
-			threadDisplayState(thread),
+			memberDisplayState(row.member),
 			kindTitle(thread.Kind),
 			thread.Title,
 			thread.HTMLURL,
@@ -2969,7 +3106,7 @@ func (m clusterBrowserModel) memberListClipboardText() string {
 
 func (r memberRow) format(width int) string {
 	thread := r.thread()
-	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, threadDisplayState(thread), formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
+	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, memberDisplayState(r.member), formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
 }
 
 func (r memberRow) thread() store.Thread {
@@ -3257,6 +3394,8 @@ func stateGlyph(state string) string {
 		return "opn"
 	case "closed":
 		return "cls"
+	case "excluded":
+		return "exc"
 	case "local":
 		return "loc"
 	case "merged":
@@ -3278,6 +3417,20 @@ func threadVisible(thread store.Thread, showClosed bool) bool {
 		return true
 	}
 	return thread.State == "open" && thread.ClosedAtLocal == ""
+}
+
+func memberDisplayState(member store.ClusterMemberDetail) string {
+	if member.State != "" && member.State != "active" {
+		return member.State
+	}
+	return threadDisplayState(member.Thread)
+}
+
+func memberVisible(member store.ClusterMemberDetail, showClosed bool) bool {
+	if showClosed {
+		return true
+	}
+	return (member.State == "" || member.State == "active") && threadVisible(member.Thread, false)
 }
 
 func closedLabel(thread store.Thread) string {

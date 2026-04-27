@@ -1518,6 +1518,94 @@ func TestTUIReopenClusterLocallyRestoresCluster(t *testing.T) {
 	}
 }
 
+func TestTUIClusterMemberOverrideActions(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	firstID, secondID, err := seedTUIClusterPair(ctx, st, repoID, 54, 540, 541)
+	if err != nil {
+		t.Fatalf("seed cluster pair: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		HideClosed: true,
+		MinSize:    1,
+		Clusters:   clusters,
+	})
+	model.openActionMenu()
+	if menuLabelIndex(model.menuItems, "Exclude #540 from C54...") < 0 {
+		t.Fatalf("action menu missing member exclude: %+v", model.menuItems)
+	}
+	if menuLabelIndex(model.menuItems, "Set #540 as canonical...") < 0 {
+		t.Fatalf("action menu missing canonical action: %+v", model.menuItems)
+	}
+	model.runAction("exclude-member-confirm")
+	if model.menuTitle != "Exclude Member" || !strings.Contains(model.menuItems[0].label, "Exclude #540 from C54") {
+		t.Fatalf("exclude member confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+
+	model.runAction("exclude-member-local")
+
+	if model.status != "Excluded #540 from C54 locally" {
+		t.Fatalf("exclude status = %q", model.status)
+	}
+	if len(model.memberRows) < 2 || model.memberRows[1].thread().Number != 541 {
+		t.Fatalf("excluded member should be hidden while closed rows are hidden: %#v", model.memberRows)
+	}
+	detail, err := st.ClusterDetail(ctx, store.ClusterDetailOptions{RepoID: repoID, ClusterID: 54, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("detail after exclude: %v", err)
+	}
+	if detail.Cluster.RepresentativeThreadID != secondID {
+		t.Fatalf("representative should refresh after excluding first member: %#v", detail.Cluster)
+	}
+
+	model.showClosed = true
+	model.refreshFromStore()
+	model.memberIndex = memberRowIndex(model.memberRows, 540)
+	model.openActionMenu()
+	if menuLabelIndex(model.menuItems, "Include #540 in C54...") < 0 {
+		t.Fatalf("action menu missing member include: %+v", model.menuItems)
+	}
+	model.runAction("include-member-confirm")
+	if model.menuTitle != "Include Member" || !strings.Contains(model.menuItems[0].label, "Include #540 in C54") {
+		t.Fatalf("include member confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+	model.runAction("include-member-local")
+	if model.status != "Included #540 in C54 locally" {
+		t.Fatalf("include status = %q", model.status)
+	}
+	model.memberIndex = memberRowIndex(model.memberRows, 541)
+	model.runAction("canonical-member-confirm")
+	if model.menuTitle != "Canonical Member" || !strings.Contains(model.menuItems[0].label, "Set #541 as canonical for C54") {
+		t.Fatalf("canonical confirmation menu = %q %+v", model.menuTitle, model.menuItems)
+	}
+	model.runAction("canonical-member-local")
+	if model.status != "Set #541 as canonical for C54" {
+		t.Fatalf("canonical status = %q", model.status)
+	}
+	detail, err = st.ClusterDetail(ctx, store.ClusterDetailOptions{RepoID: repoID, ClusterID: 54, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("detail after canonical: %v", err)
+	}
+	if detail.Cluster.RepresentativeThreadID != secondID || detail.Members[0].Thread.ID != secondID || detail.Members[0].Role != "canonical" || detail.Members[1].Thread.ID != firstID {
+		t.Fatalf("canonical member should sort first and become representative: %#v", detail)
+	}
+}
+
 func TestTUIRepositoryPickerKeepsCurrentRepoVisible(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -2062,6 +2150,15 @@ func menuLabelIndex(items []tuiMenuItem, label string) int {
 	return -1
 }
 
+func memberRowIndex(rows []memberRow, number int) int {
+	for index, row := range rows {
+		if row.selectable && row.thread().Number == number {
+			return index
+		}
+	}
+	return -1
+}
+
 func seedTUIThreadVector(ctx context.Context, st *store.Store, repoID int64, number int, title string, vector []float64) (int64, error) {
 	threadID, err := st.UpsertThread(ctx, store.Thread{
 		RepoID:        repoID,
@@ -2122,4 +2219,60 @@ func seedTUICluster(ctx context.Context, st *store.Store, repoID, clusterID int6
 		values(?, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
 	`, clusterID, threadID)
 	return err
+}
+
+func seedTUIClusterPair(ctx context.Context, st *store.Store, repoID, clusterID int64, firstNumber, secondNumber int) (int64, int64, error) {
+	firstID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      fmt.Sprintf("%d", firstNumber),
+		Number:        firstNumber,
+		Kind:          "issue",
+		State:         "open",
+		Title:         fmt.Sprintf("member %d", firstNumber),
+		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", firstNumber),
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   fmt.Sprintf("cluster-pair-hash-%d", firstNumber),
+		UpdatedAt:     "2026-04-27T00:00:00Z",
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	secondID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      fmt.Sprintf("%d", secondNumber),
+		Number:        secondNumber,
+		Kind:          "issue",
+		State:         "open",
+		Title:         fmt.Sprintf("member %d", secondNumber),
+		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", secondNumber),
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   fmt.Sprintf("cluster-pair-hash-%d", secondNumber),
+		UpdatedAt:     "2026-04-27T00:00:00Z",
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(?, ?, ?, ?, 'active', ?, ?, '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, clusterID, repoID, fmt.Sprintf("cluster-%d", clusterID), fmt.Sprintf("repo-%d", clusterID), firstID, fmt.Sprintf("cluster %d", clusterID)); err != nil {
+		return 0, 0, err
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(?, ?, 'representative', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, clusterID, firstID); err != nil {
+		return 0, 0, err
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(?, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+	`, clusterID, secondID); err != nil {
+		return 0, 0, err
+	}
+	return firstID, secondID, nil
 }
