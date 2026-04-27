@@ -791,9 +791,9 @@ func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
 	styles := table.DefaultStyles()
 	styles.Header = styles.Header.
 		Bold(true).
-		Padding(0, 0).
+		Padding(0, 1, 0, 0).
 		Foreground(lipgloss.Color(accent))
-	styles.Cell = styles.Cell.Foreground(lipgloss.Color("#dfe7ef")).Padding(0, 0)
+	styles.Cell = styles.Cell.Foreground(lipgloss.Color("#dfe7ef")).Padding(0, 1, 0, 0)
 	selectedBG := inactive
 	selectedFG := "#f7f7ff"
 	if focused {
@@ -809,11 +809,12 @@ func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
 
 func clusterColumns(width int) []table.Column {
 	width = maxInt(28, width)
+	available := maxInt(23, width-5)
 	cntW := 4
 	kindW := 5
 	ageW := 7
-	clusterW := clampInt(width/3, 12, 22)
-	titleW := maxInt(8, width-cntW-clusterW-kindW-ageW)
+	clusterW := clampInt(available/3, 12, 22)
+	titleW := maxInt(8, available-cntW-clusterW-kindW-ageW)
 	return []table.Column{
 		{Title: "cnt", Width: cntW},
 		{Title: "cluster", Width: clusterW},
@@ -825,10 +826,11 @@ func clusterColumns(width int) []table.Column {
 
 func memberColumns(width int) []table.Column {
 	width = maxInt(28, width)
+	available := maxInt(24, width-4)
 	numberW := 7
 	stateW := 6
 	ageW := 7
-	titleW := maxInt(8, width-numberW-stateW-ageW)
+	titleW := maxInt(8, available-numberW-stateW-ageW)
 	return []table.Column{
 		{Title: "number", Width: numberW},
 		{Title: "state", Width: stateW},
