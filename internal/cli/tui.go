@@ -787,6 +787,17 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Copy all body links", action: "copy-reference-links"},
 		)
 	}
+	m.menuItems = append(m.menuItems,
+		tuiMenuItem{label: "Sort clusters by size", action: "sort-size"},
+		tuiMenuItem{label: "Sort clusters by recent", action: "sort-recent"},
+		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
+		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
+		tuiMenuItem{label: "Min size 1+", action: "min-size-1"},
+		tuiMenuItem{label: "Min size 5+", action: "min-size-5"},
+		tuiMenuItem{label: "Min size 10+", action: "min-size-10"},
+		tuiMenuItem{label: closedToggleLabel(m.showClosed), action: "toggle-closed"},
+		tuiMenuItem{label: "Help", action: "show-help"},
+	)
 	if len(m.menuItems) == 0 {
 		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
 	}
@@ -809,6 +820,50 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	}
 	switch action {
+	case "sort-size":
+		m.payload.Sort = "size"
+		m.sortClusters()
+		m.loadSelectedCluster()
+		m.status = "Sort: size"
+		return true
+	case "sort-recent":
+		m.payload.Sort = "recent"
+		m.sortClusters()
+		m.loadSelectedCluster()
+		m.status = "Sort: recent"
+		return true
+	case "member-sort-kind":
+		m.memberSort = memberSortKind
+		m.sortMembers()
+		m.status = "Member sort: kind"
+		return true
+	case "member-sort-recent":
+		m.memberSort = memberSortRecent
+		m.sortMembers()
+		m.status = "Member sort: recent"
+		return true
+	case "min-size-1":
+		m.setMinSizeFromMenu(1)
+		return true
+	case "min-size-5":
+		m.setMinSizeFromMenu(5)
+		return true
+	case "min-size-10":
+		m.setMinSizeFromMenu(10)
+		return true
+	case "toggle-closed":
+		m.showClosed = !m.showClosed
+		m.applyClusterFilters()
+		if m.showClosed {
+			m.status = "Showing closed clusters and members"
+		} else {
+			m.status = "Hiding closed clusters and members"
+		}
+		return true
+	case "show-help":
+		m.showHelp = true
+		m.status = "Help"
+		return true
 	case "copy-cluster-id":
 		cluster, ok := m.selectedCluster()
 		if !ok {
@@ -960,6 +1015,12 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.status = "Menu closed"
 	}
 	return true
+}
+
+func (m *clusterBrowserModel) setMinSizeFromMenu(value int) {
+	m.minSize = maxInt(1, value)
+	m.applyClusterFilters()
+	m.status = fmt.Sprintf("Min size: %s", minSizeLabel(m.minSize))
 }
 
 func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {
@@ -1869,6 +1930,13 @@ func boolLabel(value bool) string {
 		return "shown"
 	}
 	return "hidden"
+}
+
+func closedToggleLabel(showClosed bool) string {
+	if showClosed {
+		return "Hide closed"
+	}
+	return "Show closed"
 }
 
 func layoutLabel(layout tuiLayout) string {

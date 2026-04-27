@@ -531,6 +531,45 @@ func TestTUILinkPickerKeepsMenuOpen(t *testing.T) {
 	}
 }
 
+func TestTUIActionMenuIncludesViewControls(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    5,
+		Clusters:   sampleTUIClusters(),
+	})
+
+	model.openActionMenu()
+
+	labels := make([]string, 0, len(model.menuItems))
+	for _, item := range model.menuItems {
+		labels = append(labels, item.label)
+	}
+	joined := strings.Join(labels, "\n")
+	for _, want := range []string{"Sort clusters by size", "Member sort recent", "Min size 1+", "Hide closed", "Help"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("menu missing view control %q in:\n%s", want, joined)
+		}
+	}
+
+	model.runAction("min-size-1")
+	if model.minSize != 1 {
+		t.Fatalf("min-size menu action set %d, want 1", model.minSize)
+	}
+	model.runAction("sort-size")
+	if model.payload.Sort != "size" {
+		t.Fatalf("sort menu action set %q, want size", model.payload.Sort)
+	}
+	model.runAction("member-sort-recent")
+	if model.memberSort != memberSortRecent {
+		t.Fatalf("member sort menu action set %q, want recent", model.memberSort)
+	}
+	model.runAction("show-help")
+	if !model.showHelp {
+		t.Fatal("help menu action did not show help")
+	}
+}
+
 func TestTUIReferenceLinksAreUniqueAndOrdered(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
