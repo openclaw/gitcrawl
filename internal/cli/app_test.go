@@ -263,6 +263,23 @@ func TestCloseThreadCommandLocallyClosesThread(t *testing.T) {
 	if len(rows) != 0 {
 		t.Fatalf("closed thread should be hidden, got %#v", rows)
 	}
+
+	reopen := New()
+	stdout.Reset()
+	reopen.Stdout = &stdout
+	if err := reopen.Run(ctx, []string{"--config", configPath, "reopen-thread", "openclaw/openclaw", "--number", "42", "--json"}); err != nil {
+		t.Fatalf("reopen-thread: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"reopened": true`) {
+		t.Fatalf("reopen-thread output = %q", stdout.String())
+	}
+	rows, err = st.ListThreads(ctx, repoID, false)
+	if err != nil {
+		t.Fatalf("list reopened threads: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ClosedAtLocal != "" {
+		t.Fatalf("reopened thread should be visible, got %#v", rows)
+	}
 }
 
 func TestTUIHelp(t *testing.T) {
