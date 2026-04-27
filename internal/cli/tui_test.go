@@ -1011,6 +1011,17 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 	if len(model.neighborCache[targetID]) != 1 {
 		t.Fatalf("keyboard shortcut did not reload neighbors: %+v", model.neighborCache[targetID])
 	}
+
+	delete(model.neighborCache, targetID)
+	model.focus = focusMembers
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(clusterBrowserModel)
+	if len(model.neighborCache[targetID]) != 1 {
+		t.Fatalf("enter did not load neighbors: %+v", model.neighborCache[targetID])
+	}
+	if model.focus != focusDetail {
+		t.Fatalf("enter focus = %s, want detail", model.focus)
+	}
 }
 
 func TestTUILinkPickerKeepsMenuOpen(t *testing.T) {

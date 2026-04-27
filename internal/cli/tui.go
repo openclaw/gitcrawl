@@ -256,7 +256,10 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusClusters {
 				m.focus = focusMembers
 			} else if m.focus == focusMembers {
-				m.focus = focusDetail
+				m.loadSelectedThreadNeighbors(10, 0.2)
+				if m.focus != focusDetail {
+					m.focus = focusDetail
+				}
 			}
 		case "o":
 			m.runAction("open")
