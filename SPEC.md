@@ -2,9 +2,9 @@
 
 ## Product Contract
 
-`gitcrawl` is a Go implementation of `ghcrawl` for local-first GitHub maintainer triage.
+`gitcrawl` is a local-first GitHub maintainer triage tool written in Go.
 
-The target is functional parity with `ghcrawl` except that `gitcrawl` does not expose a local HTTP API.
+The target is a compact, local SQLite workflow for syncing, searching, clustering, and reviewing related GitHub issues and pull requests.
 
 ## In Scope
 
@@ -43,6 +43,13 @@ The target is functional parity with `ghcrawl` except that `gitcrawl` does not e
 - `internal/search`: keyword, semantic, and hybrid search
 - `internal/portable`: compact sync export/import
 - `internal/tui`: terminal UI
+
+TUI guidance:
+
+- keyboard-first navigation is required
+- mouse support is optional polish
+- right-click must not be required for primary actions because terminal mouse support is inconsistent
+- avoid decorative glyph noise or transient artifacts in dense panes
 
 ## Command Surface
 
@@ -107,4 +114,4 @@ Primary environment variables:
 - `GITCRAWL_SUMMARY_MODEL`
 - `GITCRAWL_EMBED_MODEL`
 
-Legacy `GHCRAWL_*` aliases should be supported where the compatibility cost is low.
+Legacy environment aliases may be supported only when they do not leak old naming into user-facing output.

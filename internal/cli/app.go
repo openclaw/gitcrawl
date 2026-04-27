@@ -615,5 +615,5 @@ Core commands:
   search               search local thread documents
   tui                  browse local clusters in a terminal UI
 
-No API server is provided. The ghcrawl serve command is intentionally omitted.
+No API server is provided. There is intentionally no serve command.
 `

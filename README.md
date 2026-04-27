@@ -2,7 +2,7 @@
 
 `gitcrawl` is a local-first GitHub issue and pull request crawler for maintainer triage.
 
-It is the Go implementation of the `ghcrawl` product contract, minus the local HTTP API. Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and a future TUI.
+Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and a future TUI. There is no local HTTP API.
 
 ## Status
 
