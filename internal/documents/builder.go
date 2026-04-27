@@ -60,12 +60,25 @@ func labelNames(raw string) []string {
 	var labels []struct {
 		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
+	if err := json.Unmarshal([]byte(raw), &labels); err == nil {
+		out := make([]string, 0, len(labels))
+		for _, label := range labels {
+			name := strings.TrimSpace(label.Name)
+			if name != "" {
+				out = append(out, name)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err != nil {
 		return nil
 	}
-	out := make([]string, 0, len(labels))
-	for _, label := range labels {
-		name := strings.TrimSpace(label.Name)
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
 		if name != "" {
 			out = append(out, name)
 		}

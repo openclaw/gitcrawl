@@ -35,3 +35,10 @@ func TestBuildToleratesBadLabelJSON(t *testing.T) {
 		t.Fatalf("dedupe text: %q", doc.DedupeText)
 	}
 }
+
+func TestBuildSupportsLegacyStringLabels(t *testing.T) {
+	doc := Build(store.Thread{Title: "A", LabelsJSON: `["bug","help wanted"]`})
+	if doc.DedupeText != "a bug help wanted" {
+		t.Fatalf("dedupe text: %q", doc.DedupeText)
+	}
+}
