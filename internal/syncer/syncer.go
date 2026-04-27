@@ -61,6 +61,10 @@ func New(client GitHubClient, st *store.Store) *Syncer {
 
 func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	started := s.now().Format(time.RFC3339Nano)
+	since, err := normalizeSince(options.Since, s.now())
+	if err != nil {
+		return Stats{}, err
+	}
 	repoRaw, err := s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
 	if err != nil {
 		return Stats{}, err
@@ -79,7 +83,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 
 	rows, err := s.client.ListRepositoryIssues(ctx, options.Owner, options.Repo, gh.ListIssuesOptions{
 		State: "open",
-		Since: options.Since,
+		Since: since,
 		Limit: options.Limit,
 	}, options.Reporter)
 	if err != nil {
@@ -88,7 +92,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 
 	stats := Stats{
 		Repository:     options.Owner + "/" + options.Repo,
-		RequestedSince: options.Since,
+		RequestedSince: since,
 		Limit:          options.Limit,
 		MetadataOnly:   true,
 		StartedAt:      started,
@@ -132,6 +136,39 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		return Stats{}, err
 	}
 	return stats, nil
+}
+
+func normalizeSince(value string, now time.Time) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC().Format(time.RFC3339Nano), nil
+	}
+	units := []struct {
+		suffix string
+		scale  time.Duration
+	}{
+		{"mo", 30 * 24 * time.Hour},
+		{"w", 7 * 24 * time.Hour},
+		{"d", 24 * time.Hour},
+		{"h", time.Hour},
+		{"m", time.Minute},
+		{"s", time.Second},
+	}
+	for _, unit := range units {
+		if !strings.HasSuffix(value, unit.suffix) {
+			continue
+		}
+		raw := strings.TrimSuffix(value, unit.suffix)
+		amount, err := strconv.Atoi(raw)
+		if err != nil || amount <= 0 {
+			return "", fmt.Errorf("invalid --since %q: expected ISO timestamp or relative duration like 15m, 2h, 7d, 1mo", value)
+		}
+		return now.Add(-time.Duration(amount) * unit.scale).UTC().Format(time.RFC3339Nano), nil
+	}
+	return "", fmt.Errorf("invalid --since %q: expected ISO timestamp or relative duration like 15m, 2h, 7d, 1mo", value)
 }
 
 func mapIssueToThread(repoID int64, row map[string]any, pulledAt string) store.Thread {

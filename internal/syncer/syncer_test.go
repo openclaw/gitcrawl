@@ -69,6 +69,16 @@ func (fakeGitHub) ListPullReviewComments(ctx context.Context, owner, repo string
 	return nil, nil
 }
 
+type sinceCaptureGitHub struct {
+	fakeGitHub
+	since string
+}
+
+func (f *sinceCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	f.since = options.Since
+	return nil, nil
+}
+
 func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -110,5 +120,40 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 	if documentCount != 1 {
 		t.Fatalf("document count: got %d want 1", documentCount)
+	}
+}
+
+func TestSyncNormalizesRelativeSince(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &sinceCaptureGitHub{}
+	s := New(client, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 27, 8, 30, 0, 0, time.UTC) }
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "15m"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	want := "2026-04-27T08:15:00Z"
+	if client.since != want || stats.RequestedSince != want {
+		t.Fatalf("since: client=%q stats=%q want %q", client.since, stats.RequestedSince, want)
+	}
+}
+
+func TestSyncRejectsInvalidSince(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	s := New(fakeGitHub{}, st)
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "yesterday"}); err == nil {
+		t.Fatal("expected invalid since to fail")
 	}
 }
