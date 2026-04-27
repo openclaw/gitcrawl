@@ -221,3 +221,82 @@ func TestClusterMemberLocalOverrides(t *testing.T) {
 		t.Fatalf("include/canonical should clear stale exclude overrides, got %d", excludeOverrides)
 	}
 }
+
+func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	firstID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "41", Number: 41, Kind: "issue", State: "open",
+		Title: "first duplicate", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/41",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-41", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("first thread: %v", err)
+	}
+	secondID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "42", Number: 42, Kind: "issue", State: "open",
+		Title: "second duplicate", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/42",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-42", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("second thread: %v", err)
+	}
+	score := 0.93
+	input := DurableClusterInput{
+		StableKey:              "members:41,42",
+		StableSlug:             "cluster-4142",
+		RepresentativeThreadID: firstID,
+		Title:                  "first duplicate",
+		Members: []DurableClusterMemberInput{
+			{ThreadID: firstID, Role: "representative"},
+			{ThreadID: secondID, Role: "member", ScoreToRepresentative: &score},
+		},
+	}
+	result, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input})
+	if err != nil {
+		t.Fatalf("save durable clusters: %v", err)
+	}
+	if result.ClusterCount != 1 || result.MemberCount != 2 || result.RunID == 0 {
+		t.Fatalf("unexpected save result: %#v", result)
+	}
+	detail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 1, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail after save: %v", err)
+	}
+	if detail.Cluster.StableSlug != "cluster-4142" || len(detail.Members) != 2 {
+		t.Fatalf("unexpected saved cluster detail: %#v", detail)
+	}
+
+	if _, err := st.ExcludeClusterMemberLocally(ctx, repoID, detail.Cluster.ID, 41, "not related"); err != nil {
+		t.Fatalf("exclude member: %v", err)
+	}
+	if _, err := st.SetClusterCanonicalLocally(ctx, repoID, detail.Cluster.ID, 42, "best issue"); err != nil {
+		t.Fatalf("set canonical: %v", err)
+	}
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("resave durable clusters: %v", err)
+	}
+	detail, err = st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: detail.Cluster.ID, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail after overrides: %v", err)
+	}
+	if len(detail.Members) != 1 || detail.Members[0].Thread.ID != secondID || detail.Members[0].Role != "canonical" || detail.Cluster.RepresentativeThreadID != secondID {
+		t.Fatalf("saved cluster should replay local overrides: %#v", detail)
+	}
+	all, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: detail.Cluster.ID, IncludeClosed: true, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("cluster detail including excluded: %v", err)
+	}
+	if len(all.Members) != 2 || all.Members[1].State != "excluded" {
+		t.Fatalf("excluded member should remain visible with include closed: %#v", all)
+	}
+}
