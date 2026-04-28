@@ -72,6 +72,7 @@ type ClusterMemberOverride struct {
 type DurableClusterInput struct {
 	StableKey              string
 	StableSlug             string
+	ClusterType            string
 	RepresentativeThreadID int64
 	Title                  string
 	Members                []DurableClusterMemberInput
@@ -725,6 +726,15 @@ func (s *Store) SaveDurableClusters(ctx context.Context, repoID int64, inputs []
 				return err
 			}
 		}
+		if len(inputs) > 0 {
+			if _, err := tx.q().ExecContext(ctx, `
+				delete from cluster_groups
+				where repo_id = ?
+				  and cluster_type = 'similarity'
+			`, repoID); err != nil {
+				return fmt.Errorf("delete legacy similarity clusters: %w", err)
+			}
+		}
 		if _, err := tx.q().ExecContext(ctx, `
 			update cluster_runs
 			set finished_at = ?, stats_json = ?
@@ -945,12 +955,16 @@ func (s *Store) upsertDurableCluster(ctx context.Context, repoID, runID int64, i
 	if stableSlug == "" {
 		stableSlug = stableKey
 	}
+	clusterType := strings.TrimSpace(input.ClusterType)
+	if clusterType == "" {
+		clusterType = "duplicate_candidate"
+	}
 	var clusterID int64
 	if err := s.q().QueryRowContext(ctx, `
 		insert into cluster_groups(
 			repo_id, stable_key, stable_slug, status, cluster_type, representative_thread_id, title, created_at, updated_at
 		)
-		values(?, ?, ?, 'active', 'similarity', ?, ?, ?, ?)
+		values(?, ?, ?, 'active', ?, ?, ?, ?, ?)
 		on conflict(repo_id, stable_key) do update set
 			stable_slug = excluded.stable_slug,
 			cluster_type = excluded.cluster_type,
@@ -961,7 +975,7 @@ func (s *Store) upsertDurableCluster(ctx context.Context, repoID, runID int64, i
 			title = excluded.title,
 			updated_at = excluded.updated_at
 		returning id
-	`, repoID, stableKey, stableSlug, nullInt(input.RepresentativeThreadID), nullString(input.Title), now, now).Scan(&clusterID); err != nil {
+	`, repoID, stableKey, stableSlug, clusterType, nullInt(input.RepresentativeThreadID), nullString(input.Title), now, now).Scan(&clusterID); err != nil {
 		return 0, fmt.Errorf("upsert durable cluster: %w", err)
 	}
 	if _, err := s.q().ExecContext(ctx, `

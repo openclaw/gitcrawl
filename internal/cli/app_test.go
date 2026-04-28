@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -982,7 +983,7 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--json"}); err != nil {
 		t.Fatalf("cluster: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"cluster_count": 1`) {
+	if !strings.Contains(stdout.String(), `"cluster_count": 2`) {
 		t.Fatalf("cluster output = %q", stdout.String())
 	}
 	st, err = store.Open(ctx, dbPath)
@@ -994,8 +995,13 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list clusters: %v", err)
 	}
-	if len(clusters) != 1 || clusters[0].MemberCount != 2 {
-		t.Fatalf("expected one durable cluster, got %#v", clusters)
+	memberCounts := []int{}
+	for _, cluster := range clusters {
+		memberCounts = append(memberCounts, cluster.MemberCount)
+	}
+	sort.Ints(memberCounts)
+	if len(memberCounts) != 2 || memberCounts[0] != 1 || memberCounts[1] != 2 {
+		t.Fatalf("expected duplicate cluster plus singleton, got %#v", clusters)
 	}
 }
 
@@ -1452,7 +1458,7 @@ func TestRefreshEmbedsAndClustersWithoutSync(t *testing.T) {
 	if !strings.Contains(out, `"embedded": 3`) {
 		t.Fatalf("refresh did not embed rows: %q", out)
 	}
-	if !strings.Contains(out, `"cluster_count": 1`) {
+	if !strings.Contains(out, `"cluster_count": 2`) {
 		t.Fatalf("refresh did not persist cluster: %q", out)
 	}
 
@@ -1465,8 +1471,13 @@ func TestRefreshEmbedsAndClustersWithoutSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list clusters: %v", err)
 	}
-	if len(clusters) != 1 || clusters[0].MemberCount != 2 {
-		t.Fatalf("expected one durable cluster, got %#v", clusters)
+	memberCounts := []int{}
+	for _, cluster := range clusters {
+		memberCounts = append(memberCounts, cluster.MemberCount)
+	}
+	sort.Ints(memberCounts)
+	if len(memberCounts) != 2 || memberCounts[0] != 1 || memberCounts[1] != 2 {
+		t.Fatalf("expected duplicate cluster plus singleton, got %#v", clusters)
 	}
 }
 

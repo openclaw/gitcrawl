@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -252,7 +250,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
 	limitRaw := fs.String("limit", "", "maximum sync or embedding rows")
 	thresholdRaw := fs.String("threshold", fmt.Sprintf("%.2f", defaultClusterThreshold), "minimum cluster cosine score")
-	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	minSizeRaw := fs.String("min-size", "1", "minimum cluster member count")
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
 	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
@@ -551,7 +549,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	thresholdRaw := fs.String("threshold", fmt.Sprintf("%.2f", defaultClusterThreshold), "minimum cosine score")
-	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	minSizeRaw := fs.String("min-size", "1", "minimum cluster member count")
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
 	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
@@ -1941,7 +1939,7 @@ func parseClusterShapeOptions(command, maxClusterSizeRaw, fanoutRaw, crossKindTh
 
 func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, options clusterBuildOptions) ([]store.DurableClusterInput, int, error) {
 	if options.MinSize <= 0 {
-		options.MinSize = 2
+		options.MinSize = 1
 	}
 	if options.MaxClusterSize <= 0 {
 		options.MaxClusterSize = defaultClusterMaxSize
@@ -2009,19 +2007,26 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 			right := threads[builtCluster.Members[j]]
 			return left.Number < right.Number
 		})
-		rep := threads[builtCluster.RepresentativeThreadID]
+		identity := store.HumanKeyForValue(fmt.Sprintf("repo:%d:cluster-representative:%d", repoID, builtCluster.RepresentativeThreadID))
+		clusterType := "duplicate_candidate"
+		if len(builtCluster.Members) == 1 {
+			clusterType = "singleton_orphan"
+		}
 		input := store.DurableClusterInput{
-			StableKey:              durableClusterStableKey(builtCluster.Members, threads),
-			StableSlug:             durableClusterSlug(builtCluster.Members, threads),
+			StableKey:              identity.Hash,
+			StableSlug:             store.HumanKeyStableSlug(identity),
+			ClusterType:            clusterType,
 			RepresentativeThreadID: builtCluster.RepresentativeThreadID,
-			Title:                  rep.Title,
+			Title:                  "Cluster " + identity.Slug,
 			Members:                make([]store.DurableClusterMemberInput, 0, len(builtCluster.Members)),
 		}
 		for _, threadID := range builtCluster.Members {
-			role := "member"
+			role := "related"
 			var scorePtr *float64
 			if threadID == builtCluster.RepresentativeThreadID {
-				role = "representative"
+				role = "canonical"
+				scoreCopy := 1.0
+				scorePtr = &scoreCopy
 			} else if score, ok := pairScores[threadIDPairKey(threadID, builtCluster.RepresentativeThreadID)]; ok {
 				scoreCopy := score
 				scorePtr = &scoreCopy
@@ -2196,23 +2201,6 @@ func clusterRepository(ctx context.Context, st *store.Store, repoID int64, store
 		MemberCount:  saveResult.MemberCount,
 		RunID:        saveResult.RunID,
 	}, nil
-}
-
-func durableClusterStableKey(threadIDs []int64, threads map[int64]store.Thread) string {
-	parts := make([]string, 0, len(threadIDs))
-	for _, id := range threadIDs {
-		if thread, ok := threads[id]; ok && thread.Number > 0 {
-			parts = append(parts, strconv.Itoa(thread.Number))
-			continue
-		}
-		parts = append(parts, strconv.FormatInt(id, 10))
-	}
-	return "numbers:" + strings.Join(parts, ",")
-}
-
-func durableClusterSlug(threadIDs []int64, threads map[int64]store.Thread) string {
-	sum := sha256.Sum256([]byte(durableClusterStableKey(threadIDs, threads)))
-	return "cluster-" + hex.EncodeToString(sum[:])[:12]
 }
 
 func threadIDPairKey(left, right int64) string {
