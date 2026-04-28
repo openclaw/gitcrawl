@@ -95,31 +95,14 @@ func (s *Store) ListClusterSummaries(ctx context.Context, options ClusterSummary
 }
 
 func (s *Store) ListDisplayClusterSummaries(ctx context.Context, options ClusterSummaryOptions) ([]ClusterSummary, error) {
-	raw, err := s.ListRunClusterSummaries(ctx, options)
+	durable, err := s.listDurableClusterSummaries(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > 0 {
-		if options.IncludeClosed {
-			represented := make(map[int64]bool, len(raw))
-			for _, cluster := range raw {
-				if cluster.RepresentativeThreadID != 0 {
-					represented[cluster.RepresentativeThreadID] = true
-				}
-			}
-			closed, err := s.listClosedDurableClusterSummaries(ctx, options, represented)
-			if err != nil {
-				return nil, err
-			}
-			raw = append(raw, closed...)
-			sortClusterSummaries(raw, options.Sort)
-			if options.Limit > 0 && len(raw) > options.Limit {
-				raw = raw[:options.Limit]
-			}
-		}
-		return raw, nil
+	if len(durable) > 0 {
+		return durable, nil
 	}
-	return s.listDurableClusterSummaries(ctx, options)
+	return s.ListRunClusterSummaries(ctx, options)
 }
 
 func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSummaryOptions) ([]ClusterSummary, error) {
