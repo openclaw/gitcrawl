@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 type SearchHit struct {
@@ -22,6 +23,10 @@ func (s *Store) SearchDocuments(ctx context.Context, repoID int64, query string,
 	if limit <= 0 {
 		limit = 20
 	}
+	matchQuery := ftsQuery(query)
+	if matchQuery == "" {
+		return s.searchThreads(ctx, repoID, query, limit)
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		select t.id, t.number, t.kind, t.state, t.title, t.html_url, t.author_login,
 			snippet(documents_fts, 3, '[', ']', '...', 18)
@@ -31,8 +36,12 @@ func (s *Store) SearchDocuments(ctx context.Context, repoID int64, query string,
 		where t.repo_id = ? and documents_fts match ?
 		order by bm25(documents_fts)
 		limit ?
-	`, repoID, query, limit)
+	`, repoID, matchQuery, limit)
 	if err != nil {
+		fallback, fallbackErr := s.searchThreads(ctx, repoID, query, limit)
+		if fallbackErr == nil {
+			return fallback, nil
+		}
 		return nil, fmt.Errorf("search documents: %w", err)
 	}
 	defer rows.Close()
@@ -107,4 +116,25 @@ func escapeLike(value string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func ftsQuery(value string) string {
+	terms := make([]string, 0)
+	var b strings.Builder
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		terms = append(terms, `"`+b.String()+`"`)
+		b.Reset()
+	}
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return strings.Join(terms, " ")
 }

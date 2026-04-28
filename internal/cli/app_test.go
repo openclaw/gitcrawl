@@ -3,7 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -755,6 +758,133 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 	if len(clusters) != 1 || clusters[0].MemberCount != 2 {
 		t.Fatalf("expected one durable cluster, got %#v", clusters)
+	}
+}
+
+func TestRefreshEmbedsAndClustersWithoutSync(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	seedEmbeddingDocument(t, ctx, st, repoID, 101, "Duplicate crash one")
+	seedEmbeddingDocument(t, ctx, st, repoID, 102, "Duplicate crash two")
+	seedEmbeddingDocument(t, ctx, st, repoID, 103, "Unrelated settings request")
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		response := struct {
+			Data []struct {
+				Index     int       `json:"index"`
+				Embedding []float64 `json:"embedding"`
+			} `json:"data"`
+		}{}
+		for index, input := range request.Input {
+			vector := []float64{0, 1}
+			if strings.Contains(strings.ToLower(input), "duplicate") {
+				vector = []float64{1, 0.01}
+			}
+			response.Data = append(response.Data, struct {
+				Index     int       `json:"index"`
+				Embedding []float64 `json:"embedding"`
+			}{Index: index, Embedding: vector})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", server.URL)
+
+	run := New()
+	var stdout, stderr bytes.Buffer
+	run.Stdout = &stdout
+	run.Stderr = &stderr
+	if err := run.Run(ctx, []string{"--config", configPath, "refresh", "openclaw/openclaw", "--no-sync", "--threshold", "0.90", "--json"}); err != nil {
+		t.Fatalf("refresh: %v\nstderr:\n%s", err, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"embedded": 3`) {
+		t.Fatalf("refresh did not embed rows: %q", out)
+	}
+	if !strings.Contains(out, `"cluster_count": 1`) {
+		t.Fatalf("refresh did not persist cluster: %q", out)
+	}
+
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20})
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].MemberCount != 2 {
+		t.Fatalf("expected one durable cluster, got %#v", clusters)
+	}
+}
+
+func seedEmbeddingDocument(t *testing.T, ctx context.Context, st *store.Store, repoID int64, number int, title string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	threadID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      strconv.Itoa(number),
+		Number:        number,
+		Kind:          "issue",
+		State:         "open",
+		Title:         title,
+		Body:          title,
+		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   fmt.Sprintf("hash-%d", number),
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("seed thread %d: %v", number, err)
+	}
+	if _, err := st.UpsertDocument(ctx, store.Document{
+		ThreadID:   threadID,
+		Title:      title,
+		Body:       title,
+		RawText:    title,
+		DedupeText: strings.ToLower(title),
+		UpdatedAt:  now,
+	}); err != nil {
+		t.Fatalf("seed document %d: %v", number, err)
 	}
 }
 

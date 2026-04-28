@@ -20,6 +20,7 @@ import (
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
 	gh "github.com/openclaw/gitcrawl/internal/github"
+	"github.com/openclaw/gitcrawl/internal/openai"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/openclaw/gitcrawl/internal/syncer"
 	"github.com/openclaw/gitcrawl/internal/vector"
@@ -138,6 +139,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSearch(ctx, rest[1:])
 	case "configure":
 		return a.runConfigure(rest[1:])
+	case "refresh":
+		return a.runRefresh(ctx, rest[1:])
+	case "embed":
+		return a.runEmbed(ctx, rest[1:])
 	case "clusters":
 		return a.runClusters(ctx, rest[1:])
 	case "durable-clusters":
@@ -154,7 +159,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "refresh", "summarize", "key-summaries", "embed", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "summarize", "key-summaries", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -208,6 +213,135 @@ func (a *App) runConfigure(args []string) error {
 		"embed_model":     cfg.OpenAI.EmbedModel,
 		"embedding_basis": cfg.EmbeddingBasis,
 	}, true)
+}
+
+type refreshResult struct {
+	Repository string          `json:"repository"`
+	Selected   map[string]bool `json:"selected"`
+	Sync       *syncer.Stats   `json:"sync,omitempty"`
+	Embed      *embedResult    `json:"embed,omitempty"`
+	Cluster    map[string]any  `json:"cluster,omitempty"`
+}
+
+func (a *App) runRefresh(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("refresh", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	noSync := fs.Bool("no-sync", false, "skip GitHub sync stage")
+	noEmbed := fs.Bool("no-embed", false, "skip embedding stage")
+	noCluster := fs.Bool("no-cluster", false, "skip clustering stage")
+	includeComments := fs.Bool("include-comments", false, "hydrate comments during sync")
+	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
+	since := fs.String("since", "", "GitHub since timestamp")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all; default all")
+	limitRaw := fs.String("limit", "", "maximum sync or embedding rows")
+	thresholdRaw := fs.String("threshold", "0.82", "minimum cluster cosine score")
+	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true, "threshold": true, "min-size": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("refresh requires owner/repo"))
+	}
+	if *noSync && *noEmbed && *noCluster {
+		return usageErr(fmt.Errorf("refresh requires at least one selected stage"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	threshold, err := parseOptionalFloat(*thresholdRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if threshold <= 0 || threshold > 1 {
+		return usageErr(fmt.Errorf("refresh requires --threshold between 0 and 1"))
+	}
+	minSize, err := parseOptionalPositiveInt(*minSizeRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if minSize <= 0 {
+		minSize = 2
+	}
+
+	result := refreshResult{
+		Repository: owner + "/" + repoName,
+		Selected: map[string]bool{
+			"sync":    !*noSync,
+			"embed":   !*noEmbed,
+			"cluster": !*noCluster,
+		},
+	}
+	if !*noSync {
+		fmt.Fprintln(a.Stderr, "[refresh] sync")
+		stats, err := a.syncRepository(ctx, owner, repoName, syncOptions{
+			Since:           strings.TrimSpace(*since),
+			State:           strings.TrimSpace(*state),
+			Limit:           limit,
+			IncludeComments: *includeComments,
+		})
+		if err != nil {
+			return err
+		}
+		result.Repository = stats.Repository
+		result.Sync = &stats
+	}
+	if !*noEmbed {
+		fmt.Fprintln(a.Stderr, "[refresh] embed")
+		embed, err := a.embedRepository(ctx, owner, repoName, embedOptions{Limit: limit})
+		if err != nil {
+			return err
+		}
+		result.Repository = embed.Repository
+		result.Embed = &embed
+	}
+	if !*noCluster {
+		fmt.Fprintln(a.Stderr, "[refresh] cluster")
+		rt, err := a.openLocalRuntime(ctx)
+		if err != nil {
+			return err
+		}
+		repo, err := rt.repository(ctx, owner, repoName)
+		if err != nil {
+			_ = rt.Store.Close()
+			return err
+		}
+		query := store.ThreadVectorQuery{RepoID: repo.ID, Model: rt.Config.OpenAI.EmbedModel, Basis: rt.Config.EmbeddingBasis}
+		vectors, err := rt.Store.ListThreadVectorsFiltered(ctx, query)
+		if err != nil {
+			_ = rt.Store.Close()
+			return err
+		}
+		if len(vectors) == 0 {
+			vectors, err = rt.Store.ListThreadVectorsFiltered(ctx, store.ThreadVectorQuery{RepoID: repo.ID})
+			if err != nil {
+				_ = rt.Store.Close()
+				return err
+			}
+		}
+		clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, threshold, minSize)
+		_ = rt.Store.Close()
+		if err != nil {
+			return err
+		}
+		result.Repository = repo.FullName
+		result.Cluster = map[string]any{
+			"threshold":     threshold,
+			"min_size":      minSize,
+			"vector_count":  len(vectors),
+			"edge_count":    clusterResult.EdgeCount,
+			"cluster_count": clusterResult.ClusterCount,
+			"member_count":  clusterResult.MemberCount,
+			"run_id":        clusterResult.RunID,
+		}
+	}
+	return a.writeOutput("refresh", result, true)
 }
 
 func (a *App) runSearch(ctx context.Context, args []string) error {
@@ -441,11 +575,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	if limit > 0 && len(vectors) > limit {
 		vectors = vectors[:limit]
 	}
-	inputs, edgeCount, err := buildDurableClusterInputs(ctx, rt.Store, repo.ID, vectors, threshold, minSize)
-	if err != nil {
-		return err
-	}
-	saveResult, err := rt.Store.SaveDurableClusters(ctx, repo.ID, inputs)
+	clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, threshold, minSize)
 	if err != nil {
 		return err
 	}
@@ -454,11 +584,174 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		"threshold":     threshold,
 		"min_size":      minSize,
 		"vector_count":  len(vectors),
-		"edge_count":    edgeCount,
-		"cluster_count": saveResult.ClusterCount,
-		"member_count":  saveResult.MemberCount,
-		"run_id":        saveResult.RunID,
+		"edge_count":    clusterResult.EdgeCount,
+		"cluster_count": clusterResult.ClusterCount,
+		"member_count":  clusterResult.MemberCount,
+		"run_id":        clusterResult.RunID,
 	}, true)
+}
+
+type embedResult struct {
+	Repository string `json:"repository"`
+	Model      string `json:"model"`
+	Basis      string `json:"basis"`
+	Selected   int    `json:"selected"`
+	Embedded   int    `json:"embedded"`
+	Skipped    int    `json:"skipped"`
+	RunID      int64  `json:"run_id"`
+}
+
+func (a *App) runEmbed(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("embed", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	numberRaw := fs.String("number", "", "embed one issue or pull request number")
+	limitRaw := fs.String("limit", "", "maximum rows to embed")
+	force := fs.Bool("force", false, "re-embed even when content hash is unchanged")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"number": true, "limit": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("embed requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	number, err := parseOptionalPositiveInt(*numberRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	result, err := a.embedRepository(ctx, owner, repoName, embedOptions{
+		Number: number,
+		Limit:  limit,
+		Force:  *force,
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("embed", result, true)
+}
+
+type embedOptions struct {
+	Number int
+	Limit  int
+	Force  bool
+}
+
+func (a *App) embedRepository(ctx context.Context, owner, repoName string, options embedOptions) (embedResult, error) {
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return embedResult{}, err
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return embedResult{}, err
+	}
+	if rt.Config.EmbeddingBasis == "title_summary" {
+		return embedResult{}, fmt.Errorf("embedding basis %q needs summarize support, which is not implemented yet; use `gitcrawl configure --embedding-basis title_original`", rt.Config.EmbeddingBasis)
+	}
+	token := config.ResolveOpenAIKey(rt.Config)
+	if token.Value == "" {
+		return embedResult{}, fmt.Errorf("missing OpenAI API key: set %s", rt.Config.OpenAI.APIKeyEnv)
+	}
+	tasks, err := rt.Store.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
+		RepoID: repo.ID,
+		Basis:  rt.Config.EmbeddingBasis,
+		Model:  rt.Config.OpenAI.EmbedModel,
+		Number: options.Number,
+		Limit:  options.Limit,
+		Force:  options.Force,
+	})
+	if err != nil {
+		return embedResult{}, err
+	}
+	started := time.Now().UTC().Format(time.RFC3339Nano)
+	embedded := 0
+	batchSize := rt.Config.OpenAI.BatchSize
+	if batchSize <= 0 {
+		batchSize = 64
+	}
+	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL()})
+	for start := 0; start < len(tasks); start += batchSize {
+		end := start + batchSize
+		if end > len(tasks) {
+			end = len(tasks)
+		}
+		batch := tasks[start:end]
+		texts := make([]string, 0, len(batch))
+		for _, task := range batch {
+			texts = append(texts, task.Text)
+		}
+		fmt.Fprintf(a.Stderr, "[embed] embedding %d-%d of %d\n", start+1, end, len(tasks))
+		vectors, err := client.Embed(ctx, rt.Config.OpenAI.EmbedModel, texts)
+		if err != nil {
+			_, _ = rt.Store.RecordRun(ctx, store.RunRecord{
+				RepoID:     repo.ID,
+				Kind:       "embedding",
+				Scope:      "repo",
+				Status:     "error",
+				StartedAt:  started,
+				FinishedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				ErrorText:  err.Error(),
+			})
+			return embedResult{}, err
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for index, vector := range vectors {
+			task := batch[index]
+			if err := rt.Store.UpsertThreadVector(ctx, store.ThreadVector{
+				ThreadID:    task.ThreadID,
+				Basis:       rt.Config.EmbeddingBasis,
+				Model:       rt.Config.OpenAI.EmbedModel,
+				Dimensions:  len(vector),
+				ContentHash: task.ContentHash,
+				Vector:      vector,
+				Backend:     "openai",
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}); err != nil {
+				return embedResult{}, err
+			}
+			embedded++
+		}
+	}
+	result := embedResult{
+		Repository: repo.FullName,
+		Model:      rt.Config.OpenAI.EmbedModel,
+		Basis:      rt.Config.EmbeddingBasis,
+		Selected:   len(tasks),
+		Embedded:   embedded,
+		RunID:      0,
+	}
+	statsJSON, _ := json.Marshal(result)
+	runID, err := rt.Store.RecordRun(ctx, store.RunRecord{
+		RepoID:     repo.ID,
+		Kind:       "embedding",
+		Scope:      "repo",
+		Status:     "success",
+		StartedAt:  started,
+		FinishedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		StatsJSON:  string(statsJSON),
+	})
+	if err != nil {
+		return embedResult{}, err
+	}
+	result.RunID = runID
+	return result, nil
+}
+
+func openAIBaseURL() string {
+	if value := strings.TrimSpace(os.Getenv("GITCRAWL_OPENAI_BASE_URL")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
 }
 
 func (a *App) runClusters(ctx context.Context, args []string) error {
@@ -1161,20 +1454,40 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
-	cfg, err := config.Load(a.configPath)
+	stats, err := a.syncRepository(ctx, owner, repo, syncOptions{
+		Since:           strings.TrimSpace(*since),
+		State:           strings.TrimSpace(*state),
+		Limit:           limit,
+		IncludeComments: *includeComments,
+	})
 	if err != nil {
 		return err
+	}
+	return a.writeOutput("sync", stats, true)
+}
+
+type syncOptions struct {
+	Since           string
+	State           string
+	Limit           int
+	IncludeComments bool
+}
+
+func (a *App) syncRepository(ctx context.Context, owner, repo string, options syncOptions) (syncer.Stats, error) {
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return syncer.Stats{}, err
 	}
 	token := config.ResolveGitHubToken(cfg)
 	if token.Value == "" {
-		return fmt.Errorf("missing GitHub token: set %s", cfg.GitHub.TokenEnv)
+		return syncer.Stats{}, fmt.Errorf("missing GitHub token: set %s", cfg.GitHub.TokenEnv)
 	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
-		return err
+		return syncer.Stats{}, err
 	}
 	st, err := store.Open(ctx, cfg.DBPath)
 	if err != nil {
-		return err
+		return syncer.Stats{}, err
 	}
 	defer st.Close()
 
@@ -1183,18 +1496,18 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:           owner,
 		Repo:            repo,
-		State:           strings.TrimSpace(*state),
-		Since:           strings.TrimSpace(*since),
-		Limit:           limit,
-		IncludeComments: *includeComments,
+		State:           strings.TrimSpace(options.State),
+		Since:           strings.TrimSpace(options.Since),
+		Limit:           options.Limit,
+		IncludeComments: options.IncludeComments,
 		Reporter: func(message string) {
 			fmt.Fprintln(a.Stderr, message)
 		},
 	})
 	if err != nil {
-		return err
+		return syncer.Stats{}, err
 	}
-	return a.writeOutput("sync", stats, true)
+	return stats, nil
 }
 
 func (a *App) runInit(ctx context.Context, args []string) error {
@@ -1343,6 +1656,15 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 	}
 	gitDir := filepath.Join(dir, ".git")
 	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+		if !gitWorktreeClean(ctx, dir) {
+			if resetErr := runGit(ctx, "", "-C", dir, "reset", "--hard", "HEAD"); resetErr != nil {
+				return "", resetErr
+			}
+			if retryErr := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); retryErr != nil {
+				return "", retryErr
+			}
+			return "reset-pulled", nil
+		}
 		if err := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); err != nil {
 			if !isDirtyPortablePullError(err) {
 				return "", err
@@ -1594,6 +1916,30 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 		inputs = append(inputs, input)
 	}
 	return inputs, len(edges), nil
+}
+
+type clusterRepositoryResult struct {
+	EdgeCount    int
+	ClusterCount int
+	MemberCount  int
+	RunID        int64
+}
+
+func clusterRepository(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, threshold float64, minSize int) (clusterRepositoryResult, error) {
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, storedVectors, threshold, minSize)
+	if err != nil {
+		return clusterRepositoryResult{}, err
+	}
+	saveResult, err := st.SaveDurableClusters(ctx, repoID, inputs)
+	if err != nil {
+		return clusterRepositoryResult{}, err
+	}
+	return clusterRepositoryResult{
+		EdgeCount:    edgeCount,
+		ClusterCount: saveResult.ClusterCount,
+		MemberCount:  saveResult.MemberCount,
+		RunID:        saveResult.RunID,
+	}, nil
 }
 
 func durableClusterStableKey(threadIDs []int64, threads map[int64]store.Thread) string {

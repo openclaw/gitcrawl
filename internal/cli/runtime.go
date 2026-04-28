@@ -81,6 +81,9 @@ func portableStoreRoot(dbPath string) (string, bool) {
 }
 
 func gitWorktreeClean(ctx context.Context, dir string) bool {
+	if err := runGit(ctx, "", "-C", dir, "update-index", "-q", "--refresh"); err != nil {
+		return false
+	}
 	if err := runGit(ctx, "", "-C", dir, "diff", "--quiet", "--"); err != nil {
 		return false
 	}
