@@ -14,6 +14,9 @@ func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
+		if request.Dimensions != 1024 {
+			t.Fatalf("dimensions = %d, want 1024", request.Dimensions)
+		}
 		response := embeddingResponse{}
 		for index := range request.Input {
 			vector := make([]float64, 1536)
@@ -36,7 +39,7 @@ func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 	for index := range inputs {
 		inputs[index] = "thread text"
 	}
-	vectors, err := New(Options{APIKey: "test", BaseURL: server.URL}).Embed(context.Background(), "text-embedding-3-small", inputs)
+	vectors, err := New(Options{APIKey: "test", BaseURL: server.URL, Dimensions: 1024}).Embed(context.Background(), "text-embedding-3-small", inputs)
 	if err != nil {
 		t.Fatalf("embed: %v", err)
 	}

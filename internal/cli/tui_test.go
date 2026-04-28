@@ -276,6 +276,28 @@ func TestTUIClusterRowsShowClusterIDs(t *testing.T) {
 	}
 }
 
+func TestTUIClusterRowsShowReadableState(t *testing.T) {
+	clusters := sampleTUIClusters()
+	clusters[1].Status = "closed"
+	clusters[1].ClosedAt = "2026-04-27T12:00:00Z"
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "size",
+		Clusters:   clusters,
+	})
+
+	rows := model.clusterRows()
+	if len(rows) < 2 {
+		t.Fatalf("expected two cluster rows, got %+v", rows)
+	}
+	if !strings.Contains(rows[0][2], "CLOSED") {
+		t.Fatalf("first row state = %q, want CLOSED", rows[0][2])
+	}
+	if !strings.Contains(rows[1][2], "OPEN") {
+		t.Fatalf("second row state = %q, want OPEN", rows[1][2])
+	}
+}
+
 func TestTUIWideLayoutToggle(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -2089,7 +2111,7 @@ func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 		t.Fatalf("detail empty state missing recovery actions:\n%s", detail)
 	}
 	rows := model.clusterRows()
-	if len(rows) != 1 || !strings.Contains(rows[0][3], "No clusters visible") {
+	if len(rows) != 1 || !strings.Contains(rows[0][4], "No clusters visible") {
 		t.Fatalf("cluster empty row mismatch: %+v", rows)
 	}
 }

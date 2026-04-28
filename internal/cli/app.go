@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,6 +30,7 @@ const (
 	defaultTUIWorkingSetLimit  = 500
 	defaultClusterMaxSize      = 40
 	defaultClusterFanout       = 16
+	defaultClusterThreshold    = 0.80
 	defaultCrossKindMinScore   = 0.93
 	highConfidenceEdgeScore    = 0.90
 	weakEdgeMinTitleOverlap    = 0.18
@@ -248,10 +247,10 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	includeComments := fs.Bool("include-comments", false, "hydrate comments during sync")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	since := fs.String("since", "", "GitHub since timestamp")
-	state := fs.String("state", "", "GitHub issue state: open|closed|all; default all")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
 	limitRaw := fs.String("limit", "", "maximum sync or embedding rows")
-	thresholdRaw := fs.String("threshold", "0.82", "minimum cluster cosine score")
-	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	thresholdRaw := fs.String("threshold", fmt.Sprintf("%.2f", defaultClusterThreshold), "minimum cluster cosine score")
+	minSizeRaw := fs.String("min-size", "1", "minimum cluster member count")
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
 	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
@@ -549,8 +548,8 @@ func (a *App) runNeighbors(ctx context.Context, args []string) error {
 func (a *App) runCluster(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	thresholdRaw := fs.String("threshold", "0.82", "minimum cosine score")
-	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	thresholdRaw := fs.String("threshold", fmt.Sprintf("%.2f", defaultClusterThreshold), "minimum cosine score")
+	minSizeRaw := fs.String("min-size", "1", "minimum cluster member count")
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
 	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
@@ -730,7 +729,7 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 	if batchSize <= 0 {
 		batchSize = 64
 	}
-	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL()})
+	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL(), Dimensions: rt.Config.OpenAI.EmbedDimensions})
 	for start := 0; start < len(tasks); start += batchSize {
 		end := start + batchSize
 		if end > len(tasks) {
@@ -814,14 +813,24 @@ func (a *App) runDurableClusters(ctx context.Context, args []string) error {
 	return a.runClusterList(ctx, "durable-clusters", args, true)
 }
 
+func clusterListIncludesClosed(durable bool, includeClosed bool, hideClosed bool) bool {
+	if hideClosed {
+		return false
+	}
+	if durable {
+		return includeClosed
+	}
+	return true
+}
+
 func (a *App) runClusterList(ctx context.Context, command string, args []string, durable bool) error {
 	fs := flag.NewFlagSet("clusters", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
 	limitRaw := fs.String("limit", "", "maximum cluster rows")
-	sortMode := fs.String("sort", "recent", "sort mode: recent|size")
-	includeClosed := fs.Bool("include-closed", false, "include closed and secondary historical cluster memberships")
-	hideClosed := fs.Bool("hide-closed", false, "deprecated; active primary clusters are the default")
+	sortMode := fs.String("sort", "size", "sort mode: recent|size")
+	includeClosed := fs.Bool("include-closed", false, "deprecated; clusters include closed rows by default")
+	hideClosed := fs.Bool("hide-closed", false, "hide locally closed clusters")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
 		return usageErr(err)
@@ -858,7 +867,7 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 	}
 	options := store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: *includeClosed && !*hideClosed,
+		IncludeClosed: clusterListIncludesClosed(durable, *includeClosed, *hideClosed),
 		MinSize:       minSize,
 		Limit:         limit,
 		Sort:          sort,
@@ -882,10 +891,10 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
-	limitRaw := fs.String("limit", "20", "maximum cluster rows")
+	limitRaw := fs.String("limit", "", "maximum cluster rows")
 	sortMode := fs.String("sort", "", "sort mode: recent|size")
-	includeClosed := fs.Bool("include-closed", false, "include closed and secondary historical cluster memberships")
-	hideClosed := fs.Bool("hide-closed", false, "deprecated; active primary clusters are the default")
+	includeClosed := fs.Bool("include-closed", false, "deprecated; closed clusters are shown by default")
+	hideClosed := fs.Bool("hide-closed", false, "hide locally closed clusters")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -931,12 +940,12 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		sort = strings.TrimSpace(rt.Config.TUI.DefaultSort)
 	}
 	if sort == "" {
-		sort = "recent"
+		sort = "size"
 	}
 	if sort != "recent" && sort != "size" {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
-	showClosed := *includeClosed && !*hideClosed
+	showClosed := !*hideClosed || *includeClosed
 
 	clusters, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
@@ -1488,7 +1497,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	since := fs.String("since", "", "GitHub since timestamp")
-	state := fs.String("state", "", "GitHub issue state: open|closed|all; default all")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
@@ -1940,7 +1949,7 @@ func parseClusterShapeOptions(command, maxClusterSizeRaw, fanoutRaw, crossKindTh
 
 func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, options clusterBuildOptions) ([]store.DurableClusterInput, int, error) {
 	if options.MinSize <= 0 {
-		options.MinSize = 2
+		options.MinSize = 1
 	}
 	if options.MaxClusterSize <= 0 {
 		options.MaxClusterSize = defaultClusterMaxSize
@@ -2008,19 +2017,26 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 			right := threads[builtCluster.Members[j]]
 			return left.Number < right.Number
 		})
-		rep := threads[builtCluster.RepresentativeThreadID]
+		identity := store.HumanKeyForValue(fmt.Sprintf("repo:%d:cluster-representative:%d", repoID, builtCluster.RepresentativeThreadID))
+		clusterType := "duplicate_candidate"
+		if len(builtCluster.Members) == 1 {
+			clusterType = "singleton_orphan"
+		}
 		input := store.DurableClusterInput{
-			StableKey:              durableClusterStableKey(builtCluster.Members, threads),
-			StableSlug:             durableClusterSlug(builtCluster.Members, threads),
+			StableKey:              identity.Hash,
+			StableSlug:             store.HumanKeyStableSlug(identity),
+			ClusterType:            clusterType,
 			RepresentativeThreadID: builtCluster.RepresentativeThreadID,
-			Title:                  rep.Title,
+			Title:                  "Cluster " + identity.Slug,
 			Members:                make([]store.DurableClusterMemberInput, 0, len(builtCluster.Members)),
 		}
 		for _, threadID := range builtCluster.Members {
-			role := "member"
+			role := "related"
 			var scorePtr *float64
 			if threadID == builtCluster.RepresentativeThreadID {
-				role = "representative"
+				role = "canonical"
+				scoreCopy := 1.0
+				scorePtr = &scoreCopy
 			} else if score, ok := pairScores[threadIDPairKey(threadID, builtCluster.RepresentativeThreadID)]; ok {
 				scoreCopy := score
 				scorePtr = &scoreCopy
@@ -2197,23 +2213,6 @@ func clusterRepository(ctx context.Context, st *store.Store, repoID int64, store
 	}, nil
 }
 
-func durableClusterStableKey(threadIDs []int64, threads map[int64]store.Thread) string {
-	parts := make([]string, 0, len(threadIDs))
-	for _, id := range threadIDs {
-		if thread, ok := threads[id]; ok && thread.Number > 0 {
-			parts = append(parts, strconv.Itoa(thread.Number))
-			continue
-		}
-		parts = append(parts, strconv.FormatInt(id, 10))
-	}
-	return "numbers:" + strings.Join(parts, ",")
-}
-
-func durableClusterSlug(threadIDs []int64, threads map[int64]store.Thread) string {
-	sum := sha256.Sum256([]byte(durableClusterStableKey(threadIDs, threads)))
-	return "cluster-" + hex.EncodeToString(sum[:])[:12]
-}
-
 func threadIDPairKey(left, right int64) string {
 	if left > right {
 		left, right = right, left
@@ -2364,10 +2363,10 @@ No API server is provided. There is intentionally no serve command.
 const tuiUsageText = `gitcrawl tui opens the local terminal cluster browser.
 
 Usage:
-  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--include-closed]
+  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--hide-closed]
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
-The TUI starts with active primary clusters at --min-size 5 by default; pass --min-size 1 to show singleton clusters, or --include-closed to inspect historical memberships.
+The TUI starts with ghcrawl-style cluster display defaults: --min-size 5, --sort size, and closed historical clusters visible. Pass --min-size 1 for singleton clusters or --hide-closed to focus open-only.
 Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter/jump/member triage controls.
 Press a to open the same action menu from the keyboard.
 Press # to jump directly to an issue or PR number.

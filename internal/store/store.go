@@ -155,8 +155,24 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("count clusters: %w", err)
 	}
 	var lastSync string
-	if err := s.db.QueryRowContext(ctx, `select coalesce(max(finished_at), '') from sync_runs where status in ('success', 'completed')`).Scan(&lastSync); err != nil {
-		return Status{}, fmt.Errorf("read last sync: %w", err)
+	if s.hasTable(ctx, "sync_runs") {
+		if err := s.db.QueryRowContext(ctx, `select coalesce(max(finished_at), '') from sync_runs where status in ('success', 'completed')`).Scan(&lastSync); err != nil {
+			return Status{}, fmt.Errorf("read last sync: %w", err)
+		}
+	} else if s.hasTable(ctx, "repo_sync_state") {
+		if err := s.db.QueryRowContext(ctx, `
+			select coalesce(
+				max(last_open_close_reconciled_at),
+				max(last_overlapping_open_scan_completed_at),
+				max(last_non_overlapping_scan_completed_at),
+				max(last_full_open_scan_started_at),
+				max(updated_at),
+				''
+			)
+			from repo_sync_state
+		`).Scan(&lastSync); err != nil {
+			return Status{}, fmt.Errorf("read portable sync state: %w", err)
+		}
 	}
 	if lastSync != "" {
 		parsed, err := time.Parse(timeLayout, lastSync)
@@ -204,6 +220,12 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) hasTable(ctx context.Context, table string) bool {
+	var name string
+	err := s.db.QueryRowContext(ctx, `select name from sqlite_schema where type in ('table', 'virtual table') and name = ?`, table).Scan(&name)
+	return err == nil
 }
 
 func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {

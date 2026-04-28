@@ -63,6 +63,9 @@ func (s *Store) ListThreadVectors(ctx context.Context, repoID int64) ([]ThreadVe
 }
 
 func (s *Store) ListThreadVectorsFiltered(ctx context.Context, query ThreadVectorQuery) ([]ThreadVector, error) {
+	if !s.hasTable(ctx, "thread_vectors") {
+		return []ThreadVector{}, nil
+	}
 	where, args := threadVectorWhere(query)
 	rows, err := s.db.QueryContext(ctx, `
 		select tv.thread_id, tv.basis, tv.model, tv.dimensions, tv.content_hash, tv.vector_json, tv.vector_backend, tv.created_at, tv.updated_at
@@ -96,13 +99,13 @@ func (s *Store) ListThreadVectorsFiltered(ctx context.Context, query ThreadVecto
 }
 
 func (s *Store) ThreadVectorByNumber(ctx context.Context, query ThreadVectorQuery, number int) (Thread, ThreadVector, error) {
+	if !s.hasTable(ctx, "thread_vectors") {
+		return Thread{}, ThreadVector{}, fmt.Errorf("thread #%d was not found with an embedding", number)
+	}
 	where, args := threadVectorWhere(query)
 	args = append(args, number)
 	row := s.db.QueryRowContext(ctx, `
-		select t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local,
+		select `+s.threadSelectColumns(ctx, "t")+`,
 			tv.thread_id, tv.basis, tv.model, tv.dimensions, tv.content_hash, tv.vector_json, tv.vector_backend, tv.created_at, tv.updated_at
 		from threads t
 		join thread_vectors tv on tv.thread_id = t.id
@@ -131,10 +134,7 @@ func (s *Store) ThreadsByIDs(ctx context.Context, repoID int64, ids []int64) (ma
 		args = append(args, id)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type,
-			html_url, labels_json, assignees_json, raw_json, content_hash, is_draft,
-			created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-			first_pulled_at, last_pulled_at, updated_at, closed_at_local, close_reason_local
+		select `+s.threadSelectColumns(ctx, "")+`
 		from threads
 		where repo_id = ? and id in (`+strings.Join(placeholders, ",")+`)
 	`, args...)

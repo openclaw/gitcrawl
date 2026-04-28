@@ -17,6 +17,9 @@ func (fakeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.R
 }
 
 func (fakeGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	if options.State == "closed" {
+		return nil, nil
+	}
 	return []map[string]any{
 		{
 			"id":         1,
@@ -86,6 +89,30 @@ type stateCaptureGitHub struct {
 
 func (f *stateCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
 	f.state = options.State
+	return nil, nil
+}
+
+type closedSweepGitHub struct {
+	fakeGitHub
+}
+
+func (closedSweepGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	if options.State == "closed" {
+		return []map[string]any{{
+			"id":         1,
+			"number":     7,
+			"state":      "closed",
+			"title":      "download stalls",
+			"body":       "large file download stalls",
+			"html_url":   "https://github.com/openclaw/gitcrawl/issues/7",
+			"created_at": "2026-04-26T00:00:00Z",
+			"updated_at": "2026-04-27T00:00:00Z",
+			"closed_at":  "2026-04-27T00:00:00Z",
+			"labels":     []map[string]any{{"name": "bug"}},
+			"assignees":  []map[string]any{},
+			"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+		}}, nil
+	}
 	return nil, nil
 }
 
@@ -189,7 +216,7 @@ func TestSyncPassesRequestedState(t *testing.T) {
 	}
 }
 
-func TestSyncDefaultsToAllStates(t *testing.T) {
+func TestSyncDefaultsToOpenState(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -202,8 +229,8 @@ func TestSyncDefaultsToAllStates(t *testing.T) {
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if client.state != "all" {
-		t.Fatalf("default state = %q, want all", client.state)
+	if client.state != "open" {
+		t.Fatalf("default state = %q, want open", client.state)
 	}
 }
 
@@ -218,5 +245,63 @@ func TestSyncRejectsInvalidState(t *testing.T) {
 	s := New(fakeGitHub{}, st)
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", State: "merged"}); err == nil {
 		t.Fatal("expected invalid state to fail")
+	}
+}
+
+func TestSyncOpenSinceAppliesClosedOverlapSweep(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:          repoID,
+		GitHubID:        "1",
+		Number:          7,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "download stalls",
+		Body:            "large file download stalls",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/7",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "old",
+		CreatedAtGitHub: "2026-04-26T00:00:00Z",
+		UpdatedAtGitHub: "2026-04-26T00:00:00Z",
+		FirstPulledAt:   "2026-04-26T00:00:00Z",
+		LastPulledAt:    "2026-04-26T00:00:00Z",
+		UpdatedAt:       "2026-04-26T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+
+	s := New(closedSweepGitHub{}, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 27, 1, 0, 0, 0, time.UTC) }
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "1h"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if stats.ThreadsClosed != 1 {
+		t.Fatalf("threads closed = %d, want 1", stats.ThreadsClosed)
+	}
+	threads, err := st.ListThreads(ctx, repoID, true)
+	if err != nil {
+		t.Fatalf("threads: %v", err)
+	}
+	if len(threads) != 1 || threads[0].State != "closed" || threads[0].ClosedAtGitHub == "" {
+		t.Fatalf("thread not closed from overlap sweep: %#v", threads)
 	}
 }

@@ -2,7 +2,10 @@ package store
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 var humanKeyWords = []string{
@@ -44,10 +47,51 @@ func clusterHumanName(repoID, representativeThreadID, clusterID int64) string {
 	if representativeThreadID != 0 {
 		key = fmt.Sprintf("repo:%d:cluster-representative:%d", repoID, representativeThreadID)
 	}
-	hash := sha256.Sum256([]byte(key))
-	return fmt.Sprintf("%s-%s-%s",
-		humanKeyWords[int(hash[0])%len(humanKeyWords)],
-		humanKeyWords[int(hash[1])%len(humanKeyWords)],
-		humanKeyWords[int(hash[2])%len(humanKeyWords)],
-	)
+	return HumanKeyForValue(key).Slug
+}
+
+type HumanKey struct {
+	Hash     string
+	Slug     string
+	Checksum string
+}
+
+func StableHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func HumanKeyForValue(value string) HumanKey {
+	return HumanKeyFromHash(StableHash(value))
+}
+
+func HumanKeyFromHash(hash string) HumanKey {
+	normalized := strings.ToLower(hash)
+	index := func(offset int) int {
+		value, err := strconv.ParseInt(normalized[offset:offset+2], 16, 64)
+		if err != nil {
+			return 0
+		}
+		return int(value) % len(humanKeyWords)
+	}
+	checksumValue, err := strconv.ParseInt(normalized[6:12], 16, 64)
+	checksum := "0000"
+	if err == nil {
+		checksum = strconv.FormatInt(checksumValue, 36)
+		if len(checksum) < 4 {
+			checksum = strings.Repeat("0", 4-len(checksum)) + checksum
+		}
+		if len(checksum) > 4 {
+			checksum = checksum[len(checksum)-4:]
+		}
+	}
+	return HumanKey{
+		Hash:     normalized,
+		Slug:     fmt.Sprintf("%s-%s-%s", humanKeyWords[index(0)], humanKeyWords[index(2)], humanKeyWords[index(4)]),
+		Checksum: checksum,
+	}
+}
+
+func HumanKeyStableSlug(key HumanKey) string {
+	return key.Slug + "-" + key.Checksum
 }

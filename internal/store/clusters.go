@@ -72,6 +72,7 @@ type ClusterMemberOverride struct {
 type DurableClusterInput struct {
 	StableKey              string
 	StableSlug             string
+	ClusterType            string
 	RepresentativeThreadID int64
 	Title                  string
 	Members                []DurableClusterMemberInput
@@ -135,7 +136,7 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 	}
 	limit := options.Limit
 	if limit <= 0 {
-		limit = 20
+		limit = -1
 	}
 	minSize := options.MinSize
 	if minSize <= 0 {
@@ -147,9 +148,7 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 	updatedAtExpr := `coalesce(max(coalesce(t.updated_at_gh, t.updated_at)), c.created_at)`
 	having := memberCountExpr + ` >= ?`
 	if !options.IncludeClosed {
-		memberCountExpr = `sum(case when t.state = 'open' and t.closed_at_local is null then 1 else 0 end)`
-		updatedAtExpr = `coalesce(max(case when t.state = 'open' and t.closed_at_local is null then coalesce(t.updated_at_gh, t.updated_at) end), c.created_at)`
-		having = memberCountExpr + ` >= ? and c.close_reason_local is null`
+		having = memberCountExpr + ` >= ? and c.close_reason_local is null and sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) < c.member_count`
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
@@ -216,7 +215,7 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 	}
 	limit := options.Limit
 	if limit <= 0 {
-		limit = 20
+		limit = -1
 	}
 	minSize := options.MinSize
 	if minSize <= 0 {
@@ -464,10 +463,7 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 		select cm.role, cm.state, cm.score_to_representative,
-			t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
+			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_memberships cm
 		join cluster_groups cg on cg.id = cm.cluster_id
 		join threads t on t.id = cm.thread_id
@@ -526,10 +522,7 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 		select case when t.id = c.representative_thread_id then 'representative' else 'member' end as role,
 			'active' as state,
 			cm.score_to_representative,
-			t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
+			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_members cm
 		join clusters c on c.id = cm.cluster_id and c.cluster_run_id = ?
 		join threads t on t.id = cm.thread_id
@@ -729,6 +722,15 @@ func (s *Store) SaveDurableClusters(ctx context.Context, repoID int64, inputs []
 			}
 			if err := tx.applyClusterOverrides(ctx, repoID, clusterID, now); err != nil {
 				return err
+			}
+		}
+		if len(inputs) > 0 {
+			if _, err := tx.q().ExecContext(ctx, `
+				delete from cluster_groups
+				where repo_id = ?
+				  and cluster_type = 'similarity'
+			`, repoID); err != nil {
+				return fmt.Errorf("delete legacy similarity clusters: %w", err)
 			}
 		}
 		if _, err := tx.q().ExecContext(ctx, `
@@ -951,12 +953,16 @@ func (s *Store) upsertDurableCluster(ctx context.Context, repoID, runID int64, i
 	if stableSlug == "" {
 		stableSlug = stableKey
 	}
+	clusterType := strings.TrimSpace(input.ClusterType)
+	if clusterType == "" {
+		clusterType = "duplicate_candidate"
+	}
 	var clusterID int64
 	if err := s.q().QueryRowContext(ctx, `
 		insert into cluster_groups(
 			repo_id, stable_key, stable_slug, status, cluster_type, representative_thread_id, title, created_at, updated_at
 		)
-		values(?, ?, ?, 'active', 'similarity', ?, ?, ?, ?)
+		values(?, ?, ?, 'active', ?, ?, ?, ?, ?)
 		on conflict(repo_id, stable_key) do update set
 			stable_slug = excluded.stable_slug,
 			cluster_type = excluded.cluster_type,
@@ -967,7 +973,7 @@ func (s *Store) upsertDurableCluster(ctx context.Context, repoID, runID int64, i
 			title = excluded.title,
 			updated_at = excluded.updated_at
 		returning id
-	`, repoID, stableKey, stableSlug, nullInt(input.RepresentativeThreadID), nullString(input.Title), now, now).Scan(&clusterID); err != nil {
+	`, repoID, stableKey, stableSlug, clusterType, nullInt(input.RepresentativeThreadID), nullString(input.Title), now, now).Scan(&clusterID); err != nil {
 		return 0, fmt.Errorf("upsert durable cluster: %w", err)
 	}
 	if _, err := s.q().ExecContext(ctx, `
@@ -1167,6 +1173,9 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 }
 
 func (s *Store) latestRawClusterRunID(ctx context.Context, repoID int64) (int64, bool, error) {
+	if !s.hasTable(ctx, "cluster_runs") || !s.hasTable(ctx, "clusters") {
+		return 0, false, nil
+	}
 	row := s.db.QueryRowContext(ctx, `
 		select cr.id
 		from cluster_runs cr
@@ -1292,23 +1301,46 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 		placeholders = append(placeholders, "?")
 		args = append(args, threadID)
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		select thread_id, summary_kind, summary_text
-		from document_summaries
-		where thread_id in (`+strings.Join(placeholders, ",")+`)
-		order by thread_id, summary_kind, updated_at desc
-	`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("select document summaries: %w", err)
-	}
-	defer rows.Close()
-
 	out := make(map[int64]map[string]string)
+	if s.hasTable(ctx, "document_summaries") {
+		rows, err := s.db.QueryContext(ctx, `
+			select thread_id, summary_kind, summary_text
+			from document_summaries
+			where thread_id in (`+strings.Join(placeholders, ",")+`)
+			order by thread_id, summary_kind, updated_at desc
+		`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("select document summaries: %w", err)
+		}
+		if err := scanSummaryRows(rows, out, "document summary"); err != nil {
+			return nil, err
+		}
+	}
+	if s.hasTable(ctx, "thread_key_summaries") && s.hasTable(ctx, "thread_revisions") {
+		rows, err := s.db.QueryContext(ctx, `
+			select tr.thread_id, tks.summary_kind, tks.key_text
+			from thread_key_summaries tks
+			join thread_revisions tr on tr.id = tks.thread_revision_id
+			where tr.thread_id in (`+strings.Join(placeholders, ",")+`)
+			order by tr.thread_id, tks.summary_kind, tks.created_at desc
+		`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("select thread key summaries: %w", err)
+		}
+		if err := scanSummaryRows(rows, out, "thread key summary"); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func scanSummaryRows(rows *sql.Rows, out map[int64]map[string]string, source string) error {
+	defer rows.Close()
 	for rows.Next() {
 		var threadID int64
 		var kind, text string
 		if err := rows.Scan(&threadID, &kind, &text); err != nil {
-			return nil, fmt.Errorf("scan document summary: %w", err)
+			return fmt.Errorf("scan %s: %w", source, err)
 		}
 		if out[threadID] == nil {
 			out[threadID] = map[string]string{}
@@ -1318,9 +1350,9 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate document summaries: %w", err)
+		return fmt.Errorf("iterate %s rows: %w", source, err)
 	}
-	return out, nil
+	return nil
 }
 
 func snippetRunes(value string, limit int) string {

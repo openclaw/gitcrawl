@@ -234,8 +234,8 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list active display clusters: %v", err)
 	}
-	if len(activeDisplay) != 1 || activeDisplay[0].ID != 70 || activeDisplay[0].MemberCount != 2 {
-		t.Fatalf("active display clusters should hide closed raw members, got %#v", activeDisplay)
+	if len(activeDisplay) != 1 || activeDisplay[0].ID != 70 || activeDisplay[0].Source != ClusterSourceRun || activeDisplay[0].MemberCount != 3 {
+		t.Fatalf("active display clusters should prefer latest raw run clusters, got %#v", activeDisplay)
 	}
 	activeDetail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 70, IncludeClosed: false, MemberLimit: 10})
 	if err != nil {
@@ -248,16 +248,16 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list active display clusters with min size: %v", err)
 	}
-	if len(hiddenByMinSize) != 0 {
-		t.Fatalf("active display min-size should count visible members only, got %#v", hiddenByMinSize)
+	if len(hiddenByMinSize) != 1 || hiddenByMinSize[0].ID != 70 {
+		t.Fatalf("active display min-size should count raw cluster members, got %#v", hiddenByMinSize)
 	}
 
 	display, err := st.ListDisplayClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "size"})
 	if err != nil {
 		t.Fatalf("list display clusters: %v", err)
 	}
-	if len(display) != 1 || display[0].ID != 70 || display[0].Source != ClusterSourceRun || display[0].MemberCount != 3 {
-		t.Fatalf("display clusters should prefer raw run, got %#v", display)
+	if len(display) != 1 || display[0].ID != 70 || display[0].Source != ClusterSourceRun {
+		t.Fatalf("display clusters should prefer raw run groups, got %#v", display)
 	}
 	durable, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "size"})
 	if err != nil {
