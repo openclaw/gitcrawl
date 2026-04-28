@@ -32,11 +32,12 @@ type GitHubConfig struct {
 }
 
 type OpenAIConfig struct {
-	APIKeyEnv    string `toml:"api_key_env"`
-	SummaryModel string `toml:"summary_model"`
-	EmbedModel   string `toml:"embed_model"`
-	BatchSize    int    `toml:"batch_size"`
-	Concurrency  int    `toml:"concurrency"`
+	APIKeyEnv       string `toml:"api_key_env"`
+	SummaryModel    string `toml:"summary_model"`
+	EmbedModel      string `toml:"embed_model"`
+	EmbedDimensions int    `toml:"embed_dimensions"`
+	BatchSize       int    `toml:"batch_size"`
+	Concurrency     int    `toml:"concurrency"`
 }
 
 type TUIConfig struct {
@@ -62,11 +63,12 @@ func Default() Config {
 			TokenEnv: DefaultTokenEnv,
 		},
 		OpenAI: OpenAIConfig{
-			APIKeyEnv:    DefaultOpenAIEnv,
-			SummaryModel: "gpt-5.4",
-			EmbedModel:   "text-embedding-3-small",
-			BatchSize:    64,
-			Concurrency:  2,
+			APIKeyEnv:       DefaultOpenAIEnv,
+			SummaryModel:    "gpt-5.4",
+			EmbedModel:      "text-embedding-3-small",
+			EmbedDimensions: 1024,
+			BatchSize:       64,
+			Concurrency:     2,
 		},
 		TUI: TUIConfig{
 			DefaultSort: "recent",
@@ -153,6 +155,9 @@ func (c *Config) Normalize() error {
 	}
 	if c.OpenAI.EmbedModel == "" {
 		c.OpenAI.EmbedModel = envOrDefault("GITCRAWL_EMBED_MODEL", def.OpenAI.EmbedModel)
+	}
+	if c.OpenAI.EmbedDimensions <= 0 {
+		c.OpenAI.EmbedDimensions = def.OpenAI.EmbedDimensions
 	}
 	if c.OpenAI.BatchSize <= 0 {
 		c.OpenAI.BatchSize = def.OpenAI.BatchSize

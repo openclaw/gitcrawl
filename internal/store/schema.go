@@ -214,6 +214,20 @@ create table if not exists thread_fingerprints (
   unique(thread_revision_id, algorithm_version)
 );
 
+create table if not exists thread_key_summaries (
+  id integer primary key,
+  thread_revision_id integer not null references thread_revisions(id) on delete cascade,
+  summary_kind text not null,
+  prompt_version text not null,
+  provider text not null,
+  model text not null,
+  input_hash text not null,
+  output_hash text not null,
+  key_text text not null,
+  created_at text not null,
+  unique(thread_revision_id, summary_kind, prompt_version, provider, model)
+);
+
 create table if not exists sync_runs (
   id integer primary key,
   repo_id integer references repositories(id) on delete cascade,

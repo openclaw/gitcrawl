@@ -77,6 +77,59 @@ func (s *Store) UpsertThread(ctx context.Context, thread Thread) (int64, error) 
 	return id, nil
 }
 
+func (s *Store) MarkOpenThreadClosedFromGitHub(ctx context.Context, thread Thread) (bool, error) {
+	if thread.RepoID <= 0 {
+		return false, fmt.Errorf("repo id must be positive")
+	}
+	if thread.Number <= 0 {
+		return false, fmt.Errorf("thread number must be positive")
+	}
+	if thread.Kind == "" {
+		return false, fmt.Errorf("thread kind is required")
+	}
+	if thread.State == "" {
+		thread.State = "closed"
+	}
+	result, err := s.q().ExecContext(ctx, `
+		update threads
+		set github_id = ?,
+			state = ?,
+			title = ?,
+			body = ?,
+			author_login = ?,
+			author_type = ?,
+			html_url = ?,
+			labels_json = ?,
+			assignees_json = ?,
+			raw_json = ?,
+			content_hash = ?,
+			is_draft = ?,
+			created_at_gh = ?,
+			updated_at_gh = ?,
+			closed_at_gh = ?,
+			merged_at_gh = ?,
+			last_pulled_at = ?,
+			updated_at = ?
+		where repo_id = ?
+		  and kind = ?
+		  and number = ?
+		  and state = 'open'
+		  and closed_at_local is null
+	`, thread.GitHubID, thread.State, thread.Title, nullString(thread.Body), nullString(thread.AuthorLogin),
+		nullString(thread.AuthorType), thread.HTMLURL, thread.LabelsJSON, thread.AssigneesJSON, thread.RawJSON,
+		thread.ContentHash, boolInt(thread.IsDraft), nullString(thread.CreatedAtGitHub), nullString(thread.UpdatedAtGitHub),
+		nullString(thread.ClosedAtGitHub), nullString(thread.MergedAtGitHub), nullString(thread.LastPulledAt), thread.UpdatedAt,
+		thread.RepoID, thread.Kind, thread.Number)
+	if err != nil {
+		return false, fmt.Errorf("mark open thread closed from github: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, nil
+	}
+	return affected > 0, nil
+}
+
 func (s *Store) ListThreads(ctx context.Context, repoID int64, includeClosed bool) ([]Thread, error) {
 	return s.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repoID, IncludeClosed: includeClosed})
 }

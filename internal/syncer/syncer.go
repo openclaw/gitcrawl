@@ -45,6 +45,7 @@ type Stats struct {
 	IssuesSynced       int    `json:"issues_synced"`
 	PullRequestsSynced int    `json:"pull_requests_synced"`
 	CommentsSynced     int    `json:"comments_synced"`
+	ThreadsClosed      int    `json:"threads_closed"`
 	RequestedSince     string `json:"requested_since,omitempty"`
 	Limit              int    `json:"limit,omitempty"`
 	MetadataOnly       bool   `json:"metadata_only"`
@@ -129,11 +130,18 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				stats.IssuesSynced++
 			}
 		}
+		if state == "open" && since != "" && options.Limit <= 0 {
+			closed, err := s.applyClosedOverlapSweep(ctx, st, repoID, options, since)
+			if err != nil {
+				return err
+			}
+			stats.ThreadsClosed = closed
+		}
 		stats.FinishedAt = s.now().Format(time.RFC3339Nano)
 		if _, err := st.RecordRun(ctx, store.RunRecord{
 			RepoID:     repoID,
 			Kind:       "sync",
-			Scope:      "open",
+			Scope:      state,
 			Status:     "success",
 			StartedAt:  stats.StartedAt,
 			FinishedAt: stats.FinishedAt,
@@ -158,7 +166,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 func normalizeState(value string) (string, error) {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {
-		return "all", nil
+		return "open", nil
 	}
 	switch value {
 	case "open", "closed", "all":
@@ -166,6 +174,31 @@ func normalizeState(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid state %q: use open, closed, or all", value)
 	}
+}
+
+func (s *Syncer) applyClosedOverlapSweep(ctx context.Context, st *store.Store, repoID int64, options Options, since string) (int, error) {
+	rows, err := s.client.ListRepositoryIssues(ctx, options.Owner, options.Repo, gh.ListIssuesOptions{
+		State: "closed",
+		Since: since,
+	}, options.Reporter)
+	if err != nil {
+		return 0, err
+	}
+	closed := 0
+	for _, row := range rows {
+		thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
+		updated, err := st.MarkOpenThreadClosedFromGitHub(ctx, thread)
+		if err != nil {
+			return 0, err
+		}
+		if updated {
+			closed++
+		}
+	}
+	if closed > 0 {
+		options.Reporter.Printf("[sync] closed overlap sweep matched %d stale open thread(s)", closed)
+	}
+	return closed, nil
 }
 
 func normalizeSince(value string, now time.Time) (string, error) {

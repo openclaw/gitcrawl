@@ -20,17 +20,20 @@ type Client struct {
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
+	dimensions int
 }
 
 type Options struct {
 	APIKey     string
 	BaseURL    string
+	Dimensions int
 	HTTPClient *http.Client
 }
 
 type embeddingRequest struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
+	Model      string   `json:"model"`
+	Input      []string `json:"input"`
+	Dimensions int      `json:"dimensions,omitempty"`
 }
 
 type embeddingResponse struct {
@@ -57,6 +60,7 @@ func New(options Options) *Client {
 		apiKey:     strings.TrimSpace(options.APIKey),
 		baseURL:    baseURL,
 		httpClient: httpClient,
+		dimensions: options.Dimensions,
 	}
 }
 
@@ -71,7 +75,7 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
-	payload, err := json.Marshal(embeddingRequest{Model: model, Input: texts})
+	payload, err := json.Marshal(embeddingRequest{Model: model, Input: texts, Dimensions: c.dimensions})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embeddings request: %w", err)
 	}

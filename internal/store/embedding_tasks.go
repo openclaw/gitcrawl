@@ -48,10 +48,19 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 		args = append(args, options.Limit)
 	}
 	rows, err := s.q().QueryContext(ctx, `
-		select t.id, t.number, t.kind, t.title, coalesce(d.body, ''), coalesce(d.raw_text, ''), coalesce(d.dedupe_text, ''),
+		select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, ''), coalesce(d.raw_text, t.body, ''), coalesce(d.dedupe_text, t.title || ' ' || coalesce(t.body, '')),
+		       coalesce((
+		         select tks.key_text
+		         from thread_key_summaries tks
+		         join thread_revisions tr on tr.id = tks.thread_revision_id
+		         where tr.thread_id = t.id
+		           and tks.summary_kind in ('llm_key_summary', 'llm_key_3line')
+		         order by tks.created_at desc, tr.created_at desc, tks.id desc
+		         limit 1
+		       ), ''),
 		       coalesce(tv.content_hash, '')
 		from threads t
-		join documents d on d.thread_id = t.id
+		left join documents d on d.thread_id = t.id
 		left join thread_vectors tv on tv.thread_id = t.id and tv.basis = ? and tv.model = ?
 		where `+strings.Join(where, " and ")+`
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc`+limitSQL,
@@ -64,13 +73,16 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 	out := make([]EmbeddingTask, 0)
 	for rows.Next() {
 		var task EmbeddingTask
-		var body, rawText, dedupeText, existingHash string
-		if err := rows.Scan(&task.ThreadID, &task.Number, &task.Kind, &task.Title, &body, &rawText, &dedupeText, &existingHash); err != nil {
+		var body, rawText, dedupeText, keySummary, existingHash string
+		if err := rows.Scan(&task.ThreadID, &task.Number, &task.Kind, &task.Title, &body, &rawText, &dedupeText, &keySummary, &existingHash); err != nil {
 			return nil, fmt.Errorf("scan embedding task: %w", err)
 		}
-		text, err := embeddingTextForBasis(basis, task.Title, body, rawText, dedupeText)
+		text, err := embeddingTextForBasis(basis, task.Title, body, rawText, dedupeText, keySummary)
 		if err != nil {
 			return nil, err
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
 		}
 		task.Text = text
 		task.ContentHash = embeddingContentHash(basis, model, text)
@@ -85,7 +97,7 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 	return out, nil
 }
 
-func embeddingTextForBasis(basis, title, body, rawText, dedupeText string) (string, error) {
+func embeddingTextForBasis(basis, title, body, rawText, dedupeText, keySummary string) (string, error) {
 	switch basis {
 	case "", "title_original":
 		parts := []string{strings.TrimSpace(title)}
@@ -97,6 +109,12 @@ func embeddingTextForBasis(basis, title, body, rawText, dedupeText string) (stri
 		return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
 	case "dedupe_text":
 		return strings.TrimSpace(dedupeText), nil
+	case "llm_key_summary":
+		keySummary = strings.TrimSpace(keySummary)
+		if keySummary == "" {
+			return "", nil
+		}
+		return strings.TrimSpace("title: " + strings.TrimSpace(title) + "\n\nkey_summary:\n" + keySummary), nil
 	default:
 		return "", fmt.Errorf("embedding basis %q is not supported yet", basis)
 	}

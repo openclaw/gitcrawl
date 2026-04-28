@@ -32,6 +32,7 @@ const (
 	defaultTUIWorkingSetLimit  = 500
 	defaultClusterMaxSize      = 40
 	defaultClusterFanout       = 16
+	defaultClusterThreshold    = 0.80
 	defaultCrossKindMinScore   = 0.93
 	highConfidenceEdgeScore    = 0.90
 	weakEdgeMinTitleOverlap    = 0.18
@@ -248,9 +249,9 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	includeComments := fs.Bool("include-comments", false, "hydrate comments during sync")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	since := fs.String("since", "", "GitHub since timestamp")
-	state := fs.String("state", "", "GitHub issue state: open|closed|all; default all")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
 	limitRaw := fs.String("limit", "", "maximum sync or embedding rows")
-	thresholdRaw := fs.String("threshold", "0.82", "minimum cluster cosine score")
+	thresholdRaw := fs.String("threshold", fmt.Sprintf("%.2f", defaultClusterThreshold), "minimum cluster cosine score")
 	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
@@ -549,7 +550,7 @@ func (a *App) runNeighbors(ctx context.Context, args []string) error {
 func (a *App) runCluster(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	thresholdRaw := fs.String("threshold", "0.82", "minimum cosine score")
+	thresholdRaw := fs.String("threshold", fmt.Sprintf("%.2f", defaultClusterThreshold), "minimum cosine score")
 	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
@@ -730,7 +731,7 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 	if batchSize <= 0 {
 		batchSize = 64
 	}
-	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL()})
+	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL(), Dimensions: rt.Config.OpenAI.EmbedDimensions})
 	for start := 0; start < len(tasks); start += batchSize {
 		end := start + batchSize
 		if end > len(tasks) {
@@ -1488,7 +1489,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	since := fs.String("since", "", "GitHub since timestamp")
-	state := fs.String("state", "", "GitHub issue state: open|closed|all; default all")
+	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
