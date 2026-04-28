@@ -1023,6 +1023,147 @@ func TestBuildDurableClusterInputsKeepsDeterministicReferenceEdges(t *testing.T)
 	}
 }
 
+func TestBuildDurableClusterInputsIgnoresBareOneDigitProseRefs(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	firstID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "401",
+		Number:        401,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "Background task notification",
+		Body:          "This is the #1 UX gap for orchestration.",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/401",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-401",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed first thread: %v", err)
+	}
+	secondID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "402",
+		Number:        402,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "Plugin config overlay",
+		Body:          "This is #1 for locked-down deployments.",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/402",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-402",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed second thread: %v", err)
+	}
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, []store.ThreadVector{
+		{ThreadID: firstID, Vector: []float64{1, 0}},
+		{ThreadID: secondID, Vector: []float64{0, 1}},
+	}, clusterBuildOptions{
+		Threshold:          0.99,
+		MinSize:            2,
+		MaxClusterSize:     defaultClusterMaxSize,
+		Fanout:             16,
+		CrossKindThreshold: 0.99,
+	})
+	if err != nil {
+		t.Fatalf("build inputs: %v", err)
+	}
+	if edgeCount != 0 || len(inputs) != 0 {
+		t.Fatalf("bare one-digit prose refs should not form evidence edges, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+}
+
+func TestBuildDurableClusterInputsPrunesWeakGenericTitleEdges(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	firstID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "501",
+		Number:        501,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "fix: improve error handling and logging for security-critical operations",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/501",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-501",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed first thread: %v", err)
+	}
+	secondID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "502",
+		Number:        502,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "fix(gateway): isolate control-plane write rate limits by connection",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/502",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-502",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed second thread: %v", err)
+	}
+	vectors := []store.ThreadVector{
+		{ThreadID: firstID, Vector: []float64{1, 0}},
+		{ThreadID: secondID, Vector: []float64{0.84, 0.5425863986500217}},
+	}
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, vectors, clusterBuildOptions{
+		Threshold:          0.82,
+		MinSize:            2,
+		MaxClusterSize:     defaultClusterMaxSize,
+		Fanout:             16,
+		CrossKindThreshold: defaultCrossKindMinScore,
+	})
+	if err != nil {
+		t.Fatalf("build inputs: %v", err)
+	}
+	if edgeCount != 0 || len(inputs) != 0 {
+		t.Fatalf("weak generic title edge should be pruned, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+}
+
 func TestKeepTopEdgesKeepsOneSidedNearestNeighbors(t *testing.T) {
 	edges := keepTopEdges([]clusterer.Edge{
 		{LeftThreadID: 1, RightThreadID: 2, Score: 0.95},

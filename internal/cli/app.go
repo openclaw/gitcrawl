@@ -33,11 +33,13 @@ const (
 	defaultClusterMaxSize     = 40
 	defaultClusterFanout      = 16
 	defaultCrossKindMinScore  = 0.93
+	highConfidenceEdgeScore   = 0.90
+	weakEdgeMinTitleOverlap   = 0.18
 	deterministicRefScore     = 0.94
-	sharedRefMaxBucketSize    = 8
 )
 
-var threadReferencePattern = regexp.MustCompile(`(?i)(?:#|issues/|pull/)(\d+)`)
+var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b[\w.-]+/[\w.-]+#(\d+)|(?:issues|pull)/(\d+)|#(\d{2,}))`)
+var titleTokenPattern = regexp.MustCompile(`[A-Za-z0-9]{4,}`)
 
 type App struct {
 	Stdout io.Writer
@@ -1966,6 +1968,9 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 			if score < options.Threshold {
 				continue
 			}
+			if score < highConfidenceEdgeScore && titleTokenOverlap(threads[leftID].Title, threads[rightID].Title) < weakEdgeMinTitleOverlap {
+				continue
+			}
 			if threads[leftID].Kind != threads[rightID].Kind && score < options.CrossKindThreshold {
 				continue
 			}
@@ -2038,7 +2043,6 @@ func addDeterministicReferenceEdges(edges map[string]clusterer.Edge, nodes []clu
 		threadIDByNumber[thread.Number] = node.ThreadID
 	}
 	refIDsByThreadID := make(map[int64]map[int64]bool, len(nodes))
-	threadsByReferencedNumber := map[int][]int64{}
 	for _, node := range nodes {
 		thread := threads[node.ThreadID]
 		refNumbers := referencedThreadNumbers(thread)
@@ -2047,7 +2051,6 @@ func addDeterministicReferenceEdges(edges map[string]clusterer.Edge, nodes []clu
 			if referencedID, ok := threadIDByNumber[number]; ok && referencedID != node.ThreadID {
 				refIDs[referencedID] = true
 			}
-			threadsByReferencedNumber[number] = append(threadsByReferencedNumber[number], node.ThreadID)
 		}
 		refIDsByThreadID[node.ThreadID] = refIDs
 	}
@@ -2056,33 +2059,47 @@ func addDeterministicReferenceEdges(edges map[string]clusterer.Edge, nodes []clu
 			upsertClusterEdge(edges, threadID, referencedID, deterministicRefScore)
 		}
 	}
-	for _, threadIDs := range threadsByReferencedNumber {
-		if len(threadIDs) < 2 || len(threadIDs) > sharedRefMaxBucketSize {
-			continue
-		}
-		sort.Slice(threadIDs, func(i, j int) bool { return threadIDs[i] < threadIDs[j] })
-		for left := 0; left < len(threadIDs); left++ {
-			for right := left + 1; right < len(threadIDs); right++ {
-				upsertClusterEdge(edges, threadIDs[left], threadIDs[right], deterministicRefScore)
-			}
-		}
-	}
 }
 
 func referencedThreadNumbers(thread store.Thread) map[int]bool {
 	value := thread.Title + "\n" + thread.Body
 	refs := map[int]bool{}
 	for _, match := range threadReferencePattern.FindAllStringSubmatch(value, -1) {
-		if len(match) < 2 {
-			continue
-		}
-		number, err := strconv.Atoi(match[1])
+		numberText := firstNonEmpty(match[1:]...)
+		number, err := strconv.Atoi(numberText)
 		if err != nil || number <= 0 || number == thread.Number {
 			continue
 		}
 		refs[number] = true
 	}
 	return refs
+}
+
+func titleTokenOverlap(left, right string) float64 {
+	leftTokens := titleTokenSet(left)
+	rightTokens := titleTokenSet(right)
+	if len(leftTokens) == 0 || len(rightTokens) == 0 {
+		return 0
+	}
+	overlap := 0
+	for token := range leftTokens {
+		if rightTokens[token] {
+			overlap++
+		}
+	}
+	base := len(leftTokens)
+	if len(rightTokens) < base {
+		base = len(rightTokens)
+	}
+	return float64(overlap) / float64(base)
+}
+
+func titleTokenSet(value string) map[string]bool {
+	out := map[string]bool{}
+	for _, token := range titleTokenPattern.FindAllString(strings.ToLower(value), -1) {
+		out[token] = true
+	}
+	return out
 }
 
 func keepTopEdges(edges []clusterer.Edge, fanout int) []clusterer.Edge {
