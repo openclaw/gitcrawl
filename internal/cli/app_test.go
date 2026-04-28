@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -532,6 +533,112 @@ func TestCloseClusterCommandLocallyClosesCluster(t *testing.T) {
 	}
 }
 
+func TestClustersDefaultShowsActivePrimaryMembers(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	openID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "90",
+		Number:        90,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "Open member",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/90",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-90",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed open thread: %v", err)
+	}
+	closedID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "91",
+		Number:        91,
+		Kind:          "issue",
+		State:         "closed",
+		Title:         "Closed historical member",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/91",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-91",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed closed thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(90, ?, 'cluster-90', 'cluster-90', 'active', ?, 'Cluster 90', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z');
+	`, repoID, openID); err != nil {
+		t.Fatalf("seed cluster group: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(90, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z'),
+		      (90, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z');
+	`, openID, closedID); err != nil {
+		t.Fatalf("seed cluster memberships: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--sort", "size", "--min-size", "1"}); err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	var active struct {
+		Clusters []store.ClusterSummary `json:"clusters"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &active); err != nil {
+		t.Fatalf("decode active clusters: %v\n%s", err, stdout.String())
+	}
+	if len(active.Clusters) != 1 || active.Clusters[0].MemberCount != 1 {
+		t.Fatalf("default clusters should show active primary members, got %#v", active.Clusters)
+	}
+
+	stdout.Reset()
+	withClosed := New()
+	withClosed.Stdout = &stdout
+	if err := withClosed.Run(ctx, []string{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--sort", "size", "--min-size", "1", "--include-closed"}); err != nil {
+		t.Fatalf("clusters include closed: %v", err)
+	}
+	var all struct {
+		Clusters []store.ClusterSummary `json:"clusters"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &all); err != nil {
+		t.Fatalf("decode all clusters: %v\n%s", err, stdout.String())
+	}
+	if len(all.Clusters) != 1 || all.Clusters[0].MemberCount != 2 {
+		t.Fatalf("include-closed should preserve historical members, got %#v", all.Clusters)
+	}
+}
+
 func TestClusterMemberOverrideCommands(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -758,6 +865,171 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 	if len(clusters) != 1 || clusters[0].MemberCount != 2 {
 		t.Fatalf("expected one durable cluster, got %#v", clusters)
+	}
+}
+
+func TestBuildDurableClusterInputsPrunesWeakCrossKindEdges(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	issueID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "201",
+		Number:        201,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "Slack zero inbound events",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/201",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-201",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	prID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "202",
+		Number:        202,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "Slack socket mode import fix",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/202",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-202",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed pull request: %v", err)
+	}
+	vectors := []store.ThreadVector{
+		{ThreadID: issueID, Vector: []float64{1, 0}},
+		{ThreadID: prID, Vector: []float64{0.9, 0.435889894}},
+	}
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, vectors, clusterBuildOptions{
+		Threshold:          0.82,
+		MinSize:            2,
+		MaxClusterSize:     defaultClusterMaxSize,
+		Fanout:             16,
+		CrossKindThreshold: 0.93,
+	})
+	if err != nil {
+		t.Fatalf("build inputs: %v", err)
+	}
+	if edgeCount != 0 || len(inputs) != 0 {
+		t.Fatalf("weak cross-kind edge should be pruned, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+	inputs, edgeCount, err = buildDurableClusterInputs(ctx, st, repoID, vectors, clusterBuildOptions{
+		Threshold:          0.82,
+		MinSize:            2,
+		MaxClusterSize:     defaultClusterMaxSize,
+		Fanout:             16,
+		CrossKindThreshold: 0.89,
+	})
+	if err != nil {
+		t.Fatalf("build relaxed inputs: %v", err)
+	}
+	if edgeCount != 1 || len(inputs) != 1 {
+		t.Fatalf("relaxed cross-kind threshold should keep edge, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+}
+
+func TestBuildDurableClusterInputsKeepsDeterministicReferenceEdges(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	issueID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "301",
+		Number:        301,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "Gateway token regression",
+		Body:          "Users cannot authorize device tokens.",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/301",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-301",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	prID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "302",
+		Number:        302,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "Repair auth scope migration",
+		Body:          "Fixes #301 by preserving the device-token scope during upgrade.",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/302",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-302",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed pull request: %v", err)
+	}
+	vectors := []store.ThreadVector{
+		{ThreadID: issueID, Vector: []float64{1, 0}},
+		{ThreadID: prID, Vector: []float64{0, 1}},
+	}
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, vectors, clusterBuildOptions{
+		Threshold:          0.99,
+		MinSize:            2,
+		MaxClusterSize:     defaultClusterMaxSize,
+		Fanout:             16,
+		CrossKindThreshold: 0.99,
+	})
+	if err != nil {
+		t.Fatalf("build inputs: %v", err)
+	}
+	if edgeCount != 1 || len(inputs) != 1 {
+		t.Fatalf("direct issue/PR reference should form an evidence edge, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+}
+
+func TestKeepTopEdgesKeepsOneSidedNearestNeighbors(t *testing.T) {
+	edges := keepTopEdges([]clusterer.Edge{
+		{LeftThreadID: 1, RightThreadID: 2, Score: 0.95},
+		{LeftThreadID: 1, RightThreadID: 3, Score: 0.90},
+	}, 1)
+	if len(edges) != 2 {
+		t.Fatalf("one-sided top-k edges should be kept, got %#v", edges)
 	}
 }
 

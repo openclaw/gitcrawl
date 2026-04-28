@@ -63,6 +63,104 @@ func TestListClusterSummaries(t *testing.T) {
 	}
 }
 
+func TestDurableClusterSummariesUsePrimaryOpenMembers(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	canonicalID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "101", Number: 101, Kind: "issue", State: "open",
+		Title: "broad canonical", HTMLURL: "https://github.com/openclaw/openclaw/issues/101",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-101", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("canonical thread: %v", err)
+	}
+	closedID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "102", Number: 102, Kind: "issue", State: "closed",
+		Title: "closed stale related", HTMLURL: "https://github.com/openclaw/openclaw/issues/102",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-102", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("closed thread: %v", err)
+	}
+	specificID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "103", Number: 103, Kind: "issue", State: "open",
+		Title: "specific canonical elsewhere", HTMLURL: "https://github.com/openclaw/openclaw/issues/103",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-103", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("specific thread: %v", err)
+	}
+	relatedOnlyID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "104", Number: 104, Kind: "issue", State: "open",
+		Title: "real related member", HTMLURL: "https://github.com/openclaw/openclaw/issues/104",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash-104", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("related-only thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+		values(1000, ?, 'broad', 'broad', 'active', ?, 'Broad cluster', '2026-04-26T00:00:00Z', '2026-04-26T00:10:00Z'),
+		      (1001, ?, 'specific', 'specific', 'active', ?, 'Specific cluster', '2026-04-26T00:00:00Z', '2026-04-26T00:20:00Z');
+	`, repoID, canonicalID, repoID, specificID); err != nil {
+		t.Fatalf("seed cluster groups: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+		values(1000, ?, 'canonical', 'active', 'algo', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z'),
+		      (1000, ?, 'related', 'active', 'algo', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z'),
+		      (1000, ?, 'related', 'active', 'algo', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z'),
+		      (1000, ?, 'related', 'active', 'algo', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z'),
+		      (1001, ?, 'canonical', 'active', 'algo', '{}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z');
+	`, canonicalID, closedID, specificID, relatedOnlyID, specificID); err != nil {
+		t.Fatalf("seed cluster memberships: %v", err)
+	}
+
+	active, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 10, Sort: "size"})
+	if err != nil {
+		t.Fatalf("list active clusters: %v", err)
+	}
+	if len(active) != 2 || active[0].ID != 1000 || active[0].MemberCount != 2 || active[1].ID != 1001 || active[1].MemberCount != 1 {
+		t.Fatalf("active summaries should count primary open members, got %#v", active)
+	}
+	if active[0].Status != "active" {
+		t.Fatalf("active summary status should not be derived from hidden historical members, got %#v", active[0])
+	}
+	detail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 1000, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("active detail: %v", err)
+	}
+	if detail.Cluster.Status != "active" {
+		t.Fatalf("active detail status should not be derived from hidden historical members, got %#v", detail.Cluster)
+	}
+	if len(detail.Members) != 2 || detail.Members[0].Thread.Number != 101 || detail.Members[1].Thread.Number != 104 {
+		t.Fatalf("active detail should hide closed and secondary related members, got %#v", detail.Members)
+	}
+	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 103, false)
+	if err != nil {
+		t.Fatalf("cluster id for specific thread: %v", err)
+	}
+	if clusterID != 1001 {
+		t.Fatalf("specific canonical cluster id = %d, want 1001", clusterID)
+	}
+	all, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 1000, IncludeClosed: true, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("all detail: %v", err)
+	}
+	if len(all.Members) != 4 {
+		t.Fatalf("include closed should preserve all durable memberships, got %#v", all.Members)
+	}
+}
+
 func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

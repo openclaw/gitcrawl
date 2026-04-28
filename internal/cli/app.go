@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +30,14 @@ import (
 const (
 	defaultTUIMinSize         = 5
 	defaultTUIWorkingSetLimit = 500
+	defaultClusterMaxSize     = 40
+	defaultClusterFanout      = 16
+	defaultCrossKindMinScore  = 0.93
+	deterministicRefScore     = 0.94
+	sharedRefMaxBucketSize    = 8
 )
+
+var threadReferencePattern = regexp.MustCompile(`(?i)(?:#|issues/|pull/)(\d+)`)
 
 type App struct {
 	Stdout io.Writer
@@ -236,8 +244,11 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum sync or embedding rows")
 	thresholdRaw := fs.String("threshold", "0.82", "minimum cluster cosine score")
 	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
+	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
+	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true, "threshold": true, "min-size": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true, "threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -268,6 +279,10 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	}
 	if minSize <= 0 {
 		minSize = 2
+	}
+	maxClusterSize, fanout, crossKindThreshold, err := parseClusterShapeOptions("refresh", *maxClusterSizeRaw, *fanoutRaw, *crossKindThresholdRaw)
+	if err != nil {
+		return err
 	}
 
 	result := refreshResult{
@@ -325,7 +340,13 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 				return err
 			}
 		}
-		clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, threshold, minSize)
+		clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, clusterBuildOptions{
+			Threshold:          threshold,
+			MinSize:            minSize,
+			MaxClusterSize:     maxClusterSize,
+			Fanout:             fanout,
+			CrossKindThreshold: crossKindThreshold,
+		})
 		_ = rt.Store.Close()
 		if err != nil {
 			return err
@@ -333,7 +354,10 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 		result.Repository = repo.FullName
 		result.Cluster = map[string]any{
 			"threshold":     threshold,
+			"cross_kind":    crossKindThreshold,
 			"min_size":      minSize,
+			"max_size":      maxClusterSize,
+			"k":             fanout,
 			"vector_count":  len(vectors),
 			"edge_count":    clusterResult.EdgeCount,
 			"cluster_count": clusterResult.ClusterCount,
@@ -515,11 +539,14 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	thresholdRaw := fs.String("threshold", "0.82", "minimum cosine score")
 	minSizeRaw := fs.String("min-size", "2", "minimum cluster member count")
+	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
+	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
+	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
 	limitRaw := fs.String("limit", "", "maximum vector rows to cluster")
 	model := fs.String("model", "", "embedding model")
 	basis := fs.String("basis", "", "embedding basis")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"threshold": true, "min-size": true, "limit": true, "model": true, "basis": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true, "limit": true, "model": true, "basis": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -543,6 +570,10 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	}
 	if minSize <= 0 {
 		minSize = 2
+	}
+	maxClusterSize, fanout, crossKindThreshold, err := parseClusterShapeOptions("cluster", *maxClusterSizeRaw, *fanoutRaw, *crossKindThresholdRaw)
+	if err != nil {
+		return err
 	}
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {
@@ -575,14 +606,23 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	if limit > 0 && len(vectors) > limit {
 		vectors = vectors[:limit]
 	}
-	clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, threshold, minSize)
+	clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, clusterBuildOptions{
+		Threshold:          threshold,
+		MinSize:            minSize,
+		MaxClusterSize:     maxClusterSize,
+		Fanout:             fanout,
+		CrossKindThreshold: crossKindThreshold,
+	})
 	if err != nil {
 		return err
 	}
 	return a.writeOutput("cluster", map[string]any{
 		"repository":    repo.FullName,
 		"threshold":     threshold,
+		"cross_kind":    crossKindThreshold,
 		"min_size":      minSize,
+		"max_size":      maxClusterSize,
+		"k":             fanout,
 		"vector_count":  len(vectors),
 		"edge_count":    clusterResult.EdgeCount,
 		"cluster_count": clusterResult.ClusterCount,
@@ -768,7 +808,8 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
 	limitRaw := fs.String("limit", "", "maximum cluster rows")
 	sortMode := fs.String("sort", "recent", "sort mode: recent|size")
-	hideClosed := fs.Bool("hide-closed", false, "hide non-active or closed clusters")
+	includeClosed := fs.Bool("include-closed", false, "include closed and secondary historical cluster memberships")
+	hideClosed := fs.Bool("hide-closed", false, "deprecated; active primary clusters are the default")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
 		return usageErr(err)
@@ -805,7 +846,7 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 	}
 	options := store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: !*hideClosed,
+		IncludeClosed: *includeClosed && !*hideClosed,
 		MinSize:       minSize,
 		Limit:         limit,
 		Sort:          sort,
@@ -831,7 +872,8 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
 	limitRaw := fs.String("limit", "20", "maximum cluster rows")
 	sortMode := fs.String("sort", "", "sort mode: recent|size")
-	hideClosed := fs.Bool("hide-closed", false, "hide non-active or closed clusters")
+	includeClosed := fs.Bool("include-closed", false, "include closed and secondary historical cluster memberships")
+	hideClosed := fs.Bool("hide-closed", false, "deprecated; active primary clusters are the default")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -882,10 +924,11 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	if sort != "recent" && sort != "size" {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
+	showClosed := *includeClosed && !*hideClosed
 
 	clusters, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: !*hideClosed,
+		IncludeClosed: showClosed,
 		MinSize:       minSize,
 		Limit:         limit,
 		Sort:          sort,
@@ -896,7 +939,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	if interactive {
 		workingSet, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
 			RepoID:        repo.ID,
-			IncludeClosed: !*hideClosed,
+			IncludeClosed: showClosed,
 			MinSize:       1,
 			Limit:         maxInt(defaultTUIWorkingSetLimit, limit),
 			Sort:          sort,
@@ -916,7 +959,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Sort:               sort,
 		MinSize:            minSize,
 		Limit:              limit,
-		HideClosed:         *hideClosed,
+		HideClosed:         !showClosed,
 		EmbedModel:         rt.Config.OpenAI.EmbedModel,
 		EmbeddingBasis:     rt.Config.EmbeddingBasis,
 		Clusters:           clusters,
@@ -1847,9 +1890,54 @@ func parseClusterMemberCommandIDs(command, clusterIDRaw, numberRaw string) (int,
 	return clusterID, number, nil
 }
 
-func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, threshold float64, minSize int) ([]store.DurableClusterInput, int, error) {
-	if minSize <= 0 {
-		minSize = 2
+type clusterBuildOptions struct {
+	Threshold          float64
+	MinSize            int
+	MaxClusterSize     int
+	Fanout             int
+	CrossKindThreshold float64
+}
+
+func parseClusterShapeOptions(command, maxClusterSizeRaw, fanoutRaw, crossKindThresholdRaw string) (int, int, float64, error) {
+	maxClusterSize, err := parseOptionalPositiveInt(maxClusterSizeRaw)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	fanout, err := parseOptionalPositiveInt(fanoutRaw)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	crossKindThreshold, err := parseOptionalFloat(crossKindThresholdRaw)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if maxClusterSize == 0 {
+		maxClusterSize = defaultClusterMaxSize
+	}
+	if fanout == 0 {
+		fanout = defaultClusterFanout
+	}
+	if crossKindThreshold == 0 {
+		crossKindThreshold = defaultCrossKindMinScore
+	}
+	if crossKindThreshold < 0 || crossKindThreshold > 1 {
+		return 0, 0, 0, fmt.Errorf("%s requires --cross-kind-threshold between 0 and 1", command)
+	}
+	return maxClusterSize, fanout, crossKindThreshold, nil
+}
+
+func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, options clusterBuildOptions) ([]store.DurableClusterInput, int, error) {
+	if options.MinSize <= 0 {
+		options.MinSize = 2
+	}
+	if options.MaxClusterSize <= 0 {
+		options.MaxClusterSize = defaultClusterMaxSize
+	}
+	if options.Fanout <= 0 {
+		options.Fanout = defaultClusterFanout
+	}
+	if options.CrossKindThreshold <= 0 {
+		options.CrossKindThreshold = defaultCrossKindMinScore
 	}
 	threadIDs := make([]int64, 0, len(storedVectors))
 	vectorByThreadID := make(map[int64][]float64, len(storedVectors))
@@ -1869,24 +1957,35 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 		}
 		nodes = append(nodes, clusterer.Node{ThreadID: stored.ThreadID, Number: thread.Number, Title: thread.Title})
 	}
-	edges := make([]clusterer.Edge, 0)
-	pairScores := map[string]float64{}
+	candidateByPair := map[string]clusterer.Edge{}
 	for left := 0; left < len(nodes); left++ {
 		for right := left + 1; right < len(nodes); right++ {
 			leftID := nodes[left].ThreadID
 			rightID := nodes[right].ThreadID
 			score := vector.Cosine(vectorByThreadID[leftID], vectorByThreadID[rightID])
-			if score < threshold {
+			if score < options.Threshold {
 				continue
 			}
-			edges = append(edges, clusterer.Edge{LeftThreadID: leftID, RightThreadID: rightID, Score: score})
-			pairScores[threadIDPairKey(leftID, rightID)] = score
+			if threads[leftID].Kind != threads[rightID].Kind && score < options.CrossKindThreshold {
+				continue
+			}
+			upsertClusterEdge(candidateByPair, leftID, rightID, score)
 		}
 	}
-	built := clusterer.Build(nodes, edges)
+	addDeterministicReferenceEdges(candidateByPair, nodes, threads)
+	candidates := make([]clusterer.Edge, 0, len(candidateByPair))
+	for _, edge := range candidateByPair {
+		candidates = append(candidates, edge)
+	}
+	edges := keepTopEdges(candidates, options.Fanout)
+	pairScores := map[string]float64{}
+	for _, edge := range edges {
+		pairScores[threadIDPairKey(edge.LeftThreadID, edge.RightThreadID)] = edge.Score
+	}
+	built := clusterer.BuildWithOptions(nodes, edges, clusterer.Options{MaxSize: options.MaxClusterSize})
 	inputs := make([]store.DurableClusterInput, 0, len(built))
 	for _, builtCluster := range built {
-		if len(builtCluster.Members) < minSize {
+		if len(builtCluster.Members) < options.MinSize {
 			continue
 		}
 		sort.Slice(builtCluster.Members, func(i, j int) bool {
@@ -1918,6 +2017,116 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 	return inputs, len(edges), nil
 }
 
+func upsertClusterEdge(edges map[string]clusterer.Edge, leftID, rightID int64, score float64) {
+	if leftID == rightID {
+		return
+	}
+	key := threadIDPairKey(leftID, rightID)
+	if existing, ok := edges[key]; ok && existing.Score >= score {
+		return
+	}
+	if leftID > rightID {
+		leftID, rightID = rightID, leftID
+	}
+	edges[key] = clusterer.Edge{LeftThreadID: leftID, RightThreadID: rightID, Score: score}
+}
+
+func addDeterministicReferenceEdges(edges map[string]clusterer.Edge, nodes []clusterer.Node, threads map[int64]store.Thread) {
+	threadIDByNumber := make(map[int]int64, len(nodes))
+	for _, node := range nodes {
+		thread := threads[node.ThreadID]
+		threadIDByNumber[thread.Number] = node.ThreadID
+	}
+	refIDsByThreadID := make(map[int64]map[int64]bool, len(nodes))
+	threadsByReferencedNumber := map[int][]int64{}
+	for _, node := range nodes {
+		thread := threads[node.ThreadID]
+		refNumbers := referencedThreadNumbers(thread)
+		refIDs := map[int64]bool{}
+		for number := range refNumbers {
+			if referencedID, ok := threadIDByNumber[number]; ok && referencedID != node.ThreadID {
+				refIDs[referencedID] = true
+			}
+			threadsByReferencedNumber[number] = append(threadsByReferencedNumber[number], node.ThreadID)
+		}
+		refIDsByThreadID[node.ThreadID] = refIDs
+	}
+	for threadID, refIDs := range refIDsByThreadID {
+		for referencedID := range refIDs {
+			upsertClusterEdge(edges, threadID, referencedID, deterministicRefScore)
+		}
+	}
+	for _, threadIDs := range threadsByReferencedNumber {
+		if len(threadIDs) < 2 || len(threadIDs) > sharedRefMaxBucketSize {
+			continue
+		}
+		sort.Slice(threadIDs, func(i, j int) bool { return threadIDs[i] < threadIDs[j] })
+		for left := 0; left < len(threadIDs); left++ {
+			for right := left + 1; right < len(threadIDs); right++ {
+				upsertClusterEdge(edges, threadIDs[left], threadIDs[right], deterministicRefScore)
+			}
+		}
+	}
+}
+
+func referencedThreadNumbers(thread store.Thread) map[int]bool {
+	value := thread.Title + "\n" + thread.Body
+	refs := map[int]bool{}
+	for _, match := range threadReferencePattern.FindAllStringSubmatch(value, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		number, err := strconv.Atoi(match[1])
+		if err != nil || number <= 0 || number == thread.Number {
+			continue
+		}
+		refs[number] = true
+	}
+	return refs
+}
+
+func keepTopEdges(edges []clusterer.Edge, fanout int) []clusterer.Edge {
+	if fanout <= 0 || len(edges) == 0 {
+		return edges
+	}
+	neighbors := map[int64][]clusterer.Edge{}
+	for _, edge := range edges {
+		neighbors[edge.LeftThreadID] = append(neighbors[edge.LeftThreadID], edge)
+		neighbors[edge.RightThreadID] = append(neighbors[edge.RightThreadID], edge)
+	}
+	top := map[int64]map[int64]bool{}
+	for threadID, list := range neighbors {
+		sort.SliceStable(list, func(i, j int) bool {
+			if list[i].Score == list[j].Score {
+				return edgeOtherThreadID(list[i], threadID) < edgeOtherThreadID(list[j], threadID)
+			}
+			return list[i].Score > list[j].Score
+		})
+		if len(list) > fanout {
+			list = list[:fanout]
+		}
+		seen := make(map[int64]bool, len(list))
+		for _, edge := range list {
+			seen[edgeOtherThreadID(edge, threadID)] = true
+		}
+		top[threadID] = seen
+	}
+	out := make([]clusterer.Edge, 0, len(edges))
+	for _, edge := range edges {
+		if top[edge.LeftThreadID][edge.RightThreadID] || top[edge.RightThreadID][edge.LeftThreadID] {
+			out = append(out, edge)
+		}
+	}
+	return out
+}
+
+func edgeOtherThreadID(edge clusterer.Edge, threadID int64) int64 {
+	if edge.LeftThreadID == threadID {
+		return edge.RightThreadID
+	}
+	return edge.LeftThreadID
+}
+
 type clusterRepositoryResult struct {
 	EdgeCount    int
 	ClusterCount int
@@ -1925,8 +2134,8 @@ type clusterRepositoryResult struct {
 	RunID        int64
 }
 
-func clusterRepository(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, threshold float64, minSize int) (clusterRepositoryResult, error) {
-	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, storedVectors, threshold, minSize)
+func clusterRepository(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, options clusterBuildOptions) (clusterRepositoryResult, error) {
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, storedVectors, options)
 	if err != nil {
 		return clusterRepositoryResult{}, err
 	}
@@ -2109,10 +2318,10 @@ No API server is provided. There is intentionally no serve command.
 const tuiUsageText = `gitcrawl tui opens the local terminal cluster browser.
 
 Usage:
-  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--hide-closed]
+  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--include-closed]
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
-The TUI starts at --min-size 5 by default; pass --min-size 1 to show singleton clusters.
+The TUI starts with active primary clusters at --min-size 5 by default; pass --min-size 1 to show singleton clusters, or --include-closed to inspect historical memberships.
 Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter/jump/member triage controls.
 Press a to open the same action menu from the keyboard.
 Press # to jump directly to an issue or PR number.

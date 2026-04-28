@@ -221,7 +221,7 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 	args = append(args, minSize, limit)
 	memberThreadJoin := `left join threads mt on mt.id = cm.thread_id`
 	if !options.IncludeClosed {
-		memberThreadJoin += ` and mt.closed_at_local is null`
+		memberThreadJoin += ` and ` + durableVisibleMemberPredicate("cg", "cm", "mt")
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -395,6 +395,26 @@ func parseIDSet(value string) map[int64]bool {
 	return out
 }
 
+func durableVisibleMemberPredicate(clusterAlias, membershipAlias, threadAlias string) string {
+	return threadAlias + `.state = 'open'
+		and ` + threadAlias + `.closed_at_local is null
+		and (
+			` + membershipAlias + `.role in ('canonical', 'representative')
+			or not exists (
+				select 1
+				from cluster_memberships visible_cm
+				join cluster_groups visible_cg on visible_cg.id = visible_cm.cluster_id
+				where visible_cm.thread_id = ` + membershipAlias + `.thread_id
+				  and visible_cm.cluster_id <> ` + membershipAlias + `.cluster_id
+				  and visible_cm.state = 'active'
+				  and visible_cm.role in ('canonical', 'representative')
+				  and visible_cg.repo_id = ` + clusterAlias + `.repo_id
+				  and visible_cg.status = 'active'
+				  and visible_cg.closed_at is null
+			)
+		)`
+}
+
 func idSetOverlapRatio(left, right map[int64]bool) float64 {
 	smaller := len(left)
 	if len(right) < smaller {
@@ -435,7 +455,7 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 	where := `cm.cluster_id = ?`
 	args := []any{options.ClusterID}
 	if !options.IncludeClosed {
-		where += ` and cm.state = 'active' and t.closed_at_local is null`
+		where += ` and cm.state = 'active' and ` + durableVisibleMemberPredicate("cg", "cm", "t")
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
@@ -445,6 +465,7 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
 			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
 		from cluster_memberships cm
+		join cluster_groups cg on cg.id = cm.cluster_id
 		join threads t on t.id = cm.thread_id
 		where `+where+`
 		order by case cm.role when 'canonical' then 0 when 'representative' then 1 else 2 end,
@@ -550,7 +571,7 @@ func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, numb
 	where := `t.repo_id = ? and t.number = ?`
 	args := []any{repoID, number}
 	if !includeClosed {
-		where += ` and t.closed_at_local is null and cm.state = 'active' and cg.status = 'active' and cg.closed_at is null`
+		where += ` and cm.state = 'active' and cg.status = 'active' and cg.closed_at is null and ` + durableVisibleMemberPredicate("cg", "cm", "t")
 	}
 	row := s.db.QueryRowContext(ctx, `
 		select cg.id
@@ -560,6 +581,7 @@ func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, numb
 		where `+where+`
 		order by case cm.state when 'active' then 0 else 1 end,
 			case cg.status when 'active' then 0 else 1 end,
+			case cm.role when 'canonical' then 0 when 'representative' then 1 else 2 end,
 			coalesce(cg.updated_at, '') desc,
 			cg.id desc
 		limit 1
@@ -1090,19 +1112,28 @@ func nullableFloat(value *float64) sql.NullFloat64 {
 func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64, includeClosed bool) (ClusterSummary, error) {
 	where := `cg.repo_id = ? and cg.id = ?`
 	args := []any{repoID, clusterID}
+	memberCountExpr := `count(cm.thread_id)`
+	closedMemberCountExpr := `sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end)`
+	memberThreadJoin := ``
 	if !includeClosed {
 		where += ` and cg.status = 'active' and cg.closed_at is null`
+		memberCountExpr = `count(mt.id)`
+		closedMemberCountExpr = `0`
+		memberThreadJoin = `
+		left join threads mt on mt.id = cm.thread_id
+			and (` + durableVisibleMemberPredicate("cg", "cm", "mt") + `)`
 	}
 	row := s.db.QueryRowContext(ctx, `
 		select cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title,
-			count(cm.thread_id) as member_count,
+			`+memberCountExpr+` as member_count,
 			cg.updated_at, coalesce(cc.updated_at, cg.closed_at) as closed_at,
-			sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) as closed_member_count
+			`+closedMemberCountExpr+` as closed_member_count
 		from cluster_groups cg
 		left join cluster_closures cc on cc.cluster_id = cg.id
 		left join cluster_memberships cm on cm.cluster_id = cg.id and cm.state = 'active'
 		left join threads t on t.id = cm.thread_id
+		`+memberThreadJoin+`
 		left join threads rt on rt.id = cg.representative_thread_id
 		where `+where+`
 		group by cg.id

@@ -19,13 +19,41 @@ type Cluster struct {
 	Members                []int64 `json:"members"`
 }
 
+type Options struct {
+	MaxSize int
+}
+
 func Build(nodes []Node, edges []Edge) []Cluster {
+	return BuildWithOptions(nodes, edges, Options{})
+}
+
+func BuildWithOptions(nodes []Node, edges []Edge, options Options) []Cluster {
 	uf := newUnionFind()
 	for _, node := range nodes {
 		uf.add(node.ThreadID)
 	}
-	for _, edge := range edges {
-		uf.union(edge.LeftThreadID, edge.RightThreadID)
+	keptEdges := edges
+	if options.MaxSize > 0 {
+		keptEdges = make([]Edge, 0, len(edges))
+		sortedEdges := append([]Edge(nil), edges...)
+		sort.SliceStable(sortedEdges, func(i, j int) bool {
+			if sortedEdges[i].Score == sortedEdges[j].Score {
+				if sortedEdges[i].LeftThreadID == sortedEdges[j].LeftThreadID {
+					return sortedEdges[i].RightThreadID < sortedEdges[j].RightThreadID
+				}
+				return sortedEdges[i].LeftThreadID < sortedEdges[j].LeftThreadID
+			}
+			return sortedEdges[i].Score > sortedEdges[j].Score
+		})
+		for _, edge := range sortedEdges {
+			if uf.unionBounded(edge.LeftThreadID, edge.RightThreadID, options.MaxSize) {
+				keptEdges = append(keptEdges, edge)
+			}
+		}
+	} else {
+		for _, edge := range edges {
+			uf.union(edge.LeftThreadID, edge.RightThreadID)
+		}
 	}
 
 	byRoot := map[int64][]int64{}
@@ -33,7 +61,7 @@ func Build(nodes []Node, edges []Edge) []Cluster {
 		root := uf.find(node.ThreadID)
 		byRoot[root] = append(byRoot[root], node.ThreadID)
 	}
-	return format(nodes, edges, byRoot)
+	return format(nodes, keptEdges, byRoot)
 }
 
 func format(nodes []Node, edges []Edge, byRoot map[int64][]int64) []Cluster {
@@ -122,4 +150,21 @@ func (u *unionFind) union(left, right int64) {
 	}
 	u.parent[rightRoot] = leftRoot
 	u.size[leftRoot] += u.size[rightRoot]
+}
+
+func (u *unionFind) unionBounded(left, right int64, maxSize int) bool {
+	leftRoot := u.find(left)
+	rightRoot := u.find(right)
+	if leftRoot == rightRoot {
+		return true
+	}
+	if u.size[leftRoot] < u.size[rightRoot] {
+		leftRoot, rightRoot = rightRoot, leftRoot
+	}
+	if u.size[leftRoot]+u.size[rightRoot] > maxSize {
+		return false
+	}
+	u.parent[rightRoot] = leftRoot
+	u.size[leftRoot] += u.size[rightRoot]
+	return true
 }
