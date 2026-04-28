@@ -71,7 +71,7 @@ func Default() Config {
 			Concurrency:     2,
 		},
 		TUI: TUIConfig{
-			DefaultSort: "recent",
+			DefaultSort: "size",
 		},
 	}
 }

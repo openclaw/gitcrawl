@@ -750,15 +750,15 @@ func TestClustersDefaultShowsActivePrimaryMembers(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &active); err != nil {
 		t.Fatalf("decode active clusters: %v\n%s", err, stdout.String())
 	}
-	if len(active.Clusters) != 1 || active.Clusters[0].MemberCount != 1 {
-		t.Fatalf("default clusters should show active primary members, got %#v", active.Clusters)
+	if len(active.Clusters) != 1 || active.Clusters[0].MemberCount != 2 {
+		t.Fatalf("default clusters should include closed historical members, got %#v", active.Clusters)
 	}
 
 	stdout.Reset()
 	withClosed := New()
 	withClosed.Stdout = &stdout
-	if err := withClosed.Run(ctx, []string{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--sort", "size", "--min-size", "1", "--include-closed"}); err != nil {
-		t.Fatalf("clusters include closed: %v", err)
+	if err := withClosed.Run(ctx, []string{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--sort", "size", "--min-size", "1", "--hide-closed"}); err != nil {
+		t.Fatalf("clusters hide closed: %v", err)
 	}
 	var all struct {
 		Clusters []store.ClusterSummary `json:"clusters"`
@@ -766,8 +766,8 @@ func TestClustersDefaultShowsActivePrimaryMembers(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &all); err != nil {
 		t.Fatalf("decode all clusters: %v\n%s", err, stdout.String())
 	}
-	if len(all.Clusters) != 1 || all.Clusters[0].MemberCount != 2 {
-		t.Fatalf("include-closed should preserve historical members, got %#v", all.Clusters)
+	if len(all.Clusters) != 1 || all.Clusters[0].MemberCount != 1 {
+		t.Fatalf("hide-closed should focus active members, got %#v", all.Clusters)
 	}
 }
 

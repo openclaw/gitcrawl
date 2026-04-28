@@ -813,14 +813,24 @@ func (a *App) runDurableClusters(ctx context.Context, args []string) error {
 	return a.runClusterList(ctx, "durable-clusters", args, true)
 }
 
+func clusterListIncludesClosed(durable bool, includeClosed bool, hideClosed bool) bool {
+	if hideClosed {
+		return false
+	}
+	if durable {
+		return includeClosed
+	}
+	return true
+}
+
 func (a *App) runClusterList(ctx context.Context, command string, args []string, durable bool) error {
 	fs := flag.NewFlagSet("clusters", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
 	limitRaw := fs.String("limit", "", "maximum cluster rows")
-	sortMode := fs.String("sort", "recent", "sort mode: recent|size")
-	includeClosed := fs.Bool("include-closed", false, "include closed and secondary historical cluster memberships")
-	hideClosed := fs.Bool("hide-closed", false, "deprecated; active primary clusters are the default")
+	sortMode := fs.String("sort", "size", "sort mode: recent|size")
+	includeClosed := fs.Bool("include-closed", false, "deprecated; clusters include closed rows by default")
+	hideClosed := fs.Bool("hide-closed", false, "hide locally closed clusters")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
 		return usageErr(err)
@@ -857,7 +867,7 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 	}
 	options := store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
-		IncludeClosed: *includeClosed && !*hideClosed,
+		IncludeClosed: clusterListIncludesClosed(durable, *includeClosed, *hideClosed),
 		MinSize:       minSize,
 		Limit:         limit,
 		Sort:          sort,
@@ -881,10 +891,10 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
-	limitRaw := fs.String("limit", "20", "maximum cluster rows")
+	limitRaw := fs.String("limit", "", "maximum cluster rows")
 	sortMode := fs.String("sort", "", "sort mode: recent|size")
-	includeClosed := fs.Bool("include-closed", false, "include closed and secondary historical cluster memberships")
-	hideClosed := fs.Bool("hide-closed", false, "deprecated; active primary clusters are the default")
+	includeClosed := fs.Bool("include-closed", false, "deprecated; closed clusters are shown by default")
+	hideClosed := fs.Bool("hide-closed", false, "hide locally closed clusters")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-size": true, "limit": true, "sort": true})); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -930,12 +940,12 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		sort = strings.TrimSpace(rt.Config.TUI.DefaultSort)
 	}
 	if sort == "" {
-		sort = "recent"
+		sort = "size"
 	}
 	if sort != "recent" && sort != "size" {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
-	showClosed := *includeClosed && !*hideClosed
+	showClosed := !*hideClosed || *includeClosed
 
 	clusters, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
 		RepoID:        repo.ID,
@@ -2353,10 +2363,10 @@ No API server is provided. There is intentionally no serve command.
 const tuiUsageText = `gitcrawl tui opens the local terminal cluster browser.
 
 Usage:
-  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--include-closed]
+  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--hide-closed]
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
-The TUI starts with active primary clusters at --min-size 5 by default; pass --min-size 1 to show singleton clusters, or --include-closed to inspect historical memberships.
+The TUI starts with ghcrawl-style cluster display defaults: --min-size 5, --sort size, and closed historical clusters visible. Pass --min-size 1 for singleton clusters or --hide-closed to focus open-only.
 Mouse is supported: click rows, wheel panes, right-click for actions, and use the menu for copy/sort/filter/jump/member triage controls.
 Press a to open the same action menu from the keyboard.
 Press # to jump directly to an issue or PR number.

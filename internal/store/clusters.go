@@ -95,14 +95,31 @@ func (s *Store) ListClusterSummaries(ctx context.Context, options ClusterSummary
 }
 
 func (s *Store) ListDisplayClusterSummaries(ctx context.Context, options ClusterSummaryOptions) ([]ClusterSummary, error) {
-	durable, err := s.listDurableClusterSummaries(ctx, options)
+	raw, err := s.ListRunClusterSummaries(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	if len(durable) > 0 {
-		return durable, nil
+	if len(raw) > 0 {
+		if options.IncludeClosed {
+			represented := make(map[int64]bool, len(raw))
+			for _, cluster := range raw {
+				if cluster.RepresentativeThreadID != 0 {
+					represented[cluster.RepresentativeThreadID] = true
+				}
+			}
+			closed, err := s.listClosedDurableClusterSummaries(ctx, options, represented)
+			if err != nil {
+				return nil, err
+			}
+			raw = append(raw, closed...)
+			sortClusterSummaries(raw, options.Sort)
+			if options.Limit > 0 && len(raw) > options.Limit {
+				raw = raw[:options.Limit]
+			}
+		}
+		return raw, nil
 	}
-	return s.ListRunClusterSummaries(ctx, options)
+	return s.listDurableClusterSummaries(ctx, options)
 }
 
 func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSummaryOptions) ([]ClusterSummary, error) {
@@ -119,7 +136,7 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 	}
 	limit := options.Limit
 	if limit <= 0 {
-		limit = 20
+		limit = -1
 	}
 	minSize := options.MinSize
 	if minSize <= 0 {
@@ -131,9 +148,7 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 	updatedAtExpr := `coalesce(max(coalesce(t.updated_at_gh, t.updated_at)), c.created_at)`
 	having := memberCountExpr + ` >= ?`
 	if !options.IncludeClosed {
-		memberCountExpr = `sum(case when t.state = 'open' and t.closed_at_local is null then 1 else 0 end)`
-		updatedAtExpr = `coalesce(max(case when t.state = 'open' and t.closed_at_local is null then coalesce(t.updated_at_gh, t.updated_at) end), c.created_at)`
-		having = memberCountExpr + ` >= ? and c.close_reason_local is null`
+		having = memberCountExpr + ` >= ? and c.close_reason_local is null and sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) < c.member_count`
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
@@ -200,7 +215,7 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 	}
 	limit := options.Limit
 	if limit <= 0 {
-		limit = 20
+		limit = -1
 	}
 	minSize := options.MinSize
 	if minSize <= 0 {
