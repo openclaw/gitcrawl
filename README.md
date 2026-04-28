@@ -32,6 +32,7 @@ gitcrawl neighbors owner/repo --number 123 --limit 10
 gitcrawl search owner/repo --query "download stalls"
 gitcrawl search issues "download stalls" -R owner/repo --state open --json number,title,state,url,updatedAt,labels --limit 30
 gitcrawl search prs "manifest cache" -R owner/repo --state open --json number,title,state,url,updatedAt,isDraft,author --limit 20
+gitcrawl search issues "hot loop" -R owner/repo --state open --sync-if-stale 5m --json number,title,url
 gitcrawl tui
 gitcrawl tui owner/repo
 ```
@@ -40,7 +41,7 @@ gitcrawl tui owner/repo
 `gitcrawl cluster` and `gitcrawl refresh` build bounded nearest-neighbor clusters by default (`--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`) and add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges also need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.
 `gitcrawl sync` fetches issues and pull requests in every GitHub state by default. Pass `--state open` or `--state closed` to limit a sync to one state.
-`gitcrawl search issues|prs` accepts the common `gh search` shape (`<query> -R owner/repo --state open --json fields --limit N`) and answers from the local SQLite cache. It is intended for discovery without spending GitHub REST search quota; use `gh` for final live verification and GitHub write actions.
+`gitcrawl search issues|prs` accepts the common `gh search` shape (`<query> -R owner/repo --state open --json fields --limit N`) and answers from the local SQLite cache. It is intended for discovery without spending GitHub REST search quota; use `gh` for final live verification and GitHub write actions. Pass `--sync-if-stale 5m` to perform one metadata sync before the cached search when the local repository mirror is older than that duration.
 The TUI starts at `--min-size 5` so maintainer-significant active clusters are visible first; pass `--min-size 1` to include singletons. Mouse support is built in: click rows, wheel panes, and right-click for copy, sort, filter, jump, link, neighbor, local close/reopen, and member triage actions. Press `a` to open the same action menu from the keyboard, `#` to jump directly to an issue or PR number, `p` to switch between repositories already present in the local store, or `n` to load neighbors for the selected issue or PR. Enter from the members pane also loads neighbors before opening detail. The TUI quietly refreshes from the local store every 15 seconds.
 
 ## Local Defaults

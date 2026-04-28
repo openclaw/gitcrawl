@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 type RunRecord struct {
@@ -72,6 +73,25 @@ func (s *Store) ListRuns(ctx context.Context, repoID int64, kind string, limit i
 		return nil, fmt.Errorf("iterate %s runs: %w", kind, err)
 	}
 	return out, nil
+}
+
+func (s *Store) LastSuccessfulSyncAt(ctx context.Context, repoID int64) (time.Time, error) {
+	var lastSync string
+	if err := s.q().QueryRowContext(ctx, `
+		select coalesce(max(finished_at), '')
+		from sync_runs
+		where repo_id = ? and status in ('success', 'completed')
+	`, repoID).Scan(&lastSync); err != nil {
+		return time.Time{}, fmt.Errorf("read last successful sync: %w", err)
+	}
+	if lastSync == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, lastSync)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse last successful sync %q: %w", lastSync, err)
+	}
+	return parsed, nil
 }
 
 func runTable(kind string) (string, error) {

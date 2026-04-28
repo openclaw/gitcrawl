@@ -97,9 +97,10 @@ Public commands:
 ```text
 gitcrawl search issues <query> -R owner/repo --state open --json number,title,state,url,updatedAt,labels --limit 30
 gitcrawl search prs <query> -R owner/repo --state open --json number,title,state,url,updatedAt,isDraft,author --limit 20
+gitcrawl search issues <query> -R owner/repo --state open --sync-if-stale 5m --json number,title,url
 ```
 
-This compatibility path must read only from local SQLite. It avoids GitHub REST search quota and is not a replacement for final live `gh` verification before comments, closes, labels, or merges.
+This compatibility path reads from local SQLite by default. It avoids GitHub REST search quota and is not a replacement for final live `gh` verification before comments, closes, labels, or merges. `--sync-if-stale <duration>` may run one metadata sync first when the repository mirror is older than the requested max age; the search result itself still comes from SQLite.
 
 ## Config
 

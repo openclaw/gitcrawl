@@ -2,11 +2,16 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/openclaw/gitcrawl/internal/store"
 )
@@ -39,8 +44,9 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum rows")
 	limitShortRaw := fs.String("L", "", "maximum rows")
 	jsonFieldsRaw := fs.String("json", "", "comma-separated JSON fields")
+	syncIfStaleRaw := fs.String("sync-if-stale", "", "sync owner/repo first when the local mirror is older than this duration")
 	if err := fs.Parse(normalizeCommandArgs(args[1:], map[string]bool{
-		"R": true, "repo": true, "state": true, "limit": true, "L": true, "json": true,
+		"R": true, "repo": true, "state": true, "limit": true, "L": true, "json": true, "sync-if-stale": true,
 	})); err != nil {
 		return usageErr(err)
 	}
@@ -61,6 +67,15 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 	limit, err := parseGHSearchLimit(*limitRaw, *limitShortRaw)
 	if err != nil {
 		return usageErr(err)
+	}
+	syncIfStale, err := parseGHSearchDuration(*syncIfStaleRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if syncIfStale > 0 {
+		if err := a.syncGHSearchIfStale(ctx, owner, repoName, state, syncIfStale); err != nil {
+			return err
+		}
 	}
 
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
@@ -110,6 +125,49 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 	return nil
 }
 
+func (a *App) syncGHSearchIfStale(ctx context.Context, owner, repoName, state string, maxAge time.Duration) error {
+	stale, lastSync, err := a.ghSearchCacheStale(ctx, owner, repoName, maxAge)
+	if err != nil {
+		return err
+	}
+	if !stale {
+		return nil
+	}
+	if lastSync.IsZero() {
+		fmt.Fprintf(a.Stderr, "gitcrawl: no cached sync found for %s/%s; syncing before search\n", owner, repoName)
+	} else {
+		fmt.Fprintf(a.Stderr, "gitcrawl: cached sync for %s/%s is older than %s; syncing before search\n", owner, repoName, maxAge)
+	}
+	_, err = a.syncRepository(ctx, owner, repoName, syncOptions{State: state})
+	return err
+}
+
+func (a *App) ghSearchCacheStale(ctx context.Context, owner, repoName string, maxAge time.Duration) (bool, time.Time, error) {
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, time.Time{}, nil
+		}
+		return false, time.Time{}, err
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, time.Time{}, nil
+		}
+		return false, time.Time{}, err
+	}
+	lastSync, err := rt.Store.LastSuccessfulSyncAt(ctx, repo.ID)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	if lastSync.IsZero() {
+		return true, time.Time{}, nil
+	}
+	return time.Since(lastSync) > maxAge, lastSync, nil
+}
+
 func parseGHSearchQuery(value string) (query string, repo string, state string) {
 	var queryParts []string
 	for _, part := range strings.Fields(value) {
@@ -139,6 +197,24 @@ func validateGHSearchState(state string) error {
 	default:
 		return fmt.Errorf("unsupported state %q", state)
 	}
+}
+
+func parseGHSearchDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0, fmt.Errorf("expected positive duration, got %q", value)
+		}
+		return time.Duration(seconds) * time.Second, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("expected positive duration, got %q", value)
+	}
+	return duration, nil
 }
 
 func parseGHSearchLimit(longRaw, shortRaw string) (int, error) {
