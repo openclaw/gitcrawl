@@ -189,6 +189,14 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("raw second thread: %v", err)
 	}
+	rawClosed, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "103", Number: 103, Kind: "issue", State: "closed",
+		Title: "raw closed", HTMLURL: "https://github.com/openclaw/openclaw/issues/103",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "raw-103", UpdatedAt: "2026-04-26T04:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("raw closed thread: %v", err)
+	}
 	durableID, err := st.UpsertThread(ctx, Thread{
 		RepoID: repoID, GitHubID: "201", Number: 201, Kind: "issue", State: "open",
 		Title: "durable member", HTMLURL: "https://github.com/openclaw/openclaw/issues/201",
@@ -201,15 +209,16 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 		insert into cluster_runs(id, repo_id, scope, status, started_at, finished_at, stats_json)
 		values(7, ?, 'repo', 'completed', '2026-04-26T00:00:00Z', '2026-04-26T00:01:00Z', '{}');
 		insert into clusters(id, repo_id, cluster_run_id, representative_thread_id, member_count, created_at)
-		values(70, ?, 7, ?, 2, '2026-04-26T00:01:00Z');
+		values(70, ?, 7, ?, 3, '2026-04-26T00:01:00Z');
 	`, repoID, repoID, rawOne); err != nil {
 		t.Fatalf("seed raw cluster: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
 		insert into cluster_members(cluster_id, thread_id, score_to_representative, created_at)
 		values(70, ?, 1.0, '2026-04-26T00:01:00Z'),
-		      (70, ?, 0.91, '2026-04-26T00:01:00Z');
-	`, rawOne, rawTwo); err != nil {
+		      (70, ?, 0.91, '2026-04-26T00:01:00Z'),
+		      (70, ?, 0.90, '2026-04-26T00:01:00Z');
+	`, rawOne, rawTwo, rawClosed); err != nil {
 		t.Fatalf("seed raw members: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
@@ -221,11 +230,33 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 		t.Fatalf("seed durable cluster: %v", err)
 	}
 
+	activeDisplay, err := st.ListDisplayClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "size"})
+	if err != nil {
+		t.Fatalf("list active display clusters: %v", err)
+	}
+	if len(activeDisplay) != 1 || activeDisplay[0].ID != 70 || activeDisplay[0].MemberCount != 2 {
+		t.Fatalf("active display clusters should hide closed raw members, got %#v", activeDisplay)
+	}
+	activeDetail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 70, IncludeClosed: false, MemberLimit: 10})
+	if err != nil {
+		t.Fatalf("active raw detail: %v", err)
+	}
+	if len(activeDetail.Members) != 2 || activeDetail.Members[0].Thread.Number != 101 || activeDetail.Members[1].Thread.Number == 103 {
+		t.Fatalf("active raw detail should hide closed members, got %#v", activeDetail)
+	}
+	hiddenByMinSize, err := st.ListDisplayClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 3, Limit: 20, Sort: "size"})
+	if err != nil {
+		t.Fatalf("list active display clusters with min size: %v", err)
+	}
+	if len(hiddenByMinSize) != 0 {
+		t.Fatalf("active display min-size should count visible members only, got %#v", hiddenByMinSize)
+	}
+
 	display, err := st.ListDisplayClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "size"})
 	if err != nil {
 		t.Fatalf("list display clusters: %v", err)
 	}
-	if len(display) != 1 || display[0].ID != 70 || display[0].Source != ClusterSourceRun || display[0].MemberCount != 2 {
+	if len(display) != 1 || display[0].ID != 70 || display[0].Source != ClusterSourceRun || display[0].MemberCount != 3 {
 		t.Fatalf("display clusters should prefer raw run, got %#v", display)
 	}
 	durable, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 20, Sort: "size"})
@@ -240,7 +271,7 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("raw detail: %v", err)
 	}
-	if detail.Cluster.Source != ClusterSourceRun || len(detail.Members) != 2 || detail.Members[0].Thread.Number != 101 {
+	if detail.Cluster.Source != ClusterSourceRun || len(detail.Members) != 3 || detail.Members[0].Thread.Number != 101 {
 		t.Fatalf("unexpected raw detail: %#v", detail)
 	}
 }

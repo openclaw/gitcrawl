@@ -143,16 +143,20 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 	}
 	where := `c.repo_id = ? and c.cluster_run_id = ?`
 	args := []any{options.RepoID, runID, minSize}
-	having := `c.member_count >= ?`
+	memberCountExpr := `c.member_count`
+	updatedAtExpr := `coalesce(max(coalesce(t.updated_at_gh, t.updated_at)), c.created_at)`
+	having := memberCountExpr + ` >= ?`
 	if !options.IncludeClosed {
-		having += ` and c.close_reason_local is null and closed_member_count < c.member_count`
+		memberCountExpr = `sum(case when t.state = 'open' and t.closed_at_local is null then 1 else 0 end)`
+		updatedAtExpr = `coalesce(max(case when t.state = 'open' and t.closed_at_local is null then coalesce(t.updated_at_gh, t.updated_at) end), c.created_at)`
+		having = memberCountExpr + ` >= ? and c.close_reason_local is null`
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 		select c.id, c.representative_thread_id,
 			rt.number, rt.kind, rt.title,
-			c.member_count,
-			coalesce(max(coalesce(t.updated_at_gh, t.updated_at)), c.created_at) as latest_updated_at,
+			`+memberCountExpr+` as member_count,
+			`+updatedAtExpr+` as latest_updated_at,
 			c.closed_at_local, c.close_reason_local,
 			sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) as closed_member_count
 		from clusters c
@@ -515,7 +519,7 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 	where := `cm.cluster_id = ?`
 	args := []any{options.ClusterID}
 	if !options.IncludeClosed {
-		where += ` and t.closed_at_local is null`
+		where += ` and t.state = 'open' and t.closed_at_local is null`
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
@@ -1195,14 +1199,18 @@ func (s *Store) runClusterSummaryByID(ctx context.Context, repoID, clusterID int
 		return ClusterSummary{}, 0, fmt.Errorf("cluster %d was not found", clusterID)
 	}
 	having := `1 = 1`
+	memberCountExpr := `c.member_count`
+	updatedAtExpr := `coalesce(max(coalesce(t.updated_at_gh, t.updated_at)), c.created_at)`
 	if !includeClosed {
-		having = `c.close_reason_local is null and closed_member_count < c.member_count`
+		memberCountExpr = `sum(case when t.state = 'open' and t.closed_at_local is null then 1 else 0 end)`
+		updatedAtExpr = `coalesce(max(case when t.state = 'open' and t.closed_at_local is null then coalesce(t.updated_at_gh, t.updated_at) end), c.created_at)`
+		having = memberCountExpr + ` > 0 and c.close_reason_local is null`
 	}
 	row := s.db.QueryRowContext(ctx, `
 		select c.id, c.representative_thread_id,
 			rt.number, rt.kind, rt.title,
-			c.member_count,
-			coalesce(max(coalesce(t.updated_at_gh, t.updated_at)), c.created_at) as latest_updated_at,
+			`+memberCountExpr+` as member_count,
+			`+updatedAtExpr+` as latest_updated_at,
 			c.closed_at_local, c.close_reason_local,
 			sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) as closed_member_count
 		from clusters c

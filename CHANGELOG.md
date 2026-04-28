@@ -11,3 +11,4 @@
 - Split generated clusters with bounded nearest-neighbor graph safeguards, GitHub reference evidence, and cross-kind score pruning so weak similarity bridges stop merging unrelated reports into one mega-cluster.
 - Tighten clustering precision by ignoring ambiguous one-digit prose references and requiring weak embedding edges to share concrete title tokens unless they have high similarity or direct GitHub reference evidence.
 - Treat later body-only issue references as weak evidence unless they share title overlap, while still preserving title and lead-body references for canonical issue/PR fix clusters.
+- Hide GitHub-closed members from latest-run cluster summaries and details by default; `--include-closed` still shows the full historical cluster.
