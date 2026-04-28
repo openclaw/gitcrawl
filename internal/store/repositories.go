@@ -43,7 +43,7 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 	var githubRepoID sql.NullString
 	var rawJSON sql.NullString
 	err := s.q().QueryRowContext(ctx, `
-		select id, owner, name, full_name, github_repo_id, raw_json, updated_at
+		select id, owner, name, full_name, github_repo_id, `+s.repositoryRawJSONExpr(ctx)+`, updated_at
 		from repositories
 		where full_name = ?
 	`, fullName).Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName, &githubRepoID, &rawJSON, &repo.UpdatedAt)
@@ -57,7 +57,7 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 
 func (s *Store) ListRepositories(ctx context.Context) ([]Repository, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		select id, owner, name, full_name, github_repo_id, raw_json, updated_at
+		select id, owner, name, full_name, github_repo_id, `+s.repositoryRawJSONExpr(ctx)+`, updated_at
 		from repositories
 		order by coalesce(updated_at, '') desc, id desc
 	`)
@@ -82,6 +82,13 @@ func (s *Store) ListRepositories(ctx context.Context) ([]Repository, error) {
 		return nil, fmt.Errorf("iterate repositories: %w", err)
 	}
 	return repos, nil
+}
+
+func (s *Store) repositoryRawJSONExpr(ctx context.Context) string {
+	if s.hasColumn(ctx, "repositories", "raw_json") {
+		return "raw_json"
+	}
+	return "''"
 }
 
 func nullString(value string) sql.NullString {

@@ -108,10 +108,7 @@ func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptio
 		args = append(args, options.Limit)
 	}
 	rows, err := s.q().QueryContext(ctx, `
-		select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type,
-			html_url, labels_json, assignees_json, raw_json, content_hash, is_draft,
-			created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-			first_pulled_at, last_pulled_at, updated_at, closed_at_local, close_reason_local
+		select `+s.threadSelectColumns(ctx, "")+`
 		from threads
 		where `+where+`
 		order by number`+limitSQL, args...)
@@ -208,6 +205,66 @@ func scanThread(rows interface {
 	thread.RawJSON = rawJSON.String
 	thread.IsDraft = isDraft != 0
 	return thread, nil
+}
+
+func (s *Store) threadSelectColumns(ctx context.Context, alias string) string {
+	column := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+	return strings.Join([]string{
+		column("id"),
+		column("repo_id"),
+		column("github_id"),
+		column("number"),
+		column("kind"),
+		column("state"),
+		column("title"),
+		s.threadBodyExpr(ctx, alias),
+		column("author_login"),
+		column("author_type"),
+		column("html_url"),
+		column("labels_json"),
+		column("assignees_json"),
+		s.threadRawJSONExpr(ctx, alias),
+		column("content_hash"),
+		column("is_draft"),
+		column("created_at_gh"),
+		column("updated_at_gh"),
+		column("closed_at_gh"),
+		column("merged_at_gh"),
+		column("first_pulled_at"),
+		column("last_pulled_at"),
+		column("updated_at"),
+		column("closed_at_local"),
+		column("close_reason_local"),
+	}, ", ")
+}
+
+func (s *Store) threadBodyExpr(ctx context.Context, alias string) string {
+	if s.hasColumn(ctx, "threads", "body") {
+		return qualifiedColumn(alias, "body")
+	}
+	if s.hasColumn(ctx, "threads", "body_excerpt") {
+		return qualifiedColumn(alias, "body_excerpt")
+	}
+	return "''"
+}
+
+func (s *Store) threadRawJSONExpr(ctx context.Context, alias string) string {
+	if s.hasColumn(ctx, "threads", "raw_json") {
+		return qualifiedColumn(alias, "raw_json")
+	}
+	return "''"
+}
+
+func qualifiedColumn(alias, name string) string {
+	if alias == "" {
+		return name
+	}
+	return alias + "." + name
 }
 
 func boolInt(value bool) int {

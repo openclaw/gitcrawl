@@ -464,10 +464,7 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 		select cm.role, cm.state, cm.score_to_representative,
-			t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
+			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_memberships cm
 		join cluster_groups cg on cg.id = cm.cluster_id
 		join threads t on t.id = cm.thread_id
@@ -526,10 +523,7 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 		select case when t.id = c.representative_thread_id then 'representative' else 'member' end as role,
 			'active' as state,
 			cm.score_to_representative,
-			t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
+			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_members cm
 		join clusters c on c.id = cm.cluster_id and c.cluster_run_id = ?
 		join threads t on t.id = cm.thread_id
@@ -1167,6 +1161,9 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 }
 
 func (s *Store) latestRawClusterRunID(ctx context.Context, repoID int64) (int64, bool, error) {
+	if !s.hasTable(ctx, "cluster_runs") || !s.hasTable(ctx, "clusters") {
+		return 0, false, nil
+	}
 	row := s.db.QueryRowContext(ctx, `
 		select cr.id
 		from cluster_runs cr
@@ -1292,23 +1289,46 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 		placeholders = append(placeholders, "?")
 		args = append(args, threadID)
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		select thread_id, summary_kind, summary_text
-		from document_summaries
-		where thread_id in (`+strings.Join(placeholders, ",")+`)
-		order by thread_id, summary_kind, updated_at desc
-	`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("select document summaries: %w", err)
-	}
-	defer rows.Close()
-
 	out := make(map[int64]map[string]string)
+	if s.hasTable(ctx, "document_summaries") {
+		rows, err := s.db.QueryContext(ctx, `
+			select thread_id, summary_kind, summary_text
+			from document_summaries
+			where thread_id in (`+strings.Join(placeholders, ",")+`)
+			order by thread_id, summary_kind, updated_at desc
+		`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("select document summaries: %w", err)
+		}
+		if err := scanSummaryRows(rows, out, "document summary"); err != nil {
+			return nil, err
+		}
+	}
+	if s.hasTable(ctx, "thread_key_summaries") && s.hasTable(ctx, "thread_revisions") {
+		rows, err := s.db.QueryContext(ctx, `
+			select tr.thread_id, tks.summary_kind, tks.key_text
+			from thread_key_summaries tks
+			join thread_revisions tr on tr.id = tks.thread_revision_id
+			where tr.thread_id in (`+strings.Join(placeholders, ",")+`)
+			order by tr.thread_id, tks.summary_kind, tks.created_at desc
+		`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("select thread key summaries: %w", err)
+		}
+		if err := scanSummaryRows(rows, out, "thread key summary"); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func scanSummaryRows(rows *sql.Rows, out map[int64]map[string]string, source string) error {
+	defer rows.Close()
 	for rows.Next() {
 		var threadID int64
 		var kind, text string
 		if err := rows.Scan(&threadID, &kind, &text); err != nil {
-			return nil, fmt.Errorf("scan document summary: %w", err)
+			return fmt.Errorf("scan %s: %w", source, err)
 		}
 		if out[threadID] == nil {
 			out[threadID] = map[string]string{}
@@ -1318,9 +1338,9 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate document summaries: %w", err)
+		return fmt.Errorf("iterate %s rows: %w", source, err)
 	}
-	return out, nil
+	return nil
 }
 
 func snippetRunes(value string, limit int) string {

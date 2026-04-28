@@ -80,14 +80,15 @@ func (s *Store) searchThreads(ctx context.Context, repoID int64, query string, l
 		return nil, nil
 	}
 	pattern := "%" + escapeLike(needle) + "%"
+	bodyExpr := s.threadBodyExpr(ctx, "")
 	rows, err := s.db.QueryContext(ctx, `
 		select id, number, kind, state, title, html_url, author_login,
-			coalesce(nullif(body, ''), title)
+			coalesce(nullif(`+bodyExpr+`, ''), title)
 		from threads
 		where repo_id = ?
 		  and (
 			lower(title) like ? escape '\'
-			or lower(coalesce(body, '')) like ? escape '\'
+			or lower(coalesce(`+bodyExpr+`, '')) like ? escape '\'
 		  )
 		order by coalesce(updated_at_gh, updated_at) desc, number desc
 		limit ?
