@@ -2180,13 +2180,14 @@ func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
 
 func clusterColumns(width int, sortMode string) []table.Column {
 	width = maxInt(28, width)
-	available := maxInt(23, width-5)
+	available := maxInt(30, width-5)
 	idW := 7
 	cntW := 4
+	stateW := 7
 	kindW := 3
 	ageW := 7
-	clusterW := clampInt(available/3, 10, 16)
-	titleW := maxInt(8, available-idW-cntW-clusterW-kindW-ageW)
+	clusterW := clampInt(available/4, 10, 16)
+	titleW := maxInt(8, available-idW-cntW-stateW-clusterW-kindW-ageW)
 	cntTitle := "cnt"
 	ageTitle := "age"
 	if sortMode == "size" {
@@ -2198,6 +2199,7 @@ func clusterColumns(width int, sortMode string) []table.Column {
 	return []table.Column{
 		{Title: "id", Width: idW},
 		{Title: cntTitle, Width: cntW},
+		{Title: "state", Width: stateW},
 		{Title: "cluster", Width: clusterW},
 		{Title: "title", Width: titleW},
 		{Title: "k", Width: kindW},
@@ -2238,17 +2240,18 @@ func memberColumns(width int, sortMode tuiMemberSort) []table.Column {
 
 func (m clusterBrowserModel) clusterRows() []table.Row {
 	if len(m.payload.Clusters) == 0 {
-		return []table.Row{{"", "", "", "No clusters visible. Press f, /, x, or r.", "", ""}}
+		return []table.Row{{"", "", "", "", "No clusters visible. Press f, /, x, or r.", "", ""}}
 	}
 	rows := make([]table.Row, 0, len(m.payload.Clusters))
 	for _, cluster := range m.payload.Clusters {
 		rows = append(rows, table.Row{
-			fmt.Sprintf("C%d", cluster.ID),
-			fmt.Sprintf("%d", cluster.MemberCount),
-			cluster.StableSlug,
-			splitClusterTitle(cluster),
-			kindGlyph(cluster.RepresentativeKind),
-			formatRelativeTime(cluster.UpdatedAt),
+			clusterRowCell(cluster, fmt.Sprintf("C%d", cluster.ID)),
+			clusterRowCell(cluster, fmt.Sprintf("%d", cluster.MemberCount)),
+			clusterStateLabel(cluster),
+			clusterRowCell(cluster, cluster.StableSlug),
+			clusterRowCell(cluster, splitClusterTitle(cluster)),
+			clusterRowCell(cluster, kindGlyph(cluster.RepresentativeKind)),
+			clusterRowCell(cluster, formatRelativeTime(cluster.UpdatedAt)),
 		})
 	}
 	return rows
@@ -3405,6 +3408,34 @@ func kindGlyph(kind string) string {
 		return "I"
 	}
 	return truncateCells(firstNonEmpty(kind, "?"), 2)
+}
+
+func clusterStateLabel(cluster store.ClusterSummary) string {
+	switch strings.ToLower(firstNonEmpty(cluster.Status, "active")) {
+	case "closed":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb86b")).Bold(true).Render("CLOSED")
+	case "merged":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#c792ea")).Bold(true).Render("MERGED")
+	case "split":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#c792ea")).Bold(true).Render("SPLIT")
+	default:
+		if cluster.ClosedAt != "" {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb86b")).Bold(true).Render("CLOSED")
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#9bc53d")).Bold(true).Render("OPEN")
+	}
+}
+
+func clusterRowCell(cluster store.ClusterSummary, value string) string {
+	if clusterClosedForDisplay(cluster) {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#8d99ae")).Render(value)
+	}
+	return value
+}
+
+func clusterClosedForDisplay(cluster store.ClusterSummary) bool {
+	status := strings.ToLower(cluster.Status)
+	return status == "closed" || status == "merged" || status == "split" || cluster.ClosedAt != ""
 }
 
 func kindTitle(kind string) string {
