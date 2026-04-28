@@ -377,6 +377,10 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 }
 
 func (a *App) runSearch(ctx context.Context, args []string) error {
+	if len(args) > 0 && isGHSearchKind(args[0]) {
+		return a.runGHSearch(ctx, args)
+	}
+
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	query := fs.String("query", "", "search query")
@@ -2350,7 +2354,7 @@ Core commands:
   cluster-detail       dump one latest run cluster, with durable fallback
   cluster-explain      alias for cluster-detail
   neighbors            list vector-nearest local issue and pull request rows
-  search               search local thread documents
+  search               search local thread documents; also supports search issues|prs gh syntax
   portable prune       prune volatile payloads from a portable store
   tui [owner/repo]     browse clusters in the terminal UI; repo is inferred when omitted
 

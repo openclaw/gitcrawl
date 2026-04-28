@@ -5,12 +5,12 @@ func normalizeCommandArgs(args []string, stringFlags map[string]bool) []string {
 	var positionals []string
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		if len(arg) < 2 || arg[:2] != "--" {
+		name, ok := flagName(arg)
+		if !ok {
 			positionals = append(positionals, arg)
 			continue
 		}
 		flags = append(flags, arg)
-		name := arg[2:]
 		for i := 0; i < len(name); i++ {
 			if name[i] == '=' {
 				name = name[:i]
@@ -23,6 +23,16 @@ func normalizeCommandArgs(args []string, stringFlags map[string]bool) []string {
 		}
 	}
 	return append(flags, positionals...)
+}
+
+func flagName(arg string) (string, bool) {
+	if len(arg) >= 3 && arg[:2] == "--" {
+		return arg[2:], true
+	}
+	if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' {
+		return arg[1:], true
+	}
+	return "", false
 }
 
 func hasInlineValue(arg string) bool {

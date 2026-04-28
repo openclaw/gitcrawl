@@ -256,6 +256,137 @@ func TestMainHelpListsNeighbors(t *testing.T) {
 	}
 }
 
+func TestGHSearchSyntaxUsesLocalCache(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-04-27T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	issueID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:          repoID,
+		GitHubID:        "10",
+		Number:          10,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "Hot loop burns CPU",
+		Body:            "the runtime has a hot loop",
+		AuthorLogin:     "alice",
+		AuthorType:      "User",
+		HTMLURL:         "https://github.com/openclaw/openclaw/issues/10",
+		LabelsJSON:      `[{"name":"bug","color":"d73a4a"}]`,
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "issue-10",
+		UpdatedAtGitHub: "2026-04-27T01:00:00Z",
+		UpdatedAt:       "2026-04-27T01:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	if _, err := st.UpsertDocument(ctx, store.Document{ThreadID: issueID, Title: "Hot loop burns CPU", RawText: "runtime hot loop burns CPU", DedupeText: "runtime hot loop burns cpu", UpdatedAt: "2026-04-27T01:00:00Z"}); err != nil {
+		t.Fatalf("seed issue document: %v", err)
+	}
+	closedID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "11",
+		Number:        11,
+		Kind:          "issue",
+		State:         "closed",
+		Title:         "Hot loop old report",
+		HTMLURL:       "https://github.com/openclaw/openclaw/issues/11",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "issue-11",
+		UpdatedAt:     "2026-04-27T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed closed issue: %v", err)
+	}
+	if _, err := st.UpsertDocument(ctx, store.Document{ThreadID: closedID, Title: "Hot loop old report", RawText: "old hot loop", DedupeText: "old hot loop", UpdatedAt: "2026-04-27T00:00:00Z"}); err != nil {
+		t.Fatalf("seed closed document: %v", err)
+	}
+	prID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:          repoID,
+		GitHubID:        "12",
+		Number:          12,
+		Kind:            "pull_request",
+		State:           "open",
+		Title:           "Manifest cache update",
+		AuthorLogin:     "bob",
+		AuthorType:      "User",
+		HTMLURL:         "https://github.com/openclaw/openclaw/pull/12",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "pr-12",
+		IsDraft:         true,
+		UpdatedAtGitHub: "2026-04-27T02:00:00Z",
+		UpdatedAt:       "2026-04-27T02:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed pr: %v", err)
+	}
+	if _, err := st.UpsertDocument(ctx, store.Document{ThreadID: prID, Title: "Manifest cache update", RawText: "manifest cache refresh", DedupeText: "manifest cache refresh", UpdatedAt: "2026-04-27T02:00:00Z"}); err != nil {
+		t.Fatalf("seed pr document: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "search", "issues", "hot loop", "-R", "openclaw/openclaw", "--state", "open", "--json", "number,title,state,url,updatedAt,labels", "--limit", "30"}); err != nil {
+		t.Fatalf("gh issue search: %v", err)
+	}
+	var issues []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &issues); err != nil {
+		t.Fatalf("decode issue search: %v\n%s", err, stdout.String())
+	}
+	if len(issues) != 1 || int(issues[0]["number"].(float64)) != 10 {
+		t.Fatalf("issue search should return only open cached issue, got %#v", issues)
+	}
+	labels := issues[0]["labels"].([]any)
+	if len(labels) != 1 || labels[0].(map[string]any)["name"] != "bug" {
+		t.Fatalf("issue labels = %#v", labels)
+	}
+
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "search", "prs", "manifest cache", "-R", "openclaw/openclaw", "--state", "open", "--json", "number,title,state,url,updatedAt,isDraft,author", "--limit", "20"}); err != nil {
+		t.Fatalf("gh pr search: %v", err)
+	}
+	var prs []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &prs); err != nil {
+		t.Fatalf("decode pr search: %v\n%s", err, stdout.String())
+	}
+	if len(prs) != 1 || int(prs[0]["number"].(float64)) != 12 || prs[0]["isDraft"] != true {
+		t.Fatalf("pr search should return cached draft PR, got %#v", prs)
+	}
+	author := prs[0]["author"].(map[string]any)
+	if author["login"] != "bob" {
+		t.Fatalf("author = %#v", author)
+	}
+}
+
 func TestTUIInfersRepository(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

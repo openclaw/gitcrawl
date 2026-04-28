@@ -20,3 +20,11 @@ func TestNormalizeCommandArgsKeepsInlineValues(t *testing.T) {
 		t.Fatalf("args: got %#v want %#v", got, want)
 	}
 }
+
+func TestNormalizeCommandArgsMovesShortStringFlags(t *testing.T) {
+	got := normalizeCommandArgs([]string{"hot loop", "-R", "openclaw/openclaw", "--state", "open"}, map[string]bool{"R": true, "state": true})
+	want := []string{"-R", "openclaw/openclaw", "--state", "open", "hot loop"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args: got %#v want %#v", got, want)
+	}
+}

@@ -92,6 +92,15 @@ Public commands:
 - `tui`
 - `completion`
 
+`search` also supports the common `gh search` read-only shape for cached discovery:
+
+```text
+gitcrawl search issues <query> -R owner/repo --state open --json number,title,state,url,updatedAt,labels --limit 30
+gitcrawl search prs <query> -R owner/repo --state open --json number,title,state,url,updatedAt,isDraft,author --limit 20
+```
+
+This compatibility path must read only from local SQLite. It avoids GitHub REST search quota and is not a replacement for final live `gh` verification before comments, closes, labels, or merges.
+
 ## Config
 
 Default config path:
