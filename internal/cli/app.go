@@ -28,18 +28,24 @@ import (
 )
 
 const (
-	defaultTUIMinSize         = 5
-	defaultTUIWorkingSetLimit = 500
-	defaultClusterMaxSize     = 40
-	defaultClusterFanout      = 16
-	defaultCrossKindMinScore  = 0.93
-	highConfidenceEdgeScore   = 0.90
-	weakEdgeMinTitleOverlap   = 0.18
-	deterministicRefScore     = 0.94
+	defaultTUIMinSize          = 5
+	defaultTUIWorkingSetLimit  = 500
+	defaultClusterMaxSize      = 40
+	defaultClusterFanout       = 16
+	defaultCrossKindMinScore   = 0.93
+	highConfidenceEdgeScore    = 0.90
+	weakEdgeMinTitleOverlap    = 0.18
+	deterministicRefScore      = 0.94
+	bodyRefEvidencePrefixChars = 240
 )
 
 var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b[\w.-]+/[\w.-]+#(\d+)|(?:issues|pull)/(\d+)|#(\d{2,}))`)
 var titleTokenPattern = regexp.MustCompile(`[A-Za-z0-9]{4,}`)
+
+type referenceEvidence struct {
+	Title     bool
+	EarlyBody bool
+}
 
 type App struct {
 	Stdout io.Writer
@@ -2045,11 +2051,14 @@ func addDeterministicReferenceEdges(edges map[string]clusterer.Edge, nodes []clu
 	refIDsByThreadID := make(map[int64]map[int64]bool, len(nodes))
 	for _, node := range nodes {
 		thread := threads[node.ThreadID]
-		refNumbers := referencedThreadNumbers(thread)
+		refNumbers := referencedThreadNumbersByLocation(thread)
 		refIDs := map[int64]bool{}
-		for number := range refNumbers {
+		for number, evidence := range refNumbers {
 			if referencedID, ok := threadIDByNumber[number]; ok && referencedID != node.ThreadID {
-				refIDs[referencedID] = true
+				referencedThread := threads[referencedID]
+				if evidence.Title || evidence.EarlyBody || titleTokenOverlap(thread.Title, referencedThread.Title) >= weakEdgeMinTitleOverlap {
+					refIDs[referencedID] = true
+				}
 			}
 		}
 		refIDsByThreadID[node.ThreadID] = refIDs
@@ -2061,18 +2070,34 @@ func addDeterministicReferenceEdges(edges map[string]clusterer.Edge, nodes []clu
 	}
 }
 
-func referencedThreadNumbers(thread store.Thread) map[int]bool {
-	value := thread.Title + "\n" + thread.Body
-	refs := map[int]bool{}
-	for _, match := range threadReferencePattern.FindAllStringSubmatch(value, -1) {
-		numberText := firstNonEmpty(match[1:]...)
+func referencedThreadNumbersByLocation(thread store.Thread) map[int]referenceEvidence {
+	refs := map[int]referenceEvidence{}
+	collectReferencedThreadNumbers(refs, thread.Number, thread.Body, false)
+	collectReferencedThreadNumbers(refs, thread.Number, thread.Title, true)
+	return refs
+}
+
+func collectReferencedThreadNumbers(refs map[int]referenceEvidence, threadNumber int, value string, titleRef bool) {
+	for _, match := range threadReferencePattern.FindAllStringSubmatchIndex(value, -1) {
+		numberText := ""
+		for index := 2; index+1 < len(match); index += 2 {
+			if match[index] >= 0 {
+				numberText = value[match[index]:match[index+1]]
+				break
+			}
+		}
 		number, err := strconv.Atoi(numberText)
-		if err != nil || number <= 0 || number == thread.Number {
+		if err != nil || number <= 0 || number == threadNumber {
 			continue
 		}
-		refs[number] = true
+		evidence := refs[number]
+		if titleRef {
+			evidence.Title = true
+		} else if match[0] <= bodyRefEvidencePrefixChars {
+			evidence.EarlyBody = true
+		}
+		refs[number] = evidence
 	}
-	return refs
 }
 
 func titleTokenOverlap(left, right string) float64 {

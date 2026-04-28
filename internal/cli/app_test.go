@@ -1094,6 +1094,77 @@ func TestBuildDurableClusterInputsIgnoresBareOneDigitProseRefs(t *testing.T) {
 	}
 }
 
+func TestBuildDurableClusterInputsPrunesBodyOnlyUnrelatedReferences(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	watchdogID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "601",
+		Number:        601,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "feat: add external rescue watchdog",
+		Body:          "Adds a rescue watchdog service.",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/601",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-601",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed watchdog thread: %v", err)
+	}
+	windowsID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:        repoID,
+		GitHubID:      "602",
+		Number:        602,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "fix: align windows path tests with runtime behavior",
+		Body:          strings.Repeat("Windows path normalization changed in this shard. ", 8) + "The Windows shard failures inherited by #601 are unrelated to the watchdog feature itself.",
+		HTMLURL:       "https://github.com/openclaw/openclaw/pull/602",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "hash-602",
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("seed windows thread: %v", err)
+	}
+	inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, []store.ThreadVector{
+		{ThreadID: watchdogID, Vector: []float64{1, 0}},
+		{ThreadID: windowsID, Vector: []float64{0, 1}},
+	}, clusterBuildOptions{
+		Threshold:          0.99,
+		MinSize:            2,
+		MaxClusterSize:     defaultClusterMaxSize,
+		Fanout:             16,
+		CrossKindThreshold: 0.99,
+	})
+	if err != nil {
+		t.Fatalf("build inputs: %v", err)
+	}
+	if edgeCount != 0 || len(inputs) != 0 {
+		t.Fatalf("body-only reference without title overlap should not form evidence edge, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+}
+
 func TestBuildDurableClusterInputsPrunesWeakGenericTitleEdges(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
