@@ -230,6 +230,92 @@ func TestReadCommandRefreshesPortableStore(t *testing.T) {
 	}
 }
 
+func TestWritableRuntimeUsesPortableMirror(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 1, "portable issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("clone portable store: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(checkoutDir, dbRel)}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+
+	run := New()
+	run.configPath = configPath
+	rt, err := run.openLocalRuntime(ctx)
+	if err != nil {
+		t.Fatalf("open writable runtime: %v", err)
+	}
+	repo, err := rt.repository(ctx, "openclaw", "openclaw")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	threads, err := rt.Store.ListThreadsFiltered(ctx, store.ThreadListOptions{RepoID: repo.ID, Numbers: []int{1}})
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("threads = %d, want 1", len(threads))
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := rt.Store.UpsertThreadVector(ctx, store.ThreadVector{
+		ThreadID:    threads[0].ID,
+		Basis:       "title_original",
+		Model:       "text-embedding-3-small",
+		Dimensions:  3,
+		ContentHash: "hash-vector",
+		Vector:      []float64{0.1, 0.2, 0.3},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("upsert runtime vector: %v", err)
+	}
+	if err := rt.Store.Close(); err != nil {
+		t.Fatalf("close writable runtime: %v", err)
+	}
+	if rt.SourceDBPath == rt.Config.DBPath {
+		t.Fatalf("runtime db path should differ from portable source: %s", rt.Config.DBPath)
+	}
+	if !gitWorktreeClean(ctx, checkoutDir) {
+		t.Fatal("portable checkout should stay clean after writable runtime command")
+	}
+
+	read := New()
+	read.configPath = configPath
+	readRT, err := read.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		t.Fatalf("open read-only runtime: %v", err)
+	}
+	defer readRT.Store.Close()
+	if _, _, err := readRT.Store.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{
+		RepoID:     repo.ID,
+		Model:      "text-embedding-3-small",
+		Basis:      "title_original",
+		Dimensions: 3,
+	}, 1); err != nil {
+		t.Fatalf("read runtime vector: %v", err)
+	}
+}
+
 func seedPortableThread(t *testing.T, dbPath string, number int, title string) {
 	t.Helper()
 	ctx := context.Background()

@@ -27,7 +27,6 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
-	openReadOnly := false
 	if _, ok := portableStoreRoot(cfg.DBPath); ok {
 		mirrorPath, _, err := a.ensurePortableRuntimeDB(ctx, cfg.DBPath, false)
 		if err != nil {
@@ -35,14 +34,8 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 		}
 		cfg.DBPath = mirrorPath
 		remoteSource = true
-		openReadOnly = true
 	}
-	var st *store.Store
-	if openReadOnly {
-		st, err = store.OpenReadOnly(ctx, cfg.DBPath)
-	} else {
-		st, err = store.Open(ctx, cfg.DBPath)
-	}
+	st, err := store.Open(ctx, cfg.DBPath)
 	if err != nil {
 		return localRuntime{}, err
 	}
@@ -157,7 +150,7 @@ func portableRuntimeNeedsCopy(sourceDBPath, mirrorPath string) (bool, error) {
 		}
 		return false, fmt.Errorf("stat portable runtime db: %w", err)
 	}
-	return sourceInfo.Size() != mirrorInfo.Size() || sourceInfo.ModTime().After(mirrorInfo.ModTime()), nil
+	return sourceInfo.ModTime().After(mirrorInfo.ModTime()), nil
 }
 
 func copyFileAtomic(sourcePath, targetPath string) error {
