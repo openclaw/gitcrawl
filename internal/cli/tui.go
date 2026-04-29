@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-isatty"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/openclaw/gitcrawl/internal/vector"
@@ -770,7 +771,11 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 		if shortcut <= 9 {
 			key = fmt.Sprintf("%d. ", shortcut)
 		}
-		lines = append(lines, truncateCells(prefix+key+item.label, width))
+		line := truncateCells(prefix+key+item.label, width)
+		if index == m.menuIndex {
+			line = selectedMenuLineStyle(width).Render(padCells(line, width))
+		}
+		lines = append(lines, line)
 	}
 	footer := "Enter/1-9 run  Esc close"
 	if m.inMenuSubmenu() {
@@ -1003,6 +1008,12 @@ func (m clusterBrowserModel) handleJumpKey(msg tea.KeyMsg) (clusterBrowserModel,
 
 func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 	layout := m.layout()
+	if msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
+		if m.menuOpen {
+			m.handleMenuMouse(layout, msg)
+		}
+		return
+	}
 	if msg.Button != tea.MouseButtonLeft && msg.Button != tea.MouseButtonRight && !isMouseWheel(msg.Button) {
 		return
 	}
@@ -1089,18 +1100,31 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		}
 		return
 	}
+	if msg.Action == tea.MouseActionMotion {
+		index, ok := m.menuIndexAtMouse(layout, msg.X, msg.Y)
+		if !ok {
+			return
+		}
+		if index < 0 || index >= len(m.menuItems) {
+			return
+		}
+		if !m.menuItems[index].selectable() {
+			index = m.nearestSelectableMenuIndex(index, 1)
+		}
+		if index >= 0 && index < len(m.menuItems) && m.menuItems[index].selectable() {
+			m.menuIndex = index
+			m.keepMenuVisible()
+		}
+		return
+	}
 	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
 		return
 	}
-	menuRect := layout.detail
-	if m.menuFloating {
-		menuRect = m.menuRect
-	}
-	if !menuRect.contains(msg.X, msg.Y) {
+	index, ok := m.menuIndexAtMouse(layout, msg.X, msg.Y)
+	if !ok {
 		m.closeMenu("Menu closed")
 		return
 	}
-	index := m.menuOff + msg.Y - menuRect.y - 4
 	if index < 0 || index >= len(m.menuItems) {
 		return
 	}
@@ -1114,6 +1138,19 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 	if m.runMenuItem(m.menuItems[m.menuIndex]) {
 		m.closeMenu("")
 	}
+}
+
+func (m clusterBrowserModel) menuIndexAtMouse(layout tuiLayout, x, y int) (int, bool) {
+	menuRect := layout.detail
+	rowOffset := 4
+	if m.menuFloating {
+		menuRect = m.menuRect
+		rowOffset = 3
+	}
+	if !menuRect.contains(x, y) {
+		return 0, false
+	}
+	return m.menuOff + y - menuRect.y - rowOffset, true
 }
 
 func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) {
@@ -4058,6 +4095,14 @@ func floatingMenuStyle(width, height int) lipgloss.Style {
 		Foreground(lipgloss.Color("#f7f7ff"))
 }
 
+func selectedMenuLineStyle(width int) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Width(maxInt(1, width)).
+		Background(lipgloss.Color("#ffd166")).
+		Foreground(lipgloss.Color("#05070d")).
+		Bold(true)
+}
+
 func overlayBlock(base, block string, x, y, width int) string {
 	baseLines := strings.Split(base, "\n")
 	blockLines := strings.Split(block, "\n")
@@ -4066,11 +4111,18 @@ func overlayBlock(base, block string, x, y, width int) string {
 		if row < 0 || row >= len(baseLines) {
 			continue
 		}
+		baseLine := baseLines[row]
 		prefix := strings.Repeat(" ", maxInt(0, x))
-		if x > 0 && baseLines[row] != "" {
-			prefix = padCells(truncateCells(baseLines[row], x), x)
+		if x > 0 && baseLine != "" {
+			prefix = padCells(ansi.Cut(baseLine, 0, x), x)
 		}
-		rendered := prefix + line
+		lineWidth := ansi.StringWidth(line)
+		suffixStart := maxInt(0, x+lineWidth)
+		suffix := ""
+		if suffixStart < ansi.StringWidth(baseLine) {
+			suffix = ansi.Cut(baseLine, suffixStart, width)
+		}
+		rendered := prefix + line + suffix
 		if width > 0 {
 			rendered = truncateCells(rendered, width)
 		}
@@ -4083,9 +4135,9 @@ func padCells(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	cellWidth := lipgloss.Width(value)
+	cellWidth := ansi.StringWidth(value)
 	if cellWidth >= width {
-		return truncateCells(value, width)
+		return ansi.Cut(value, 0, width)
 	}
 	return value + strings.Repeat(" ", width-cellWidth)
 }

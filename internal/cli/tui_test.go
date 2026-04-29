@@ -1144,7 +1144,7 @@ func TestTUIMouseClickUsesFloatingMenuOffset(t *testing.T) {
 
 	model.handleMouse(tea.MouseMsg{
 		X:      model.menuRect.x + 2,
-		Y:      model.menuRect.y + 4,
+		Y:      model.menuRect.y + 3,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
@@ -1154,6 +1154,35 @@ func TestTUIMouseClickUsesFloatingMenuOffset(t *testing.T) {
 	}
 	if model.menuOpen || model.menuFloating {
 		t.Fatalf("floating menu should close cleanly, open=%v floating=%v", model.menuOpen, model.menuFloating)
+	}
+}
+
+func TestTUIMouseMotionHoversFloatingMenuItems(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.menuOpen = true
+	model.menuFloating = true
+	model.menuRect = tuiRect{x: 5, y: 3, w: 40, h: 12}
+	model.menuOff = 2
+	model.menuItems = make([]tuiMenuItem, 6)
+	for index := range model.menuItems {
+		model.menuItems[index] = tuiMenuItem{label: fmt.Sprintf("Item %d", index), action: "close-menu"}
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      model.menuRect.x + 2,
+		Y:      model.menuRect.y + 4,
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonNone,
+	})
+
+	if model.menuIndex != 3 {
+		t.Fatalf("hover selected %d, want item 3", model.menuIndex)
 	}
 }
 
@@ -1185,6 +1214,14 @@ func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 	}
 	if model.status != "Menu closed" {
 		t.Fatalf("right click close status = %q, want Menu closed", model.status)
+	}
+}
+
+func TestOverlayBlockPreservesCoveredRowSuffix(t *testing.T) {
+	got := overlayBlock("abcdefghij\nklmnopqrst", "XX", 2, 0, 10)
+	want := "abXXefghij\nklmnopqrst"
+	if got != want {
+		t.Fatalf("overlay result = %q, want %q", got, want)
 	}
 }
 
