@@ -513,7 +513,7 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		bold(fmt.Sprintf("Cluster %d", cluster.ID)),
 		color("#5bc0eb", cluster.StableSlug),
 	}
-	lines = append(lines, wrapPlain(firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster"), width)...)
+	lines = append(lines, wrapPlain(splitClusterTitle(cluster), width)...)
 	lines = append(lines,
 		"",
 		fmt.Sprintf("members: %d   status: %s   updated: %s", cluster.MemberCount, firstNonEmpty(cluster.Status, "unknown"), formatRelativeTime(cluster.UpdatedAt)),
@@ -534,7 +534,7 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 		dim(tuiRule(width)),
 		bold(fmt.Sprintf("%s #%d", kindTitle(thread.Kind), thread.Number)),
 	)
-	lines = append(lines, wrapPlain(thread.Title, width)...)
+	lines = append(lines, wrapPlain(renderTitleText(thread.Title), width)...)
 	lines = append(lines,
 		"",
 	)
@@ -557,7 +557,7 @@ func (m clusterBrowserModel) detailLines(width int) []string {
 					neighbor.Thread.Number,
 					kindTitle(neighbor.Thread.Kind),
 					neighbor.Score*100,
-					neighbor.Thread.Title,
+					renderTitleText(neighbor.Thread.Title),
 				), width))
 			}
 			lines = append(lines, "")
@@ -2283,7 +2283,7 @@ func (m clusterBrowserModel) memberTableRows() []table.Row {
 			fmt.Sprintf("#%d", thread.Number),
 			stateGlyph(memberDisplayState(member.member)),
 			formatRelativeTime(thread.UpdatedAtGitHub),
-			thread.Title,
+			renderTitleText(thread.Title),
 		})
 	}
 	return rows
@@ -3327,7 +3327,47 @@ func layoutLabel(layout tuiLayout) string {
 }
 
 func splitClusterTitle(cluster store.ClusterSummary) string {
-	return firstNonEmpty(cluster.RepresentativeTitle, cluster.Title, "Untitled cluster")
+	return firstNonEmpty(renderTitleText(cluster.RepresentativeTitle), renderTitleText(cluster.Title), "Untitled cluster")
+}
+
+func renderTitleText(value string) string {
+	value = strings.TrimSpace(stripEmoji(value))
+	if value == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func stripEmoji(value string) string {
+	if value == "" {
+		return ""
+	}
+	var out strings.Builder
+	out.Grow(len(value))
+	for _, r := range value {
+		if isEmojiRune(r) {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+func isEmojiRune(r rune) bool {
+	switch {
+	case r == '\u200d' || r == '\u20e3':
+		return true
+	case r >= '\ufe00' && r <= '\ufe0f':
+		return true
+	case r >= '\U0001f000' && r <= '\U0001faff':
+		return true
+	case r >= '\u2600' && r <= '\u27bf':
+		return true
+	case r == '\u3030' || r == '\u303d' || r == '\u3297' || r == '\u3299':
+		return true
+	default:
+		return false
+	}
 }
 
 func sortedSummaryKeys(values map[string]string) []string {

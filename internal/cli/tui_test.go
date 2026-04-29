@@ -337,6 +337,47 @@ func TestTUIClusterRowsShowReadableState(t *testing.T) {
 	}
 }
 
+func TestTUIRowsStripEmojiFromRenderedTitles(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{{
+			ID:                   1,
+			Status:               "active",
+			StableSlug:           "emoji-title",
+			RepresentativeKind:   "issue",
+			RepresentativeTitle:  "🔥 Gateway crash 🧨 after upgrade",
+			RepresentativeNumber: 123,
+			MemberCount:          3,
+			UpdatedAt:            "2026-04-27T00:00:00Z",
+		}},
+	})
+	clusterRows := model.clusterRows()
+	if strings.ContainsAny(clusterRows[0][4], "🔥🧨") {
+		t.Fatalf("cluster title still contains emoji: %q", clusterRows[0][4])
+	}
+	if clusterRows[0][4] != "Gateway crash after upgrade" {
+		t.Fatalf("cluster title = %q, want sanitized title", clusterRows[0][4])
+	}
+
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{Thread: store.Thread{
+			Number:          123,
+			State:           "open",
+			Title:           "🚨 Browser snapshot fails ✅",
+			UpdatedAtGitHub: "2026-04-27T00:00:00Z",
+		}},
+	}}
+	memberRows := model.memberTableRows()
+	if strings.ContainsAny(memberRows[0][3], "🚨✅") {
+		t.Fatalf("member title still contains emoji: %q", memberRows[0][3])
+	}
+	if memberRows[0][3] != "Browser snapshot fails" {
+		t.Fatalf("member title = %q, want sanitized title", memberRows[0][3])
+	}
+}
+
 func TestTUIRenderedRowsStyleOpenAndClosedStates(t *testing.T) {
 	openCluster := clusterRowStyle(store.ClusterSummary{Status: "active"}, false, false)
 	closedCluster := clusterRowStyle(store.ClusterSummary{Status: "closed"}, false, false)
