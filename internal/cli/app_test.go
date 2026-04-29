@@ -82,6 +82,40 @@ func TestDefaultPortableStoreDir(t *testing.T) {
 	}
 }
 
+func TestDatabaseSourceLocationLocal(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	if got := databaseSourceKind(dbPath); got != "local" {
+		t.Fatalf("source kind = %q, want local", got)
+	}
+	if got := databaseSourceLocation(context.Background(), dbPath); got != "gitcrawl.db" {
+		t.Fatalf("source location = %q, want db filename", got)
+	}
+}
+
+func TestDatabaseSourceLocationRemoteGitHubStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "gitcrawl-store")
+	dbPath := filepath.Join(storeDir, "data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("mkdir store data: %v", err)
+	}
+	if err := runGit(ctx, storeDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if err := runGit(ctx, storeDir, "remote", "add", "origin", "https://github.com/openclaw/gitcrawl-store.git"); err != nil {
+		t.Fatalf("git remote add: %v", err)
+	}
+
+	if got := databaseSourceKind(dbPath); got != "remote" {
+		t.Fatalf("source kind = %q, want remote", got)
+	}
+	want := "openclaw/gitcrawl-store:openclaw__openclaw.sync.db"
+	if got := databaseSourceLocation(ctx, dbPath); got != want {
+		t.Fatalf("source location = %q, want %q", got, want)
+	}
+}
+
 func TestSyncPortableStoreResetsDirtyCache(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

@@ -40,6 +40,8 @@ type clusterBrowserPayload struct {
 	Repository         string                 `json:"repository"`
 	InferredRepository bool                   `json:"inferred_repository"`
 	Mode               string                 `json:"mode"`
+	DBSource           string                 `json:"db_source,omitempty"`
+	DBLocation         string                 `json:"db_location,omitempty"`
 	Sort               string                 `json:"sort"`
 	MinSize            int                    `json:"min_size"`
 	Limit              int                    `json:"limit,omitempty"`
@@ -455,7 +457,35 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 	if m.jumping {
 		line = "Jump: " + m.searchInput.View()
 	}
-	return lipgloss.NewStyle().Width(width).Height(2).Background(lipgloss.Color("#5bc0eb")).Foreground(lipgloss.Color("#05070d")).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
+	if location := m.footerLocation(); location != "" {
+		line = strings.TrimSpace(line + "  " + location)
+	}
+	bg, fg := footerPalette(m.payload.DBSource)
+	return lipgloss.NewStyle().Width(width).Height(2).Background(bg).Foreground(fg).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
+}
+
+func (m clusterBrowserModel) footerLocation() string {
+	location := strings.TrimSpace(m.payload.DBLocation)
+	if location == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(m.payload.DBSource)) {
+	case "remote":
+		return "remote " + location
+	case "local":
+		return "local " + location
+	default:
+		return location
+	}
+}
+
+func footerPalette(source string) (lipgloss.Color, lipgloss.Color) {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "remote":
+		return lipgloss.Color("#f2c14e"), lipgloss.Color("#05070d")
+	default:
+		return lipgloss.Color("#5bc0eb"), lipgloss.Color("#05070d")
+	}
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {

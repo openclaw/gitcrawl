@@ -977,6 +977,8 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Repository:         repo.FullName,
 		InferredRepository: inferred,
 		Mode:               "cluster-browser",
+		DBSource:           databaseSourceKind(rt.Config.DBPath),
+		DBLocation:         databaseSourceLocation(ctx, rt.Config.DBPath),
 		Sort:               sort,
 		MinSize:            minSize,
 		Limit:              limit,
@@ -992,6 +994,53 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		return a.writeOutput("tui", payload, true)
 	}
 	return a.runInteractiveTUI(ctx, rt.Store, repo.ID, payload)
+}
+
+func databaseSourceKind(dbPath string) string {
+	if _, ok := portableStoreRoot(dbPath); ok {
+		return "remote"
+	}
+	return "local"
+}
+
+func databaseSourceLocation(ctx context.Context, dbPath string) string {
+	filename := filepath.Base(dbPath)
+	root, ok := portableStoreRoot(dbPath)
+	if !ok {
+		return filename
+	}
+	if repo := githubRepoFromRemote(gitRemoteURL(ctx, root)); repo != "" {
+		return repo + ":" + filename
+	}
+	return filepath.Base(root) + ":" + filename
+}
+
+func gitRemoteURL(ctx context.Context, dir string) string {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "remote", "get-url", "origin")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func githubRepoFromRemote(remote string) string {
+	value := strings.TrimSuffix(strings.TrimSpace(remote), ".git")
+	switch {
+	case strings.HasPrefix(value, "git@github.com:"):
+		value = strings.TrimPrefix(value, "git@github.com:")
+	case strings.Contains(value, "github.com/"):
+		idx := strings.Index(value, "github.com/")
+		value = value[idx+len("github.com/"):]
+	default:
+		return ""
+	}
+	value = strings.Trim(value, "/")
+	parts := strings.Split(value, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
 }
 
 func (a *App) resolveOptionalRepository(ctx context.Context, rt localRuntime, args []string) (store.Repository, bool, error) {

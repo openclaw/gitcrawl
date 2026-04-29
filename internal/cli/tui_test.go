@@ -93,6 +93,44 @@ func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
 	}
 }
 
+func TestTUIFooterShowsLocalDatabaseLocation(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		DBSource:   "local",
+		DBLocation: "gitcrawl.db",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	footer := model.renderFooter(120)
+	if !strings.Contains(footer, "local gitcrawl.db") {
+		t.Fatalf("footer missing local database location:\n%s", footer)
+	}
+	bg, _ := footerPalette(model.payload.DBSource)
+	if bg != lipgloss.Color("#5bc0eb") {
+		t.Fatalf("local footer background = %q, want blue", bg)
+	}
+}
+
+func TestTUIFooterShowsRemoteDatabaseLocation(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		DBSource:   "remote",
+		DBLocation: "openclaw/gitcrawl-store:openclaw__openclaw.sync.db",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	footer := model.renderFooter(140)
+	if !strings.Contains(footer, "remote openclaw/gitcrawl-store:openclaw__openclaw.sync.db") {
+		t.Fatalf("footer missing remote database location:\n%s", footer)
+	}
+	bg, _ := footerPalette(model.payload.DBSource)
+	if bg == lipgloss.Color("#5bc0eb") {
+		t.Fatalf("remote footer background should not use local blue")
+	}
+}
+
 func TestTUIViewFitsTerminalFrame(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
