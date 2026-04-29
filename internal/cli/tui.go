@@ -111,6 +111,8 @@ type clusterBrowserModel struct {
 	menuIndex        int
 	menuOff          int
 	menuItems        []tuiMenuItem
+	menuFloating     bool
+	menuRect         tuiRect
 	quitRequested    bool
 	showClosed       bool
 	compactDetail    bool
@@ -318,6 +320,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			m.runAction("copy-url")
 		case "a":
+			m.clearMenuPlacement()
 			m.openActionMenu()
 		case "s":
 			if m.payload.Sort == "recent" {
@@ -434,7 +437,11 @@ func (m clusterBrowserModel) View() string {
 			body = lipgloss.JoinVertical(lipgloss.Left, top, detail)
 		}
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	view := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	if m.menuOpen && m.menuFloating {
+		view = m.renderFloatingMenu(view)
+	}
+	return view
 }
 
 type tuiLayout struct {
@@ -603,7 +610,7 @@ func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
 	if m.showHelp {
 		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.helpLines(rect.w-4)...)
 	}
-	if m.menuOpen {
+	if m.menuOpen && !m.menuFloating {
 		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.menuLines(rect.w-4)...)
 	}
 	m.detailView.SetContent(strings.Join(lines, "\n"))
@@ -780,12 +787,25 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 	return lines
 }
 
+func (m clusterBrowserModel) renderFloatingMenu(view string) string {
+	rect := m.menuRect
+	if rect.w <= 0 || rect.h <= 0 {
+		return view
+	}
+	lines := m.menuLines(maxInt(1, rect.w-2))
+	if len(lines) > maxInt(0, rect.h-2) {
+		lines = lines[:maxInt(0, rect.h-2)]
+	}
+	box := floatingMenuStyle(rect.w, rect.h).Render(strings.Join(lines, "\n"))
+	return overlayBlock(view, box, rect.x, rect.y, m.width)
+}
+
 func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	page := maxInt(1, m.menuVisibleCount())
 	if index, ok := visibleMenuShortcutIndex(msg.String(), m.menuItems, m.menuOff, page); ok {
 		m.menuIndex = index
 		if m.runMenuItem(m.menuItems[m.menuIndex]) {
-			m.menuOpen = false
+			m.closeMenu("")
 		}
 		if m.quitRequested {
 			return m, tea.Quit
@@ -794,10 +814,9 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "esc", "q":
-		m.menuOpen = false
-		m.status = "Menu closed"
+		m.closeMenu("Menu closed")
 	case "h", "?":
-		m.menuOpen = false
+		m.closeMenu("")
 		m.showHelp = true
 		m.status = "Help"
 	case "b", "left", "backspace":
@@ -817,19 +836,19 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		m.openRepositoryMenu()
 	case "n":
-		m.menuOpen = false
+		m.closeMenu("")
 		m.loadSelectedThreadNeighbors(10, 0.2)
 	case "r":
-		m.menuOpen = false
+		m.closeMenu("")
 		m.refreshFromStore()
 	case "l":
-		m.menuOpen = false
+		m.closeMenu("")
 		m.toggleWideLayout()
 	case "d":
-		m.menuOpen = false
+		m.closeMenu("")
 		m.toggleDetailMode()
 	case "s":
-		m.menuOpen = false
+		m.closeMenu("")
 		if m.payload.Sort == "recent" {
 			m.payload.Sort = "size"
 		} else {
@@ -839,7 +858,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loadSelectedCluster()
 		m.status = "Sort: " + m.payload.Sort
 	case "m":
-		m.menuOpen = false
+		m.closeMenu("")
 		m.memberSort = nextMemberSort(m.memberSort)
 		m.sortMembers()
 		m.status = "Member sort: " + string(m.memberSort)
@@ -864,7 +883,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.menuIndex >= 0 && m.menuIndex < len(m.menuItems) {
 			if m.runMenuItem(m.menuItems[m.menuIndex]) {
-				m.menuOpen = false
+				m.closeMenu("")
 			}
 			if m.quitRequested {
 				return m, tea.Quit
@@ -938,7 +957,7 @@ func (m *clusterBrowserModel) startFilterInput() tea.Cmd {
 	m.searchBeforeEdit = m.search
 	m.jumping = false
 	m.showHelp = false
-	m.menuOpen = false
+	m.closeMenu("")
 	m.searchInput.Prompt = "/ "
 	m.searchInput.Placeholder = "filter clusters"
 	m.searchInput.SetValue(m.search)
@@ -950,7 +969,7 @@ func (m *clusterBrowserModel) startJumpInput() tea.Cmd {
 	m.jumping = true
 	m.searching = false
 	m.showHelp = false
-	m.menuOpen = false
+	m.closeMenu("")
 	m.searchInput.Prompt = "# "
 	m.searchInput.Placeholder = "issue or PR number"
 	m.searchInput.SetValue("")
@@ -1050,6 +1069,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		}
 		m.selectByMousePosition(layout, msg.X, msg.Y)
 		m.openActionMenu()
+		m.placeFloatingMenu(layout, msg.X, msg.Y)
 	}
 }
 
@@ -1065,20 +1085,22 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		return
 	case tea.MouseButtonRight:
 		if msg.Action == tea.MouseActionPress {
-			m.menuOpen = false
-			m.status = "Menu closed"
+			m.closeMenu("Menu closed")
 		}
 		return
 	}
 	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
 		return
 	}
-	if !layout.detail.contains(msg.X, msg.Y) {
-		m.menuOpen = false
-		m.status = "Menu closed"
+	menuRect := layout.detail
+	if m.menuFloating {
+		menuRect = m.menuRect
+	}
+	if !menuRect.contains(msg.X, msg.Y) {
+		m.closeMenu("Menu closed")
 		return
 	}
-	index := m.menuOff + msg.Y - layout.detail.y - 4
+	index := m.menuOff + msg.Y - menuRect.y - 4
 	if index < 0 || index >= len(m.menuItems) {
 		return
 	}
@@ -1090,7 +1112,7 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 	m.menuIndex = index
 	m.keepMenuVisible()
 	if m.runMenuItem(m.menuItems[m.menuIndex]) {
-		m.menuOpen = false
+		m.closeMenu("")
 	}
 }
 
@@ -1262,6 +1284,52 @@ func (m *clusterBrowserModel) openActionMenu() {
 	m.menuOpen = true
 	m.showHelp = false
 	m.status = "Action menu"
+}
+
+func (m *clusterBrowserModel) clearMenuPlacement() {
+	m.menuFloating = false
+	m.menuRect = tuiRect{}
+}
+
+func (m *clusterBrowserModel) closeMenu(status string) {
+	m.menuOpen = false
+	m.clearMenuPlacement()
+	if status != "" {
+		m.status = status
+	}
+}
+
+func (m *clusterBrowserModel) placeFloatingMenu(layout tuiLayout, x, y int) {
+	if !m.menuOpen {
+		return
+	}
+	maxWidth := maxInt(24, m.width-2)
+	width := clampInt(m.preferredMenuWidth(), 34, minInt(58, maxWidth))
+	availableHeight := maxInt(1, m.height-layout.header.h-layout.footer.h)
+	visibleRows := minInt(maxInt(1, len(m.menuItems)), 12)
+	height := minInt(visibleRows+7, availableHeight)
+	if height < minInt(8, availableHeight) {
+		height = minInt(8, availableHeight)
+	}
+	maxX := maxInt(0, m.width-width)
+	minY := layout.header.h
+	maxY := maxInt(minY, m.height-layout.footer.h-height)
+	m.menuFloating = true
+	m.menuRect = tuiRect{
+		x: clampInt(x+1, 0, maxX),
+		y: clampInt(y, minY, maxY),
+		w: width,
+		h: height,
+	}
+	m.keepMenuVisible()
+}
+
+func (m clusterBrowserModel) preferredMenuWidth() int {
+	width := lipgloss.Width(firstNonEmpty(m.menuTitle, "Actions")) + 4
+	for _, item := range m.menuItems {
+		width = maxInt(width, lipgloss.Width(item.label)+8)
+	}
+	return width
 }
 
 func (m *clusterBrowserModel) openRepositoryMenu() {
@@ -2050,6 +2118,9 @@ func (m *clusterBrowserModel) setSelectedClusterCanonicalLocally() {
 }
 
 func (m clusterBrowserModel) menuVisibleCount() int {
+	if m.menuFloating && m.menuRect.h > 0 {
+		return maxInt(1, m.menuRect.h-7)
+	}
 	height := m.detailView.Height
 	if height <= 0 {
 		height = maxInt(1, m.layout().detail.h-2)
@@ -3975,6 +4046,48 @@ func selectedFG(focused bool) string {
 		return "#05070d"
 	}
 	return "#f7f7ff"
+}
+
+func floatingMenuStyle(width, height int) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Width(maxInt(1, width-2)).
+		Height(maxInt(1, height-2)).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#ffd166")).
+		Background(lipgloss.Color("#151922")).
+		Foreground(lipgloss.Color("#f7f7ff"))
+}
+
+func overlayBlock(base, block string, x, y, width int) string {
+	baseLines := strings.Split(base, "\n")
+	blockLines := strings.Split(block, "\n")
+	for offset, line := range blockLines {
+		row := y + offset
+		if row < 0 || row >= len(baseLines) {
+			continue
+		}
+		prefix := strings.Repeat(" ", maxInt(0, x))
+		if x > 0 && baseLines[row] != "" {
+			prefix = padCells(truncateCells(baseLines[row], x), x)
+		}
+		rendered := prefix + line
+		if width > 0 {
+			rendered = truncateCells(rendered, width)
+		}
+		baseLines[row] = rendered
+	}
+	return strings.Join(baseLines, "\n")
+}
+
+func padCells(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	cellWidth := lipgloss.Width(value)
+	if cellWidth >= width {
+		return truncateCells(value, width)
+	}
+	return value + strings.Repeat(" ", width-cellWidth)
 }
 
 func minInt(a, b int) int {
