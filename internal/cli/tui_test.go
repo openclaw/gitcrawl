@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -49,8 +51,8 @@ func TestTUIViewShowsRowsInDefaultTerminal(t *testing.T) {
 	if !strings.Contains(view, "alpha-bravo") {
 		t.Fatalf("expected default terminal view to render cluster rows:\n%s", view)
 	}
-	if model.clusterTable.Height() < 1 {
-		t.Fatalf("cluster table viewport height = %d, want at least 1", model.clusterTable.Height())
+	if model.clusterViewportHeight() < 1 {
+		t.Fatalf("cluster table viewport height = %d, want at least 1", model.clusterViewportHeight())
 	}
 }
 
@@ -87,6 +89,34 @@ func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
 	for _, want := range []string{"right-click menu", "? help", "q quit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("narrow footer missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestTUIViewFitsTerminalFrame(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "size",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 190
+	model.height = 32
+	model.focus = focusMembers
+	model.showClosed = true
+	model.memberRows = []memberRow{
+		{label: "ISSUES (37)"},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 44718, State: "closed", Title: strings.Repeat("ReferenceError ", 20), UpdatedAtGitHub: "2026-04-27T00:00:00Z"}}},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 45057, State: "closed", Title: strings.Repeat("ReferenceError ", 20), UpdatedAtGitHub: "2026-04-27T00:00:00Z"}}},
+	}
+	model.memberIndex = 1
+
+	view := model.View()
+	if got := lipgloss.Height(view); got != model.height {
+		t.Fatalf("view height = %d, want %d\n%s", got, model.height, view)
+	}
+	for lineIndex, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > model.width {
+			t.Fatalf("line %d width = %d, want <= %d: %q", lineIndex, got, model.width, line)
 		}
 	}
 }
@@ -175,6 +205,7 @@ func TestTUIMouseSelectsVisibleClusterWindow(t *testing.T) {
 	model.height = 24
 	model.selected = 20
 	model.syncComponents()
+	model.keepVisible()
 	start := model.clusterVisibleStart()
 	if start == 0 {
 		t.Fatalf("expected selected row to force a scrolled cluster window")
@@ -220,6 +251,7 @@ func TestTUIMouseSelectsVisibleMemberWindow(t *testing.T) {
 	}
 	model.memberIndex = 20
 	model.syncComponents()
+	model.keepVisible()
 	start := model.memberVisibleStart()
 	if start == 0 {
 		t.Fatalf("expected selected row to force a scrolled member window")
@@ -295,6 +327,67 @@ func TestTUIClusterRowsShowReadableState(t *testing.T) {
 	}
 	if !strings.Contains(rows[1][2], "OPEN") {
 		t.Fatalf("second row state = %q, want OPEN", rows[1][2])
+	}
+	for rowIndex, row := range rows {
+		for cellIndex, cell := range row {
+			if strings.Contains(cell, "\x1b[") {
+				t.Fatalf("cluster row %d cell %d contains ANSI escapes: %q", rowIndex, cellIndex, cell)
+			}
+		}
+	}
+}
+
+func TestTUIRenderedRowsStyleOpenAndClosedStates(t *testing.T) {
+	openCluster := clusterRowStyle(store.ClusterSummary{Status: "active"}, false, false)
+	closedCluster := clusterRowStyle(store.ClusterSummary{Status: "closed"}, false, false)
+	if openCluster.GetForeground() == nil || openCluster.GetBackground() == nil {
+		t.Fatalf("open cluster style missing foreground/background")
+	}
+	if closedCluster.GetForeground() == nil || closedCluster.GetBackground() == nil {
+		t.Fatalf("closed cluster style missing foreground/background")
+	}
+	if fmt.Sprint(openCluster.GetBackground()) == fmt.Sprint(closedCluster.GetBackground()) {
+		t.Fatalf("open and closed cluster backgrounds should differ")
+	}
+	clusterView := renderStyledTable([]table.Column{{Title: "id", Width: 8}, {Title: "state", Width: 8}}, []table.Row{{"C1", "OPEN"}, {"C2", "CLOSED"}}, 0, 2, 20, "#5bc0eb", func(index int) lipgloss.Style {
+		if index == 0 {
+			return openCluster
+		}
+		return closedCluster
+	})
+	if !strings.Contains(clusterView, "C1") || !strings.Contains(clusterView, "OPEN") || !strings.Contains(clusterView, "C2") || !strings.Contains(clusterView, "CLOSED") {
+		t.Fatalf("styled cluster rows lost text: %q", clusterView)
+	}
+	for lineIndex, line := range strings.Split(clusterView, "\n") {
+		if lipgloss.Width(line) > 20 {
+			t.Fatalf("cluster line %d width = %d, want <= 20: %q", lineIndex, lipgloss.Width(line), line)
+		}
+	}
+
+	openMember := memberRowStyle(memberRow{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{State: "open"}}}, false, false)
+	closedMember := memberRowStyle(memberRow{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{State: "closed"}}}, false, false)
+	if openMember.GetForeground() == nil || openMember.GetBackground() == nil {
+		t.Fatalf("open member style missing foreground/background")
+	}
+	if closedMember.GetForeground() == nil || closedMember.GetBackground() == nil {
+		t.Fatalf("closed member style missing foreground/background")
+	}
+	if fmt.Sprint(openMember.GetBackground()) == fmt.Sprint(closedMember.GetBackground()) {
+		t.Fatalf("open and closed member backgrounds should differ")
+	}
+	memberView := renderStyledTable([]table.Column{{Title: "number", Width: 8}, {Title: "st", Width: 8}}, []table.Row{{"#1", "opn"}, {"#2", "cls"}}, 0, 2, 20, "#9bc53d", func(index int) lipgloss.Style {
+		if index == 0 {
+			return openMember
+		}
+		return closedMember
+	})
+	if !strings.Contains(memberView, "#1") || !strings.Contains(memberView, "opn") || !strings.Contains(memberView, "#2") || !strings.Contains(memberView, "cls") {
+		t.Fatalf("styled member rows lost text: %q", memberView)
+	}
+	for lineIndex, line := range strings.Split(memberView, "\n") {
+		if lipgloss.Width(line) > 20 {
+			t.Fatalf("member line %d width = %d, want <= 20: %q", lineIndex, lipgloss.Width(line), line)
+		}
 	}
 }
 

@@ -112,8 +112,6 @@ type clusterBrowserModel struct {
 	memberRows       []memberRow
 	memberOff        int
 	memberIndex      int
-	clusterTable     table.Model
-	memberTable      table.Model
 	detailView       viewport.Model
 	searchInput      textinput.Model
 	detailCache      map[int64]store.ClusterDetail
@@ -198,8 +196,6 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 		memberSort:    memberSortKind,
 		wideLayout:    wideLayoutColumns,
 		memberIndex:   -1,
-		clusterTable:  newTUITable(),
-		memberTable:   newTUITable(),
 		detailView:    viewport.New(1, 1),
 		searchInput:   search,
 		detailCache:   map[int64]store.ClusterDetail{},
@@ -443,8 +439,8 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 	if m.payload.InferredRepository {
 		line += "  inferred"
 	}
-	style := lipgloss.NewStyle().Width(width).Height(1).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Padding(0, 1)
-	return style.Render(truncateCells(bold(line), maxInt(1, width-2)))
+	style := lipgloss.NewStyle().Width(width).Height(1).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Bold(true).Padding(0, 1)
+	return style.Render(truncateCells(line, maxInt(1, width-2)))
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
@@ -463,11 +459,25 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 }
 
 func (m clusterBrowserModel) renderClusters(rect tuiRect) string {
-	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus, m.clusterPositionLabel()), m.clusterTable.View()))
+	tableWidth := tableViewportWidth(rect)
+	tableView := renderStyledTable(clusterColumns(tableWidth, m.payload.Sort), m.clusterRows(), m.clusterOff, tableViewportHeight(rect), tableWidth, "#5bc0eb", func(index int) lipgloss.Style {
+		if index < 0 || index >= len(m.payload.Clusters) {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("#dfe7ef"))
+		}
+		return clusterRowStyle(m.payload.Clusters[index], index == m.selected, m.focus == focusClusters)
+	})
+	return paneStyle(focusClusters, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusClusters, m.focus, m.clusterPositionLabel()), tableView))
 }
 
 func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
-	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus, m.memberPositionLabel()), m.memberTable.View()))
+	tableWidth := tableViewportWidth(rect)
+	tableView := renderStyledTable(memberColumns(tableWidth, m.memberSort), m.memberTableRows(), m.memberOff, tableViewportHeight(rect), tableWidth, "#9bc53d", func(index int) lipgloss.Style {
+		if index < 0 || index >= len(m.memberRows) {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("#dfe7ef"))
+		}
+		return memberRowStyle(m.memberRows[index], index == m.memberIndex, m.focus == focusMembers)
+	})
+	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus, m.memberPositionLabel()), tableView))
 }
 
 func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
@@ -887,7 +897,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			if row < 0 {
 				return
 			}
-			index := m.clusterVisibleStart() + row
+			index := m.clusterOff + row
 			if index >= 0 && index < len(m.payload.Clusters) {
 				m.selected = index
 				m.loadSelectedCluster()
@@ -903,7 +913,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			if row < 0 {
 				return
 			}
-			index := m.memberVisibleStart() + row
+			index := m.memberOff + row
 			if index >= 0 && index < len(m.memberRows) {
 				if !m.memberRows[index].selectable {
 					m.memberIndex = index
@@ -976,7 +986,7 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 		m.focus = focusClusters
 		row := y - layout.clusters.y - 3
 		if row >= 0 {
-			index := m.clusterVisibleStart() + row
+			index := m.clusterOff + row
 			if index >= 0 && index < len(m.payload.Clusters) {
 				m.selected = index
 				m.loadSelectedCluster()
@@ -986,7 +996,7 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 		m.focus = focusMembers
 		row := y - layout.members.y - 3
 		if row >= 0 {
-			index := m.memberVisibleStart() + row
+			index := m.memberOff + row
 			if index >= 0 && index < len(m.memberRows) {
 				if !m.memberRows[index].selectable {
 					m.memberIndex = index
@@ -2078,74 +2088,55 @@ func (r tuiRect) contains(x, y int) bool {
 }
 
 func (m *clusterBrowserModel) keepVisible() {
-	m.clusterOff = m.clusterVisibleStart()
-	m.memberOff = m.memberVisibleStart()
+	m.clusterOff = keepRowVisible(m.clusterOff, m.selected, len(m.payload.Clusters), m.clusterViewportHeight())
+	m.memberOff = keepRowVisible(m.memberOff, m.memberIndex, len(m.memberRows), m.memberViewportHeight())
 }
 
 func (m clusterBrowserModel) clusterVisibleStart() int {
-	return tableVisibleStart(m.selected, len(m.payload.Clusters), m.clusterViewportHeight())
+	return keepRowVisible(m.clusterOff, m.selected, len(m.payload.Clusters), m.clusterViewportHeight())
 }
 
 func (m clusterBrowserModel) memberVisibleStart() int {
-	return tableVisibleStart(m.memberIndex, len(m.memberRows), m.memberViewportHeight())
+	return keepRowVisible(m.memberOff, m.memberIndex, len(m.memberRows), m.memberViewportHeight())
 }
 
 func (m clusterBrowserModel) clusterViewportHeight() int {
-	if height := m.clusterTable.Height(); height > 0 {
-		return height
-	}
-	return fallbackTableViewportHeight(m.layout().clusters)
+	return tableViewportHeight(m.layout().clusters)
 }
 
 func (m clusterBrowserModel) memberViewportHeight() int {
-	if height := m.memberTable.Height(); height > 0 {
-		return height
-	}
-	return fallbackTableViewportHeight(m.layout().members)
+	return tableViewportHeight(m.layout().members)
 }
 
-func fallbackTableViewportHeight(rect tuiRect) int {
+func tableViewportWidth(rect tuiRect) int {
+	return maxInt(24, rect.w-4)
+}
+
+func tableViewportHeight(rect tuiRect) int {
 	return maxInt(1, maxInt(2, rect.h-3)-1)
 }
 
-func tableVisibleStart(cursor, rowCount, viewportHeight int) int {
-	if rowCount <= 0 || cursor < 0 {
+func keepRowVisible(offset, selected, rowCount, viewportHeight int) int {
+	if rowCount <= 0 || selected < 0 {
 		return 0
 	}
-	cursor = clampInt(cursor, 0, rowCount-1)
-	return clampInt(cursor-maxInt(1, viewportHeight), 0, cursor)
+	viewportHeight = maxInt(1, viewportHeight)
+	selected = clampInt(selected, 0, rowCount-1)
+	maxOffset := maxInt(0, rowCount-viewportHeight)
+	offset = clampInt(offset, 0, maxOffset)
+	if selected < offset {
+		return selected
+	}
+	if selected >= offset+viewportHeight {
+		return clampInt(selected-viewportHeight+1, 0, maxOffset)
+	}
+	return offset
 }
 
 func (m *clusterBrowserModel) syncComponents() {
 	layout := m.layout()
-	clusterW := maxInt(24, layout.clusters.w-4)
-	memberW := maxInt(24, layout.members.w-4)
 	detailW := maxInt(24, layout.detail.w-4)
 	detailH := maxInt(2, layout.detail.h-2)
-
-	m.clusterTable.SetWidth(clusterW)
-	m.clusterTable.SetHeight(maxInt(2, layout.clusters.h-3))
-	m.clusterTable.SetStyles(tuiTableStyles(m.focus == focusClusters, "#5bc0eb", "#23445c"))
-	m.clusterTable.SetColumns(clusterColumns(clusterW, m.payload.Sort))
-	m.clusterTable.SetRows(m.clusterRows())
-	m.clusterTable.SetCursor(clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1)))
-	if m.focus == focusClusters {
-		m.clusterTable.Focus()
-	} else {
-		m.clusterTable.Blur()
-	}
-
-	m.memberTable.SetWidth(memberW)
-	m.memberTable.SetHeight(maxInt(2, layout.members.h-3))
-	m.memberTable.SetStyles(tuiTableStyles(m.focus == focusMembers, "#9bc53d", "#33521e"))
-	m.memberTable.SetColumns(memberColumns(memberW, m.memberSort))
-	m.memberTable.SetRows(m.memberTableRows())
-	m.memberTable.SetCursor(clampInt(m.memberIndex, 0, maxInt(0, len(m.memberRows)-1)))
-	if m.focus == focusMembers {
-		m.memberTable.Focus()
-	} else {
-		m.memberTable.Blur()
-	}
 
 	m.detailView.Width = detailW
 	m.detailView.Height = detailH
@@ -2154,28 +2145,48 @@ func (m *clusterBrowserModel) syncComponents() {
 	m.searchInput.Width = maxInt(20, m.width-16)
 }
 
-func newTUITable() table.Model {
-	return table.New(table.WithStyles(tuiTableStyles(false, "#5bc0eb", "#23445c")), table.WithFocused(false))
+func renderStyledTable(columns []table.Column, rows []table.Row, offset, height, width int, headerColor string, styleForRow func(index int) lipgloss.Style) string {
+	height = maxInt(1, height)
+	width = maxInt(1, width)
+	lines := make([]string, 0, height+1)
+	lines = append(lines, renderTableHeader(columns, width, headerColor))
+	for line := 0; line < height; line++ {
+		index := offset + line
+		if index < 0 || index >= len(rows) {
+			lines = append(lines, lipgloss.NewStyle().Width(width).Render(""))
+			continue
+		}
+		lines = append(lines, renderTableRow(columns, rows[index], width, styleForRow(index)))
+	}
+	return strings.Join(lines, "\n")
 }
 
-func tuiTableStyles(focused bool, accent, inactive string) table.Styles {
-	styles := table.DefaultStyles()
-	styles.Header = styles.Header.
-		Bold(true).
-		Padding(0, 1, 0, 0).
-		Foreground(lipgloss.Color(accent))
-	styles.Cell = styles.Cell.Foreground(lipgloss.Color("#dfe7ef")).Padding(0, 1, 0, 0)
-	selectedBG := inactive
-	selectedFG := "#f7f7ff"
-	if focused {
-		selectedBG = "#f7f7ff"
-		selectedFG = "#05070d"
+func renderTableHeader(columns []table.Column, width int, headerColor string) string {
+	values := make(table.Row, 0, len(columns))
+	for _, column := range columns {
+		values = append(values, column.Title)
 	}
-	styles.Selected = styles.Selected.
-		Foreground(lipgloss.Color(selectedFG)).
-		Background(lipgloss.Color(selectedBG)).
-		Bold(true)
-	return styles
+	line := truncateCells(renderTableCells(columns, values), width)
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(headerColor)).Width(width).Render(line)
+}
+
+func renderTableRow(columns []table.Column, row table.Row, width int, rowStyle lipgloss.Style) string {
+	line := truncateCells(renderTableCells(columns, row), width)
+	return rowStyle.Width(width).Render(line)
+}
+
+func renderTableCells(columns []table.Column, row table.Row) string {
+	cells := make([]string, 0, min(len(columns), len(row)))
+	cellStyle := lipgloss.NewStyle().Padding(0, 1, 0, 0)
+	for index, value := range row {
+		if index >= len(columns) || columns[index].Width <= 0 {
+			continue
+		}
+		column := columns[index]
+		cell := lipgloss.NewStyle().Width(column.Width).MaxWidth(column.Width).Inline(true).Render(truncateCells(value, column.Width))
+		cells = append(cells, cellStyle.Render(cell))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
 }
 
 func clusterColumns(width int, sortMode string) []table.Column {
@@ -2245,13 +2256,13 @@ func (m clusterBrowserModel) clusterRows() []table.Row {
 	rows := make([]table.Row, 0, len(m.payload.Clusters))
 	for _, cluster := range m.payload.Clusters {
 		rows = append(rows, table.Row{
-			clusterRowCell(cluster, fmt.Sprintf("C%d", cluster.ID)),
-			clusterRowCell(cluster, fmt.Sprintf("%d", cluster.MemberCount)),
+			fmt.Sprintf("C%d", cluster.ID),
+			fmt.Sprintf("%d", cluster.MemberCount),
 			clusterStateLabel(cluster),
-			clusterRowCell(cluster, cluster.StableSlug),
-			clusterRowCell(cluster, splitClusterTitle(cluster)),
-			clusterRowCell(cluster, kindGlyph(cluster.RepresentativeKind)),
-			clusterRowCell(cluster, formatRelativeTime(cluster.UpdatedAt)),
+			cluster.StableSlug,
+			splitClusterTitle(cluster),
+			kindGlyph(cluster.RepresentativeKind),
+			formatRelativeTime(cluster.UpdatedAt),
 		})
 	}
 	return rows
@@ -3413,29 +3424,68 @@ func kindGlyph(kind string) string {
 func clusterStateLabel(cluster store.ClusterSummary) string {
 	switch strings.ToLower(firstNonEmpty(cluster.Status, "active")) {
 	case "closed":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb86b")).Bold(true).Render("CLOSED")
+		return "CLOSED"
 	case "merged":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#c792ea")).Bold(true).Render("MERGED")
+		return "MERGED"
 	case "split":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#c792ea")).Bold(true).Render("SPLIT")
+		return "SPLIT"
 	default:
 		if cluster.ClosedAt != "" {
-			return lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb86b")).Bold(true).Render("CLOSED")
+			return "CLOSED"
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#9bc53d")).Bold(true).Render("OPEN")
+		return "OPEN"
 	}
 }
 
-func clusterRowCell(cluster store.ClusterSummary, value string) string {
-	if clusterClosedForDisplay(cluster) {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#8d99ae")).Render(value)
+func clusterRowStyle(cluster store.ClusterSummary, selected bool, focused bool) lipgloss.Style {
+	status := strings.ToLower(firstNonEmpty(cluster.Status, "active"))
+	if cluster.ClosedAt != "" && status == "active" {
+		status = "closed"
 	}
-	return value
+	switch status {
+	case "closed":
+		if selected {
+			return selectedRowStyle(focused, "#ffe0ad", "#1d1304", "#473111", "#ffd08a")
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#aab2bf")).Background(lipgloss.Color("#242936"))
+	case "merged", "split":
+		if selected {
+			return selectedRowStyle(focused, "#ead7ff", "#1b0e2a", "#342042", "#dfbdff")
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#d8c4ff")).Background(lipgloss.Color("#21172d"))
+	default:
+		if selected {
+			return selectedRowStyle(focused, "#d7ffd2", "#061607", "#14351d", "#a8f0ae")
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#e8ffe8")).Background(lipgloss.Color("#0f2115"))
+	}
 }
 
-func clusterClosedForDisplay(cluster store.ClusterSummary) bool {
-	status := strings.ToLower(cluster.Status)
-	return status == "closed" || status == "merged" || status == "split" || cluster.ClosedAt != ""
+func memberRowStyle(row memberRow, selected bool, focused bool) lipgloss.Style {
+	if !row.selectable {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#9bc53d")).Bold(true)
+	}
+	state := strings.ToLower(memberDisplayState(row.member))
+	switch state {
+	case "closed", "local", "merged":
+		if selected {
+			return selectedRowStyle(focused, "#ffe0ad", "#1d1304", "#473111", "#ffd08a")
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#aab2bf")).Background(lipgloss.Color("#242936"))
+	default:
+		if selected {
+			return selectedRowStyle(focused, "#d7ffd2", "#061607", "#14351d", "#a8f0ae")
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#e8ffe8")).Background(lipgloss.Color("#0f2115"))
+	}
+}
+
+func selectedRowStyle(focused bool, focusedBG, focusedFG, blurredBG, blurredFG string) lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true)
+	if focused {
+		return style.Foreground(lipgloss.Color(focusedFG)).Background(lipgloss.Color(focusedBG))
+	}
+	return style.Foreground(lipgloss.Color(blurredFG)).Background(lipgloss.Color(blurredBG))
 }
 
 func kindTitle(kind string) string {
