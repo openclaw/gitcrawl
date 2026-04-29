@@ -207,6 +207,9 @@ func TestTUIActionShortcutOpensMenu(t *testing.T) {
 	if !model.menuOpen || model.menuTitle != "Actions" {
 		t.Fatalf("action shortcut state menu=%v title=%q", model.menuOpen, model.menuTitle)
 	}
+	if model.menuFloating {
+		t.Fatal("keyboard action menu should use the detail pane, not floating placement")
+	}
 }
 
 func TestTUIMouseSelectsClusterRows(t *testing.T) {
@@ -514,7 +517,7 @@ func TestTUIWideLayoutToggle(t *testing.T) {
 	}
 }
 
-func TestTUIMouseIgnoresRightClick(t *testing.T) {
+func TestTUIRightClickOpensFloatingMenu(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
 		Sort:       "recent",
@@ -533,6 +536,12 @@ func TestTUIMouseIgnoresRightClick(t *testing.T) {
 	})
 	if model.selected != 1 {
 		t.Fatalf("right click changed selected cluster to %d", model.selected)
+	}
+	if !model.menuOpen || !model.menuFloating {
+		t.Fatalf("right click menu state open=%v floating=%v", model.menuOpen, model.menuFloating)
+	}
+	if !model.menuRect.contains(layout.clusters.x+3, layout.clusters.y+4) {
+		t.Fatalf("floating menu rect %+v should be placed at the right-click row", model.menuRect)
 	}
 }
 
@@ -660,6 +669,9 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 
 	if !model.menuOpen {
 		t.Fatal("expected right click to open action menu")
+	}
+	if !model.menuFloating {
+		t.Fatal("expected right click action menu to float")
 	}
 	if model.selected != 1 {
 		t.Fatalf("right click selected %d, want 1", model.selected)
@@ -1113,6 +1125,38 @@ func TestTUIMouseClickUsesMenuOffset(t *testing.T) {
 	}
 }
 
+func TestTUIMouseClickUsesFloatingMenuOffset(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.menuOpen = true
+	model.menuFloating = true
+	model.menuRect = tuiRect{x: 5, y: 3, w: 40, h: 12}
+	model.menuOff = 5
+	model.menuItems = make([]tuiMenuItem, 8)
+	for index := range model.menuItems {
+		model.menuItems[index] = tuiMenuItem{label: fmt.Sprintf("Item %d", index), action: "close-menu"}
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      model.menuRect.x + 2,
+		Y:      model.menuRect.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.menuIndex != 5 {
+		t.Fatalf("floating menu click selected %d, want offset row 5", model.menuIndex)
+	}
+	if model.menuOpen || model.menuFloating {
+		t.Fatalf("floating menu should close cleanly, open=%v floating=%v", model.menuOpen, model.menuFloating)
+	}
+}
+
 func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -1122,6 +1166,8 @@ func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 	model.width = 140
 	model.height = 32
 	model.openActionMenu()
+	model.menuFloating = true
+	model.menuRect = tuiRect{x: 5, y: 5, w: 40, h: 12}
 	layout := model.layout()
 
 	model.handleMouse(tea.MouseMsg{
@@ -1133,6 +1179,9 @@ func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 
 	if model.menuOpen {
 		t.Fatal("expected right click to close open menu")
+	}
+	if model.menuFloating {
+		t.Fatal("expected right click close to clear floating menu placement")
 	}
 	if model.status != "Menu closed" {
 		t.Fatalf("right click close status = %q, want Menu closed", model.status)
