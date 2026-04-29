@@ -529,7 +529,7 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  a actions  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	controls := "Tab focus  click select  right-click menu  a actions  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
 	if width < 100 {
 		controls = "Tab focus click right-click menu a actions / filter # jump ? help q quit"
 	}
