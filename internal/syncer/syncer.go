@@ -17,6 +17,7 @@ import (
 
 type GitHubClient interface {
 	GetRepo(ctx context.Context, owner, repo string, reporter gh.Reporter) (map[string]any, error)
+	GetIssue(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) (map[string]any, error)
 	ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error)
 	ListIssueComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error)
 	ListPullReviews(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error)
@@ -35,6 +36,7 @@ type Options struct {
 	State           string
 	Since           string
 	Limit           int
+	Numbers         []int
 	IncludeComments bool
 	Reporter        gh.Reporter
 }
@@ -48,6 +50,7 @@ type Stats struct {
 	ThreadsClosed      int    `json:"threads_closed"`
 	RequestedSince     string `json:"requested_since,omitempty"`
 	Limit              int    `json:"limit,omitempty"`
+	Numbers            []int  `json:"numbers,omitempty"`
 	MetadataOnly       bool   `json:"metadata_only"`
 	StartedAt          string `json:"started_at"`
 	FinishedAt         string `json:"finished_at"`
@@ -87,19 +90,33 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		return Stats{}, err
 	}
 
-	rows, err := s.client.ListRepositoryIssues(ctx, options.Owner, options.Repo, gh.ListIssuesOptions{
-		State: state,
-		Since: since,
-		Limit: options.Limit,
-	}, options.Reporter)
-	if err != nil {
-		return Stats{}, err
+	numbers := uniquePositiveNumbers(options.Numbers)
+	rows := make([]map[string]any, 0, len(numbers))
+	if len(numbers) > 0 {
+		for _, number := range numbers {
+			row, err := s.client.GetIssue(ctx, options.Owner, options.Repo, number, options.Reporter)
+			if err != nil {
+				return Stats{}, err
+			}
+			rows = append(rows, row)
+		}
+	} else {
+		var err error
+		rows, err = s.client.ListRepositoryIssues(ctx, options.Owner, options.Repo, gh.ListIssuesOptions{
+			State: state,
+			Since: since,
+			Limit: options.Limit,
+		}, options.Reporter)
+		if err != nil {
+			return Stats{}, err
+		}
 	}
 
 	stats := Stats{
 		Repository:     options.Owner + "/" + options.Repo,
 		RequestedSince: since,
 		Limit:          options.Limit,
+		Numbers:        numbers,
 		MetadataOnly:   !options.IncludeComments,
 		StartedAt:      started,
 	}
@@ -130,7 +147,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				stats.IssuesSynced++
 			}
 		}
-		if state == "open" && since != "" && options.Limit <= 0 {
+		if len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0 {
 			closed, err := s.applyClosedOverlapSweep(ctx, st, repoID, options, since)
 			if err != nil {
 				return err
@@ -141,7 +158,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		if _, err := st.RecordRun(ctx, store.RunRecord{
 			RepoID:     repoID,
 			Kind:       "sync",
-			Scope:      state,
+			Scope:      syncRunScope(state, numbers),
 			Status:     "success",
 			StartedAt:  stats.StartedAt,
 			FinishedAt: stats.FinishedAt,
@@ -161,6 +178,36 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		return Stats{}, err
 	}
 	return stats, nil
+}
+
+func uniquePositiveNumbers(numbers []int) []int {
+	if len(numbers) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(numbers))
+	out := make([]int, 0, len(numbers))
+	for _, number := range numbers {
+		if number <= 0 {
+			continue
+		}
+		if _, ok := seen[number]; ok {
+			continue
+		}
+		seen[number] = struct{}{}
+		out = append(out, number)
+	}
+	return out
+}
+
+func syncRunScope(state string, numbers []int) string {
+	if len(numbers) == 0 {
+		return state
+	}
+	parts := make([]string, 0, len(numbers))
+	for _, number := range numbers {
+		parts = append(parts, strconv.Itoa(number))
+	}
+	return "numbers:" + strings.Join(parts, ",")
 }
 
 func normalizeState(value string) (string, error) {

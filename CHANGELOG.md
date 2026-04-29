@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `gitcrawl sync --numbers` for exact issue and pull request hydration, including comment documents, without relying on list ordering or updated-time windows.
 - Implement `gitcrawl refresh` and `gitcrawl embed` so synced repositories can generate OpenAI embeddings and rebuild durable clusters end to end.
 - Add `gitcrawl sync --state open|closed|all` so incremental backups can refresh recently closed issues and pull requests.
 - Default `gitcrawl sync` to `--state all`, keeping closed issue and pull request state fresh unless a narrower state is requested.

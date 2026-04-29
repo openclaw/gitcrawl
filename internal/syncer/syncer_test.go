@@ -16,6 +16,38 @@ func (fakeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.R
 	return map[string]any{"id": 123}, nil
 }
 
+func (fakeGitHub) GetIssue(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) (map[string]any, error) {
+	if number == 8 {
+		return map[string]any{
+			"id":           2,
+			"number":       8,
+			"state":        "open",
+			"title":        "fix sync",
+			"body":         "",
+			"html_url":     "https://github.com/openclaw/gitcrawl/pull/8",
+			"created_at":   "2026-04-26T00:00:00Z",
+			"updated_at":   "2026-04-26T00:00:00Z",
+			"labels":       []map[string]any{},
+			"assignees":    []map[string]any{},
+			"user":         map[string]any{"login": "vincentkoc", "type": "User"},
+			"pull_request": map[string]any{"url": "https://api.github.com/repos/openclaw/gitcrawl/pulls/8"},
+		}, nil
+	}
+	return map[string]any{
+		"id":         1,
+		"number":     7,
+		"state":      "open",
+		"title":      "download stalls",
+		"body":       "large file download stalls",
+		"html_url":   "https://github.com/openclaw/gitcrawl/issues/7",
+		"created_at": "2026-04-26T00:00:00Z",
+		"updated_at": "2026-04-26T00:00:00Z",
+		"labels":     []map[string]any{{"name": "bug"}},
+		"assignees":  []map[string]any{},
+		"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+	}, nil
+}
+
 func (fakeGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
 	if options.State == "closed" {
 		return nil, nil
@@ -116,6 +148,22 @@ func (closedSweepGitHub) ListRepositoryIssues(ctx context.Context, owner, repo s
 	return nil, nil
 }
 
+type targetedGitHub struct {
+	fakeGitHub
+	listCalled bool
+	numbers    []int
+}
+
+func (f *targetedGitHub) GetIssue(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) (map[string]any, error) {
+	f.numbers = append(f.numbers, number)
+	return f.fakeGitHub.GetIssue(ctx, owner, repo, number, reporter)
+}
+
+func (f *targetedGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	f.listCalled = true
+	return nil, nil
+}
+
 func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -160,6 +208,47 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 	if documentCount != 1 {
 		t.Fatalf("document count: got %d want 1", documentCount)
+	}
+}
+
+func TestSyncCanTargetIssueNumbers(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &targetedGitHub{}
+	s := New(client, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{7, 7, 8}, IncludeComments: true})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if client.listCalled {
+		t.Fatal("targeted sync should not call repository issue listing")
+	}
+	if got, want := client.numbers, []int{7, 8}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("targeted numbers: got %#v want %#v", got, want)
+	}
+	if stats.ThreadsSynced != 2 || stats.IssuesSynced != 1 || stats.PullRequestsSynced != 1 {
+		t.Fatalf("unexpected stats: %#v", stats)
+	}
+	if stats.CommentsSynced != 1 {
+		t.Fatalf("comments synced: got %d want 1", stats.CommentsSynced)
+	}
+
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, false)
+	if err != nil {
+		t.Fatalf("threads: %v", err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("threads: got %d want 2", len(threads))
 	}
 }
 
