@@ -977,8 +977,10 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Repository:         repo.FullName,
 		InferredRepository: inferred,
 		Mode:               "cluster-browser",
-		DBSource:           databaseSourceKind(rt.Config.DBPath),
-		DBLocation:         databaseSourceLocation(ctx, rt.Config.DBPath),
+		DBSource:           databaseSourceKind(rt.SourceDBPath),
+		DBLocation:         databaseSourceLocation(ctx, rt.SourceDBPath),
+		DBRefreshSource:    remoteRefreshSource(rt),
+		DBRuntimePath:      remoteRuntimePath(rt),
 		Sort:               sort,
 		MinSize:            minSize,
 		Limit:              limit,
@@ -1001,6 +1003,20 @@ func databaseSourceKind(dbPath string) string {
 		return "remote"
 	}
 	return "local"
+}
+
+func remoteRefreshSource(rt localRuntime) string {
+	if rt.RemoteSource {
+		return rt.SourceDBPath
+	}
+	return ""
+}
+
+func remoteRuntimePath(rt localRuntime) string {
+	if rt.RemoteSource {
+		return rt.Config.DBPath
+	}
+	return ""
 }
 
 func databaseSourceLocation(ctx context.Context, dbPath string) string {

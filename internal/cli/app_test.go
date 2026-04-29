@@ -218,6 +218,16 @@ func TestReadCommandRefreshesPortableStore(t *testing.T) {
 	if !strings.Contains(stdout.String(), "refreshed issue") {
 		t.Fatalf("read command did not refresh portable store, got %q", stdout.String())
 	}
+	if !gitWorktreeClean(ctx, checkoutDir) {
+		t.Fatal("portable checkout should stay clean after read-only command")
+	}
+	mirrorPath, err := run.portableRuntimeDBPath(filepath.Join(checkoutDir, dbRel))
+	if err != nil {
+		t.Fatalf("runtime db path: %v", err)
+	}
+	if _, err := os.Stat(mirrorPath); err != nil {
+		t.Fatalf("runtime mirror db was not created: %v", err)
+	}
 }
 
 func seedPortableThread(t *testing.T, dbPath string, number int, title string) {

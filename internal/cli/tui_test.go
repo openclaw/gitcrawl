@@ -131,6 +131,26 @@ func TestTUIFooterShowsRemoteDatabaseLocation(t *testing.T) {
 	}
 }
 
+func TestTUIFooterShowsRemoteRefreshLoadingState(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository:      "openclaw/openclaw",
+		DBSource:        "remote",
+		DBLocation:      "openclaw/gitcrawl-store:openclaw__openclaw.sync.db",
+		DBRefreshSource: "/tmp/source.db",
+		DBRuntimePath:   "/tmp/runtime.db",
+		Sort:            "recent",
+		Clusters:        sampleTUIClusters(),
+	})
+
+	if !model.remoteRefreshing {
+		t.Fatal("remote model should start in refresh loading state")
+	}
+	footer := model.renderFooter(140)
+	if !strings.Contains(footer, "Refreshing remote data") {
+		t.Fatalf("footer missing remote refresh loading state:\n%s", footer)
+	}
+}
+
 func TestTUIViewFitsTerminalFrame(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

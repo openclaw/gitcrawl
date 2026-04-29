@@ -35,6 +35,12 @@ var (
 const tuiAutoRefreshInterval = 15 * time.Second
 
 type tuiAutoRefreshMsg struct{}
+type tuiRemoteRefreshTickMsg struct{}
+
+type tuiRemoteRefreshMsg struct {
+	changed bool
+	err     error
+}
 
 type clusterBrowserPayload struct {
 	Repository         string                 `json:"repository"`
@@ -42,6 +48,8 @@ type clusterBrowserPayload struct {
 	Mode               string                 `json:"mode"`
 	DBSource           string                 `json:"db_source,omitempty"`
 	DBLocation         string                 `json:"db_location,omitempty"`
+	DBRefreshSource    string                 `json:"-"`
+	DBRuntimePath      string                 `json:"-"`
 	Sort               string                 `json:"sort"`
 	MinSize            int                    `json:"min_size"`
 	Limit              int                    `json:"limit,omitempty"`
@@ -120,6 +128,8 @@ type clusterBrowserModel struct {
 	neighborCache    map[int64][]tuiNeighbor
 	detail           store.ClusterDetail
 	hasDetail        bool
+	remoteRefreshing bool
+	remoteFrame      int
 }
 
 type memberRow struct {
@@ -173,7 +183,10 @@ func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int
 	}
 	model := newClusterBrowserModel(ctx, st, repoID, payload)
 	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := program.Run()
+	finalModel, err := program.Run()
+	if final, ok := finalModel.(clusterBrowserModel); ok && final.store != nil && final.store != st {
+		_ = final.store.Close()
+	}
 	return err
 }
 
@@ -203,13 +216,21 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 		detailCache:   map[int64]store.ClusterDetail{},
 		neighborCache: map[int64][]tuiNeighbor{},
 	}
+	if payload.DBSource == "remote" && payload.DBRefreshSource != "" && payload.DBRuntimePath != "" {
+		model.remoteRefreshing = true
+		model.status = "Refreshing remote data"
+	}
 	model.applyClusterFilters()
 	model.loadSelectedCluster()
 	return model
 }
 
 func (m clusterBrowserModel) Init() tea.Cmd {
-	return m.autoRefreshCmd()
+	cmds := []tea.Cmd{m.autoRefreshCmd()}
+	if m.remoteRefreshing {
+		cmds = append(cmds, m.remoteRefreshCmd(), m.remoteRefreshTickCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -220,6 +241,29 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.autoRefreshFromStore()
 		return m, m.autoRefreshCmd()
+	case tuiRemoteRefreshTickMsg:
+		if !m.remoteRefreshing {
+			return m, nil
+		}
+		m.remoteFrame++
+		return m, m.remoteRefreshTickCmd()
+	case tuiRemoteRefreshMsg:
+		m.remoteRefreshing = false
+		if msg.err != nil {
+			m.status = "Remote refresh failed: " + msg.err.Error()
+			return m, nil
+		}
+		if msg.changed {
+			if err := m.reopenRuntimeStore(); err != nil {
+				m.status = "Remote refresh loaded but reopen failed: " + err.Error()
+				return m, nil
+			}
+			m.refreshFromStore()
+			m.status = "Remote data refreshed"
+			return m, nil
+		}
+		m.status = "Remote data already current"
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -333,6 +377,38 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 	}
 	return m, nil
+}
+
+func (m clusterBrowserModel) remoteRefreshCmd() tea.Cmd {
+	sourceDBPath := m.payload.DBRefreshSource
+	runtimeDBPath := m.payload.DBRuntimePath
+	return func() tea.Msg {
+		changed, err := refreshPortableRuntimeDB(m.ctx, sourceDBPath, runtimeDBPath, true)
+		return tuiRemoteRefreshMsg{changed: changed, err: err}
+	}
+}
+
+func (m clusterBrowserModel) remoteRefreshTickCmd() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return tuiRemoteRefreshTickMsg{}
+	})
+}
+
+func (m *clusterBrowserModel) reopenRuntimeStore() error {
+	if strings.TrimSpace(m.payload.DBRuntimePath) == "" {
+		return nil
+	}
+	next, err := store.OpenReadOnly(m.ctx, m.payload.DBRuntimePath)
+	if err != nil {
+		return err
+	}
+	if m.store != nil {
+		_ = m.store.Close()
+	}
+	m.store = next
+	m.detailCache = map[int64]store.ClusterDetail{}
+	m.neighborCache = map[int64][]tuiNeighbor{}
+	return nil
 }
 
 func (m clusterBrowserModel) View() string {
@@ -457,11 +533,19 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 	if m.jumping {
 		line = "Jump: " + m.searchInput.View()
 	}
+	if m.remoteRefreshing {
+		line = fmt.Sprintf("Refreshing remote data %s  %s", loadingFrame(m.remoteFrame), line)
+	}
 	if location := m.footerLocation(); location != "" {
 		line = strings.TrimSpace(line + "  " + location)
 	}
 	bg, fg := footerPalette(m.payload.DBSource)
 	return lipgloss.NewStyle().Width(width).Height(2).Background(bg).Foreground(fg).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
+}
+
+func loadingFrame(index int) string {
+	frames := []string{"-", "\\", "|", "/"}
+	return frames[index%len(frames)]
 }
 
 func (m clusterBrowserModel) footerLocation() string {
