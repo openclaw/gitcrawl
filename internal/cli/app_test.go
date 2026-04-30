@@ -1459,6 +1459,91 @@ func TestEmbedErrorBranchesRecordFailures(t *testing.T) {
 	}
 }
 
+func TestEmbedTruncatesOversizedBody(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw",
+		GitHubRepoID: "12345", RawJSON: "{}", UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	body := strings.Repeat("a", 100_000)
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "27137", Number: 27137, Kind: "issue", State: "open",
+		Title: "Oversized issue", Body: body,
+		HTMLURL: "https://github.com/openclaw/openclaw/issues/27137",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}",
+		ContentHash: "h", UpdatedAtGitHub: "2026-04-30T01:00:00Z", UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	st.Close()
+
+	const serverInputCap = 30_000
+	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode embeddings request: %v", err)
+		}
+		for index, input := range payload.Input {
+			if len(input) > serverInputCap {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]any{
+						"message": fmt.Sprintf("Invalid 'input[%d]': maximum input length is 8192 tokens.", index),
+						"type":    "invalid_request_error",
+					},
+				})
+				return
+			}
+		}
+		data := make([]map[string]any, 0, len(payload.Input))
+		for index := range payload.Input {
+			data = append(data, map[string]any{"index": index, "embedding": []float64{1, 0.01 * float64(index)}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer openAIServer.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", openAIServer.URL)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.Stderr = &stderr
+	if err := app.Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw"}); err != nil {
+		t.Fatalf("embed should truncate oversized body, got: %v\nstderr=%s", err, stderr.String())
+	}
+
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	vectors, err := st.ListThreadVectors(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list vectors: %v", err)
+	}
+	if len(vectors) != 1 {
+		t.Fatalf("expected 1 vector after truncating embed, got %d", len(vectors))
+	}
+}
+
 func githubIssueJSON(number int, kind string, title string) map[string]any {
 	return map[string]any{
 		"id":         number + 10000,

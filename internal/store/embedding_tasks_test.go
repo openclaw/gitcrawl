@@ -5,7 +5,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func TestEmbeddingTextForBasisTruncatesOversizedBody(t *testing.T) {
+	title := "Big issue"
+	body := strings.Repeat("a", 100_000)
+
+	for _, basis := range []string{"title_original", "dedupe_text", "llm_key_summary"} {
+		text, err := embeddingTextForBasis(basis, title, body, body, body, body)
+		if err != nil {
+			t.Fatalf("%s: embedding text: %v", basis, err)
+		}
+		if got := utf8.RuneCountInString(text); got > 30_000 {
+			t.Fatalf("%s: embedding text not truncated: got %d runes, want <= 30000", basis, got)
+		}
+	}
+}
 
 func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	ctx := context.Background()

@@ -97,6 +97,19 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 	return out, nil
 }
 
+// maxEmbeddingInputRunes caps embedding input to fit under OpenAI's 8192-token
+// limit using a conservative 3 chars/token floor. See issue #2; #3 tracks
+// per-model dynamic detection.
+const maxEmbeddingInputRunes = 24576
+
+func truncateForEmbedding(text string) string {
+	runes := []rune(text)
+	if len(runes) <= maxEmbeddingInputRunes {
+		return text
+	}
+	return string(runes[:maxEmbeddingInputRunes])
+}
+
 func embeddingTextForBasis(basis, title, body, rawText, dedupeText, keySummary string) (string, error) {
 	switch basis {
 	case "", "title_original":
@@ -106,15 +119,15 @@ func embeddingTextForBasis(basis, title, body, rawText, dedupeText, keySummary s
 		} else if strings.TrimSpace(rawText) != "" {
 			parts = append(parts, strings.TrimSpace(rawText))
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
+		return truncateForEmbedding(strings.TrimSpace(strings.Join(parts, "\n\n"))), nil
 	case "dedupe_text":
-		return strings.TrimSpace(dedupeText), nil
+		return truncateForEmbedding(strings.TrimSpace(dedupeText)), nil
 	case "llm_key_summary":
 		keySummary = strings.TrimSpace(keySummary)
 		if keySummary == "" {
 			return "", nil
 		}
-		return strings.TrimSpace("title: " + strings.TrimSpace(title) + "\n\nkey_summary:\n" + keySummary), nil
+		return truncateForEmbedding(strings.TrimSpace("title: " + strings.TrimSpace(title) + "\n\nkey_summary:\n" + keySummary)), nil
 	default:
 		return "", fmt.Errorf("embedding basis %q is not supported yet", basis)
 	}
