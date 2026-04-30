@@ -59,3 +59,10 @@ jobs:
 
       - name: Build
         run: go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=${GITHUB_SHA:0:7}" -o bin/gitcrawl ./cmd/gitcrawl
+
+      - name: Snapshot release build
+        uses: goreleaser/goreleaser-action@v7.1.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish

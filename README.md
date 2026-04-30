@@ -60,6 +60,17 @@ The TUI starts at `--min-size 5` and `--sort size`, like ghcrawl's saved default
 - a GitHub token for sync commands
 - an OpenAI API key only for summary and embedding commands
 
+## Install
+
+Download a release archive from GitHub releases or build from source:
+
+```bash
+git clone https://github.com/openclaw/gitcrawl.git
+cd gitcrawl
+go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=$(git describe --tags --always --dirty)" -o bin/gitcrawl ./cmd/gitcrawl
+./bin/gitcrawl --version
+```
+
 ## Development
 
 ```bash
