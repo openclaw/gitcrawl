@@ -2,6 +2,7 @@
 
 ## 0.1.1 - Unreleased
 
+- Honor `GITCRAWL_GITHUB_BASE_URL` and `GITHUB_BASE_URL` during `gitcrawl sync`, matching cached search and test-server workflows.
 - Fix cached `search issues|prs` against portable stores by using portable-safe thread body and raw JSON columns.
 - Keep read-only portable-store commands responsive when the backing Git remote is unavailable by making refresh best-effort and non-interactive with bounded SSH connection attempts.
 

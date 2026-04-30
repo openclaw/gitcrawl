@@ -805,6 +805,13 @@ func openAIBaseURL() string {
 	return strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
 }
 
+func githubBaseURL() string {
+	if value := strings.TrimSpace(os.Getenv("GITCRAWL_GITHUB_BASE_URL")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv("GITHUB_BASE_URL"))
+}
+
 func (a *App) runClusters(ctx context.Context, args []string) error {
 	return a.runClusterList(ctx, "clusters", args, false)
 }
@@ -1627,7 +1634,7 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	}
 	defer st.Close()
 
-	client := gh.New(gh.Options{Token: token.Value})
+	client := gh.New(gh.Options{Token: token.Value, BaseURL: githubBaseURL()})
 	service := syncer.New(client, st)
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:           owner,
