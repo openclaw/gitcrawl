@@ -52,6 +52,35 @@ func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 	}
 }
 
+func TestEmbedCapsOversizedInputsBeforeRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request embeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(request.Input) != 1 {
+			t.Fatalf("inputs = %d, want 1", len(request.Input))
+		}
+		if got := len([]rune(request.Input[0])); got != maxEmbeddingInputRunes {
+			t.Fatalf("input runes = %d, want %d", got, maxEmbeddingInputRunes)
+		}
+		_ = json.NewEncoder(w).Encode(embeddingResponse{Data: []struct {
+			Index     int       `json:"index"`
+			Embedding []float64 `json:"embedding"`
+		}{{Index: 0, Embedding: []float64{1}}}})
+	}))
+	defer server.Close()
+
+	input := strings.Repeat("x", maxEmbeddingInputRunes+50)
+	vectors, err := New(Options{APIKey: "test", BaseURL: server.URL}).Embed(context.Background(), "text-embedding-3-small", []string{input})
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if len(vectors) != 1 || len(vectors[0]) != 1 {
+		t.Fatalf("vectors = %#v", vectors)
+	}
+}
+
 func TestEmbedErrorBranches(t *testing.T) {
 	client := New(Options{APIKey: "test"})
 	if _, err := client.Embed(context.Background(), "", []string{"text"}); err == nil {

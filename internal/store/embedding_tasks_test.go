@@ -67,3 +67,23 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 		t.Fatalf("unexpected embedding text: %q", tasks[0].Text)
 	}
 }
+
+func TestEmbeddingTextForBasisCapsLongInputs(t *testing.T) {
+	body := strings.Repeat("x", MaxEmbeddingTextRunes+500)
+	text, meta, err := embeddingTextForBasisWithMeta("title_original", "oversized issue", body, "", "", "")
+	if err != nil {
+		t.Fatalf("embedding text: %v", err)
+	}
+	if !meta.Truncated {
+		t.Fatal("long embedding text should be marked truncated")
+	}
+	if got := len([]rune(text)); got != MaxEmbeddingTextRunes {
+		t.Fatalf("truncated runes = %d, want %d", got, MaxEmbeddingTextRunes)
+	}
+	if meta.OriginalRunes <= MaxEmbeddingTextRunes || meta.Runes != MaxEmbeddingTextRunes {
+		t.Fatalf("meta = %+v", meta)
+	}
+	if !strings.HasPrefix(text, "oversized issue\n\n") {
+		t.Fatalf("truncated text lost title prefix: %q", text[:40])
+	}
+}

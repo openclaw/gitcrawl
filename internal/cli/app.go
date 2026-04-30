@@ -741,6 +741,9 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 			texts = append(texts, task.Text)
 		}
 		fmt.Fprintf(a.Stderr, "[embed] embedding %d-%d of %d\n", start+1, end, len(tasks))
+		if truncated := truncatedEmbeddingTaskCount(batch); truncated > 0 {
+			fmt.Fprintf(a.Stderr, "[embed] truncated %d input(s) to %d runes\n", truncated, store.MaxEmbeddingTextRunes)
+		}
 		vectors, err := client.Embed(ctx, rt.Config.OpenAI.EmbedModel, texts)
 		if err != nil {
 			_, _ = rt.Store.RecordRun(ctx, store.RunRecord{
@@ -796,6 +799,16 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 	}
 	result.RunID = runID
 	return result, nil
+}
+
+func truncatedEmbeddingTaskCount(tasks []store.EmbeddingTask) int {
+	count := 0
+	for _, task := range tasks {
+		if task.TextTruncated {
+			count++
+		}
+	}
+	return count
 }
 
 func openAIBaseURL() string {

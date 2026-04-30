@@ -14,6 +14,7 @@ import (
 const (
 	defaultBaseURL            = "https://api.openai.com/v1"
 	maxEmbeddingResponseBytes = 64 << 20
+	maxEmbeddingInputRunes    = 24_000
 )
 
 type Client struct {
@@ -75,6 +76,7 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
+	texts = capEmbeddingInputs(texts)
 	payload, err := json.Marshal(embeddingRequest{Model: model, Input: texts, Dimensions: c.dimensions})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embeddings request: %w", err)
@@ -123,4 +125,16 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 		}
 	}
 	return out, nil
+}
+
+func capEmbeddingInputs(texts []string) []string {
+	out := make([]string, len(texts))
+	for index, text := range texts {
+		runes := []rune(text)
+		if len(runes) > maxEmbeddingInputRunes {
+			text = string(runes[:maxEmbeddingInputRunes])
+		}
+		out[index] = text
+	}
+	return out
 }

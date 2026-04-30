@@ -9,12 +9,15 @@ import (
 )
 
 type EmbeddingTask struct {
-	ThreadID    int64  `json:"thread_id"`
-	Number      int    `json:"number"`
-	Kind        string `json:"kind"`
-	Title       string `json:"title"`
-	Text        string `json:"-"`
-	ContentHash string `json:"content_hash"`
+	ThreadID          int64  `json:"thread_id"`
+	Number            int    `json:"number"`
+	Kind              string `json:"kind"`
+	Title             string `json:"title"`
+	Text              string `json:"-"`
+	ContentHash       string `json:"content_hash"`
+	TextTruncated     bool   `json:"text_truncated,omitempty"`
+	OriginalTextRunes int    `json:"original_text_runes,omitempty"`
+	TextRunes         int    `json:"text_runes,omitempty"`
 }
 
 type EmbeddingTaskOptions struct {
@@ -26,6 +29,8 @@ type EmbeddingTaskOptions struct {
 	Force         bool
 	IncludeClosed bool
 }
+
+const MaxEmbeddingTextRunes = 24_000
 
 func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOptions) ([]EmbeddingTask, error) {
 	basis := strings.TrimSpace(options.Basis)
@@ -77,7 +82,7 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 		if err := rows.Scan(&task.ThreadID, &task.Number, &task.Kind, &task.Title, &body, &rawText, &dedupeText, &keySummary, &existingHash); err != nil {
 			return nil, fmt.Errorf("scan embedding task: %w", err)
 		}
-		text, err := embeddingTextForBasis(basis, task.Title, body, rawText, dedupeText, keySummary)
+		text, meta, err := embeddingTextForBasisWithMeta(basis, task.Title, body, rawText, dedupeText, keySummary)
 		if err != nil {
 			return nil, err
 		}
@@ -85,6 +90,9 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 			continue
 		}
 		task.Text = text
+		task.TextTruncated = meta.Truncated
+		task.OriginalTextRunes = meta.OriginalRunes
+		task.TextRunes = meta.Runes
 		task.ContentHash = embeddingContentHash(basis, model, text)
 		if !options.Force && existingHash == task.ContentHash {
 			continue
@@ -98,6 +106,18 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 }
 
 func embeddingTextForBasis(basis, title, body, rawText, dedupeText, keySummary string) (string, error) {
+	text, _, err := embeddingTextForBasisWithMeta(basis, title, body, rawText, dedupeText, keySummary)
+	return text, err
+}
+
+type embeddingTextMeta struct {
+	Truncated     bool
+	OriginalRunes int
+	Runes         int
+}
+
+func embeddingTextForBasisWithMeta(basis, title, body, rawText, dedupeText, keySummary string) (string, embeddingTextMeta, error) {
+	var text string
 	switch basis {
 	case "", "title_original":
 		parts := []string{strings.TrimSpace(title)}
@@ -106,21 +126,34 @@ func embeddingTextForBasis(basis, title, body, rawText, dedupeText, keySummary s
 		} else if strings.TrimSpace(rawText) != "" {
 			parts = append(parts, strings.TrimSpace(rawText))
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
+		text = strings.TrimSpace(strings.Join(parts, "\n\n"))
 	case "dedupe_text":
-		return strings.TrimSpace(dedupeText), nil
+		text = strings.TrimSpace(dedupeText)
 	case "llm_key_summary":
 		keySummary = strings.TrimSpace(keySummary)
 		if keySummary == "" {
-			return "", nil
+			return "", embeddingTextMeta{}, nil
 		}
-		return strings.TrimSpace("title: " + strings.TrimSpace(title) + "\n\nkey_summary:\n" + keySummary), nil
+		text = strings.TrimSpace("title: " + strings.TrimSpace(title) + "\n\nkey_summary:\n" + keySummary)
 	default:
-		return "", fmt.Errorf("embedding basis %q is not supported yet", basis)
+		return "", embeddingTextMeta{}, fmt.Errorf("embedding basis %q is not supported yet", basis)
 	}
+	text, meta := capEmbeddingText(text)
+	return text, meta, nil
+}
+
+func capEmbeddingText(text string) (string, embeddingTextMeta) {
+	runes := []rune(strings.TrimSpace(text))
+	meta := embeddingTextMeta{OriginalRunes: len(runes), Runes: len(runes)}
+	if len(runes) <= MaxEmbeddingTextRunes {
+		return string(runes), meta
+	}
+	meta.Truncated = true
+	meta.Runes = MaxEmbeddingTextRunes
+	return string(runes[:MaxEmbeddingTextRunes]), meta
 }
 
 func embeddingContentHash(basis, model, text string) string {
-	sum := sha256.Sum256([]byte("embedding:" + basis + ":" + model + "\n" + text))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("embedding:v2:max_runes=%d:%s:%s\n%s", MaxEmbeddingTextRunes, basis, model, text)))
 	return hex.EncodeToString(sum[:])
 }

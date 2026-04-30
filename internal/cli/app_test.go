@@ -1459,6 +1459,17 @@ func TestEmbedErrorBranchesRecordFailures(t *testing.T) {
 	}
 }
 
+func TestTruncatedEmbeddingTaskCount(t *testing.T) {
+	tasks := []store.EmbeddingTask{
+		{Number: 1},
+		{Number: 2, TextTruncated: true},
+		{Number: 3, TextTruncated: true},
+	}
+	if got := truncatedEmbeddingTaskCount(tasks); got != 2 {
+		t.Fatalf("truncated count = %d, want 2", got)
+	}
+}
+
 func githubIssueJSON(number int, kind string, title string) map[string]any {
 	return map[string]any{
 		"id":         number + 10000,
