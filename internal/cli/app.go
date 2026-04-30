@@ -1800,6 +1800,9 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 			if retryErr := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); retryErr != nil {
 				return "", retryErr
 			}
+			if err := removePortableSQLiteSidecars(dir); err != nil {
+				return "", err
+			}
 			return "reset-pulled", nil
 		}
 		if err := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); err != nil {
@@ -1812,7 +1815,13 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 			if retryErr := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); retryErr != nil {
 				return "", retryErr
 			}
+			if err := removePortableSQLiteSidecars(dir); err != nil {
+				return "", err
+			}
 			return "reset-pulled", nil
+		}
+		if err := removePortableSQLiteSidecars(dir); err != nil {
+			return "", err
 		}
 		return "pulled", nil
 	}
@@ -1827,7 +1836,30 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 	if err := runGit(ctx, "", "clone", "--depth", "1", remoteURL, dir); err != nil {
 		return "", err
 	}
+	if err := removePortableSQLiteSidecars(dir); err != nil {
+		return "", err
+	}
 	return "cloned", nil
+}
+
+func removePortableSQLiteSidecars(dir string) error {
+	return filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".db-wal") || strings.HasSuffix(path, ".db-shm") {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove portable sqlite sidecar %s: %w", path, err)
+			}
+		}
+		return nil
+	})
 }
 
 func isDirtyPortablePullError(err error) bool {
@@ -1871,17 +1903,18 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		return err
 	}
 	storeStatus := store.Status{DBPath: cfg.DBPath}
-	st, err := store.OpenReadOnly(ctx, cfg.DBPath)
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	} else {
-		defer st.Close()
-		storeStatus, err = st.Status(ctx)
+		defer rt.Store.Close()
+		storeStatus, err = rt.Store.Status(ctx)
 		if err != nil {
 			return err
 		}
+		storeStatus.DBPath = cfg.DBPath
 	}
 
 	githubToken := config.ResolveGitHubToken(cfg)

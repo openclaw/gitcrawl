@@ -147,6 +147,12 @@ func TestSyncPortableStoreResetsDirtyCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkoutDir, "data", "openclaw__openclaw.sync.db"), []byte("local-cache-edit"), 0o644); err != nil {
 		t.Fatalf("dirty checkout db: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(checkoutDir, "data", "openclaw__openclaw.sync.db-wal"), []byte("stale wal"), 0o644); err != nil {
+		t.Fatalf("write stale wal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(checkoutDir, "data", "openclaw__openclaw.sync.db-shm"), []byte("stale shm"), 0o644); err != nil {
+		t.Fatalf("write stale shm: %v", err)
+	}
 	if err := os.WriteFile(dbPath, []byte("remote-v2"), 0o644); err != nil {
 		t.Fatalf("write updated remote db: %v", err)
 	}
@@ -170,6 +176,11 @@ func TestSyncPortableStoreResetsDirtyCache(t *testing.T) {
 	}
 	if string(got) != "remote-v2" {
 		t.Fatalf("checkout db = %q, want remote-v2", string(got))
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(filepath.Join(checkoutDir, "data", "openclaw__openclaw.sync.db"+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("stale sqlite sidecar %s was not removed: %v", suffix, err)
+		}
 	}
 }
 
@@ -313,6 +324,57 @@ func TestWritableRuntimeUsesPortableMirror(t *testing.T) {
 		Dimensions: 3,
 	}, 1); err != nil {
 		t.Fatalf("read runtime vector: %v", err)
+	}
+}
+
+func TestDoctorRefreshesPortableStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 1, "initial issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("clone portable store: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(checkoutDir, dbRel)}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 2, "refreshed issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add update: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "update store"); err != nil {
+		t.Fatalf("git commit update: %v", err)
+	}
+
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	if err := doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"}); err != nil {
+		t.Fatalf("doctor: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("parse doctor json: %v\n%s", err, stdout.String())
+	}
+	if got := payload["thread_count"]; got != float64(2) {
+		t.Fatalf("doctor thread_count = %#v, want 2; payload=%s", got, stdout.String())
 	}
 }
 

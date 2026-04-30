@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOpenMigratesSchema(t *testing.T) {
@@ -213,6 +214,103 @@ func TestOpenReadOnlySupportsCanonicalPortableStore(t *testing.T) {
 	}
 	if !bytes.Equal(after, before) {
 		t.Fatal("readonly portable open mutated database bytes")
+	}
+}
+
+func TestStatusPrefersPortableExportedAt(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "portable.sync.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		create table repositories (
+			id integer primary key,
+			owner text not null,
+			name text not null,
+			full_name text not null,
+			github_repo_id text,
+			updated_at text not null
+		);
+		create table threads (
+			id integer primary key,
+			repo_id integer not null,
+			github_id text not null,
+			number integer not null,
+			kind text not null,
+			state text not null,
+			title text not null,
+			body_excerpt text,
+			body_length integer not null default 0,
+			author_login text,
+			author_type text,
+			html_url text not null,
+			labels_json text not null,
+			assignees_json text not null,
+			content_hash text not null,
+			is_draft integer not null default 0,
+			created_at_gh text,
+			updated_at_gh text,
+			closed_at_gh text,
+			merged_at_gh text,
+			first_pulled_at text,
+			last_pulled_at text,
+			updated_at text not null,
+			closed_at_local text,
+			close_reason_local text
+		);
+		create table repo_sync_state (
+			repo_id integer primary key,
+			last_full_open_scan_started_at text,
+			last_overlapping_open_scan_completed_at text,
+			last_non_overlapping_scan_completed_at text,
+			last_open_close_reconciled_at text,
+			updated_at text not null
+		);
+		create table cluster_groups (
+			id integer primary key,
+			repo_id integer not null,
+			stable_key text not null,
+			stable_slug text not null,
+			status text not null,
+			cluster_type text not null,
+			representative_thread_id integer,
+			title text,
+			created_at text not null,
+			updated_at text not null,
+			closed_at text
+		);
+		create table portable_metadata (
+			key text primary key,
+			value text not null
+		);
+		insert into repositories(id, owner, name, full_name, updated_at)
+		values(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '2026-04-28T00:00:00Z');
+		insert into repo_sync_state(repo_id, last_open_close_reconciled_at, updated_at)
+		values(1, '2026-04-28T01:02:03Z', '2026-04-28T01:02:03Z');
+		insert into portable_metadata(key, value)
+		values('exported_at', '2026-04-30T01:11:27.830908426Z');
+	`)
+	if err != nil {
+		t.Fatalf("seed portable db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+
+	st, err := OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open readonly portable: %v", err)
+	}
+	defer st.Close()
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatalf("portable status: %v", err)
+	}
+	want := "2026-04-30T01:11:27.830908426Z"
+	if got := status.LastSyncAt.Format(time.RFC3339Nano); got != want {
+		t.Fatalf("last sync = %q, want portable exported_at %q", got, want)
 	}
 }
 

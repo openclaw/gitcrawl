@@ -87,7 +87,10 @@ func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
 	if !gitWorktreeClean(ctx, root) {
 		return nil
 	}
-	return runGit(ctx, "", "-C", root, "pull", "--ff-only", "--quiet")
+	if err := runGit(ctx, "", "-C", root, "pull", "--ff-only", "--quiet"); err != nil {
+		return err
+	}
+	return removePortableSQLiteSidecars(root)
 }
 
 var portableRuntimeMu sync.Mutex

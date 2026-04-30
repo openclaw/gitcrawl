@@ -159,7 +159,13 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		if err := s.db.QueryRowContext(ctx, `select coalesce(max(finished_at), '') from sync_runs where status in ('success', 'completed')`).Scan(&lastSync); err != nil {
 			return Status{}, fmt.Errorf("read last sync: %w", err)
 		}
-	} else if s.hasTable(ctx, "repo_sync_state") {
+	}
+	if lastSync == "" && s.hasTable(ctx, "portable_metadata") {
+		if err := s.db.QueryRowContext(ctx, `select value from portable_metadata where key = 'exported_at'`).Scan(&lastSync); err != nil && err != sql.ErrNoRows {
+			return Status{}, fmt.Errorf("read portable exported timestamp: %w", err)
+		}
+	}
+	if lastSync == "" && s.hasTable(ctx, "repo_sync_state") {
 		if err := s.db.QueryRowContext(ctx, `
 			select coalesce(
 				max(last_open_close_reconciled_at),
