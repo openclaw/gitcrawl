@@ -68,7 +68,7 @@ func HumanKeyForValue(value string) HumanKey {
 func HumanKeyFromHash(hash string) HumanKey {
 	normalized := strings.ToLower(hash)
 	index := func(offset int) int {
-		value, err := strconv.ParseInt(normalized[offset:offset+2], 16, 64)
+		value, err := strconv.ParseUint(normalized[offset:offset+2], 16, 8)
 		if err != nil {
 			return 0
 		}
