@@ -79,6 +79,22 @@ func TestTUIHeaderShowsDetailMode(t *testing.T) {
 	}
 }
 
+func TestTUIHeaderDoesNotWrapAtTerminalWidth(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: strings.Repeat("openclaw/", 20),
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	header := model.renderHeader(80)
+	lines := strings.Split(header, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("header rendered %d lines, want 1:\n%s", len(lines), header)
+	}
+	if width := lipgloss.Width(lines[0]); width > 80 {
+		t.Fatalf("header width = %d, want <= 80: %q", width, lines[0])
+	}
+}
+
 func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -154,6 +170,31 @@ func TestTUIFooterShowsRemoteRefreshLoadingState(t *testing.T) {
 	}
 }
 
+func TestTUIFooterDoesNotWrapLongRemoteLocation(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		DBSource:   "remote",
+		DBLocation: "openclaw/gitcrawl-store:" + strings.Repeat("openclaw__openclaw.sync.db", 6),
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.status = "Cluster 14316"
+
+	footer := model.renderFooter(80)
+	lines := strings.Split(footer, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("footer rendered %d lines, want 2:\n%s", len(lines), footer)
+	}
+	if !strings.Contains(lines[1], "? help") || !strings.Contains(lines[1], "q quit") {
+		t.Fatalf("footer controls were displaced:\n%s", footer)
+	}
+	for index, line := range lines {
+		if width := lipgloss.Width(line); width > 80 {
+			t.Fatalf("footer line %d width = %d, want <= 80: %q", index, width, line)
+		}
+	}
+}
+
 func TestTUIViewFitsTerminalFrame(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -210,6 +251,9 @@ func TestTUIActionShortcutOpensMenu(t *testing.T) {
 	if !model.menuOpen || model.menuTitle != "Actions" {
 		t.Fatalf("action shortcut state menu=%v title=%q", model.menuOpen, model.menuTitle)
 	}
+	if model.menuFloating {
+		t.Fatal("keyboard action menu should use the detail pane, not floating placement")
+	}
 }
 
 func TestTUIMouseSelectsClusterRows(t *testing.T) {
@@ -240,6 +284,77 @@ func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	})
 	if model.selected != 1 {
 		t.Fatalf("second row click selected %d, want 1", model.selected)
+	}
+}
+
+func TestTUIMouseDoubleClickOpensClusterRepresentative(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	layout := model.layout()
+	restoreOpenURL, opened := captureOpenURL(t)
+
+	msg := tea.MouseMsg{
+		X:      layout.clusters.x + 2,
+		Y:      layout.clusters.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	model.handleMouse(msg)
+	if len(*opened) != 0 {
+		t.Fatalf("single click opened URL: %#v", *opened)
+	}
+	model.handleMouse(msg)
+	restoreOpenURL()
+
+	if got := *opened; len(got) != 1 || got[0] != "https://github.com/openclaw/openclaw/issues/11" {
+		t.Fatalf("opened URLs = %#v", got)
+	}
+}
+
+func TestTUIMouseDoubleClickOpensMemberThread(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.memberRows = []memberRow{
+		{label: "ISSUES (1)"},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{
+			ID:              42,
+			Number:          42,
+			Kind:            "issue",
+			State:           "open",
+			Title:           "Selected issue",
+			HTMLURL:         "https://github.com/openclaw/openclaw/issues/42",
+			UpdatedAtGitHub: "2026-04-27T10:00:00Z",
+		}}},
+	}
+	model.memberIndex = 0
+	layout := model.layout()
+	restoreOpenURL, opened := captureOpenURL(t)
+
+	msg := tea.MouseMsg{
+		X:      layout.members.x + 2,
+		Y:      layout.members.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	model.handleMouse(msg)
+	if len(*opened) != 0 {
+		t.Fatalf("single click opened URL: %#v", *opened)
+	}
+	model.handleMouse(msg)
+	restoreOpenURL()
+
+	if got := *opened; len(got) != 1 || got[0] != "https://github.com/openclaw/openclaw/issues/42" {
+		t.Fatalf("opened URLs = %#v", got)
 	}
 }
 
@@ -517,7 +632,30 @@ func TestTUIWideLayoutToggle(t *testing.T) {
 	}
 }
 
-func TestTUIMouseIgnoresRightClick(t *testing.T) {
+func TestTUIMemberMovementDoesNotWrapPastEdges(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberRows = []memberRow{
+		{label: "ISSUES (2)"},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 1, State: "open"}}},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 2, State: "open"}}},
+	}
+
+	if got := model.nextSelectableMemberIndex(2, 1); got != 2 {
+		t.Fatalf("member down from last = %d, want last row", got)
+	}
+	if got := model.nextSelectableMemberIndex(1, -1); got != 1 {
+		t.Fatalf("member up from first = %d, want first row", got)
+	}
+	if got := model.nextSelectableMemberIndex(1, 10); got != 2 {
+		t.Fatalf("member page down = %d, want last row", got)
+	}
+}
+
+func TestTUIRightClickOpensFloatingMenu(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
 		Sort:       "recent",
@@ -536,6 +674,12 @@ func TestTUIMouseIgnoresRightClick(t *testing.T) {
 	})
 	if model.selected != 1 {
 		t.Fatalf("right click changed selected cluster to %d", model.selected)
+	}
+	if !model.menuOpen || !model.menuFloating {
+		t.Fatalf("right click menu state open=%v floating=%v", model.menuOpen, model.menuFloating)
+	}
+	if !model.menuRect.contains(layout.clusters.x+3, layout.clusters.y+4) {
+		t.Fatalf("floating menu rect %+v should be placed at the right-click row", model.menuRect)
 	}
 }
 
@@ -623,6 +767,49 @@ func TestMergeClusterSummariesKeepsPrimaryView(t *testing.T) {
 	}
 }
 
+func TestTUIRefreshPreservesUnlimitedWorkingSet(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+			{ID: 2, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+			{ID: 3, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+
+	model.applyClusterRefresh([]store.ClusterSummary{
+		{ID: 2, Status: "active", MemberCount: 7, UpdatedAt: "2026-04-28T00:00:00Z"},
+	}, 2)
+
+	if len(model.payload.Clusters) != 3 {
+		t.Fatalf("refresh collapsed working set to %d clusters: %#v", len(model.payload.Clusters), model.payload.Clusters)
+	}
+	if model.payload.Clusters[0].ID != 2 || model.payload.Clusters[0].MemberCount != 7 {
+		t.Fatalf("fresh cluster update was not preserved first: %#v", model.payload.Clusters)
+	}
+}
+
+func TestTUIRefreshHonorsExplicitClusterLimit(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Limit:      1,
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+			{ID: 2, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+
+	model.applyClusterRefresh([]store.ClusterSummary{
+		{ID: 2, Status: "active", MemberCount: 7, UpdatedAt: "2026-04-28T00:00:00Z"},
+	}, 2)
+
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("explicit limit was not honored: %#v", model.payload.Clusters)
+	}
+}
+
 func TestTUIHideClosedUsesLoadedWorkingSet(t *testing.T) {
 	clusters := sampleTUIClusters()
 	clusters[0].Status = "closed"
@@ -663,6 +850,9 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 
 	if !model.menuOpen {
 		t.Fatal("expected right click to open action menu")
+	}
+	if !model.menuFloating {
+		t.Fatal("expected right click action menu to float")
 	}
 	if model.selected != 1 {
 		t.Fatalf("right click selected %d, want 1", model.selected)
@@ -1999,6 +2189,81 @@ func TestTUIMouseClickUsesMenuOffset(t *testing.T) {
 	}
 }
 
+func TestTUIMouseClickUsesFloatingMenuOffset(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.menuOpen = true
+	model.menuFloating = true
+	model.menuRect = tuiRect{x: 5, y: 3, w: 40, h: 12}
+	model.menuOff = 5
+	model.menuItems = make([]tuiMenuItem, 8)
+	for index := range model.menuItems {
+		model.menuItems[index] = tuiMenuItem{label: fmt.Sprintf("Item %d", index), action: "close-menu"}
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      model.menuRect.x + 2,
+		Y:      model.menuRect.y + 3,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.menuIndex != 5 {
+		t.Fatalf("floating menu click selected %d, want offset row 5", model.menuIndex)
+	}
+	if model.menuOpen || model.menuFloating {
+		t.Fatalf("floating menu should close cleanly, open=%v floating=%v", model.menuOpen, model.menuFloating)
+	}
+}
+
+func TestTUIMouseMotionHoversFloatingMenuItems(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.menuOpen = true
+	model.menuFloating = true
+	model.menuRect = tuiRect{x: 5, y: 3, w: 40, h: 12}
+	model.menuOff = 1
+	model.menuItems = make([]tuiMenuItem, 6)
+	for index := range model.menuItems {
+		model.menuItems[index] = tuiMenuItem{label: fmt.Sprintf("Item %d", index), action: "close-menu"}
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      model.menuRect.x + 2,
+		Y:      model.menuRect.y + 5,
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonNone,
+	})
+
+	if model.menuIndex != 3 {
+		t.Fatalf("hover selected %d, want item 3", model.menuIndex)
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      model.menuRect.x + 2,
+		Y:      model.menuRect.y + 6,
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonRight,
+	})
+
+	if model.menuIndex != 4 {
+		t.Fatalf("right-button hover selected %d, want item 4", model.menuIndex)
+	}
+	if !model.menuOpen {
+		t.Fatal("right-button motion should not close the menu")
+	}
+}
+
 func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -2008,6 +2273,8 @@ func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 	model.width = 140
 	model.height = 32
 	model.openActionMenu()
+	model.menuFloating = true
+	model.menuRect = tuiRect{x: 5, y: 5, w: 40, h: 12}
 	layout := model.layout()
 
 	model.handleMouse(tea.MouseMsg{
@@ -2020,8 +2287,19 @@ func TestTUIRightClickClosesOpenMenu(t *testing.T) {
 	if model.menuOpen {
 		t.Fatal("expected right click to close open menu")
 	}
+	if model.menuFloating {
+		t.Fatal("expected right click close to clear floating menu placement")
+	}
 	if model.status != "Menu closed" {
 		t.Fatalf("right click close status = %q, want Menu closed", model.status)
+	}
+}
+
+func TestOverlayBlockPreservesCoveredRowSuffix(t *testing.T) {
+	got := overlayBlock("abcdefghij\nklmnopqrst", "XX", 2, 0, 10)
+	want := "abXXefghij\nklmnopqrst"
+	if got != want {
+		t.Fatalf("overlay result = %q, want %q", got, want)
 	}
 }
 
@@ -3214,6 +3492,26 @@ func TestTUIPanePositionLabels(t *testing.T) {
 	if got := model.memberPositionLabel(); got != "2/2" {
 		t.Fatalf("member position = %q, want 2/2", got)
 	}
+}
+
+func captureOpenURL(t *testing.T) (func(), *[]string) {
+	t.Helper()
+	previous := openURL
+	opened := []string{}
+	openURL = func(url string) error {
+		opened = append(opened, url)
+		return nil
+	}
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		openURL = previous
+		restored = true
+	}
+	t.Cleanup(restore)
+	return restore, &opened
 }
 
 func sampleTUIClusters() []store.ClusterSummary {
