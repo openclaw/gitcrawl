@@ -693,6 +693,49 @@ func TestMergeClusterSummariesKeepsPrimaryView(t *testing.T) {
 	}
 }
 
+func TestTUIRefreshPreservesUnlimitedWorkingSet(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+			{ID: 2, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+			{ID: 3, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+
+	model.applyClusterRefresh([]store.ClusterSummary{
+		{ID: 2, Status: "active", MemberCount: 7, UpdatedAt: "2026-04-28T00:00:00Z"},
+	}, 2)
+
+	if len(model.payload.Clusters) != 3 {
+		t.Fatalf("refresh collapsed working set to %d clusters: %#v", len(model.payload.Clusters), model.payload.Clusters)
+	}
+	if model.payload.Clusters[0].ID != 2 || model.payload.Clusters[0].MemberCount != 7 {
+		t.Fatalf("fresh cluster update was not preserved first: %#v", model.payload.Clusters)
+	}
+}
+
+func TestTUIRefreshHonorsExplicitClusterLimit(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Limit:      1,
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+			{ID: 2, Status: "active", MemberCount: 5, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+
+	model.applyClusterRefresh([]store.ClusterSummary{
+		{ID: 2, Status: "active", MemberCount: 7, UpdatedAt: "2026-04-28T00:00:00Z"},
+	}, 2)
+
+	if len(model.payload.Clusters) != 1 || model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("explicit limit was not honored: %#v", model.payload.Clusters)
+	}
+}
+
 func TestTUIHideClosedUsesLoadedWorkingSet(t *testing.T) {
 	clusters := sampleTUIClusters()
 	clusters[0].Status = "closed"

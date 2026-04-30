@@ -2783,6 +2783,9 @@ func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummar
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
 	}
+	if m.payload.Limit <= 0 && len(clusters) > 0 && len(clusters) < len(m.allClusters) {
+		clusters = mergeClusterSummaries(clusters, m.allClusters)
+	}
 	m.detailCache = map[int64]store.ClusterDetail{}
 	m.allClusters = append([]store.ClusterSummary(nil), clusters...)
 	m.payload.Clusters = append([]store.ClusterSummary(nil), clusters...)
