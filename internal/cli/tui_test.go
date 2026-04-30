@@ -284,6 +284,77 @@ func TestTUIMouseSelectsClusterRows(t *testing.T) {
 	}
 }
 
+func TestTUIMouseDoubleClickOpensClusterRepresentative(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	layout := model.layout()
+	restoreOpenURL, opened := captureOpenURL(t)
+
+	msg := tea.MouseMsg{
+		X:      layout.clusters.x + 2,
+		Y:      layout.clusters.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	model.handleMouse(msg)
+	if len(*opened) != 0 {
+		t.Fatalf("single click opened URL: %#v", *opened)
+	}
+	model.handleMouse(msg)
+	restoreOpenURL()
+
+	if got := *opened; len(got) != 1 || got[0] != "https://github.com/openclaw/openclaw/issues/11" {
+		t.Fatalf("opened URLs = %#v", got)
+	}
+}
+
+func TestTUIMouseDoubleClickOpensMemberThread(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.memberRows = []memberRow{
+		{label: "ISSUES (1)"},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{
+			ID:              42,
+			Number:          42,
+			Kind:            "issue",
+			State:           "open",
+			Title:           "Selected issue",
+			HTMLURL:         "https://github.com/openclaw/openclaw/issues/42",
+			UpdatedAtGitHub: "2026-04-27T10:00:00Z",
+		}}},
+	}
+	model.memberIndex = 0
+	layout := model.layout()
+	restoreOpenURL, opened := captureOpenURL(t)
+
+	msg := tea.MouseMsg{
+		X:      layout.members.x + 2,
+		Y:      layout.members.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	model.handleMouse(msg)
+	if len(*opened) != 0 {
+		t.Fatalf("single click opened URL: %#v", *opened)
+	}
+	model.handleMouse(msg)
+	restoreOpenURL()
+
+	if got := *opened; len(got) != 1 || got[0] != "https://github.com/openclaw/openclaw/issues/42" {
+		t.Fatalf("opened URLs = %#v", got)
+	}
+}
+
 func TestTUIMouseSelectsVisibleClusterWindow(t *testing.T) {
 	clusters := make([]store.ClusterSummary, 0, 30)
 	for i := 0; i < 30; i++ {
@@ -2535,6 +2606,26 @@ func TestTUIPanePositionLabels(t *testing.T) {
 	if got := model.memberPositionLabel(); got != "2/2" {
 		t.Fatalf("member position = %q, want 2/2", got)
 	}
+}
+
+func captureOpenURL(t *testing.T) (func(), *[]string) {
+	t.Helper()
+	previous := openURL
+	opened := []string{}
+	openURL = func(url string) error {
+		opened = append(opened, url)
+		return nil
+	}
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		openURL = previous
+		restored = true
+	}
+	t.Cleanup(restore)
+	return restore, &opened
 }
 
 func sampleTUIClusters() []store.ClusterSummary {

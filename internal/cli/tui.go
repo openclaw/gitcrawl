@@ -125,6 +125,11 @@ type clusterBrowserModel struct {
 	memberRows       []memberRow
 	memberOff        int
 	memberIndex      int
+	lastClickFocus   tuiFocus
+	lastClickIndex   int
+	lastClickX       int
+	lastClickY       int
+	lastClickAt      time.Time
 	detailView       viewport.Model
 	searchInput      textinput.Model
 	detailCache      map[int64]store.ClusterDetail
@@ -148,6 +153,7 @@ type tuiMenuItem struct {
 }
 
 const tuiMenuSeparatorAction = "separator"
+const tuiDoubleClickWindow = 450 * time.Millisecond
 
 func (item tuiMenuItem) selectable() bool {
 	return item.action != "" && item.action != tuiMenuSeparatorAction
@@ -1033,6 +1039,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		if msg.Action != tea.MouseActionPress {
 			return
 		}
+		now := time.Now()
 		switch {
 		case layout.clusters.contains(msg.X, msg.Y):
 			m.focus = focusClusters
@@ -1049,6 +1056,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 				m.selected = index
 				m.loadSelectedCluster()
 				m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
+				m.finishRowClick(focusClusters, index, msg.X, msg.Y, now)
 			}
 		case layout.members.contains(msg.X, msg.Y):
 			m.focus = focusMembers
@@ -1065,6 +1073,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 				if !m.memberRows[index].selectable {
 					m.memberIndex = index
 					m.status = m.memberRows[index].label
+					m.clearLastClick()
 					return
 				}
 				previous := m.memberIndex
@@ -1073,6 +1082,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 					m.detailView.GotoTop()
 				}
 				m.status = fmt.Sprintf("Selected #%d", m.memberRows[m.memberIndex].thread().Number)
+				m.finishRowClick(focusMembers, index, msg.X, msg.Y, now)
 			}
 		case layout.detail.contains(msg.X, msg.Y):
 			m.focus = focusDetail
@@ -1085,6 +1095,32 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		m.openActionMenu()
 		m.placeFloatingMenu(layout, msg.X, msg.Y)
 	}
+}
+
+func (m *clusterBrowserModel) finishRowClick(focus tuiFocus, index, x, y int, now time.Time) {
+	if m.isDoubleClick(focus, index, x, y, now) {
+		m.clearLastClick()
+		m.runAction("open")
+		return
+	}
+	m.lastClickFocus = focus
+	m.lastClickIndex = index
+	m.lastClickX = x
+	m.lastClickY = y
+	m.lastClickAt = now
+}
+
+func (m *clusterBrowserModel) isDoubleClick(focus tuiFocus, index, x, y int, now time.Time) bool {
+	return !m.lastClickAt.IsZero() &&
+		m.lastClickFocus == focus &&
+		m.lastClickIndex == index &&
+		m.lastClickX == x &&
+		m.lastClickY == y &&
+		now.Sub(m.lastClickAt) <= tuiDoubleClickWindow
+}
+
+func (m *clusterBrowserModel) clearLastClick() {
+	m.lastClickAt = time.Time{}
 }
 
 func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg) {
@@ -3377,7 +3413,7 @@ func (r memberRow) thread() store.Thread {
 	return r.member.Thread
 }
 
-func openURL(url string) error {
+var openURL = func(url string) error {
 	if strings.TrimSpace(url) == "" {
 		return fmt.Errorf("no URL selected")
 	}
