@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 - Unreleased
+## 0.1.1 - 2026-04-30
 
 - Fix portable store refreshes when local Git pull configuration tries to rebase onto multiple branch merge refs.
 - Honor `GITCRAWL_GITHUB_BASE_URL` and `GITHUB_BASE_URL` during `gitcrawl sync`, matching cached search and test-server workflows.
