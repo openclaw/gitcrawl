@@ -34,9 +34,13 @@ var (
 )
 
 const tuiAutoRefreshInterval = 15 * time.Second
+const tuiWheelSettleDelay = 90 * time.Millisecond
 
 type tuiAutoRefreshMsg struct{}
 type tuiRemoteRefreshTickMsg struct{}
+type tuiWheelSettledMsg struct {
+	seq int
+}
 
 type tuiRemoteRefreshMsg struct {
 	changed bool
@@ -130,6 +134,7 @@ type clusterBrowserModel struct {
 	lastClickX       int
 	lastClickY       int
 	lastClickAt      time.Time
+	wheelSeq         int
 	detailView       viewport.Model
 	searchInput      textinput.Model
 	detailCache      map[int64]store.ClusterDetail
@@ -250,6 +255,14 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.autoRefreshFromStore()
 		return m, m.autoRefreshCmd()
+	case tuiWheelSettledMsg:
+		if msg.seq != m.wheelSeq {
+			return m, nil
+		}
+		m.loadSelectedCluster()
+		m.keepVisible()
+		m.syncComponents()
+		return m, nil
 	case tuiRemoteRefreshTickMsg:
 		if !m.remoteRefreshing {
 			return m, nil
@@ -379,12 +392,13 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.keepVisible()
 		m.syncComponents()
 	case tea.MouseMsg:
-		m.handleMouse(msg)
+		cmd := m.handleMouse(msg)
 		if m.quitRequested {
 			return m, tea.Quit
 		}
 		m.keepVisible()
 		m.syncComponents()
+		return m, cmd
 	}
 	return m, nil
 }
@@ -444,11 +458,12 @@ func (m clusterBrowserModel) View() string {
 			body = lipgloss.JoinVertical(lipgloss.Left, top, detail)
 		}
 	}
+	body = fitBlock(body, layout.header.w, maxInt(1, layout.footer.y-layout.header.h))
 	view := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	if m.menuOpen && m.menuFloating {
 		view = m.renderFloatingMenu(view)
 	}
-	return view
+	return fitBlock(view, layout.header.w, m.height)
 }
 
 type tuiLayout struct {
@@ -537,10 +552,7 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
-	controls := "Tab focus  click select  right-click menu  a actions  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
-	if width < 100 {
-		controls = "Tab focus click right-click menu a actions / filter # jump ? help q quit"
-	}
+	controls := footerControls(width)
 	line := firstNonEmpty(m.status, "Ready")
 	if m.searching {
 		line = "Filter: " + m.searchInput.View()
@@ -558,6 +570,18 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 	statusLine := padCells(" "+truncateCells(line, maxInt(1, width-2)), width)
 	controlsLine := padCells(" "+truncateCells(controls, maxInt(1, width-2)), width)
 	return lipgloss.NewStyle().Width(width).Height(2).Background(bg).Foreground(fg).Render(statusLine + "\n" + controlsLine)
+}
+
+func footerControls(width int) string {
+	full := "Tab focus  click select  right-click menu  a actions  header sort  wheel scroll  / filter  # jump  p repos  n neighbors  s sort  m members  d detail  r refresh  f min  l layout  x closed  ? help  q quit"
+	if lipgloss.Width(full) <= maxInt(1, width-2) {
+		return full
+	}
+	compact := "Tab focus  click select  right-click menu  a actions  wheel scroll  / filter  # jump  r refresh  ? help  q quit"
+	if lipgloss.Width(compact) <= maxInt(1, width-2) {
+		return compact
+	}
+	return "Tab focus click right-click menu a actions / filter # jump ? help q quit"
 }
 
 func loadingFrame(index int) string {
@@ -1015,29 +1039,29 @@ func (m clusterBrowserModel) handleJumpKey(msg tea.KeyMsg) (clusterBrowserModel,
 	return m, nil
 }
 
-func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
+func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	layout := m.layout()
 	if msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
 		if m.menuOpen {
 			m.handleMenuMouse(layout, msg)
 		}
-		return
+		return nil
 	}
 	if msg.Button != tea.MouseButtonLeft && msg.Button != tea.MouseButtonRight && !isMouseWheel(msg.Button) {
-		return
+		return nil
 	}
 	if m.menuOpen {
 		m.handleMenuMouse(layout, msg)
-		return
+		return nil
 	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
-		m.mouseWheel(layout, msg, -3)
+		return m.mouseWheel(layout, msg, -3)
 	case tea.MouseButtonWheelDown:
-		m.mouseWheel(layout, msg, 3)
+		return m.mouseWheel(layout, msg, 3)
 	case tea.MouseButtonLeft:
 		if msg.Action != tea.MouseActionPress {
-			return
+			return nil
 		}
 		now := time.Now()
 		switch {
@@ -1046,10 +1070,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			row := msg.Y - layout.clusters.y - 3
 			if row == -1 {
 				m.sortClustersFromHeader(msg.X - layout.clusters.x - 2)
-				return
+				return nil
 			}
 			if row < 0 {
-				return
+				return nil
 			}
 			index := m.clusterOff + row
 			if index >= 0 && index < len(m.payload.Clusters) {
@@ -1063,10 +1087,10 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 			row := msg.Y - layout.members.y - 3
 			if row == -1 {
 				m.sortMembersFromHeader(msg.X - layout.members.x - 2)
-				return
+				return nil
 			}
 			if row < 0 {
-				return
+				return nil
 			}
 			index := m.memberOff + row
 			if index >= 0 && index < len(m.memberRows) {
@@ -1074,7 +1098,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 					m.memberIndex = index
 					m.status = m.memberRows[index].label
 					m.clearLastClick()
-					return
+					return nil
 				}
 				previous := m.memberIndex
 				m.memberIndex = index
@@ -1089,12 +1113,13 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 		}
 	case tea.MouseButtonRight:
 		if msg.Action != tea.MouseActionPress {
-			return
+			return nil
 		}
 		m.selectByMousePosition(layout, msg.X, msg.Y)
 		m.openActionMenu()
 		m.placeFloatingMenu(layout, msg.X, msg.Y)
 	}
+	return nil
 }
 
 func (m *clusterBrowserModel) finishRowClick(focus tuiFocus, index, x, y int, now time.Time) {
@@ -2297,11 +2322,12 @@ func isMouseWheel(button tea.MouseButton) bool {
 	return button == tea.MouseButtonWheelUp || button == tea.MouseButtonWheelDown || button == tea.MouseButtonWheelLeft || button == tea.MouseButtonWheelRight
 }
 
-func (m *clusterBrowserModel) mouseWheel(layout tuiLayout, msg tea.MouseMsg, delta int) {
+func (m *clusterBrowserModel) mouseWheel(layout tuiLayout, msg tea.MouseMsg, delta int) tea.Cmd {
+	m.clearLastClick()
 	switch {
 	case layout.clusters.contains(msg.X, msg.Y):
 		m.focus = focusClusters
-		m.move(delta)
+		return m.moveClusterByWheel(delta)
 	case layout.members.contains(msg.X, msg.Y):
 		m.focus = focusMembers
 		m.move(delta)
@@ -2311,6 +2337,24 @@ func (m *clusterBrowserModel) mouseWheel(layout tuiLayout, msg tea.MouseMsg, del
 	default:
 		m.move(delta)
 	}
+	return nil
+}
+
+func (m *clusterBrowserModel) moveClusterByWheel(delta int) tea.Cmd {
+	if len(m.payload.Clusters) == 0 {
+		return nil
+	}
+	previous := m.selected
+	m.selected = clampInt(m.selected+delta, 0, len(m.payload.Clusters)-1)
+	if m.selected == previous {
+		return nil
+	}
+	m.status = fmt.Sprintf("Cluster %d", m.payload.Clusters[m.selected].ID)
+	m.wheelSeq++
+	seq := m.wheelSeq
+	return tea.Tick(tuiWheelSettleDelay, func(time.Time) tea.Msg {
+		return tuiWheelSettledMsg{seq: seq}
+	})
 }
 
 func (m *clusterBrowserModel) jumpEdge(end bool) {
@@ -4173,6 +4217,22 @@ func padCells(value string, width int) string {
 		return ansi.Cut(value, 0, width)
 	}
 	return value + strings.Repeat(" ", width-cellWidth)
+}
+
+func fitBlock(value string, width, height int) string {
+	width = maxInt(1, width)
+	height = maxInt(1, height)
+	lines := strings.Split(value, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for index, line := range lines {
+		lines[index] = padCells(line, width)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func minInt(a, b int) int {

@@ -400,6 +400,61 @@ func TestTUIMouseSelectsVisibleClusterWindow(t *testing.T) {
 	}
 }
 
+func TestTUIFastWheelScrollKeepsFrameStable(t *testing.T) {
+	clusters := make([]store.ClusterSummary, 0, 120)
+	for i := 0; i < 120; i++ {
+		clusters = append(clusters, store.ClusterSummary{
+			ID:                   int64(i + 1),
+			StableSlug:           fmt.Sprintf("cluster-%03d", i+1),
+			Status:               "active",
+			RepresentativeKind:   "issue",
+			RepresentativeTitle:  fmt.Sprintf("Issue %03d", i+1),
+			RepresentativeNumber: 1000 + i,
+			MemberCount:          5,
+			UpdatedAt:            fmt.Sprintf("2026-04-27T%02d:00:00Z", i%24),
+		})
+	}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		DBSource:   "remote",
+		DBLocation: "openclaw/gitcrawl-store:openclaw__openclaw.sync.db",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+	model.width = 190
+	model.height = 34
+	layout := model.layout()
+
+	for i := 0; i < 80; i++ {
+		cmd := model.handleMouse(tea.MouseMsg{
+			X:      layout.clusters.x + 2,
+			Y:      layout.clusters.y + 4,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonWheelDown,
+		})
+		if cmd == nil && model.selected < len(model.payload.Clusters)-1 {
+			t.Fatal("cluster wheel movement should defer detail reload until scrolling settles")
+		}
+		model.keepVisible()
+		model.syncComponents()
+	}
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != model.height {
+		t.Fatalf("view height = %d, want %d", len(lines), model.height)
+	}
+	if !strings.Contains(lines[0], "openclaw/openclaw") {
+		t.Fatalf("header moved or disappeared: %q", lines[0])
+	}
+	if !strings.Contains(lines[len(lines)-1], "q quit") {
+		t.Fatalf("footer moved or disappeared: %q", lines[len(lines)-1])
+	}
+	if count := strings.Count(view, "openclaw/openclaw  "); count != 1 {
+		t.Fatalf("header count = %d, want 1", count)
+	}
+}
+
 func TestTUIMouseSelectsVisibleMemberWindow(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
