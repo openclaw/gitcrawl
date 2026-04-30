@@ -92,7 +92,7 @@ func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
 	}
 	pullCtx, cancel := context.WithTimeout(ctx, portableStoreRefreshTimeout)
 	defer cancel()
-	if err := runGit(pullCtx, "", "-C", root, "pull", "--ff-only", "--quiet"); err != nil {
+	if err := fastForwardGitCheckout(pullCtx, root, true); err != nil {
 		return err
 	}
 	return removePortableSQLiteSidecars(root)

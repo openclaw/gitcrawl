@@ -185,6 +185,62 @@ func TestSyncPortableStoreResetsDirtyCache(t *testing.T) {
 	}
 }
 
+func TestSyncPortableStoreIgnoresBrokenPullRebaseConfig(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	dbPath := filepath.Join(remoteDir, "data", "openclaw__openclaw.sync.db")
+	if err := os.WriteFile(dbPath, []byte("remote-v1"), 0o644); err != nil {
+		t.Fatalf("write remote db: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "add", "data/openclaw__openclaw.sync.db"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("initial portable sync: %v", err)
+	}
+	if err := runGit(ctx, "", "-C", checkoutDir, "config", "pull.rebase", "true"); err != nil {
+		t.Fatalf("set pull rebase: %v", err)
+	}
+	if err := runGit(ctx, "", "-C", checkoutDir, "config", "--add", "branch.main.merge", "refs/heads/backup"); err != nil {
+		t.Fatalf("add second merge branch: %v", err)
+	}
+	if err := os.WriteFile(dbPath, []byte("remote-v2"), 0o644); err != nil {
+		t.Fatalf("write updated remote db: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "add", "data/openclaw__openclaw.sync.db"); err != nil {
+		t.Fatalf("git add update: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "update store"); err != nil {
+		t.Fatalf("git commit update: %v", err)
+	}
+
+	action, err := syncPortableStore(ctx, remoteDir, checkoutDir)
+	if err != nil {
+		t.Fatalf("portable sync with broken pull config: %v", err)
+	}
+	if action != "pulled" {
+		t.Fatalf("action = %q, want pulled", action)
+	}
+	got, err := os.ReadFile(filepath.Join(checkoutDir, "data", "openclaw__openclaw.sync.db"))
+	if err != nil {
+		t.Fatalf("read checkout db: %v", err)
+	}
+	if string(got) != "remote-v2" {
+		t.Fatalf("checkout db = %q, want remote-v2", string(got))
+	}
+}
+
 func TestInitWithPortableStoreCloneAndPull(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

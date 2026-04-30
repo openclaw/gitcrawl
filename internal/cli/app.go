@@ -1804,7 +1804,7 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 			if resetErr := runGit(ctx, "", "-C", dir, "reset", "--hard", "HEAD"); resetErr != nil {
 				return "", resetErr
 			}
-			if retryErr := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); retryErr != nil {
+			if retryErr := fastForwardGitCheckout(ctx, dir, false); retryErr != nil {
 				return "", retryErr
 			}
 			if err := removePortableSQLiteSidecars(dir); err != nil {
@@ -1812,14 +1812,14 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 			}
 			return "reset-pulled", nil
 		}
-		if err := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); err != nil {
+		if err := fastForwardGitCheckout(ctx, dir, false); err != nil {
 			if !isDirtyPortablePullError(err) {
 				return "", err
 			}
 			if resetErr := runGit(ctx, "", "-C", dir, "reset", "--hard", "HEAD"); resetErr != nil {
 				return "", err
 			}
-			if retryErr := runGit(ctx, "", "-C", dir, "pull", "--ff-only"); retryErr != nil {
+			if retryErr := fastForwardGitCheckout(ctx, dir, false); retryErr != nil {
 				return "", retryErr
 			}
 			if err := removePortableSQLiteSidecars(dir); err != nil {
@@ -1874,6 +1874,69 @@ func isDirtyPortablePullError(err error) bool {
 	return strings.Contains(message, "Your local changes") || strings.Contains(message, "would be overwritten by merge")
 }
 
+func fastForwardGitCheckout(ctx context.Context, dir string, quiet bool) error {
+	branch := currentGitBranch(ctx, dir)
+	remote := ""
+	if branch != "" {
+		value, err := gitConfigValue(ctx, dir, "branch."+branch+".remote")
+		if err == nil {
+			remote = value
+		}
+	}
+	if strings.TrimSpace(remote) == "" {
+		remote = "origin"
+	}
+	fetchArgs := []string{"-C", dir, "fetch", "--prune"}
+	if quiet {
+		fetchArgs = append(fetchArgs, "--quiet")
+	}
+	fetchArgs = append(fetchArgs, remote)
+	if err := runGit(ctx, "", fetchArgs...); err != nil {
+		return err
+	}
+	target := gitRemoteBranchRef(ctx, dir, remote, branch)
+	if target == "" {
+		var err error
+		target, err = gitOutput(ctx, "", "-C", dir, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remote+"/HEAD")
+		if err != nil {
+			return fmt.Errorf("resolve portable store upstream branch: %w", err)
+		}
+		if strings.TrimSpace(target) == "" {
+			return fmt.Errorf("resolve portable store upstream branch: remote %q has no HEAD", remote)
+		}
+	}
+	mergeArgs := []string{"-C", dir, "merge", "--ff-only"}
+	if quiet {
+		mergeArgs = append(mergeArgs, "--quiet")
+	}
+	mergeArgs = append(mergeArgs, target)
+	return runGit(ctx, "", mergeArgs...)
+}
+
+func currentGitBranch(ctx context.Context, dir string) string {
+	branch, err := gitOutput(ctx, "", "-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(branch)
+}
+
+func gitRemoteBranchRef(ctx context.Context, dir, remote, branch string) string {
+	if strings.TrimSpace(remote) == "" || strings.TrimSpace(branch) == "" {
+		return ""
+	}
+	ref := "refs/remotes/" + remote + "/" + branch
+	if err := runGit(ctx, "", "-C", dir, "show-ref", "--verify", "--quiet", ref); err != nil {
+		return ""
+	}
+	return ref
+}
+
+func gitConfigValue(ctx context.Context, dir, key string) (string, error) {
+	value, err := gitOutput(ctx, "", "-C", dir, "config", "--get", key)
+	return strings.TrimSpace(value), err
+}
+
 func runGit(ctx context.Context, workdir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
@@ -1886,6 +1949,20 @@ func runGit(ctx context.Context, workdir string, args ...string) error {
 		return fmt.Errorf("git %s failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func gitOutput(ctx context.Context, workdir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workdir
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (a *App) runDoctor(ctx context.Context, args []string) error {
