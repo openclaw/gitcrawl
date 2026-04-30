@@ -3258,11 +3258,6 @@ func (m clusterBrowserModel) memberListClipboardText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (r memberRow) format(width int) string {
-	thread := r.thread()
-	return truncateCells(fmt.Sprintf("#%-7d %-7s %-8s %s", thread.Number, memberDisplayState(r.member), formatRelativeTime(thread.UpdatedAtGitHub), thread.Title), width)
-}
-
 func (r memberRow) thread() store.Thread {
 	return r.member.Thread
 }

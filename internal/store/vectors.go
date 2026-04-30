@@ -214,22 +214,6 @@ func scanThreadVector(row interface {
 	return thread, vector, nil
 }
 
-func scanThreadVectorOnly(row interface {
-	Scan(dest ...any) error
-}) (ThreadVector, error) {
-	var vector ThreadVector
-	var raw []byte
-	if err := row.Scan(&vector.ThreadID, &vector.Basis, &vector.Model, &vector.Dimensions, &vector.ContentHash, &raw, &vector.Backend, &vector.CreatedAt, &vector.UpdatedAt); err != nil {
-		return ThreadVector{}, fmt.Errorf("scan thread vector: %w", err)
-	}
-	decoded, err := decodeStoredVector(raw)
-	if err != nil {
-		return ThreadVector{}, err
-	}
-	vector.Vector = decoded
-	return vector, nil
-}
-
 func decodeStoredVector(raw []byte) ([]float64, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("stored vector payload is empty")
