@@ -76,6 +76,22 @@ func TestTUIHeaderShowsDetailMode(t *testing.T) {
 	}
 }
 
+func TestTUIHeaderDoesNotWrapAtTerminalWidth(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: strings.Repeat("openclaw/", 20),
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	header := model.renderHeader(80)
+	lines := strings.Split(header, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("header rendered %d lines, want 1:\n%s", len(lines), header)
+	}
+	if width := lipgloss.Width(lines[0]); width > 80 {
+		t.Fatalf("header width = %d, want <= 80: %q", width, lines[0])
+	}
+}
+
 func TestTUIViewKeepsEssentialFooterHintsNarrow(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -148,6 +164,31 @@ func TestTUIFooterShowsRemoteRefreshLoadingState(t *testing.T) {
 	footer := model.renderFooter(140)
 	if !strings.Contains(footer, "Refreshing remote data") {
 		t.Fatalf("footer missing remote refresh loading state:\n%s", footer)
+	}
+}
+
+func TestTUIFooterDoesNotWrapLongRemoteLocation(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		DBSource:   "remote",
+		DBLocation: "openclaw/gitcrawl-store:" + strings.Repeat("openclaw__openclaw.sync.db", 6),
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.status = "Cluster 14316"
+
+	footer := model.renderFooter(80)
+	lines := strings.Split(footer, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("footer rendered %d lines, want 2:\n%s", len(lines), footer)
+	}
+	if !strings.Contains(lines[1], "? help") || !strings.Contains(lines[1], "q quit") {
+		t.Fatalf("footer controls were displaced:\n%s", footer)
+	}
+	for index, line := range lines {
+		if width := lipgloss.Width(line); width > 80 {
+			t.Fatalf("footer line %d width = %d, want <= 80: %q", index, width, line)
+		}
 	}
 }
 
@@ -514,6 +555,29 @@ func TestTUIWideLayoutToggle(t *testing.T) {
 	}
 	if rightStack.clusters.w <= columns.clusters.w {
 		t.Fatalf("right-stack should give clusters more width, columns=%+v rightStack=%+v", columns.clusters, rightStack.clusters)
+	}
+}
+
+func TestTUIMemberMovementDoesNotWrapPastEdges(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberRows = []memberRow{
+		{label: "ISSUES (2)"},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 1, State: "open"}}},
+		{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 2, State: "open"}}},
+	}
+
+	if got := model.nextSelectableMemberIndex(2, 1); got != 2 {
+		t.Fatalf("member down from last = %d, want last row", got)
+	}
+	if got := model.nextSelectableMemberIndex(1, -1); got != 1 {
+		t.Fatalf("member up from first = %d, want first row", got)
+	}
+	if got := model.nextSelectableMemberIndex(1, 10); got != 2 {
+		t.Fatalf("member page down = %d, want last row", got)
 	}
 }
 

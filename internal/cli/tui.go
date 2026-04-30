@@ -525,8 +525,9 @@ func (m clusterBrowserModel) renderHeader(width int) string {
 	if m.payload.InferredRepository {
 		line += "  inferred"
 	}
-	style := lipgloss.NewStyle().Width(width).Height(1).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Bold(true).Padding(0, 1)
-	return style.Render(truncateCells(line, maxInt(1, width-2)))
+	content := padCells(" "+truncateCells(line, maxInt(1, width-2)), width)
+	style := lipgloss.NewStyle().Width(width).Height(1).Background(lipgloss.Color("#0d1321")).Foreground(lipgloss.Color("#f7f7ff")).Bold(true)
+	return style.Render(content)
 }
 
 func (m clusterBrowserModel) renderFooter(width int) string {
@@ -548,7 +549,9 @@ func (m clusterBrowserModel) renderFooter(width int) string {
 		line = strings.TrimSpace(line + "  " + location)
 	}
 	bg, fg := footerPalette(m.payload.DBSource)
-	return lipgloss.NewStyle().Width(width).Height(2).Background(bg).Foreground(fg).Padding(0, 1).Render(truncateCells(line, width-2) + "\n" + truncateCells(controls, maxInt(1, width-2)))
+	statusLine := padCells(" "+truncateCells(line, maxInt(1, width-2)), width)
+	controlsLine := padCells(" "+truncateCells(controls, maxInt(1, width-2)), width)
+	return lipgloss.NewStyle().Width(width).Height(2).Background(bg).Foreground(fg).Render(statusLine + "\n" + controlsLine)
 }
 
 func loadingFrame(index int) string {
@@ -3085,18 +3088,14 @@ func (m clusterBrowserModel) nextSelectableMemberIndex(current, delta int) int {
 	}
 	index := current
 	for moved := 0; moved < steps; moved++ {
-		for attempts := 0; attempts < len(m.memberRows); attempts++ {
-			index += step
-			if index < 0 {
-				index = len(m.memberRows) - 1
-			}
-			if index >= len(m.memberRows) {
-				index = 0
-			}
-			if m.memberRows[index].selectable {
-				break
-			}
+		next := index + step
+		for next >= 0 && next < len(m.memberRows) && !m.memberRows[next].selectable {
+			next += step
 		}
+		if next < 0 || next >= len(m.memberRows) {
+			return index
+		}
+		index = next
 	}
 	return index
 }
