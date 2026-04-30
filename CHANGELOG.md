@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - Unreleased
+
+- Fix cached `search issues|prs` against portable stores by using portable-safe thread body and raw JSON columns.
+- Keep read-only portable-store commands responsive when the backing Git remote is unavailable by making refresh best-effort and non-interactive with bounded SSH connection attempts.
+
 ## 0.1.0 - 2026-04-30
 
 - Add `gitcrawl sync --numbers` for exact issue and pull request hydration, including comment documents, without relying on list ordering or updated-time windows.

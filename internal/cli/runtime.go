@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -19,6 +20,8 @@ type localRuntime struct {
 	SourceDBPath string
 	RemoteSource bool
 }
+
+const portableStoreRefreshTimeout = 15 * time.Second
 
 func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	cfg, err := config.Load(a.configPath)
@@ -87,7 +90,9 @@ func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
 	if !gitWorktreeClean(ctx, root) {
 		return nil
 	}
-	if err := runGit(ctx, "", "-C", root, "pull", "--ff-only", "--quiet"); err != nil {
+	pullCtx, cancel := context.WithTimeout(ctx, portableStoreRefreshTimeout)
+	defer cancel()
+	if err := runGit(pullCtx, "", "-C", root, "pull", "--ff-only", "--quiet"); err != nil {
 		return err
 	}
 	return removePortableSQLiteSidecars(root)
@@ -124,9 +129,7 @@ func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath stri
 	portableRuntimeMu.Lock()
 	defer portableRuntimeMu.Unlock()
 	if refresh {
-		if err := refreshPortableStoreForDB(ctx, sourceDBPath); err != nil {
-			return false, err
-		}
+		_ = refreshPortableStoreForDB(ctx, sourceDBPath)
 	}
 	needsCopy, err := portableRuntimeNeedsCopy(sourceDBPath, mirrorPath)
 	if err != nil {

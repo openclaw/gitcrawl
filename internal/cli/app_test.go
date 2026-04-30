@@ -241,6 +241,48 @@ func TestReadCommandRefreshesPortableStore(t *testing.T) {
 	}
 }
 
+func TestReadCommandUsesCachedPortableStoreWhenRefreshFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 1, "cached issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("clone portable store: %v", err)
+	}
+	if err := runGit(ctx, "", "-C", checkoutDir, "remote", "set-url", "origin", filepath.Join(dir, "missing-remote")); err != nil {
+		t.Fatalf("break portable remote: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(checkoutDir, dbRel)}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "threads", "openclaw/openclaw", "--numbers", "1", "--json"}); err != nil {
+		t.Fatalf("threads should use cached portable store after refresh failure: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "cached issue") {
+		t.Fatalf("cached portable store was not queried, got %q", stdout.String())
+	}
+}
+
 func TestWritableRuntimeUsesPortableMirror(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

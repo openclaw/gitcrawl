@@ -144,10 +144,7 @@ func (s *Store) searchThreadsFiltered(ctx context.Context, options ThreadSearchO
 	}
 	args = append(args, options.Limit)
 	rows, err := s.q().QueryContext(ctx, `
-		select t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
+		select `+s.threadSelectColumns(ctx, "t")+`
 		from `+from+`
 		where `+strings.Join(where, " and ")+`
 		order by `+threadSearchOrder(matchQuery != "")+`
@@ -163,17 +160,15 @@ func (s *Store) searchThreadsFiltered(ctx context.Context, options ThreadSearchO
 func (s *Store) searchThreadsLike(ctx context.Context, options ThreadSearchOptions) ([]Thread, error) {
 	where, args := threadSearchWhere(options)
 	needle := strings.TrimSpace(strings.ToLower(options.Query))
+	bodyExpr := s.threadBodyExpr(ctx, "t")
 	if needle != "" {
 		pattern := "%" + escapeLike(needle) + "%"
-		where = append(where, `(lower(t.title) like ? escape '\' or lower(coalesce(t.body, '')) like ? escape '\')`)
+		where = append(where, `(lower(t.title) like ? escape '\' or lower(coalesce(`+bodyExpr+`, '')) like ? escape '\')`)
 		args = append(args, pattern, pattern)
 	}
 	args = append(args, options.Limit)
 	rows, err := s.q().QueryContext(ctx, `
-		select t.id, t.repo_id, t.github_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.author_type,
-			t.html_url, t.labels_json, t.assignees_json, t.raw_json, t.content_hash, t.is_draft,
-			t.created_at_gh, t.updated_at_gh, t.closed_at_gh, t.merged_at_gh,
-			t.first_pulled_at, t.last_pulled_at, t.updated_at, t.closed_at_local, t.close_reason_local
+		select `+s.threadSelectColumns(ctx, "t")+`
 		from threads t
 		where `+strings.Join(where, " and ")+`
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
