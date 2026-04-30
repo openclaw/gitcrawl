@@ -24,3 +24,23 @@ func TestQuerySortsByScore(t *testing.T) {
 		t.Fatalf("order: %#v", got)
 	}
 }
+
+func TestQueryAndCosineEdgeBranches(t *testing.T) {
+	got := Query([]Item{
+		{ThreadID: 2, Vector: []float64{1, 0}},
+		{ThreadID: 1, Vector: []float64{1, 0}},
+		{ThreadID: 3, Vector: []float64{-1, 0}},
+	}, []float64{1, 0}, 0, 2)
+	if len(got) != 1 || got[0].ThreadID != 1 {
+		t.Fatalf("default limit/exclude/nonpositive score result = %#v", got)
+	}
+	if got := Cosine(nil, []float64{1}); got != 0 {
+		t.Fatalf("nil cosine = %f", got)
+	}
+	if got := Cosine([]float64{1}, []float64{1, 2}); got != 0 {
+		t.Fatalf("mismatch cosine = %f", got)
+	}
+	if got := Cosine([]float64{0}, []float64{1}); got != 0 {
+		t.Fatalf("zero magnitude cosine = %f", got)
+	}
+}

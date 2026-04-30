@@ -46,3 +46,31 @@ func TestBuildWithOptionsKeepsStrongBoundedComponents(t *testing.T) {
 		t.Fatalf("second cluster members: %#v", got)
 	}
 }
+
+func TestUnionFindAndRepresentativeTieBranches(t *testing.T) {
+	uf := newUnionFind()
+	uf.union(1, 2)
+	uf.union(1, 2)
+	uf.union(3, 1)
+	if root := uf.find(2); root == 0 {
+		t.Fatalf("root = %d", root)
+	}
+	if !uf.unionBounded(1, 2, 2) {
+		t.Fatal("same bounded root should be accepted")
+	}
+	if uf.unionBounded(1, 4, 1) {
+		t.Fatal("oversized bounded union should be rejected")
+	}
+	nodes := map[int64]Node{
+		1: {ThreadID: 1, Number: 10},
+		2: {ThreadID: 2, Number: 5},
+		3: {ThreadID: 3, Number: 5},
+	}
+	edges := map[int64]int{1: 1, 2: 1, 3: 1}
+	if !betterRepresentative(2, 1, edges, nodes) {
+		t.Fatal("lower issue number should win representative tie")
+	}
+	if !betterRepresentative(2, 3, edges, nodes) {
+		t.Fatal("lower thread id should win exact representative tie")
+	}
+}

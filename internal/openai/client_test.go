@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,50 @@ func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 	}
 	if len(vectors[0]) != 1536 {
 		t.Fatalf("dimensions: got %d want 1536", len(vectors[0]))
+	}
+}
+
+func TestEmbedErrorBranches(t *testing.T) {
+	client := New(Options{APIKey: "test"})
+	if _, err := client.Embed(context.Background(), "", []string{"text"}); err == nil {
+		t.Fatal("missing model should fail")
+	}
+	if vectors, err := client.Embed(context.Background(), "model", nil); err != nil || vectors != nil {
+		t.Fatalf("empty inputs = %+v err=%v", vectors, err)
+	}
+	if _, err := New(Options{}).Embed(context.Background(), "model", []string{"text"}); err == nil {
+		t.Fatal("missing API key should fail")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "api-error"):
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(embeddingResponse{Error: &struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			}{Message: "bad input", Type: "invalid_request"}})
+		case strings.Contains(r.URL.Path, "wrong-count"):
+			_ = json.NewEncoder(w).Encode(embeddingResponse{})
+		case strings.Contains(r.URL.Path, "bad-index"):
+			_ = json.NewEncoder(w).Encode(embeddingResponse{Data: []struct {
+				Index     int       `json:"index"`
+				Embedding []float64 `json:"embedding"`
+			}{{Index: 4, Embedding: []float64{1}}}})
+		case strings.Contains(r.URL.Path, "empty-vector"):
+			_ = json.NewEncoder(w).Encode(embeddingResponse{Data: []struct {
+				Index     int       `json:"index"`
+				Embedding []float64 `json:"embedding"`
+			}{{Index: 0, Embedding: nil}}})
+		default:
+			http.Error(w, "plain failure", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+	for _, suffix := range []string{"/api-error", "/wrong-count", "/bad-index", "/empty-vector", ""} {
+		_, err := New(Options{APIKey: "test", BaseURL: server.URL + suffix}).Embed(context.Background(), "model", []string{"text"})
+		if err == nil {
+			t.Fatalf("expected error for %q", suffix)
+		}
 	}
 }

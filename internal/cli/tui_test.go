@@ -3,9 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -989,6 +992,889 @@ func TestTUIActionMenuQuickKeysRunViewActions(t *testing.T) {
 	if model.menuOpen || model.memberSort == memberSortKind {
 		t.Fatalf("menu member-sort key state menu=%v sort=%q", model.menuOpen, model.memberSort)
 	}
+}
+
+func TestTUIUpdateCoversKeyboardStateMachine(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detail = store.ClusterDetail{
+		Cluster: sampleTUIClusters()[0],
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 10, Number: 10, Kind: "issue", State: "open", Title: "A", HTMLURL: ""}},
+			{Thread: store.Thread{ID: 11, Number: 11, Kind: "pull_request", State: "closed", Title: "B", HTMLURL: ""}},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+
+	messages := []tea.Msg{
+		tea.WindowSizeMsg{Width: 150, Height: 30},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRight},
+		tea.KeyMsg{Type: tea.KeyShiftTab},
+		tea.KeyMsg{Type: tea.KeyDown},
+		tea.KeyMsg{Type: tea.KeyUp},
+		tea.KeyMsg{Type: tea.KeyPgDown},
+		tea.KeyMsg{Type: tea.KeyPgUp},
+		tea.KeyMsg{Type: tea.KeyHome},
+		tea.KeyMsg{Type: tea.KeyEnd},
+		tea.KeyMsg{Type: tea.KeyEnter},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}},
+		tea.KeyMsg{Type: tea.KeyEsc},
+	}
+	var updated tea.Model = model
+	for _, msg := range messages {
+		next, _ := updated.Update(msg)
+		updated = next
+	}
+	model = updated.(clusterBrowserModel)
+	if model.width != 150 || model.height != 30 {
+		t.Fatalf("window size not applied: %dx%d", model.width, model.height)
+	}
+	if model.status == "" {
+		t.Fatalf("expected status after key flow")
+	}
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	model = next.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("q should return a quit command")
+	}
+	if model.quitRequested {
+		t.Fatal("keyboard quit should not set mouse quit flag")
+	}
+}
+
+func TestTUIUpdateCoversMainKeysAfterMenuBoundary(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    2,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 150
+	model.height = 30
+	model.detail = store.ClusterDetail{
+		Cluster: sampleTUIClusters()[0],
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 10, Number: 10, Kind: "issue", State: "open", Title: "A", HTMLURL: ""}},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+
+	for _, msg := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}},
+		tea.KeyMsg{Type: tea.KeyEsc},
+	} {
+		next, _ := model.Update(msg)
+		model = next.(clusterBrowserModel)
+	}
+	if model.showHelp {
+		t.Fatal("esc should close help")
+	}
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = next.(clusterBrowserModel)
+	if !model.searching || cmd == nil {
+		t.Fatalf("slash should start search, searching=%v cmd=%v", model.searching, cmd)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(clusterBrowserModel)
+	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'#'}})
+	model = next.(clusterBrowserModel)
+	if !model.jumping || cmd == nil {
+		t.Fatalf("hash should start jump, jumping=%v cmd=%v", model.jumping, cmd)
+	}
+
+	model.jumping = false
+	model.focus = focusMembers
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(clusterBrowserModel)
+	if model.focus != focusDetail {
+		t.Fatalf("enter on members should focus detail, got %v", model.focus)
+	}
+	layout := model.layout()
+	next, _ = model.Update(tea.MouseMsg{X: layout.clusters.x + 2, Y: layout.clusters.y + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	model = next.(clusterBrowserModel)
+	if model.focus != focusClusters {
+		t.Fatalf("mouse update should focus clusters, got %v", model.focus)
+	}
+}
+
+func TestTUIRichDetailRenderingBranches(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 150
+	model.height = 32
+	thread := store.Thread{
+		ID:              44,
+		Number:          44,
+		Kind:            "pull_request",
+		State:           "closed",
+		Title:           "Render **markdown** labels",
+		HTMLURL:         "https://github.com/openclaw/openclaw/pull/44",
+		LabelsJSON:      `[{"name":"bug"},{"name":"ui"}]`,
+		AuthorLogin:     "alice",
+		UpdatedAtGitHub: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano),
+	}
+	model.detail = store.ClusterDetail{
+		Cluster: sampleTUIClusters()[0],
+		Members: []store.ClusterMemberDetail{{
+			Thread: thread,
+			Summaries: map[string]string{
+				"key_summary":               "# Heading\n\n> quoted\n\n  - nested list item with [link](https://example.test)\n\n```go\nfmt.Println(\"hi\")\n```",
+				"maintainer_signal_summary": "maintainer signal",
+			},
+			BodySnippet: "Preview line with `code` and ~~strike~~",
+		}},
+	}
+	model.hasDetail = true
+	model.memberRows = []memberRow{{selectable: true, member: model.detail.Members[0]}}
+	model.memberIndex = 0
+	model.neighborCache = map[int64][]tuiNeighbor{
+		thread.ID: []tuiNeighbor{{Thread: store.Thread{Number: 45, Kind: "issue", Title: "Neighbor title"}, Score: 0.91}},
+	}
+	view := model.View()
+	lines := strings.Join(model.detailLines(80), "\n")
+	for _, want := range []string{"labels: bug, ui", "Neighbors", "Key summary", "Maintainer signal", "code"} {
+		if !strings.Contains(view, want) && !strings.Contains(lines, want) {
+			t.Fatalf("rich detail missing %q:\nview:\n%s\nlines:\n%s", want, view, lines)
+		}
+	}
+	if got := layoutLabel(tuiLayout{}); got != string(wideLayoutColumns) {
+		t.Fatalf("default layout label = %q", got)
+	}
+	if got := formatSummaryLabel("custom_summary"); got != "custom summary" {
+		t.Fatalf("summary label = %q", got)
+	}
+	if !isEmojiRune(rune(0x1F600)) || isEmojiRune('A') {
+		t.Fatal("emoji detection branch mismatch")
+	}
+}
+
+func TestTUIRunMenuItemCoversNonExternalActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    5,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.detail = store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{{
+		Thread: store.Thread{ID: 42, Number: 42, Kind: "issue", State: "open", Title: "Selected", HTMLURL: "https://github.com/openclaw/openclaw/issues/42"},
+	}}}
+	model.hasDetail = true
+	model.sortMembers()
+
+	actions := []tuiMenuItem{
+		{label: "section", action: tuiMenuSeparatorAction},
+		{action: "sort-size"},
+		{action: "sort-recent"},
+		{action: "member-sort-kind"},
+		{action: "member-sort-recent"},
+		{action: "refresh"},
+		{action: "filter"},
+		{action: "clear-filter"},
+		{action: "repository-picker"},
+		{action: "jump"},
+		{action: "toggle-layout"},
+		{action: "toggle-detail"},
+		{action: "min-size-1"},
+		{action: "min-size-5"},
+		{action: "min-size-10"},
+		{action: "toggle-closed"},
+		{action: "show-help"},
+		{action: "open-cluster-representative"},
+		{action: "copy-cluster-url"},
+		{action: "close-cluster-confirm"},
+		{action: "close-cluster-local"},
+		{action: "reopen-cluster-confirm"},
+		{action: "reopen-cluster-local"},
+		{action: "exclude-member-confirm"},
+		{action: "exclude-member-local"},
+		{action: "include-member-confirm"},
+		{action: "include-member-local"},
+		{action: "canonical-member-confirm"},
+		{action: "canonical-member-local"},
+		{action: "load-neighbors"},
+		{action: "close-thread-confirm"},
+		{action: "close-thread-local"},
+		{action: "reopen-thread-confirm"},
+		{action: "reopen-thread-local"},
+		{action: "copy-body-preview"},
+		{action: "copy-summaries"},
+		{action: "copy-neighbors"},
+		{action: "open-link-picker"},
+		{action: "copy-link-picker"},
+		{action: "copy-reference-links"},
+		{action: "close-menu"},
+		{action: "quit"},
+	}
+	for _, item := range actions {
+		model.searching = false
+		model.jumping = false
+		_ = model.runMenuItem(item)
+	}
+	if !model.quitRequested {
+		t.Fatal("quit action should mark quitRequested")
+	}
+	if model.status == "" {
+		t.Fatal("menu actions should update status")
+	}
+
+	empty := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{Repository: "openclaw/openclaw"})
+	for _, action := range []string{"copy-cluster-id", "copy-cluster-name", "copy-cluster-title", "open", "copy-url", "copy-markdown", "copy-title", "open-first-link", "copy-first-link"} {
+		if !empty.runMenuItem(tuiMenuItem{action: action}) {
+			t.Fatalf("empty action %s should be handled", action)
+		}
+		if empty.status == "" {
+			t.Fatalf("empty action %s should set status", action)
+		}
+	}
+}
+
+func TestTUILocalActionUnavailableBranches(t *testing.T) {
+	durable := sampleTUIClusters()[0]
+	durable.Source = store.ClusterSourceDurable
+	durable.Status = "active"
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   []store.ClusterSummary{durable},
+	})
+	model.detail = store.ClusterDetail{Cluster: durable, Members: []store.ClusterMemberDetail{{
+		Thread: store.Thread{ID: 42, Number: 42, Kind: "issue", State: "open", Title: "Selected", HTMLURL: "https://github.com/openclaw/openclaw/issues/42"},
+		State:  "active",
+	}}}
+	model.hasDetail = true
+	model.memberRows = []memberRow{{selectable: true, member: model.detail.Members[0]}}
+	model.memberIndex = 0
+	for _, action := range []string{
+		"close-thread-local",
+		"reopen-thread-local",
+		"close-cluster-local",
+		"reopen-cluster-local",
+		"exclude-member-local",
+		"include-member-local",
+		"canonical-member-local",
+	} {
+		if !model.runMenuItem(tuiMenuItem{action: action}) {
+			t.Fatalf("action %s should be handled", action)
+		}
+		if !strings.Contains(model.status, "unavailable") {
+			t.Fatalf("action %s status = %q", action, model.status)
+		}
+	}
+
+	empty := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{Repository: "openclaw/openclaw"})
+	for _, fn := range []func(){
+		empty.openCloseThreadMenu,
+		empty.openReopenThreadMenu,
+		empty.openCloseClusterMenu,
+		empty.openReopenClusterMenu,
+		empty.openExcludeMemberMenu,
+		empty.openIncludeMemberMenu,
+		empty.openCanonicalMemberMenu,
+		empty.closeSelectedThreadLocally,
+		empty.reopenSelectedThreadLocally,
+		empty.closeSelectedClusterLocally,
+		empty.reopenSelectedClusterLocally,
+		empty.excludeSelectedClusterMemberLocally,
+		empty.includeSelectedClusterMemberLocally,
+		empty.setSelectedClusterCanonicalLocally,
+	} {
+		fn()
+		if empty.status == "" {
+			t.Fatal("empty local action should set status")
+		}
+	}
+}
+
+func TestTUIRunMenuItemCoversDesktopActionsWithFakeCommands(t *testing.T) {
+	installFakeDesktopCommands(t)
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{
+			Thread: store.Thread{
+				ID:              42,
+				Number:          42,
+				Kind:            "issue",
+				State:           "open",
+				Title:           "Thread with links",
+				AuthorLogin:     "alice",
+				UpdatedAtGitHub: "2026-04-30T00:00:00Z",
+				HTMLURL:         "https://github.com/openclaw/openclaw/issues/42",
+				LabelsJSON:      `[{"name":"bug"}]`,
+			},
+			BodySnippet: "See [docs](https://example.com/docs) and https://example.com/log.",
+			Summaries:   map[string]string{"key_summary": "Useful summary."},
+		},
+	}}
+	model.detail = store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{model.memberRows[0].member}}
+	model.hasDetail = true
+	model.neighborCache[42] = []tuiNeighbor{{Thread: store.Thread{Number: 43, Kind: "pull_request", Title: "Neighbor"}, Score: 0.88}}
+
+	for _, item := range []tuiMenuItem{
+		{action: "open-cluster-representative", value: "https://github.com/openclaw/openclaw/issues/11"},
+		{action: "copy-cluster-url", value: "https://github.com/openclaw/openclaw/issues/11"},
+		{action: "copy-thread-detail"},
+		{action: "copy-body-preview"},
+		{action: "copy-summaries"},
+		{action: "copy-neighbors"},
+		{action: "copy-cluster-id"},
+		{action: "copy-cluster-name"},
+		{action: "copy-cluster-title"},
+		{action: "copy-member-list"},
+		{action: "open-picked-link", value: "https://example.com/docs"},
+		{action: "copy-picked-link", value: "https://example.com/docs"},
+		{action: "copy-cluster"},
+		{action: "copy-visible-clusters"},
+		{action: "copy-reference-links"},
+		{action: "open"},
+		{action: "copy-url"},
+		{action: "copy-markdown"},
+		{action: "copy-title"},
+		{action: "open-first-link"},
+		{action: "copy-first-link"},
+	} {
+		if !model.runMenuItem(item) {
+			t.Fatalf("action %s was not handled", item.action)
+		}
+		if strings.Contains(model.status, "copy text:") || strings.Contains(model.status, "open URL:") {
+			t.Fatalf("desktop action %s failed: %s", item.action, model.status)
+		}
+	}
+}
+
+func installFakeDesktopCommands(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("desktop command fakes are shell scripts")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat >/dev/null\nexit 0\n"
+	for _, name := range []string{"open", "pbcopy", "xdg-open", "xclip"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestTUIRemoteRefreshMessages(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository:      "openclaw/openclaw",
+		DBRefreshSource: "/tmp/missing-source.db",
+		DBRuntimePath:   "/tmp/missing-runtime.db",
+		Clusters:        sampleTUIClusters(),
+	})
+	model.remoteRefreshing = true
+
+	updated, cmd := model.Update(tuiRemoteRefreshTickMsg{})
+	model = updated.(clusterBrowserModel)
+	if model.remoteFrame != 1 || cmd == nil {
+		t.Fatalf("remote tick frame/cmd = %d/%v", model.remoteFrame, cmd)
+	}
+	updated, _ = model.Update(tuiRemoteRefreshMsg{err: fmt.Errorf("network down")})
+	model = updated.(clusterBrowserModel)
+	if model.remoteRefreshing || !strings.Contains(model.status, "network down") {
+		t.Fatalf("remote refresh error state = refreshing:%v status:%q", model.remoteRefreshing, model.status)
+	}
+	updated, _ = model.Update(tuiRemoteRefreshMsg{changed: false})
+	model = updated.(clusterBrowserModel)
+	if model.status != "Remote data already current" {
+		t.Fatalf("remote no-change status = %q", model.status)
+	}
+}
+
+func TestTUIUpdateRefreshMessageBranches(t *testing.T) {
+	st, repoID, _ := seedTUIDurableStore(t)
+	defer st.Close()
+
+	model := newClusterBrowserModel(context.Background(), st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+
+	model.menuOpen = true
+	updated, cmd := model.Update(tuiAutoRefreshMsg{})
+	model = updated.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("auto refresh while menu is open should reschedule")
+	}
+
+	model.menuOpen = false
+	updated, cmd = model.Update(tuiAutoRefreshMsg{})
+	model = updated.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("auto refresh should reschedule after refreshing from store")
+	}
+
+	updated, cmd = model.Update(tuiRemoteRefreshTickMsg{})
+	model = updated.(clusterBrowserModel)
+	if cmd != nil {
+		t.Fatalf("remote tick should be ignored when not refreshing: %v", cmd)
+	}
+
+	model.remoteRefreshing = true
+	updated, cmd = model.Update(tuiRemoteRefreshTickMsg{})
+	model = updated.(clusterBrowserModel)
+	if model.remoteFrame == 0 || cmd == nil {
+		t.Fatalf("remote tick frame/cmd = %d/%v", model.remoteFrame, cmd)
+	}
+
+	updated, cmd = model.Update(tuiRemoteRefreshMsg{err: fmt.Errorf("boom")})
+	model = updated.(clusterBrowserModel)
+	if cmd != nil || !strings.Contains(model.status, "Remote refresh failed") {
+		t.Fatalf("remote error status/cmd = %q/%v", model.status, cmd)
+	}
+}
+
+func TestTUIInitAndNonInteractiveProgramFallback(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository:      "openclaw/openclaw",
+		DBSource:        "remote",
+		DBRefreshSource: "/tmp/source.db",
+		DBRuntimePath:   "/tmp/runtime.db",
+		Clusters:        sampleTUIClusters(),
+	})
+	if cmd := model.Init(); cmd == nil {
+		t.Fatal("remote model init should return batched refresh commands")
+	}
+	local := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Clusters:   sampleTUIClusters(),
+	})
+	if cmd := local.Init(); cmd != nil {
+		t.Fatalf("local model without store should not create init command: %v", cmd)
+	}
+
+	app := New()
+	var stdout strings.Builder
+	app.Stdout = &stdout
+	err := app.runInteractiveTUI(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Clusters:   sampleTUIClusters(),
+	})
+	if err != nil {
+		t.Fatalf("non-interactive fallback: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "openclaw/openclaw") {
+		t.Fatalf("fallback output = %q", stdout.String())
+	}
+}
+
+func TestTUIRemoteRefreshCommandAndReopenRuntimeStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	runtimePath := filepath.Join(dir, "runtime.db")
+	st, err := store.Open(ctx, sourcePath)
+	if err != nil {
+		t.Fatalf("open source: %v", err)
+	}
+	if _, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-30T00:00:00Z"}); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close source: %v", err)
+	}
+
+	model := newClusterBrowserModel(ctx, nil, 0, clusterBrowserPayload{
+		Repository:      "openclaw/openclaw",
+		DBSource:        "remote",
+		DBRefreshSource: sourcePath,
+		DBRuntimePath:   runtimePath,
+		Clusters:        sampleTUIClusters(),
+	})
+	msg := model.remoteRefreshCmd()()
+	refresh, ok := msg.(tuiRemoteRefreshMsg)
+	if !ok || refresh.err != nil || !refresh.changed {
+		t.Fatalf("remote refresh msg = %#v", msg)
+	}
+	if err := model.reopenRuntimeStore(); err != nil {
+		t.Fatalf("reopen runtime store: %v", err)
+	}
+	if model.store == nil {
+		t.Fatal("runtime store was not reopened")
+	}
+	_ = model.store.Close()
+}
+
+func TestTUILocalActionsMutateStore(t *testing.T) {
+	ctx := context.Background()
+	st, repoID, clusterID := seedTUIDurableStore(t)
+	defer st.Close()
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "size",
+		MinSize:    1,
+		Clusters: []store.ClusterSummary{{
+			ID:                   clusterID,
+			Source:               store.ClusterSourceDurable,
+			Status:               "active",
+			StableSlug:           "local-actions",
+			RepresentativeKind:   "issue",
+			RepresentativeTitle:  "First member",
+			RepresentativeNumber: 201,
+			MemberCount:          2,
+			UpdatedAt:            "2026-04-30T00:00:00Z",
+		}},
+	})
+	model.loadSelectedCluster()
+	if !model.hasDetail || len(model.memberRows) == 0 {
+		t.Fatalf("expected loaded detail, got %+v", model.detail)
+	}
+	model.closeSelectedThreadLocally()
+	if !strings.Contains(model.status, "Closed #") {
+		t.Fatalf("close thread status = %q", model.status)
+	}
+	model.showClosed = true
+	model.refreshFromStore()
+	model.memberIndex = memberRowIndex(model.memberRows, 201)
+	model.reopenSelectedThreadLocally()
+	if !strings.Contains(model.status, "Reopened #") {
+		t.Fatalf("reopen thread status = %q", model.status)
+	}
+	model.closeSelectedClusterLocally()
+	if !strings.Contains(model.status, "Closed cluster") {
+		t.Fatalf("close cluster status = %q", model.status)
+	}
+	model.showClosed = true
+	model.refreshFromStore()
+	model.reopenSelectedClusterLocally()
+	if !strings.Contains(model.status, "Reopened cluster") {
+		t.Fatalf("reopen cluster status = %q", model.status)
+	}
+	model.memberIndex = memberRowIndex(model.memberRows, 202)
+	model.excludeSelectedClusterMemberLocally()
+	if !strings.Contains(model.status, "Excluded #202") {
+		t.Fatalf("exclude member status = %q", model.status)
+	}
+	model.showClosed = true
+	model.refreshFromStore()
+	model.memberIndex = memberRowIndex(model.memberRows, 202)
+	model.includeSelectedClusterMemberLocally()
+	if !strings.Contains(model.status, "Included #202") {
+		t.Fatalf("include member status = %q", model.status)
+	}
+	model.memberIndex = memberRowIndex(model.memberRows, 202)
+	model.setSelectedClusterCanonicalLocally()
+	if !strings.Contains(model.status, "Set #202 as canonical") {
+		t.Fatalf("canonical status = %q", model.status)
+	}
+}
+
+func TestTUIJumpAndSortHelpersCoverStoreBackedBranches(t *testing.T) {
+	ctx := context.Background()
+	st, repoID, clusterID := seedTUIDurableStore(t)
+	defer st.Close()
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    5,
+		Limit:      1,
+		Clusters:   nil,
+	})
+	model.jumpToThreadNumber(202)
+	if model.currentClusterID() != clusterID || model.memberIndex < 0 {
+		t.Fatalf("jump did not load cluster/member: cluster=%d memberIndex=%d status=%q", model.currentClusterID(), model.memberIndex, model.status)
+	}
+	if _, ok := model.clusterFromWorkingSet(clusterID); !ok {
+		t.Fatalf("cluster %d not added to working set", clusterID)
+	}
+	model.sortMembersFromHeader(1)
+	if model.memberSort != memberSortNumber {
+		t.Fatalf("member sort = %q, want number", model.memberSort)
+	}
+	model.sortMembersFromHeader(columnRightEdge(memberColumns(80, model.memberSort), 1) - 1)
+	if model.memberSort != memberSortState {
+		t.Fatalf("member sort = %q, want state", model.memberSort)
+	}
+	model.width = 120
+	model.payload.Sort = "recent"
+	model.sortClustersFromHeader(0)
+	if model.payload.Sort != "size" {
+		t.Fatalf("cluster sort = %q, want size from first header", model.payload.Sort)
+	}
+	model.sortClustersFromHeader(10_000)
+	if model.payload.Sort != "recent" {
+		t.Fatalf("cluster sort = %q, want recent from last header", model.payload.Sort)
+	}
+	model.payload.Sort = "recent"
+	model.sortClustersFromHeader(columnRightEdge(clusterColumns(80, model.payload.Sort), 1) + 1)
+	if model.payload.Sort != "size" {
+		t.Fatalf("cluster sort = %q, want size from middle toggle", model.payload.Sort)
+	}
+	model.sortClustersFromHeader(columnRightEdge(clusterColumns(80, model.payload.Sort), 1) + 1)
+	if model.payload.Sort != "recent" {
+		t.Fatalf("cluster sort = %q, want recent from middle toggle", model.payload.Sort)
+	}
+	before := len(model.allClusters)
+	model.ensureClusterInWorkingSet(store.ClusterSummary{})
+	model.ensureClusterInWorkingSet(store.ClusterSummary{ID: clusterID})
+	model.ensureClusterInWorkingSet(store.ClusterSummary{ID: clusterID + 100, RepresentativeTitle: "new"})
+	if len(model.allClusters) != before+1 {
+		t.Fatalf("working set size = %d, want %d", len(model.allClusters), before+1)
+	}
+	model.searchInput.SetValue("not-a-number")
+	model.jumping = true
+	updated, _ := model.handleJumpKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated
+	if !strings.Contains(model.status, "Enter a positive") {
+		t.Fatalf("bad jump status = %q", model.status)
+	}
+	model.startJumpInput()
+	model.searchInput.SetValue("201")
+	updated, _ = model.handleJumpKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated
+	if !strings.Contains(model.status, "Jumped") {
+		t.Fatalf("good jump status = %q", model.status)
+	}
+}
+
+func TestTUIDisplayHelperBranches(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 120
+	model.height = 32
+	model.focus = focusMembers
+	if model.pageStep() <= 0 {
+		t.Fatal("member page step should be positive")
+	}
+	model.focus = focusDetail
+	model.detailView.Height = 7
+	if model.pageStep() != 7 {
+		t.Fatalf("detail page step = %d, want 7", model.pageStep())
+	}
+	for _, source := range []string{"remote", "local", "other", ""} {
+		model.payload.DBSource = source
+		model.payload.DBLocation = "store.db"
+		if got := model.footerLocation(); got == "" {
+			t.Fatalf("footer location empty for %q", source)
+		}
+	}
+	for _, width := range []int{80, 110, 160} {
+		model.width = width
+		layout := model.layout()
+		if layoutLabel(layout) == "" {
+			t.Fatalf("empty layout label for %+v", layout)
+		}
+	}
+	for _, value := range []int{0, 1, 5, 10} {
+		if nextMinSize(value) <= 0 {
+			t.Fatalf("next min size for %d should be positive", value)
+		}
+	}
+	for _, value := range []bool{true, false} {
+		if boolLabel(value) == "" {
+			t.Fatalf("bool label empty")
+		}
+	}
+	for _, kind := range []string{"issue", "pull_request", "discussion", ""} {
+		if kindLabel(kind) == "" || kindGlyph(kind) == "" || kindTitle(kind) == "" {
+			t.Fatalf("kind helpers empty for %q", kind)
+		}
+	}
+	for _, state := range []string{"open", "closed", "merged", "draft", ""} {
+		if stateGlyph(state) == "" {
+			t.Fatalf("state glyph empty for %q", state)
+		}
+	}
+	for _, cluster := range []store.ClusterSummary{
+		{Status: "active"},
+		{Status: "closed", ClosedAt: "2026-04-30T00:00:00Z"},
+		{Status: "merged"},
+		{Status: "split"},
+		{Status: "ignored"},
+	} {
+		if clusterStateLabel(cluster) == "" {
+			t.Fatalf("cluster state empty for %+v", cluster)
+		}
+		_ = clusterRowStyle(cluster, false, true)
+		_ = clusterRowStyle(cluster, true, true)
+	}
+	for _, member := range []store.ClusterMemberDetail{
+		{Thread: store.Thread{State: "open"}},
+		{Thread: store.Thread{State: "closed", ClosedAtGitHub: "2026-04-30T00:00:00Z"}},
+		{Thread: store.Thread{State: "merged", MergedAtGitHub: "2026-04-30T00:00:00Z"}},
+		{Thread: store.Thread{State: "open", IsDraft: true}},
+	} {
+		if memberDisplayState(member) == "" || closedLabel(member.Thread) == "" {
+			t.Fatalf("member display empty for %+v", member)
+		}
+	}
+	for _, ref := range []store.ClusterSummary{
+		{RepresentativeNumber: 1, RepresentativeKind: "issue"},
+		{RepresentativeTitle: "fallback title"},
+	} {
+		if threadRef(ref) == "" {
+			t.Fatalf("thread ref empty for %+v", ref)
+		}
+	}
+	for _, ts := range []string{"", "bad", time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano), time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339Nano)} {
+		if formatRelativeTime(ts) == "" {
+			t.Fatalf("relative time empty for %q", ts)
+		}
+	}
+	if link, ok := firstMarkdownLink("see [docs](https://example.com/docs)."); !ok || link != "https://example.com/docs" {
+		t.Fatal("first markdown link not found")
+	}
+	if got := formatSummaryLabel("llm_key_3line"); got == "" {
+		t.Fatal("summary label empty")
+	}
+	for _, key := range []string{"key_summary", "problem_summary", "solution_summary", "maintainer_signal_summary", "dedupe_summary"} {
+		if got := formatSummaryLabel(key); got == "" || strings.Contains(got, "_") {
+			t.Fatalf("summary label for %q = %q", key, got)
+		}
+	}
+	if got := labelsFromJSON(`[{"name":"bug"},{"name":"needs review"}]`); !strings.Contains(got, "bug") || !strings.Contains(got, "needs review") {
+		t.Fatalf("labels = %q", got)
+	}
+	if got := labelsFromJSON(`["bug","needs review"]`); !strings.Contains(got, "bug") || !strings.Contains(got, "needs review") {
+		t.Fatalf("string labels = %q", got)
+	}
+	if labelsFromJSON(`not-json`) != "" {
+		t.Fatal("invalid labels should render empty")
+	}
+	if selectedColor(true) == "" || selectedColor(false) == "" || selectedFG(true) == "" || selectedFG(false) == "" {
+		t.Fatal("selected colors empty")
+	}
+	if columnRightEdge(nil, 0) != 0 || columnRightEdge([]table.Column{{Width: 3}}, 1) != 0 {
+		t.Fatal("invalid column right edge should be zero")
+	}
+	for _, r := range []rune{'\u200d', '\ufe0f', '\U0001f600', '\u2600', '\u303d'} {
+		if !isEmojiRune(r) {
+			t.Fatalf("expected %U to be treated as emoji", r)
+		}
+	}
+	if isEmojiRune('A') {
+		t.Fatal("ASCII letter should not be emoji")
+	}
+	if !isMouseWheel(tea.MouseButtonWheelDown) || !isMouseWheel(tea.MouseButtonWheelUp) || isMouseWheel(tea.MouseButtonLeft) {
+		t.Fatal("mouse wheel detection mismatch")
+	}
+	if got := wrapPlain("alpha beta gamma", 5); len(got) == 0 {
+		t.Fatalf("wrap = %+v", got)
+	}
+	if got := markdownLines("**bold** `code` [link](https://example.com)", 12); len(got) == 0 {
+		t.Fatal("markdown lines empty")
+	}
+}
+
+func TestTUISearchMoveAndWheelBranches(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 150
+	model.height = 32
+	model.detail = store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 1, Kind: "issue", State: "open", Title: "One"}},
+		{Thread: store.Thread{ID: 2, Number: 2, Kind: "pull_request", State: "open", Title: "Two"}},
+	}}
+	model.hasDetail = true
+	model.sortMembers()
+
+	model.focus = focusClusters
+	model.move(1)
+	if model.selected != 1 {
+		t.Fatalf("cluster move selected = %d", model.selected)
+	}
+	model.applyClusterDetail(store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 1, Kind: "issue", State: "open", Title: "One"}},
+		{Thread: store.Thread{ID: 2, Number: 2, Kind: "pull_request", State: "open", Title: "Two"}},
+	}})
+	model.focus = focusMembers
+	model.move(1)
+	if model.memberIndex < 0 {
+		t.Fatalf("member move index/status = %d/%q", model.memberIndex, model.status)
+	}
+	model.focus = focusDetail
+	model.detailView.SetContent(strings.Repeat("line\n", 20))
+	model.move(3)
+	model.move(-2)
+	model.jumpEdge(false)
+	model.jumpEdge(true)
+	model.focus = focusMembers
+	model.jumpEdge(false)
+	first := model.memberIndex
+	model.jumpEdge(true)
+	if model.memberIndex == first {
+		t.Fatalf("member jump edge did not move from %d", first)
+	}
+	model.focus = focusClusters
+	model.jumpEdge(false)
+	model.jumpEdge(true)
+	if model.selected != len(model.payload.Clusters)-1 {
+		t.Fatalf("cluster jump edge selected = %d", model.selected)
+	}
+
+	model.search = "first"
+	model.startFilterInput()
+	model.searchInput.SetValue("second")
+	updated, _ := model.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = updated
+	if !model.searching {
+		t.Fatal("typing should keep search mode active")
+	}
+	updated, _ = model.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated
+	if model.searching || !strings.Contains(model.status, "Filter:") {
+		t.Fatalf("enter search state = %v status=%q", model.searching, model.status)
+	}
+
+	model.width = 150
+	model.height = 32
+	layout := model.layout()
+	model.mouseWheel(layout, tea.MouseMsg{X: layout.clusters.x + 1, Y: layout.clusters.y + 3}, 1)
+	if model.focus != focusClusters {
+		t.Fatalf("wheel over clusters focus = %q", model.focus)
+	}
+	model.mouseWheel(layout, tea.MouseMsg{X: layout.members.x + 1, Y: layout.members.y + 3}, 1)
+	if model.focus != focusMembers {
+		t.Fatalf("wheel over members focus = %q", model.focus)
+	}
+	model.mouseWheel(layout, tea.MouseMsg{X: layout.detail.x + 1, Y: layout.detail.y + 3}, 1)
+	if model.focus != focusDetail {
+		t.Fatalf("wheel over detail focus = %q", model.focus)
+	}
+	model.mouseWheel(layout, tea.MouseMsg{X: 999, Y: 999}, -1)
 }
 
 func TestTUIActionMenuRepositoryShortcutOpensPicker(t *testing.T) {
@@ -2353,6 +3239,85 @@ func sampleTUIClusters() []store.ClusterSummary {
 			UpdatedAt:            "2026-04-27T11:00:00Z",
 		},
 	}
+}
+
+func seedTUIDurableStore(t *testing.T) (*store.Store, int64, int64) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "openclaw",
+		FullName:  "openclaw/openclaw",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-04-30T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	firstID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:          repoID,
+		GitHubID:        "201",
+		Number:          201,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "First member",
+		Body:            "First body",
+		HTMLURL:         "https://github.com/openclaw/openclaw/issues/201",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "hash-201",
+		UpdatedAtGitHub: "2026-04-30T01:00:00Z",
+		UpdatedAt:       "2026-04-30T01:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed first thread: %v", err)
+	}
+	secondID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID:          repoID,
+		GitHubID:        "202",
+		Number:          202,
+		Kind:            "pull_request",
+		State:           "open",
+		Title:           "Second member",
+		Body:            "Second body",
+		HTMLURL:         "https://github.com/openclaw/openclaw/pull/202",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "hash-202",
+		UpdatedAtGitHub: "2026-04-30T02:00:00Z",
+		UpdatedAt:       "2026-04-30T02:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed second thread: %v", err)
+	}
+	result, err := st.SaveDurableClusters(ctx, repoID, []store.DurableClusterInput{{
+		StableKey:              "local-actions-key",
+		StableSlug:             "local-actions",
+		ClusterType:            "duplicate_candidate",
+		RepresentativeThreadID: firstID,
+		Title:                  "Local actions",
+		Members: []store.DurableClusterMemberInput{
+			{ThreadID: firstID, Role: "canonical"},
+			{ThreadID: secondID, Role: "related"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("save durable clusters: %v", err)
+	}
+	summaries, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true, MinSize: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list durable clusters: %v", err)
+	}
+	if len(summaries) != result.ClusterCount || len(summaries) == 0 {
+		t.Fatalf("durable summaries = %+v result=%+v", summaries, result)
+	}
+	return st, repoID, summaries[0].ID
 }
 
 func menuLabelIndex(items []tuiMenuItem, label string) int {

@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -164,6 +165,36 @@ func (f *targetedGitHub) ListRepositoryIssues(ctx context.Context, owner, repo s
 	return nil, nil
 }
 
+type pullCommentGitHub struct {
+	fakeGitHub
+}
+
+func (pullCommentGitHub) ListPullReviews(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	if number != 8 {
+		return nil, nil
+	}
+	return []map[string]any{{
+		"id":         81,
+		"body":       "review body",
+		"created_at": "2026-04-26T00:00:00Z",
+		"updated_at": "2026-04-26T00:01:00Z",
+		"user":       map[string]any{"login": "reviewbot[bot]", "type": "User"},
+	}}, nil
+}
+
+func (pullCommentGitHub) ListPullReviewComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	if number != 8 {
+		return nil, nil
+	}
+	return []map[string]any{{
+		"id":         82,
+		"body":       "line comment",
+		"created_at": "2026-04-26T00:02:00Z",
+		"updated_at": "2026-04-26T00:03:00Z",
+		"user":       map[string]any{"login": "alice", "type": "Bot"},
+	}}, nil
+}
+
 func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -208,6 +239,35 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 	if documentCount != 1 {
 		t.Fatalf("document count: got %d want 1", documentCount)
+	}
+}
+
+func TestSyncHydratesPullReviewComments(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	s := New(pullCommentGitHub{}, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{8}, IncludeComments: true})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if stats.CommentsSynced != 2 {
+		t.Fatalf("comments synced = %d, want 2", stats.CommentsSynced)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil {
+		t.Fatalf("threads: %v", err)
+	}
+	if len(threads) != 1 || threads[0].Kind != "pull_request" {
+		t.Fatalf("threads = %+v", threads)
 	}
 }
 
@@ -392,5 +452,51 @@ func TestSyncOpenSinceAppliesClosedOverlapSweep(t *testing.T) {
 	}
 	if len(threads) != 1 || threads[0].State != "closed" || threads[0].ClosedAtGitHub == "" {
 		t.Fatalf("thread not closed from overlap sweep: %#v", threads)
+	}
+}
+
+func TestMappingHelperBranches(t *testing.T) {
+	if got := jsonID("abc"); got != "abc" {
+		t.Fatalf("string json id = %q", got)
+	}
+	if got := jsonID(float64(12)); got != "12" {
+		t.Fatalf("float json id = %q", got)
+	}
+	if got := jsonID(int64(13)); got != "13" {
+		t.Fatalf("int64 json id = %q", got)
+	}
+	if got := jsonID(json.Number("14")); got != "14" {
+		t.Fatalf("json number id = %q", got)
+	}
+	if got := jsonID(struct{}{}); got != "" {
+		t.Fatalf("unknown json id = %q", got)
+	}
+	if got := intValue(float64(22)); got != 22 {
+		t.Fatalf("float int value = %d", got)
+	}
+	if got := intValue(int64(23)); got != 23 {
+		t.Fatalf("int64 int value = %d", got)
+	}
+	if got := intValue(json.Number("24")); got != 24 {
+		t.Fatalf("json number int value = %d", got)
+	}
+	if got := intValue("bad"); got != 0 {
+		t.Fatalf("bad int value = %d", got)
+	}
+	if got := stringValue(time.Unix(0, 0).UTC()); got == "" {
+		t.Fatal("Stringer value should render")
+	}
+	if loginFromUser("not-user") != "" || typeFromUser("not-user") != "" {
+		t.Fatal("non-map user should return empty fields")
+	}
+	comment := mapComment(77, "review", map[string]any{
+		"id":         json.Number("88"),
+		"body":       time.Unix(0, 0).UTC(),
+		"created_at": "2026-04-30T00:00:00Z",
+		"updated_at": "2026-04-30T00:01:00Z",
+		"user":       map[string]any{"login": "dependabot[bot]", "type": "User"},
+	})
+	if comment.GitHubID != "88" || !comment.IsBot || comment.Body == "" {
+		t.Fatalf("comment = %+v", comment)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
+	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -181,6 +182,65 @@ func TestSyncPortableStoreResetsDirtyCache(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(checkoutDir, "data", "openclaw__openclaw.sync.db"+suffix)); !os.IsNotExist(err) {
 			t.Fatalf("stale sqlite sidecar %s was not removed: %v", suffix, err)
 		}
+	}
+}
+
+func TestInitWithPortableStoreCloneAndPull(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 7, "portable init issue")
+	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--portable-store", remoteDir, "--store-dir", checkoutDir, "--portable-db", filepath.ToSlash(dbRel)}); err != nil {
+		t.Fatalf("portable init: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Portable store") || !strings.Contains(stdout.String(), "cloned") {
+		t.Fatalf("portable init output = %q", stdout.String())
+	}
+	action, err := syncPortableStore(ctx, remoteDir, checkoutDir)
+	if err != nil {
+		t.Fatalf("portable pull: %v", err)
+	}
+	if action != "pulled" {
+		t.Fatalf("portable action = %q, want pulled", action)
+	}
+	invalid := New()
+	if err := invalid.Run(ctx, []string{"--config", filepath.Join(dir, "bad.toml"), "init", "--portable-store", remoteDir, "--store-dir", filepath.Join(dir, "bad-checkout"), "--portable-db", "../bad.db"}); err == nil {
+		t.Fatal("invalid portable db should fail")
+	}
+	if _, err := syncPortableStore(ctx, "", checkoutDir); err == nil {
+		t.Fatal("missing portable URL should fail")
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, ""); err == nil {
+		t.Fatal("missing portable dir should fail")
+	}
+	nonGitDir := filepath.Join(dir, "not-git")
+	if err := os.MkdirAll(nonGitDir, 0o755); err != nil {
+		t.Fatalf("mkdir non-git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nonGitDir, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write non-git file: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, nonGitDir); err == nil {
+		t.Fatal("non-git existing dir should fail")
 	}
 }
 
@@ -491,6 +551,221 @@ func TestMainHelpListsNeighbors(t *testing.T) {
 	}
 }
 
+func TestAppOutputModesAndUsageBranches(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "version flag text", args: []string{"--version"}, want: "dev"},
+		{name: "version command json", args: []string{"--json", "version"}, want: `"version"`},
+		{name: "version command log fallback", args: []string{"--format", "log", "version"}, want: "dev"},
+		{name: "help tui", args: []string{"help", "tui"}, want: "cluster browser"},
+		{name: "configure creates config", args: []string{"--config", filepath.Join(dir, "configure.toml"), "--format", "log", "configure"}, want: "configure="},
+		{name: "doctor default json", args: []string{"--config", filepath.Join(dir, "missing.toml"), "--json", "doctor"}, want: `"config_exists": false`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			app.Stdout = &stdout
+			if err := app.Run(ctx, tc.args); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if !strings.Contains(stdout.String(), tc.want) {
+				t.Fatalf("output = %q, want %q", stdout.String(), tc.want)
+			}
+		})
+	}
+
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+	errorCases := [][]string{
+		{"--format", "xml", "version"},
+		{"help", "unknown"},
+		{"serve"},
+		{"summarize"},
+		{"configure", "--unknown"},
+		{"refresh", "--unknown"},
+		{"refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--no-cluster"},
+		{"refresh", "badrepo"},
+		{"search", "--unknown"},
+		{"search", "openclaw/openclaw"},
+		{"search", "openclaw/openclaw", "--query", "x", "--mode", "bogus"},
+		{"neighbors", "--unknown"},
+		{"neighbors", "openclaw/openclaw"},
+		{"cluster", "--unknown"},
+		{"cluster", "openclaw/openclaw", "--threshold", "2"},
+		{"cluster", "openclaw/openclaw", "--cross-kind-threshold", "2"},
+		{"embed", "--unknown"},
+		{"embed", "openclaw/openclaw", "--number", "bad"},
+		{"clusters", "--unknown"},
+		{"clusters", "openclaw/openclaw", "--sort", "bogus"},
+		{"tui", "--unknown"},
+		{"tui", "openclaw/openclaw", "extra"},
+		{"tui", "openclaw/openclaw", "--min-size", "bad"},
+		{"tui", "openclaw/openclaw", "--limit", "bad"},
+		{"tui", "openclaw/openclaw", "--sort", "bad", "--json"},
+		{"cluster-detail", "--unknown"},
+		{"cluster-detail", "openclaw/openclaw"},
+		{"runs", "--unknown"},
+		{"runs", "openclaw/openclaw", "--limit", "nope"},
+		{"threads", "--unknown"},
+		{"threads", "openclaw/openclaw", "--numbers", "1,nope"},
+		{"sync", "--unknown"},
+		{"close-thread", "--unknown"},
+		{"close-thread", "openclaw/openclaw"},
+		{"reopen-thread", "--unknown"},
+		{"reopen-thread", "openclaw/openclaw"},
+		{"close-cluster", "--unknown"},
+		{"close-cluster", "openclaw/openclaw"},
+		{"reopen-cluster", "--unknown"},
+		{"reopen-cluster", "openclaw/openclaw"},
+		{"exclude-cluster-member", "--unknown"},
+		{"exclude-cluster-member", "openclaw/openclaw", "--id", "1"},
+		{"include-cluster-member", "--unknown"},
+		{"include-cluster-member", "openclaw/openclaw", "--number", "1"},
+		{"set-cluster-canonical", "--unknown"},
+		{"set-cluster-canonical", "openclaw/openclaw", "--id", "bad", "--number", "1"},
+		{"portable"},
+		{"portable", "unknown"},
+		{"portable", "prune", "--unknown"},
+		{"portable", "prune", "extra"},
+	}
+	for _, args := range errorCases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			app := New()
+			err := app.Run(ctx, append([]string{"--config", configPath}, args...))
+			if err == nil {
+				t.Fatalf("expected error for %v", args)
+			}
+			if ExitCode(err) == 0 {
+				t.Fatalf("expected nonzero exit for %v", args)
+			}
+			if err.Error() == "" {
+				t.Fatalf("empty error for %v", args)
+			}
+		})
+	}
+
+	emptyConfig := filepath.Join(dir, "empty.toml")
+	emptyDB := filepath.Join(dir, "empty.db")
+	if err := New().Run(ctx, []string{"--config", emptyConfig, "init", "--db", emptyDB}); err != nil {
+		t.Fatalf("empty init: %v", err)
+	}
+	runtimeErrorCases := [][]string{
+		{"search", "openclaw/openclaw", "--query", "x"},
+		{"neighbors", "openclaw/openclaw", "--number", "1"},
+		{"cluster", "openclaw/openclaw"},
+		{"clusters", "openclaw/openclaw"},
+		{"cluster-detail", "openclaw/openclaw", "--id", "1"},
+		{"runs", "openclaw/openclaw"},
+		{"threads", "openclaw/openclaw"},
+		{"close-thread", "openclaw/openclaw", "--number", "1"},
+		{"reopen-thread", "openclaw/openclaw", "--number", "1"},
+	}
+	for _, args := range runtimeErrorCases {
+		t.Run("empty "+strings.Join(args, " "), func(t *testing.T) {
+			err := New().Run(ctx, append([]string{"--config", emptyConfig}, args...))
+			if err == nil {
+				t.Fatalf("expected runtime error for %v", args)
+			}
+		})
+	}
+
+	if _, err := resolveOutputFormat("bad", false); err == nil {
+		t.Fatal("bad output format should fail")
+	}
+	if _, _, err := parseOwnerRepo("bad"); err == nil {
+		t.Fatal("bad owner/repo should fail")
+	}
+	if _, err := parseOptionalPositiveInt("0"); err == nil {
+		t.Fatal("zero int should fail")
+	}
+	if _, err := parseOptionalPositiveIntList("1, 0"); err == nil {
+		t.Fatal("bad int list should fail")
+	}
+	if _, _, _, err := parseClusterShapeOptions("test", "bad", "1", "0.5"); err == nil {
+		t.Fatal("bad cluster shape should fail")
+	}
+	if !isDirtyPortablePullError(fmt.Errorf("Your local changes would be overwritten by merge")) {
+		t.Fatal("dirty portable pull error not detected")
+	}
+	t.Setenv("OPENAI_BASE_URL", "https://openai.example/v1")
+	if got := openAIBaseURL(); got != "https://openai.example/v1" {
+		t.Fatalf("openAIBaseURL fallback = %q", got)
+	}
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", "https://gitcrawl-openai.example/v1")
+	if got := openAIBaseURL(); got != "https://gitcrawl-openai.example/v1" {
+		t.Fatalf("openAIBaseURL override = %q", got)
+	}
+	t.Setenv("GITHUB_BASE_URL", "https://github.example")
+	if got := githubBaseURL(); got != "https://github.example" {
+		t.Fatalf("githubBaseURL fallback = %q", got)
+	}
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", "https://gitcrawl-github.example")
+	if got := githubBaseURL(); got != "https://gitcrawl-github.example" {
+		t.Fatalf("githubBaseURL override = %q", got)
+	}
+	if got := formatOptionalTime(time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)); got == "" {
+		t.Fatal("non-zero optional time should be formatted")
+	}
+}
+
+func TestGlobalCommandBranches(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		args      []string
+		wantErr   bool
+		wantOut   string
+		exitCode  int
+		jsonShape bool
+	}{
+		{args: []string{"--help"}, wantOut: "Usage:"},
+		{args: []string{"help"}, wantOut: "Usage:"},
+		{args: []string{"help", "sync"}, wantErr: true, exitCode: 2},
+		{args: []string{"--version"}, wantOut: "dev"},
+		{args: []string{"version"}, wantOut: "dev"},
+		{args: []string{"--json", "version"}, wantOut: `"version"`},
+		{args: []string{"--bad"}, wantErr: true, exitCode: 2},
+		{args: []string{"--format", "bad", "version"}, wantErr: true, exitCode: 2},
+		{args: []string{"serve"}, wantErr: true, exitCode: 2},
+		{args: []string{"completion"}, wantErr: true, exitCode: 1},
+		{args: []string{"unknown"}, wantErr: true, exitCode: 2},
+		{args: []string{"cluster-explain"}, wantErr: true, exitCode: 2},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			app.Stdout = &stdout
+			err := app.Run(ctx, tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				if tc.exitCode != 0 && ExitCode(err) != tc.exitCode {
+					t.Fatalf("exit code = %d, want %d: %v", ExitCode(err), tc.exitCode, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if tc.wantOut != "" && !strings.Contains(stdout.String(), tc.wantOut) {
+				t.Fatalf("output missing %q: %q", tc.wantOut, stdout.String())
+			}
+		})
+	}
+}
+
 func TestGHSearchSyntaxUsesLocalCache(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -718,6 +993,442 @@ func TestTUIRequiresInteractiveTerminalByDefault(t *testing.T) {
 	}
 }
 
+func TestResolveOptionalRepositoryBranches(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	app := New()
+	rt := localRuntime{Store: st}
+	if _, _, err := app.resolveOptionalRepository(ctx, rt, nil); err == nil {
+		t.Fatal("empty store should not infer repository")
+	}
+	first, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "one", FullName: "openclaw/one", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		t.Fatalf("first repo: %v", err)
+	}
+	if _, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "two", FullName: "openclaw/two", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
+		t.Fatalf("second repo: %v", err)
+	}
+	if repo, inferred, err := app.resolveOptionalRepository(ctx, rt, nil); err != nil || !inferred || repo.FullName == "" {
+		t.Fatalf("multi repo inference repo=%+v inferred=%v err=%v", repo, inferred, err)
+	}
+	repo, inferred, err := app.resolveOptionalRepository(ctx, rt, []string{"openclaw/one"})
+	if err != nil {
+		t.Fatalf("explicit repo: %v", err)
+	}
+	if inferred || repo.ID != first {
+		t.Fatalf("explicit repo=%+v inferred=%v", repo, inferred)
+	}
+}
+
+func TestCommandFlowCoversSearchEmbedNeighborsClusterDetailRunsAndRefresh(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	configure := New()
+	var stdout bytes.Buffer
+	configure.Stdout = &stdout
+	if err := configure.Run(ctx, []string{
+		"--config", configPath,
+		"configure",
+		"--summary-model", "summary-test",
+		"--embed-model", "embed-test",
+		"--embedding-basis", "title_original",
+		"--json",
+	}); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"updated": true`) {
+		t.Fatalf("configure output = %q", stdout.String())
+	}
+
+	repoID, firstID, secondID := seedCommandFlowStore(t, dbPath)
+
+	search := New()
+	stdout.Reset()
+	search.Stdout = &stdout
+	if err := search.Run(ctx, []string{"--config", configPath, "search", "openclaw/openclaw", "--query", "gateway websocket", "--mode", "hybrid", "--limit", "5", "--json"}); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Gateway websocket stalls") {
+		t.Fatalf("search output missing seeded hit: %s", stdout.String())
+	}
+
+	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Fatalf("unexpected OpenAI path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-openai-key" {
+			t.Fatalf("authorization = %q", got)
+		}
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode embeddings request: %v", err)
+		}
+		data := make([]map[string]any, 0, len(payload.Input))
+		for index, text := range payload.Input {
+			vector := []float64{0, 1}
+			if strings.Contains(text, "Gateway") || strings.Contains(text, "websocket") {
+				vector = []float64{1, 0}
+			}
+			if strings.Contains(text, "typing") {
+				vector = []float64{0.92, 0.08}
+			}
+			data = append(data, map[string]any{"index": index, "embedding": vector})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer openAIServer.Close()
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", openAIServer.URL)
+
+	embed := New()
+	stdout.Reset()
+	embed.Stdout = &stdout
+	if err := embed.Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw", "--limit", "3", "--json"}); err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"embedded": 3`) {
+		t.Fatalf("embed output = %q", stdout.String())
+	}
+
+	neighbors := New()
+	stdout.Reset()
+	neighbors.Stdout = &stdout
+	if err := neighbors.Run(ctx, []string{"--config", configPath, "neighbors", "openclaw/openclaw", "--number", "101", "--limit", "2", "--threshold", "0.1", "--json"}); err != nil {
+		t.Fatalf("neighbors: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"number": 102`) {
+		t.Fatalf("neighbors output = %q", stdout.String())
+	}
+
+	cluster := New()
+	stdout.Reset()
+	cluster.Stdout = &stdout
+	if err := cluster.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.7", "--min-size", "2", "--k", "2", "--json"}); err != nil {
+		t.Fatalf("cluster: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"cluster_count": 1`) {
+		t.Fatalf("cluster output = %q", stdout.String())
+	}
+
+	clusters := New()
+	stdout.Reset()
+	clusters.Stdout = &stdout
+	if err := clusters.Run(ctx, []string{"--config", configPath, "clusters", "openclaw/openclaw", "--sort", "recent", "--min-size", "1", "--limit", "5", "--json"}); err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"clusters"`) {
+		t.Fatalf("clusters output = %q", stdout.String())
+	}
+
+	durable := New()
+	stdout.Reset()
+	durable.Stdout = &stdout
+	if err := durable.Run(ctx, []string{"--config", configPath, "durable-clusters", "openclaw/openclaw", "--include-closed", "--min-size", "1", "--json"}); err != nil {
+		t.Fatalf("durable-clusters: %v", err)
+	}
+	var durablePayload struct {
+		Clusters []store.ClusterSummary `json:"clusters"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &durablePayload); err != nil {
+		t.Fatalf("decode durable clusters: %v\n%s", err, stdout.String())
+	}
+	if len(durablePayload.Clusters) == 0 {
+		t.Fatalf("durable clusters output = %q", stdout.String())
+	}
+
+	detail := New()
+	stdout.Reset()
+	detail.Stdout = &stdout
+	if err := detail.Run(ctx, []string{"--config", configPath, "cluster-detail", "openclaw/openclaw", "--id", strconv.FormatInt(durablePayload.Clusters[0].ID, 10), "--member-limit", "5", "--body-chars", "12", "--json"}); err != nil {
+		t.Fatalf("cluster-detail: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Gateway") {
+		t.Fatalf("cluster-detail output = %q", stdout.String())
+	}
+
+	runs := New()
+	stdout.Reset()
+	runs.Stdout = &stdout
+	if err := runs.Run(ctx, []string{"--config", configPath, "runs", "openclaw/openclaw", "--kind", "embedding", "--limit", "3", "--json"}); err != nil {
+		t.Fatalf("runs: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"kind": "embedding"`) {
+		t.Fatalf("runs output = %q", stdout.String())
+	}
+
+	refresh := New()
+	stdout.Reset()
+	refresh.Stdout = &stdout
+	if err := refresh.Run(ctx, []string{"--config", configPath, "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--threshold", "0.7", "--min-size", "2", "--json"}); err != nil {
+		t.Fatalf("refresh cluster-only: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"cluster":`) {
+		t.Fatalf("refresh output = %q", stdout.String())
+	}
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open final store: %v", err)
+	}
+	defer st.Close()
+	threads, err := st.ThreadsByIDs(ctx, repoID, []int64{firstID, secondID})
+	if err != nil {
+		t.Fatalf("threads by ids: %v", err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("threads by ids = %+v", threads)
+	}
+}
+
+func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch r.URL.Path {
+		case "/repos/openclaw/openclaw":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/openclaw"})
+		case "/repos/openclaw/openclaw/issues/101":
+			_ = json.NewEncoder(w).Encode(githubIssueJSON(101, "issue", "Gateway websocket stalls"))
+		case "/repos/openclaw/openclaw/issues/102":
+			row := githubIssueJSON(102, "pull_request", "Fix Discord typing timeout")
+			row["pull_request"] = map[string]any{"url": "https://api.github.test/pulls/102"}
+			_ = json.NewEncoder(w).Encode(row)
+		case "/repos/openclaw/openclaw/issues/101/comments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(1001, "issue comment")})
+		case "/repos/openclaw/openclaw/issues/102/comments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(1002, "pr issue comment")})
+		case "/repos/openclaw/openclaw/pulls/102/reviews":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(1003, "review body")})
+		case "/repos/openclaw/openclaw/pulls/102/comments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(1004, "review line")})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "sync", "openclaw/openclaw", "--numbers", "101,102", "--include-comments", "--json"}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	var stats struct {
+		ThreadsSynced      int `json:"threads_synced"`
+		PullRequestsSynced int `json:"pull_requests_synced"`
+		CommentsSynced     int `json:"comments_synced"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &stats); err != nil {
+		t.Fatalf("decode sync stats: %v\n%s", err, stdout.String())
+	}
+	if stats.ThreadsSynced != 2 || stats.PullRequestsSynced != 1 || stats.CommentsSynced != 4 {
+		t.Fatalf("sync stats = %+v", stats)
+	}
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.ThreadCount != 2 || status.RepositoryCount != 1 {
+		t.Fatalf("status after sync = %+v", status)
+	}
+}
+
+func TestRefreshRunsSyncEmbedAndClusterWithLocalServers(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	githubServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/openclaw/openclaw":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/openclaw"})
+		case "/repos/openclaw/openclaw/issues":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				githubIssueJSON(201, "issue", "Gateway reconnect loop"),
+				githubIssueJSON(202, "issue", "Gateway reconnect timeout"),
+			})
+		case "/repos/openclaw/openclaw/issues/201/comments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(2001, "same reconnect loop")})
+		case "/repos/openclaw/openclaw/issues/202/comments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(2002, "same reconnect timeout")})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+		}
+	}))
+	defer githubServer.Close()
+
+	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Fatalf("unexpected OpenAI path: %s", r.URL.Path)
+		}
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode embeddings request: %v", err)
+		}
+		data := make([]map[string]any, 0, len(payload.Input))
+		for index := range payload.Input {
+			data = append(data, map[string]any{"index": index, "embedding": []float64{1, 0.01 * float64(index)}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer openAIServer.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", githubServer.URL)
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", openAIServer.URL)
+
+	run := New()
+	var stdout, stderr bytes.Buffer
+	run.Stdout = &stdout
+	run.Stderr = &stderr
+	if err := run.Run(ctx, []string{"--config", configPath, "refresh", "openclaw/openclaw", "--include-comments", "--limit", "2", "--threshold", "0.5", "--min-size", "1", "--json"}); err != nil {
+		t.Fatalf("refresh: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload refreshResult
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode refresh: %v\n%s", err, stdout.String())
+	}
+	if payload.Sync == nil || payload.Sync.ThreadsSynced != 2 || payload.Sync.CommentsSynced != 2 {
+		t.Fatalf("sync payload = %+v", payload.Sync)
+	}
+	if payload.Embed == nil || payload.Embed.Embedded != 2 {
+		t.Fatalf("embed payload = %+v", payload.Embed)
+	}
+	if payload.Cluster == nil || int(payload.Cluster["vector_count"].(float64)) != 2 {
+		t.Fatalf("cluster payload = %+v", payload.Cluster)
+	}
+	for _, want := range []string{"[refresh] sync", "[refresh] embed", "[refresh] cluster"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q: %s", want, stderr.String())
+		}
+	}
+}
+
+func TestEmbedErrorBranchesRecordFailures(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+	t.Setenv("OPENAI_API_KEY", "")
+	if err := New().Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw"}); err == nil {
+		t.Fatal("missing OpenAI key should fail")
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.EmbeddingBasis = "title_summary"
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save title summary config: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	if err := New().Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw"}); err == nil {
+		t.Fatal("title_summary embed should fail")
+	}
+
+	cfg.EmbeddingBasis = "title_original"
+	cfg.OpenAI.BatchSize = 0
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "embed failed", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", server.URL)
+	if err := New().Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw", "--limit", "1"}); err == nil {
+		t.Fatal("OpenAI error should fail")
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	runs, err := st.ListRuns(ctx, repo.ID, "embedding", 1)
+	if err != nil {
+		t.Fatalf("list embedding runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != "error" || runs[0].ErrorText == "" {
+		t.Fatalf("embedding error run = %+v", runs)
+	}
+}
+
+func githubIssueJSON(number int, kind string, title string) map[string]any {
+	return map[string]any{
+		"id":         number + 10000,
+		"number":     number,
+		"state":      "open",
+		"title":      title,
+		"body":       title + " body",
+		"html_url":   fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
+		"labels":     []map[string]any{{"name": "bug"}},
+		"assignees":  []map[string]any{},
+		"user":       map[string]any{"login": kind + "-author", "type": "User"},
+		"created_at": "2026-04-30T01:00:00Z",
+		"updated_at": "2026-04-30T02:00:00Z",
+	}
+}
+
+func githubCommentJSON(id int, body string) map[string]any {
+	return map[string]any{
+		"id":         id,
+		"body":       body,
+		"user":       map[string]any{"login": "commenter", "type": "User"},
+		"created_at": "2026-04-30T03:00:00Z",
+		"updated_at": "2026-04-30T04:00:00Z",
+	}
+}
+
 func TestCloseThreadCommandLocallyClosesThread(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -799,6 +1510,166 @@ func TestCloseThreadCommandLocallyClosesThread(t *testing.T) {
 	if len(rows) != 1 || rows[0].ClosedAtLocal != "" {
 		t.Fatalf("reopened thread should be visible, got %#v", rows)
 	}
+}
+
+func TestClusterLocalOverrideCommands(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	repoID, firstID, secondID := seedCommandFlowStore(t, dbPath)
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.SaveDurableClusters(ctx, repoID, []store.DurableClusterInput{{
+		StableKey:              "cli-cluster",
+		StableSlug:             "cli-cluster",
+		RepresentativeThreadID: firstID,
+		Title:                  "CLI cluster",
+		Members: []store.DurableClusterMemberInput{
+			{ThreadID: firstID, Role: "canonical"},
+			{ThreadID: secondID, Role: "member"},
+		},
+	}}); err != nil {
+		t.Fatalf("save cluster: %v", err)
+	}
+	clusterIDValue, err := st.ClusterIDForThreadNumber(ctx, repoID, 101, false)
+	if err != nil {
+		t.Fatalf("cluster id: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	run := func(args ...string) string {
+		t.Helper()
+		stdout.Reset()
+		cmd := New()
+		cmd.Stdout = &stdout
+		if err := cmd.Run(ctx, append([]string{"--config", configPath}, args...)); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return stdout.String()
+	}
+	clusterID := strconv.FormatInt(clusterIDValue, 10)
+	if out := run("exclude-cluster-member", "openclaw/openclaw", "--id", clusterID, "--number", "102", "--reason", "duplicate", "--json"); !strings.Contains(out, `"action": "exclude"`) {
+		t.Fatalf("exclude output = %q", out)
+	}
+	if out := run("include-cluster-member", "openclaw/openclaw", "--id", clusterID, "--number", "102", "--reason", "needed", "--json"); !strings.Contains(out, `"action": "include"`) {
+		t.Fatalf("include output = %q", out)
+	}
+	if out := run("set-cluster-canonical", "openclaw/openclaw", "--id", clusterID, "--number", "102", "--reason", "better", "--json"); !strings.Contains(out, `"action": "canonical"`) {
+		t.Fatalf("canonical output = %q", out)
+	}
+	if out := run("close-cluster", "openclaw/openclaw", "--id", clusterID, "--reason", "resolved", "--json"); !strings.Contains(out, `"closed": true`) {
+		t.Fatalf("close cluster output = %q", out)
+	}
+	if out := run("reopen-cluster", "openclaw/openclaw", "--id", clusterID, "--json"); !strings.Contains(out, `"reopened": true`) {
+		t.Fatalf("reopen cluster output = %q", out)
+	}
+}
+
+func seedCommandFlowStore(t *testing.T, dbPath string) (int64, int64, int64) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:        "openclaw",
+		Name:         "openclaw",
+		FullName:     "openclaw/openclaw",
+		GitHubRepoID: "12345",
+		RawJSON:      `{"full_name":"openclaw/openclaw"}`,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	threads := []store.Thread{
+		{
+			RepoID:          repoID,
+			GitHubID:        "101",
+			Number:          101,
+			Kind:            "issue",
+			State:           "open",
+			Title:           "Gateway websocket stalls",
+			Body:            "Gateway websocket stalls when messages arrive.",
+			AuthorLogin:     "alice",
+			AuthorType:      "User",
+			HTMLURL:         "https://github.com/openclaw/openclaw/issues/101",
+			LabelsJSON:      `[{"name":"bug"}]`,
+			AssigneesJSON:   "[]",
+			RawJSON:         "{}",
+			ContentHash:     "thread-101",
+			UpdatedAtGitHub: "2026-04-30T01:00:00Z",
+			UpdatedAt:       now,
+		},
+		{
+			RepoID:          repoID,
+			GitHubID:        "102",
+			Number:          102,
+			Kind:            "issue",
+			State:           "open",
+			Title:           "Discord typing timeout",
+			Body:            "typing TTL stops while gateway websocket is slow.",
+			AuthorLogin:     "bob",
+			AuthorType:      "User",
+			HTMLURL:         "https://github.com/openclaw/openclaw/issues/102",
+			LabelsJSON:      `[]`,
+			AssigneesJSON:   "[]",
+			RawJSON:         "{}",
+			ContentHash:     "thread-102",
+			UpdatedAtGitHub: "2026-04-30T02:00:00Z",
+			UpdatedAt:       now,
+		},
+		{
+			RepoID:          repoID,
+			GitHubID:        "103",
+			Number:          103,
+			Kind:            "pull_request",
+			State:           "open",
+			Title:           "Refactor portable cache",
+			Body:            "Portable cache maintenance update.",
+			AuthorLogin:     "carol",
+			AuthorType:      "User",
+			HTMLURL:         "https://github.com/openclaw/openclaw/pull/103",
+			LabelsJSON:      `[]`,
+			AssigneesJSON:   "[]",
+			RawJSON:         "{}",
+			ContentHash:     "thread-103",
+			IsDraft:         true,
+			UpdatedAtGitHub: "2026-04-30T03:00:00Z",
+			UpdatedAt:       now,
+		},
+	}
+	ids := make([]int64, 0, len(threads))
+	for _, thread := range threads {
+		id, err := st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("seed thread %d: %v", thread.Number, err)
+		}
+		ids = append(ids, id)
+		if _, err := st.UpsertDocument(ctx, store.Document{
+			ThreadID:   id,
+			Title:      thread.Title,
+			RawText:    thread.Title + "\n\n" + thread.Body,
+			DedupeText: strings.ToLower(thread.Title + " " + thread.Body),
+			UpdatedAt:  now,
+		}); err != nil {
+			t.Fatalf("seed document %d: %v", thread.Number, err)
+		}
+	}
+	return repoID, ids[0], ids[1]
 }
 
 func TestCloseClusterCommandLocallyClosesCluster(t *testing.T) {
