@@ -30,7 +30,10 @@ type EmbeddingTaskOptions struct {
 	IncludeClosed bool
 }
 
-const MaxEmbeddingTextRunes = 24_000
+const (
+	MaxEmbeddingTextRunes       = 6_000
+	embeddingContentHashVersion = "embedding:v2:max_runes=24000"
+)
 
 func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOptions) ([]EmbeddingTask, error) {
 	basis := strings.TrimSpace(options.Basis)
@@ -154,6 +157,6 @@ func capEmbeddingText(text string) (string, embeddingTextMeta) {
 }
 
 func embeddingContentHash(basis, model, text string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("embedding:v2:max_runes=%d:%s:%s\n%s", MaxEmbeddingTextRunes, basis, model, text)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s\n%s", embeddingContentHashVersion, basis, model, text)))
 	return hex.EncodeToString(sum[:])
 }

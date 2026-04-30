@@ -316,7 +316,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	}
 	if !*noEmbed {
 		fmt.Fprintln(a.Stderr, "[refresh] embed")
-		embed, err := a.embedRepository(ctx, owner, repoName, embedOptions{Limit: limit})
+		embed, err := a.embedRepository(ctx, owner, repoName, embedOptions{Limit: limit, IncludeClosed: stateIncludesClosed(*state)})
 		if err != nil {
 			return err
 		}
@@ -335,6 +335,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			return err
 		}
 		query := store.ThreadVectorQuery{RepoID: repo.ID, Model: rt.Config.OpenAI.EmbedModel, Basis: rt.Config.EmbeddingBasis}
+		query.IncludeClosed = stateIncludesClosed(*state)
 		vectors, err := rt.Store.ListThreadVectorsFiltered(ctx, query)
 		if err != nil {
 			_ = rt.Store.Close()
@@ -556,6 +557,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum vector rows to cluster")
 	model := fs.String("model", "", "embedding model")
 	basis := fs.String("basis", "", "embedding basis")
+	includeClosed := fs.Bool("include-closed", false, "include closed issue and pull request vectors")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true, "limit": true, "model": true, "basis": true})); err != nil {
 		return usageErr(err)
@@ -600,16 +602,17 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		return err
 	}
 	query := store.ThreadVectorQuery{
-		RepoID: repo.ID,
-		Model:  firstNonEmpty(strings.TrimSpace(*model), rt.Config.OpenAI.EmbedModel),
-		Basis:  firstNonEmpty(strings.TrimSpace(*basis), rt.Config.EmbeddingBasis),
+		RepoID:        repo.ID,
+		Model:         firstNonEmpty(strings.TrimSpace(*model), rt.Config.OpenAI.EmbedModel),
+		Basis:         firstNonEmpty(strings.TrimSpace(*basis), rt.Config.EmbeddingBasis),
+		IncludeClosed: *includeClosed,
 	}
 	vectors, err := rt.Store.ListThreadVectorsFiltered(ctx, query)
 	if err != nil {
 		return err
 	}
 	if len(vectors) == 0 && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" {
-		vectors, err = rt.Store.ListThreadVectorsFiltered(ctx, store.ThreadVectorQuery{RepoID: repo.ID})
+		vectors, err = rt.Store.ListThreadVectorsFiltered(ctx, store.ThreadVectorQuery{RepoID: repo.ID, IncludeClosed: *includeClosed})
 		if err != nil {
 			return err
 		}
@@ -658,6 +661,7 @@ func (a *App) runEmbed(ctx context.Context, args []string) error {
 	numberRaw := fs.String("number", "", "embed one issue or pull request number")
 	limitRaw := fs.String("limit", "", "maximum rows to embed")
 	force := fs.Bool("force", false, "re-embed even when content hash is unchanged")
+	includeClosed := fs.Bool("include-closed", false, "include closed issue and pull request rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"number": true, "limit": true})); err != nil {
 		return usageErr(err)
@@ -679,9 +683,10 @@ func (a *App) runEmbed(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 	result, err := a.embedRepository(ctx, owner, repoName, embedOptions{
-		Number: number,
-		Limit:  limit,
-		Force:  *force,
+		Number:        number,
+		Limit:         limit,
+		Force:         *force,
+		IncludeClosed: *includeClosed,
 	})
 	if err != nil {
 		return err
@@ -690,9 +695,10 @@ func (a *App) runEmbed(ctx context.Context, args []string) error {
 }
 
 type embedOptions struct {
-	Number int
-	Limit  int
-	Force  bool
+	Number        int
+	Limit         int
+	Force         bool
+	IncludeClosed bool
 }
 
 func (a *App) embedRepository(ctx context.Context, owner, repoName string, options embedOptions) (embedResult, error) {
@@ -713,12 +719,13 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 		return embedResult{}, fmt.Errorf("missing OpenAI API key: set %s", rt.Config.OpenAI.APIKeyEnv)
 	}
 	tasks, err := rt.Store.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
-		RepoID: repo.ID,
-		Basis:  rt.Config.EmbeddingBasis,
-		Model:  rt.Config.OpenAI.EmbedModel,
-		Number: options.Number,
-		Limit:  options.Limit,
-		Force:  options.Force,
+		RepoID:        repo.ID,
+		Basis:         rt.Config.EmbeddingBasis,
+		Model:         rt.Config.OpenAI.EmbedModel,
+		Number:        options.Number,
+		Limit:         options.Limit,
+		Force:         options.Force,
+		IncludeClosed: options.IncludeClosed,
 	})
 	if err != nil {
 		return embedResult{}, err
@@ -2436,6 +2443,15 @@ func parseOptionalFloat(value string) (float64, error) {
 		return 0, fmt.Errorf("expected number, got %q", value)
 	}
 	return parsed, nil
+}
+
+func stateIncludesClosed(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "all", "closed":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseOptionalPositiveIntList(value string) ([]int, error) {

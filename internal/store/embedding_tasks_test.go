@@ -87,3 +87,46 @@ func TestEmbeddingTextForBasisCapsLongInputs(t *testing.T) {
 		t.Fatalf("truncated text lost title prefix: %q", text[:40])
 	}
 }
+
+func TestListEmbeddingTasksIncludeClosed(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "clawhub",
+		FullName:  "openclaw/clawhub",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-04-30T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	for _, thread := range []Thread{
+		{RepoID: repoID, GitHubID: "11", Number: 11, Kind: "issue", State: "open", Title: "Open skill bug", Body: "still broken", HTMLURL: "https://github.com/openclaw/clawhub/issues/11", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h11", UpdatedAt: "2026-04-30T00:00:00Z"},
+		{RepoID: repoID, GitHubID: "12", Number: 12, Kind: "issue", State: "closed", Title: "Closed skill bug", Body: "fixed already", HTMLURL: "https://github.com/openclaw/clawhub/issues/12", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h12", UpdatedAt: "2026-04-30T00:00:00Z"},
+	} {
+		if _, err := st.UpsertThread(ctx, thread); err != nil {
+			t.Fatalf("thread %d: %v", thread.Number, err)
+		}
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{RepoID: repoID, Basis: "title_original", Model: "test"})
+	if err != nil {
+		t.Fatalf("open tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Number != 11 {
+		t.Fatalf("open tasks = %+v, want only #11", tasks)
+	}
+	tasks, err = st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{RepoID: repoID, Basis: "title_original", Model: "test", IncludeClosed: true})
+	if err != nil {
+		t.Fatalf("all tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("include-closed tasks = %+v, want 2", tasks)
+	}
+}

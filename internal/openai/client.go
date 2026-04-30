@@ -14,7 +14,7 @@ import (
 const (
 	defaultBaseURL            = "https://api.openai.com/v1"
 	maxEmbeddingResponseBytes = 64 << 20
-	maxEmbeddingInputRunes    = 24_000
+	maxEmbeddingInputRunes    = 6_000
 )
 
 type Client struct {
