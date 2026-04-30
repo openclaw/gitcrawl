@@ -185,7 +185,7 @@ func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int
 		return a.writeOutput("tui", payload, true)
 	}
 	model := newClusterBrowserModel(ctx, st, repoID, payload)
-	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	finalModel, err := program.Run()
 	if final, ok := finalModel.(clusterBrowserModel); ok && final.store != nil && final.store != st {
 		_ = final.store.Close()
@@ -1088,21 +1088,6 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) {
 }
 
 func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg) {
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		m.menuIndex = m.nextSelectableMenuIndex(-1)
-		m.keepMenuVisible()
-		return
-	case tea.MouseButtonWheelDown:
-		m.menuIndex = m.nextSelectableMenuIndex(1)
-		m.keepMenuVisible()
-		return
-	case tea.MouseButtonRight:
-		if msg.Action == tea.MouseActionPress {
-			m.closeMenu("Menu closed")
-		}
-		return
-	}
 	if msg.Action == tea.MouseActionMotion {
 		index, ok := m.menuIndexAtMouse(layout, msg.X, msg.Y)
 		if !ok {
@@ -1117,6 +1102,21 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 		if index >= 0 && index < len(m.menuItems) && m.menuItems[index].selectable() {
 			m.menuIndex = index
 			m.keepMenuVisible()
+		}
+		return
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.menuIndex = m.nextSelectableMenuIndex(-1)
+		m.keepMenuVisible()
+		return
+	case tea.MouseButtonWheelDown:
+		m.menuIndex = m.nextSelectableMenuIndex(1)
+		m.keepMenuVisible()
+		return
+	case tea.MouseButtonRight:
+		if msg.Action == tea.MouseActionPress {
+			m.closeMenu("Menu closed")
 		}
 		return
 	}

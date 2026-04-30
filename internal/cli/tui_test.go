@@ -1275,7 +1275,7 @@ func TestTUIMouseMotionHoversFloatingMenuItems(t *testing.T) {
 	model.menuOpen = true
 	model.menuFloating = true
 	model.menuRect = tuiRect{x: 5, y: 3, w: 40, h: 12}
-	model.menuOff = 2
+	model.menuOff = 1
 	model.menuItems = make([]tuiMenuItem, 6)
 	for index := range model.menuItems {
 		model.menuItems[index] = tuiMenuItem{label: fmt.Sprintf("Item %d", index), action: "close-menu"}
@@ -1283,13 +1283,27 @@ func TestTUIMouseMotionHoversFloatingMenuItems(t *testing.T) {
 
 	model.handleMouse(tea.MouseMsg{
 		X:      model.menuRect.x + 2,
-		Y:      model.menuRect.y + 4,
+		Y:      model.menuRect.y + 5,
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonNone,
 	})
 
 	if model.menuIndex != 3 {
 		t.Fatalf("hover selected %d, want item 3", model.menuIndex)
+	}
+
+	model.handleMouse(tea.MouseMsg{
+		X:      model.menuRect.x + 2,
+		Y:      model.menuRect.y + 6,
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonRight,
+	})
+
+	if model.menuIndex != 4 {
+		t.Fatalf("right-button hover selected %d, want item 4", model.menuIndex)
+	}
+	if !model.menuOpen {
+		t.Fatal("right-button motion should not close the menu")
 	}
 }
 
