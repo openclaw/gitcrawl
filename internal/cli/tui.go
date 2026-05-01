@@ -164,10 +164,10 @@ const tuiDoubleClickWindow = 450 * time.Millisecond
 const (
 	tuiOpenRowFG            = "#f2c94c"
 	tuiOpenRowBG            = "#14130f"
-	tuiOpenSelectedFG       = "#f5d76e"
-	tuiOpenSelectedBG       = "#262314"
-	tuiOpenSelectedBlurFG   = "#c8b969"
-	tuiOpenSelectedBlurBG   = "#1b1a12"
+	tuiOpenSelectedFG       = "#f2c94c"
+	tuiOpenSelectedBG       = "#1d1e18"
+	tuiOpenSelectedBlurFG   = "#c3b66f"
+	tuiOpenSelectedBlurBG   = "#171711"
 	tuiClosedRowFG          = "#8793a3"
 	tuiClosedRowBG          = "#0f141b"
 	tuiClosedSelectedFG     = "#d6dde8"
@@ -4001,7 +4001,7 @@ func memberRowStyle(row memberRow, selected bool, focused bool) lipgloss.Style {
 }
 
 func selectedRowStyle(focused bool, focusedBG, focusedFG, blurredBG, blurredFG string) lipgloss.Style {
-	style := lipgloss.NewStyle().Bold(true)
+	style := lipgloss.NewStyle()
 	if focused {
 		return style.Foreground(lipgloss.Color(focusedFG)).Background(lipgloss.Color(focusedBG))
 	}
