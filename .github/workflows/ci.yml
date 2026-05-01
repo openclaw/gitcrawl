@@ -63,6 +63,9 @@ jobs:
       - name: Smoke test TUI help
         run: |
           set -euo pipefail
+          test -n "$(./bin/gitcrawl --version)"
+          ./bin/gitcrawl metadata --json | grep -q '"schema_version"'
+          ./bin/gitcrawl status --json | grep -q '"databases"'
           output="$(./bin/gitcrawl help tui)"
           printf '%s\n' "$output"
           printf '%s' "$output" | grep -q "gitcrawl tui"
