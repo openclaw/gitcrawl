@@ -1438,6 +1438,7 @@ func TestEmbedErrorBranchesRecordFailures(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("GITCRAWL_OPENAI_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_OPENAI_RETRY_DISABLED", "1")
 	if err := New().Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw", "--limit", "1"}); err == nil {
 		t.Fatal("OpenAI error should fail")
 	}
@@ -1456,6 +1457,142 @@ func TestEmbedErrorBranchesRecordFailures(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].Status != "error" || runs[0].ErrorText == "" {
 		t.Fatalf("embedding error run = %+v", runs)
+	}
+}
+
+func TestEmbedRunPartialOnSomeFailedBatches(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.OpenAI.BatchSize = 1
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// First input is permanently bad — return non-retryable 400.
+		if len(payload.Input) == 1 && strings.Contains(payload.Input[0], "Gateway websocket stalls") {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"message": "bad input", "type": "invalid_request_error"},
+			})
+			return
+		}
+		data := make([]map[string]any, 0, len(payload.Input))
+		for index := range payload.Input {
+			data = append(data, map[string]any{"index": index, "embedding": []float64{1, 0.5 * float64(index)}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_OPENAI_RETRY_DISABLED", "1")
+
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+	if err := app.Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw", "--json"}); err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+
+	var result embedResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode embed result: %v\n%s", err, stdout.String())
+	}
+	if result.Status != "partial" {
+		t.Fatalf("status = %q, want partial", result.Status)
+	}
+	if result.Embedded != 2 {
+		t.Fatalf("embedded = %d, want 2", result.Embedded)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", result.Failed)
+	}
+	if len(result.Failures) != 1 {
+		t.Fatalf("failures = %+v", result.Failures)
+	}
+	if result.Failures[0].Status != http.StatusBadRequest {
+		t.Fatalf("failure status = %d", result.Failures[0].Status)
+	}
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	runs, err := st.ListRuns(ctx, repo.ID, "embedding", 1)
+	if err != nil {
+		t.Fatalf("runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != "partial" {
+		t.Fatalf("run = %+v", runs)
+	}
+}
+
+func TestEmbedRunCancelledRecordsCancelledStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_OPENAI_RETRY_DISABLED", "1")
+
+	if err := New().Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw"}); err == nil {
+		t.Fatal("expected cancellation error")
+	}
+
+	st, err := store.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repo, err := st.RepositoryByFullName(context.Background(), "openclaw/openclaw")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	runs, err := st.ListRuns(context.Background(), repo.ID, "embedding", 1)
+	if err != nil {
+		t.Fatalf("runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != "cancelled" {
+		t.Fatalf("expected cancelled run, got %+v", runs)
 	}
 }
 
