@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
+	"github.com/vincentkoc/crawlkit/configkit"
 )
 
 const (
@@ -49,15 +49,24 @@ type TokenResolution struct {
 	Source string
 }
 
+var appConfig = configkit.App{Name: "gitcrawl", ConfigEnv: DefaultConfigEnv}
+
 func Default() Config {
-	home := homeDir()
-	base := filepath.Join(home, ".config", "gitcrawl")
+	paths, err := appConfig.DefaultPaths()
+	if err != nil {
+		paths = configkit.Paths{
+			DBPath:   filepath.Join(homeDir(), ".config", "gitcrawl", "gitcrawl.db"),
+			CacheDir: filepath.Join(homeDir(), ".config", "gitcrawl", "cache"),
+			LogDir:   filepath.Join(homeDir(), ".config", "gitcrawl", "logs"),
+		}
+	}
+	base := filepath.Dir(paths.DBPath)
 	return Config{
 		Version:        1,
-		DBPath:         filepath.Join(base, "gitcrawl.db"),
-		CacheDir:       filepath.Join(base, "cache"),
+		DBPath:         paths.DBPath,
+		CacheDir:       paths.CacheDir,
 		VectorDir:      filepath.Join(base, "vectors"),
-		LogDir:         filepath.Join(base, "logs"),
+		LogDir:         paths.LogDir,
 		EmbeddingBasis: "title_original",
 		GitHub: GitHubConfig{
 			TokenEnv: DefaultTokenEnv,
@@ -77,25 +86,18 @@ func Default() Config {
 }
 
 func ResolvePath(flagPath string) string {
-	if strings.TrimSpace(flagPath) != "" {
-		return expandHome(flagPath)
+	path, err := appConfig.ResolveConfigPath(flagPath)
+	if err != nil {
+		return filepath.Join(homeDir(), ".config", "gitcrawl", "config.toml")
 	}
-	if envPath := strings.TrimSpace(os.Getenv(DefaultConfigEnv)); envPath != "" {
-		return expandHome(envPath)
-	}
-	home := homeDir()
-	return filepath.Join(home, ".config", "gitcrawl", "config.toml")
+	return path
 }
 
 func Load(path string) (Config, error) {
 	cfg := Default()
 	resolved := ResolvePath(path)
-	data, err := os.ReadFile(resolved)
-	if err != nil {
+	if err := configkit.LoadTOML(resolved, &cfg); err != nil {
 		return Config{}, err
-	}
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	if err := cfg.Normalize(); err != nil {
 		return Config{}, err
@@ -108,21 +110,19 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 	resolved := ResolvePath(path)
-	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	data, err := toml.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	return os.WriteFile(resolved, data, 0o600)
+	return configkit.WriteTOML(resolved, cfg, 0o600)
 }
 
 func EnsureRuntimeDirs(cfg Config) error {
-	for _, path := range []string{cfg.CacheDir, cfg.VectorDir, cfg.LogDir, filepath.Dir(cfg.DBPath)} {
-		if err := os.MkdirAll(expandHome(path), 0o755); err != nil {
-			return fmt.Errorf("create runtime dir %s: %w", path, err)
-		}
+	if err := configkit.EnsureRuntimeDirs(configkit.RuntimeConfig{
+		DBPath:   cfg.DBPath,
+		CacheDir: cfg.CacheDir,
+		LogDir:   cfg.LogDir,
+	}); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(configkit.ExpandHome(cfg.VectorDir), 0o755); err != nil {
+		return fmt.Errorf("create runtime dir %s: %w", cfg.VectorDir, err)
 	}
 	return nil
 }
@@ -200,13 +200,7 @@ func envOrDefault(primary, fallback string) string {
 }
 
 func expandHome(path string) string {
-	if path == "~" {
-		return homeDir()
-	}
-	if strings.HasPrefix(path, "~/") {
-		return filepath.Join(homeDir(), strings.TrimPrefix(path, "~/"))
-	}
-	return path
+	return configkit.ExpandHome(path)
 }
 
 func homeDir() string {
