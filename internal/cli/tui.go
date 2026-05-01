@@ -113,6 +113,7 @@ type clusterBrowserModel struct {
 	showHelp         bool
 	menuOpen         bool
 	menuTitle        string
+	menuContext      tuiFocus
 	menuIndex        int
 	menuOff          int
 	menuItems        []tuiMenuItem
@@ -160,6 +161,22 @@ type tuiMenuItem struct {
 const tuiMenuSeparatorAction = "separator"
 const tuiDoubleClickWindow = 450 * time.Millisecond
 
+const (
+	tuiOpenRowFG            = "#d7dee8"
+	tuiOpenRowBG            = "#101820"
+	tuiOpenSelectedFG       = "#f8fafc"
+	tuiOpenSelectedBG       = "#2f3f56"
+	tuiOpenSelectedBlurFG   = "#cbd5e1"
+	tuiOpenSelectedBlurBG   = "#1f2937"
+	tuiClosedRowFG          = "#8793a3"
+	tuiClosedRowBG          = "#0f141b"
+	tuiClosedSelectedFG     = "#d6dde8"
+	tuiClosedSelectedBG     = "#303744"
+	tuiClosedSelectedBlurFG = "#aab2bf"
+	tuiClosedSelectedBlurBG = "#242936"
+	tuiMutedAccent          = "#8fb8d8"
+)
+
 func (item tuiMenuItem) selectable() bool {
 	return item.action != "" && item.action != tuiMenuSeparatorAction
 }
@@ -175,6 +192,69 @@ func menuHasSection(items []tuiMenuItem, label string) bool {
 		}
 	}
 	return false
+}
+
+func actionMenuTitle(context tuiFocus) string {
+	switch context {
+	case focusClusters:
+		return "Cluster Actions"
+	case focusMembers:
+		return "Member Actions"
+	case focusDetail:
+		return "Detail Actions"
+	default:
+		return "Actions"
+	}
+}
+
+func actionMenuSubtitle(context tuiFocus) string {
+	switch context {
+	case focusClusters:
+		return "cluster scope"
+	case focusMembers:
+		return "selected member scope"
+	case focusDetail:
+		return "detail scope"
+	default:
+		return "current selection"
+	}
+}
+
+type actionMenuPalette struct {
+	accent     string
+	background string
+	foreground string
+	selectedBG string
+	selectedFG string
+}
+
+func actionMenuColors(context tuiFocus) actionMenuPalette {
+	switch context {
+	case focusClusters:
+		return actionMenuPalette{
+			accent:     "#8fb8d8",
+			background: "#111827",
+			foreground: "#d7dee8",
+			selectedBG: "#2f3f56",
+			selectedFG: "#f8fafc",
+		}
+	case focusMembers:
+		return actionMenuPalette{
+			accent:     "#a8b8a0",
+			background: "#111a16",
+			foreground: "#d7dee8",
+			selectedBG: "#344337",
+			selectedFG: "#f8fafc",
+		}
+	default:
+		return actionMenuPalette{
+			accent:     "#b8aa8f",
+			background: "#151922",
+			foreground: "#d7dee8",
+			selectedBG: "#3f3a31",
+			selectedFG: "#f8fafc",
+		}
+	}
 }
 
 type tuiNeighbor struct {
@@ -784,7 +864,12 @@ func (m clusterBrowserModel) helpLines(width int) []string {
 }
 
 func (m clusterBrowserModel) menuLines(width int) []string {
-	lines := []string{bold(firstNonEmpty(m.menuTitle, "Actions")), ""}
+	palette := actionMenuColors(m.menuContext)
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color(palette.accent)).
+		Render(firstNonEmpty(m.menuTitle, "Actions"))
+	lines := []string{title, dim(actionMenuSubtitle(m.menuContext)), ""}
 	visible := m.menuVisibleCount()
 	start := clampInt(m.menuOff, 0, maxInt(0, len(m.menuItems)-visible))
 	end := minInt(len(m.menuItems), start+visible)
@@ -806,7 +891,7 @@ func (m clusterBrowserModel) menuLines(width int) []string {
 		}
 		line := truncateCells(prefix+key+item.label, width)
 		if index == m.menuIndex {
-			line = selectedMenuLineStyle(width).Render(padCells(line, width))
+			line = selectedMenuLineStyle(width, palette).Render(padCells(line, width))
 		}
 		lines = append(lines, line)
 	}
@@ -834,7 +919,7 @@ func (m clusterBrowserModel) renderFloatingMenu(view string) string {
 	if len(lines) > maxInt(0, rect.h-2) {
 		lines = lines[:maxInt(0, rect.h-2)]
 	}
-	box := floatingMenuStyle(rect.w, rect.h).Render(strings.Join(lines, "\n"))
+	box := floatingMenuStyle(rect.w, rect.h, actionMenuColors(m.menuContext)).Render(strings.Join(lines, "\n"))
 	return overlayBlock(view, box, rect.x, rect.y, m.width)
 }
 
@@ -859,11 +944,11 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "Help"
 	case "b", "left", "backspace":
 		if m.inMenuSubmenu() {
-			m.openActionMenu()
+			m.openActionMenuFor(m.menuContext)
 		}
 	case "a":
 		if m.inMenuSubmenu() {
-			m.openActionMenu()
+			m.openActionMenuFor(m.menuContext)
 		}
 	case "/":
 		cmd := m.startFilterInput()
@@ -1115,8 +1200,14 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if msg.Action != tea.MouseActionPress {
 			return nil
 		}
+		context := m.actionMenuContextAt(layout, msg.X, msg.Y)
 		m.selectByMousePosition(layout, msg.X, msg.Y)
-		m.openActionMenu()
+		if context == focusMembers {
+			if _, ok := m.selectedMember(); !ok {
+				context = focusClusters
+			}
+		}
+		m.openActionMenuFor(context)
 		m.placeFloatingMenu(layout, msg.X, msg.Y)
 	}
 	return nil
@@ -1251,10 +1342,70 @@ func (m *clusterBrowserModel) selectByMousePosition(layout tuiLayout, x, y int) 
 	}
 }
 
+func (m clusterBrowserModel) actionMenuContextAt(layout tuiLayout, x, y int) tuiFocus {
+	switch {
+	case layout.clusters.contains(x, y):
+		return focusClusters
+	case layout.members.contains(x, y):
+		return focusMembers
+	case layout.detail.contains(x, y):
+		return focusDetail
+	default:
+		return ""
+	}
+}
+
 func (m *clusterBrowserModel) openActionMenu() {
-	m.menuItems = nil
+	m.openActionMenuFor("")
+}
+
+func (m *clusterBrowserModel) openActionMenuFor(context tuiFocus) {
+	if context == focusMembers {
+		if _, ok := m.selectedMember(); !ok {
+			context = focusClusters
+		}
+	}
+	if context == focusDetail {
+		if _, ok := m.selectedThread(); !ok {
+			context = focusClusters
+		}
+	}
+
+	items := make([]tuiMenuItem, 0, 32)
+	if context == "" {
+		m.appendThreadMenuItems(&items)
+		m.appendMemberClusterMenuItems(&items)
+		m.appendClusterMenuItems(&items, true)
+		m.appendReferenceLinkMenuItems(&items)
+		m.appendViewMenuItems(&items)
+	} else if context == focusMembers || context == focusDetail {
+		m.appendThreadMenuItems(&items)
+		m.appendMemberClusterMenuItems(&items)
+		m.appendReferenceLinkMenuItems(&items)
+		m.appendClusterContextMenuItems(&items)
+		m.appendViewMenuItems(&items)
+	} else if context == focusClusters {
+		m.appendClusterMenuItems(&items, true)
+		m.appendViewMenuItems(&items)
+	}
+	if len(items) == 0 {
+		items = append(items, tuiMenuItem{label: "No actions available", action: "close-menu"})
+	}
+	items = append(items, tuiMenuItem{label: "Close menu", action: "close-menu"})
+
+	m.menuItems = items
+	m.menuContext = context
+	m.menuTitle = actionMenuTitle(context)
+	m.menuIndex = m.firstSelectableMenuIndex()
+	m.menuOff = 0
+	m.menuOpen = true
+	m.showHelp = false
+	m.status = m.menuTitle
+}
+
+func (m clusterBrowserModel) appendThreadMenuItems(items *[]tuiMenuItem) {
 	if thread, ok := m.selectedThread(); ok {
-		m.menuItems = append(m.menuItems,
+		*items = append(*items,
 			tuiMenuSection("Thread"),
 			tuiMenuItem{label: fmt.Sprintf("Open #%d in browser", thread.Number), action: "open"},
 			tuiMenuItem{label: "Copy selected URL", action: "copy-url"},
@@ -1264,54 +1415,68 @@ func (m *clusterBrowserModel) openActionMenu() {
 			tuiMenuItem{label: "Load neighbors", action: "load-neighbors"},
 		)
 		if thread.ClosedAtLocal != "" {
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Reopen locally...", action: "reopen-thread-confirm"})
+			*items = append(*items, tuiMenuItem{label: "Reopen locally...", action: "reopen-thread-confirm"})
 		} else {
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close locally...", action: "close-thread-confirm"})
+			*items = append(*items, tuiMenuItem{label: "Close locally...", action: "close-thread-confirm"})
 		}
 	}
+}
+
+func (m clusterBrowserModel) appendMemberClusterMenuItems(items *[]tuiMenuItem) {
 	if member, ok := m.selectedMember(); ok {
 		sectionAdded := false
 		if cluster, clusterOK := m.selectedCluster(); clusterOK {
 			if clusterSupportsDurableLocalActions(cluster) && member.State == "excluded" {
-				m.menuItems = append(m.menuItems, tuiMenuItem{label: fmt.Sprintf("Include #%d in C%d...", member.Thread.Number, cluster.ID), action: "include-member-confirm"})
+				if !sectionAdded {
+					*items = append(*items, tuiMenuSection("Member in cluster"))
+					sectionAdded = true
+				}
+				*items = append(*items, tuiMenuItem{label: fmt.Sprintf("Include #%d in C%d...", member.Thread.Number, cluster.ID), action: "include-member-confirm"})
 			} else if clusterSupportsDurableLocalActions(cluster) {
-				m.menuItems = append(m.menuItems,
+				if !sectionAdded {
+					*items = append(*items, tuiMenuSection("Member in cluster"))
+					sectionAdded = true
+				}
+				*items = append(*items,
 					tuiMenuItem{label: fmt.Sprintf("Exclude #%d from C%d...", member.Thread.Number, cluster.ID), action: "exclude-member-confirm"},
 					tuiMenuItem{label: fmt.Sprintf("Set #%d as canonical...", member.Thread.Number), action: "canonical-member-confirm"},
 				)
 			}
 		}
 		if strings.TrimSpace(member.BodySnippet) != "" {
-			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
-				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
+			if !menuHasSection(*items, "Thread") {
+				*items = append(*items, tuiMenuSection("Thread"))
 				sectionAdded = true
 			}
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy body preview", action: "copy-body-preview"})
+			*items = append(*items, tuiMenuItem{label: "Copy body preview", action: "copy-body-preview"})
 		}
 		if len(member.Summaries) > 0 {
-			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
-				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
+			if !sectionAdded && !menuHasSection(*items, "Thread") {
+				*items = append(*items, tuiMenuSection("Thread"))
 				sectionAdded = true
 			}
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy summaries", action: "copy-summaries"})
+			*items = append(*items, tuiMenuItem{label: "Copy summaries", action: "copy-summaries"})
 		}
 		if _, ok := m.neighborCache[member.Thread.ID]; ok {
-			if !sectionAdded && !menuHasSection(m.menuItems, "Thread") {
-				m.menuItems = append(m.menuItems, tuiMenuSection("Thread"))
+			if !sectionAdded && !menuHasSection(*items, "Thread") {
+				*items = append(*items, tuiMenuSection("Thread"))
 			}
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy neighbors", action: "copy-neighbors"})
+			*items = append(*items, tuiMenuItem{label: "Copy neighbors", action: "copy-neighbors"})
 		}
 	}
+}
+
+func (m clusterBrowserModel) appendClusterMenuItems(items *[]tuiMenuItem, includeVisible bool) {
 	if m.hasSelectedCluster() {
-		m.menuItems = append(m.menuItems, tuiMenuSection("Cluster"))
+		*items = append(*items, tuiMenuSection("Cluster"))
 		if url, ok := m.selectedClusterURL(); ok {
 			cluster, _ := m.selectedCluster()
-			m.menuItems = append(m.menuItems,
+			*items = append(*items,
 				tuiMenuItem{label: fmt.Sprintf("Open representative #%d", cluster.RepresentativeNumber), action: "open-cluster-representative", value: url},
 				tuiMenuItem{label: "Copy representative URL", action: "copy-cluster-url", value: url},
 			)
 		}
-		m.menuItems = append(m.menuItems,
+		*items = append(*items,
 			tuiMenuItem{label: "Copy cluster ID", action: "copy-cluster-id"},
 			tuiMenuItem{label: "Copy cluster name", action: "copy-cluster-name"},
 			tuiMenuItem{label: "Copy cluster title", action: "copy-cluster-title"},
@@ -1320,36 +1485,55 @@ func (m *clusterBrowserModel) openActionMenu() {
 		cluster, _ := m.selectedCluster()
 		if clusterSupportsDurableLocalActions(cluster) {
 			if cluster.Status == "closed" || cluster.ClosedAt != "" {
-				m.menuItems = append(m.menuItems, tuiMenuItem{label: "Reopen cluster locally...", action: "reopen-cluster-confirm"})
+				*items = append(*items, tuiMenuItem{label: "Reopen cluster locally...", action: "reopen-cluster-confirm"})
 			} else {
-				m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close cluster locally...", action: "close-cluster-confirm"})
+				*items = append(*items, tuiMenuItem{label: "Close cluster locally...", action: "close-cluster-confirm"})
 			}
 		}
 		if m.hasDetail {
-			m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy member list", action: "copy-member-list"})
+			*items = append(*items, tuiMenuItem{label: "Copy member list", action: "copy-member-list"})
 		}
 	}
-	if len(m.payload.Clusters) > 0 {
-		if !menuHasSection(m.menuItems, "Cluster") {
-			m.menuItems = append(m.menuItems, tuiMenuSection("Cluster"))
+	if includeVisible && len(m.payload.Clusters) > 0 {
+		if !menuHasSection(*items, "Cluster") {
+			*items = append(*items, tuiMenuSection("Cluster"))
 		}
-		m.menuItems = append(m.menuItems, tuiMenuItem{label: "Copy visible clusters", action: "copy-visible-clusters"})
+		*items = append(*items, tuiMenuItem{label: "Copy visible clusters", action: "copy-visible-clusters"})
 	}
+}
+
+func (m clusterBrowserModel) appendClusterContextMenuItems(items *[]tuiMenuItem) {
+	if !m.hasSelectedCluster() {
+		return
+	}
+	*items = append(*items,
+		tuiMenuSection("Cluster context"),
+		tuiMenuItem{label: "Copy cluster summary", action: "copy-cluster"},
+	)
+	if m.hasDetail {
+		*items = append(*items, tuiMenuItem{label: "Copy member list", action: "copy-member-list"})
+	}
+}
+
+func (m clusterBrowserModel) appendReferenceLinkMenuItems(items *[]tuiMenuItem) {
 	referenceLinks := m.referenceLinks()
 	if len(referenceLinks) > 0 {
-		m.menuItems = append(m.menuItems,
+		*items = append(*items,
 			tuiMenuSection("Links"),
 			tuiMenuItem{label: "Open first body link", action: "open-first-link"},
 			tuiMenuItem{label: "Copy first body link", action: "copy-first-link"},
 		)
 	}
 	if len(referenceLinks) > 1 {
-		m.menuItems = append(m.menuItems,
+		*items = append(*items,
 			tuiMenuItem{label: "Open body link...", action: "open-link-picker"},
 			tuiMenuItem{label: "Copy body link...", action: "copy-link-picker"},
 			tuiMenuItem{label: "Copy all body links", action: "copy-reference-links"},
 		)
 	}
+}
+
+func (m clusterBrowserModel) appendViewMenuItems(items *[]tuiMenuItem) {
 	viewItems := []tuiMenuItem{
 		tuiMenuSection("View"),
 		tuiMenuItem{label: "Sort clusters by size", action: "sort-size"},
@@ -1374,17 +1558,7 @@ func (m *clusterBrowserModel) openActionMenu() {
 		tuiMenuItem{label: "Help", action: "show-help"},
 		tuiMenuItem{label: "Quit", action: "quit"},
 	)
-	m.menuItems = append(m.menuItems, viewItems...)
-	if len(m.menuItems) == 0 {
-		m.menuItems = append(m.menuItems, tuiMenuItem{label: "No actions available", action: "close-menu"})
-	}
-	m.menuItems = append(m.menuItems, tuiMenuItem{label: "Close menu", action: "close-menu"})
-	m.menuTitle = "Actions"
-	m.menuIndex = m.firstSelectableMenuIndex()
-	m.menuOff = 0
-	m.menuOpen = true
-	m.showHelp = false
-	m.status = "Action menu"
+	*items = append(*items, viewItems...)
 }
 
 func (m *clusterBrowserModel) clearMenuPlacement() {
@@ -1695,7 +1869,7 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		}
 		return true
 	case "back-to-actions":
-		m.openActionMenu()
+		m.openActionMenuFor(m.menuContext)
 		return false
 	case "select-repo":
 		m.switchRepository(item.value)
@@ -3784,38 +3958,38 @@ func clusterRowStyle(cluster store.ClusterSummary, selected bool, focused bool) 
 	switch status {
 	case "closed":
 		if selected {
-			return selectedRowStyle(focused, "#ffe0ad", "#1d1304", "#473111", "#ffd08a")
+			return selectedRowStyle(focused, tuiClosedSelectedBG, tuiClosedSelectedFG, tuiClosedSelectedBlurBG, tuiClosedSelectedBlurFG)
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#aab2bf")).Background(lipgloss.Color("#242936"))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(tuiClosedRowFG)).Background(lipgloss.Color(tuiClosedRowBG))
 	case "merged", "split":
 		if selected {
-			return selectedRowStyle(focused, "#ead7ff", "#1b0e2a", "#342042", "#dfbdff")
+			return selectedRowStyle(focused, "#394052", "#d8c4ff", "#242936", "#b8a3d8")
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#d8c4ff")).Background(lipgloss.Color("#21172d"))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#b8a3d8")).Background(lipgloss.Color("#151620"))
 	default:
 		if selected {
-			return selectedRowStyle(focused, "#d7ffd2", "#061607", "#14351d", "#a8f0ae")
+			return selectedRowStyle(focused, tuiOpenSelectedBG, tuiOpenSelectedFG, tuiOpenSelectedBlurBG, tuiOpenSelectedBlurFG)
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#e8ffe8")).Background(lipgloss.Color("#0f2115"))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(tuiOpenRowFG)).Background(lipgloss.Color(tuiOpenRowBG))
 	}
 }
 
 func memberRowStyle(row memberRow, selected bool, focused bool) lipgloss.Style {
 	if !row.selectable {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#9bc53d")).Bold(true)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(tuiMutedAccent)).Bold(true)
 	}
 	state := strings.ToLower(memberDisplayState(row.member))
 	switch state {
 	case "closed", "local", "merged":
 		if selected {
-			return selectedRowStyle(focused, "#ffe0ad", "#1d1304", "#473111", "#ffd08a")
+			return selectedRowStyle(focused, tuiClosedSelectedBG, tuiClosedSelectedFG, tuiClosedSelectedBlurBG, tuiClosedSelectedBlurFG)
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#aab2bf")).Background(lipgloss.Color("#242936"))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(tuiClosedRowFG)).Background(lipgloss.Color(tuiClosedRowBG))
 	default:
 		if selected {
-			return selectedRowStyle(focused, "#d7ffd2", "#061607", "#14351d", "#a8f0ae")
+			return selectedRowStyle(focused, tuiOpenSelectedBG, tuiOpenSelectedFG, tuiOpenSelectedBlurBG, tuiOpenSelectedBlurFG)
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("#e8ffe8")).Background(lipgloss.Color("#0f2115"))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(tuiOpenRowFG)).Background(lipgloss.Color(tuiOpenRowBG))
 	}
 }
 
@@ -4162,21 +4336,21 @@ func selectedFG(focused bool) string {
 	return "#f7f7ff"
 }
 
-func floatingMenuStyle(width, height int) lipgloss.Style {
+func floatingMenuStyle(width, height int, palette actionMenuPalette) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Width(maxInt(1, width-2)).
 		Height(maxInt(1, height-2)).
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#ffd166")).
-		Background(lipgloss.Color("#151922")).
-		Foreground(lipgloss.Color("#f7f7ff"))
+		BorderForeground(lipgloss.Color(palette.accent)).
+		Background(lipgloss.Color(palette.background)).
+		Foreground(lipgloss.Color(palette.foreground))
 }
 
-func selectedMenuLineStyle(width int) lipgloss.Style {
+func selectedMenuLineStyle(width int, palette actionMenuPalette) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Width(maxInt(1, width)).
-		Background(lipgloss.Color("#ffd166")).
-		Foreground(lipgloss.Color("#05070d")).
+		Background(lipgloss.Color(palette.selectedBG)).
+		Foreground(lipgloss.Color(palette.selectedFG)).
 		Bold(true)
 }
 
