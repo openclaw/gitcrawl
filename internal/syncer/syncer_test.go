@@ -455,6 +455,33 @@ func TestSyncOpenSinceAppliesClosedOverlapSweep(t *testing.T) {
 	}
 }
 
+func TestExpectedIssueTotal(t *testing.T) {
+	cases := []struct {
+		name  string
+		repo  map[string]any
+		state string
+		since string
+		limit int
+		want  int
+	}{
+		{name: "open no filters", repo: map[string]any{"open_issues_count": float64(666)}, state: "open", want: 666},
+		{name: "open with limit below count", repo: map[string]any{"open_issues_count": float64(666)}, state: "open", limit: 100, want: 100},
+		{name: "open with limit above count", repo: map[string]any{"open_issues_count": float64(50)}, state: "open", limit: 200, want: 50},
+		{name: "open with since", repo: map[string]any{"open_issues_count": float64(666)}, state: "open", since: "2026-04-26T00:00:00Z", want: 0},
+		{name: "closed state", repo: map[string]any{"open_issues_count": float64(666)}, state: "closed", want: 0},
+		{name: "all state", repo: map[string]any{"open_issues_count": float64(666)}, state: "all", want: 0},
+		{name: "missing count", repo: map[string]any{}, state: "open", want: 0},
+		{name: "zero count", repo: map[string]any{"open_issues_count": float64(0)}, state: "open", want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := expectedIssueTotal(tc.repo, tc.state, tc.since, tc.limit); got != tc.want {
+				t.Fatalf("expectedIssueTotal = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMappingHelperBranches(t *testing.T) {
 	if got := jsonID("abc"); got != "abc" {
 		t.Fatalf("string json id = %q", got)
