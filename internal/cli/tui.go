@@ -162,12 +162,12 @@ const tuiMenuSeparatorAction = "separator"
 const tuiDoubleClickWindow = 450 * time.Millisecond
 
 const (
-	tuiOpenRowFG            = "#d7dee8"
-	tuiOpenRowBG            = "#101820"
-	tuiOpenSelectedFG       = "#f8fafc"
-	tuiOpenSelectedBG       = "#2f3f56"
-	tuiOpenSelectedBlurFG   = "#cbd5e1"
-	tuiOpenSelectedBlurBG   = "#1f2937"
+	tuiOpenRowFG            = "#f2c94c"
+	tuiOpenRowBG            = "#14130f"
+	tuiOpenSelectedFG       = "#fff8d6"
+	tuiOpenSelectedBG       = "#5a4516"
+	tuiOpenSelectedBlurFG   = "#d8c77c"
+	tuiOpenSelectedBlurBG   = "#302814"
 	tuiClosedRowFG          = "#8793a3"
 	tuiClosedRowBG          = "#0f141b"
 	tuiClosedSelectedFG     = "#d6dde8"
