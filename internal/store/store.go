@@ -4,12 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/vincentkoc/crawlkit/sqlitekit"
 )
 
 const (
@@ -39,64 +36,33 @@ type Status struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create db dir: %w", err)
-	}
-	if err := ensureDBFile(path); err != nil {
-		return nil, err
-	}
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)&_pragma=busy_timeout(5000)",
-		path,
-	)
-	db, err := sql.Open("sqlite", dsn)
+	base, err := sqlitekit.Open(ctx, sqlitekit.Options{Path: path})
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ping sqlite: %w", err)
-	}
-	if err := tightenDBFilePerms(path); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
+	db := base.DB()
 	st := &Store{db: db, path: path}
 	if err := st.migrate(ctx); err != nil {
-		_ = db.Close()
+		_ = base.Close()
 		return nil, err
 	}
 	return st, nil
 }
 
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	if _, err := os.Stat(path); err != nil {
-		return nil, fmt.Errorf("stat db file: %w", err)
-	}
-	dsn := fmt.Sprintf(
-		"file:%s?mode=ro&_pragma=query_only(1)&_pragma=foreign_keys(1)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)&_pragma=busy_timeout(5000)",
-		path,
-	)
-	db, err := sql.Open("sqlite", dsn)
+	base, err := sqlitekit.OpenReadOnly(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite readonly: %w", err)
+		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ping sqlite readonly: %w", err)
-	}
+	db := base.DB()
 	st := &Store{db: db, path: path}
 	current, err := st.schemaVersion(ctx)
 	if err != nil {
-		_ = db.Close()
+		_ = base.Close()
 		return nil, err
 	}
 	if current > schemaVersion {
-		_ = db.Close()
+		_ = base.Close()
 		return nil, fmt.Errorf("database schema version %d is newer than supported version %d", current, schemaVersion)
 	}
 	return st, nil
@@ -272,32 +238,4 @@ func (s *Store) schemaVersion(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("read schema version: %w", err)
 	}
 	return version, nil
-}
-
-func ensureDBFile(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat db file: %w", err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil && !os.IsExist(err) {
-		return fmt.Errorf("create db file: %w", err)
-	}
-	if file != nil {
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close db file: %w", err)
-		}
-	}
-	return nil
-}
-
-func tightenDBFilePerms(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("chmod db file: %w", err)
-	}
-	return nil
 }

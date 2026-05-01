@@ -8,10 +8,12 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/mattn/go-isatty v0.0.20
-	modernc.org/sqlite v1.50.0
 )
 
-require github.com/pelletier/go-toml/v2 v2.3.0 // indirect
+require (
+	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
+	modernc.org/sqlite v1.50.0 // indirect
+)
 
 require (
 	github.com/atotto/clipboard v0.1.4 // indirect
