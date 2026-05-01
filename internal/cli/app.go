@@ -23,6 +23,7 @@ import (
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/openclaw/gitcrawl/internal/syncer"
 	"github.com/openclaw/gitcrawl/internal/vector"
+	"github.com/vincentkoc/crawlkit/control"
 )
 
 const (
@@ -124,12 +125,16 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	switch rest[0] {
 	case "version":
 		return a.writeOutput("version", map[string]string{"version": version}, false)
+	case "metadata":
+		return a.runMetadata(rest[1:])
 	case "serve":
 		return usageErr(fmt.Errorf("serve is not supported in gitcrawl"))
 	case "init":
 		return a.runInit(ctx, rest[1:])
 	case "doctor":
 		return a.runDoctor(ctx, rest[1:])
+	case "status":
+		return a.runStatus(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
 	case "threads":
@@ -2169,6 +2174,113 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runMetadata(args []string) error {
+	fs := flag.NewFlagSet("metadata", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, nil)); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 0 {
+		return usageErr(fmt.Errorf("metadata takes flags only"))
+	}
+	cfg := config.Default()
+	manifest := control.NewManifest("gitcrawl", "Git Crawl", "gitcrawl")
+	manifest.Description = "Local-first GitHub issue and pull request crawler."
+	manifest.Branding = control.Branding{SymbolName: "point.3.connected.trianglepath.dotted", AccentColor: "#2da44e"}
+	manifest.Paths = control.Paths{
+		DefaultConfig:   config.ResolvePath(""),
+		ConfigEnv:       config.DefaultConfigEnv,
+		DefaultDatabase: cfg.DBPath,
+		DefaultCache:    cfg.CacheDir,
+		DefaultLogs:     cfg.LogDir,
+	}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "tui", "portable", "clusters", "embeddings"}
+	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "sqlite", "portable"}}
+	manifest.Commands = map[string]control.Command{
+		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
+		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
+		"sync":            {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
+		"search":          {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
+		"tui":             {Title: "Terminal cluster browser", Argv: []string{"gitcrawl", "tui"}},
+		"tui-json":        {Title: "Terminal cluster data", Argv: []string{"gitcrawl", "tui", "--json"}, JSON: true},
+		"portable":        {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "--json"}, JSON: true, Mutates: true},
+		"clusters":        {Title: "Clusters", Argv: []string{"gitcrawl", "clusters", "--json"}, JSON: true},
+		"legacy-sync-api": {Title: "Legacy sync-status alias", Argv: []string{"gitcrawl", "sync-status"}, Legacy: true, Deprecated: true},
+	}
+	return a.writeOutput("metadata", manifest, false)
+}
+
+func (a *App) runStatus(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, nil)); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 0 {
+		return usageErr(fmt.Errorf("status takes flags only"))
+	}
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		cfg = config.Default()
+		if err := cfg.Normalize(); err != nil {
+			return err
+		}
+	}
+	status := store.Status{DBPath: cfg.DBPath}
+	if _, err := os.Stat(cfg.DBPath); err == nil {
+		st, err := store.OpenReadOnly(ctx, cfg.DBPath)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		status, err = st.Status(ctx)
+		if err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	status.DBPath = cfg.DBPath
+	return a.writeOutput("status", controlStatus(config.ResolvePath(a.configPath), cfg, status), false)
+}
+
+func controlStatus(configPath string, cfg config.Config, status store.Status) control.Status {
+	counts := []control.Count{
+		control.NewCount("repositories", "Repositories", int64(status.RepositoryCount)),
+		control.NewCount("threads", "Threads", int64(status.ThreadCount)),
+		control.NewCount("open_threads", "Open threads", int64(status.OpenThreadCount)),
+		control.NewCount("clusters", "Clusters", int64(status.ClusterCount)),
+	}
+	out := control.NewStatus("gitcrawl", fmt.Sprintf("%d threads across %d repositories", status.ThreadCount, status.RepositoryCount))
+	out.State = "current"
+	out.ConfigPath = configPath
+	out.DatabasePath = status.DBPath
+	out.Counts = counts
+	if !status.LastSyncAt.IsZero() {
+		out.LastSyncAt = status.LastSyncAt.UTC().Format(time.RFC3339)
+	}
+	db := control.SQLiteDatabase("primary", "GitHub archive", "archive", status.DBPath, true, counts)
+	out.DatabaseBytes = db.Bytes
+	out.WALBytes = fileSize(status.DBPath + "-wal")
+	out.Databases = []control.Database{db}
+	return out
+}
+
+func fileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
 func (a *App) applyCommandJSON(enabled bool) {
 	if enabled {
 		a.format = FormatJSON
@@ -2676,6 +2788,8 @@ Global flags:
   --version            print version
 
 Core commands:
+  metadata             print crawlkit control metadata
+  status               print fast read-only archive status
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
