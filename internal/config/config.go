@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vincentkoc/crawlkit/configkit"
+	crawlconfig "github.com/vincentkoc/crawlkit/config"
 )
 
 const (
@@ -49,12 +49,12 @@ type TokenResolution struct {
 	Source string
 }
 
-var appConfig = configkit.App{Name: "gitcrawl", ConfigEnv: DefaultConfigEnv}
+var appConfig = crawlconfig.App{Name: "gitcrawl", ConfigEnv: DefaultConfigEnv}
 
 func Default() Config {
 	paths, err := appConfig.DefaultPaths()
 	if err != nil {
-		paths = configkit.Paths{
+		paths = crawlconfig.Paths{
 			DBPath:   filepath.Join(homeDir(), ".config", "gitcrawl", "gitcrawl.db"),
 			CacheDir: filepath.Join(homeDir(), ".config", "gitcrawl", "cache"),
 			LogDir:   filepath.Join(homeDir(), ".config", "gitcrawl", "logs"),
@@ -96,7 +96,7 @@ func ResolvePath(flagPath string) string {
 func Load(path string) (Config, error) {
 	cfg := Default()
 	resolved := ResolvePath(path)
-	if err := configkit.LoadTOML(resolved, &cfg); err != nil {
+	if err := crawlconfig.LoadTOML(resolved, &cfg); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.Normalize(); err != nil {
@@ -110,18 +110,18 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 	resolved := ResolvePath(path)
-	return configkit.WriteTOML(resolved, cfg, 0o600)
+	return crawlconfig.WriteTOML(resolved, cfg, 0o600)
 }
 
 func EnsureRuntimeDirs(cfg Config) error {
-	if err := configkit.EnsureRuntimeDirs(configkit.RuntimeConfig{
+	if err := crawlconfig.EnsureRuntimeDirs(crawlconfig.RuntimeConfig{
 		DBPath:   cfg.DBPath,
 		CacheDir: cfg.CacheDir,
 		LogDir:   cfg.LogDir,
 	}); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(configkit.ExpandHome(cfg.VectorDir), 0o755); err != nil {
+	if err := os.MkdirAll(crawlconfig.ExpandHome(cfg.VectorDir), 0o755); err != nil {
 		return fmt.Errorf("create runtime dir %s: %w", cfg.VectorDir, err)
 	}
 	return nil
@@ -200,7 +200,7 @@ func envOrDefault(primary, fallback string) string {
 }
 
 func expandHome(path string) string {
-	return configkit.ExpandHome(path)
+	return crawlconfig.ExpandHome(path)
 }
 
 func homeDir() string {

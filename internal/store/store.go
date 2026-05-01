@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vincentkoc/crawlkit/sqlitekit"
+	crawlstore "github.com/vincentkoc/crawlkit/store"
 )
 
 const (
@@ -36,7 +36,7 @@ type Status struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	base, err := sqlitekit.Open(ctx, sqlitekit.Options{Path: path})
+	base, err := crawlstore.Open(ctx, crawlstore.Options{Path: path})
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	base, err := sqlitekit.OpenReadOnly(ctx, path)
+	base, err := crawlstore.OpenReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
 	}
