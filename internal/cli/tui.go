@@ -164,10 +164,10 @@ const tuiDoubleClickWindow = 450 * time.Millisecond
 const (
 	tuiOpenRowFG            = "#f2c94c"
 	tuiOpenRowBG            = "#14130f"
-	tuiOpenSelectedFG       = "#fff8d6"
-	tuiOpenSelectedBG       = "#5a4516"
-	tuiOpenSelectedBlurFG   = "#d8c77c"
-	tuiOpenSelectedBlurBG   = "#302814"
+	tuiOpenSelectedFG       = "#f5d76e"
+	tuiOpenSelectedBG       = "#262314"
+	tuiOpenSelectedBlurFG   = "#c8b969"
+	tuiOpenSelectedBlurBG   = "#1b1a12"
 	tuiClosedRowFG          = "#8793a3"
 	tuiClosedRowBG          = "#0f141b"
 	tuiClosedSelectedFG     = "#d6dde8"
@@ -3008,8 +3008,15 @@ func (m clusterBrowserModel) currentClusterID() int64 {
 	return m.payload.Clusters[m.selected].ID
 }
 
+func (m clusterBrowserModel) clusterRefreshLimit() int {
+	if m.payload.Limit > 0 {
+		return m.payload.Limit
+	}
+	return maxInt(defaultTUIWorkingSetLimit, maxInt(len(m.payload.Clusters), len(m.allClusters)))
+}
+
 func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSummary, error) {
-	viewLimit := maxInt(20, m.payload.Limit)
+	viewLimit := m.clusterRefreshLimit()
 	clusters, err := m.store.ListDisplayClusterSummaries(m.ctx, store.ClusterSummaryOptions{
 		RepoID:        m.repoID,
 		IncludeClosed: m.showClosed,
@@ -3024,7 +3031,7 @@ func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSu
 		RepoID:        m.repoID,
 		IncludeClosed: m.showClosed,
 		MinSize:       1,
-		Limit:         maxInt(defaultTUIWorkingSetLimit, maxInt(m.payload.Limit, len(m.allClusters))),
+		Limit:         viewLimit,
 		Sort:          m.payload.Sort,
 	})
 	if err != nil {

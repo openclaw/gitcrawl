@@ -3578,6 +3578,54 @@ func TestTUIAutoRefreshIsQuietUntilClustersChange(t *testing.T) {
 	}
 }
 
+func TestTUIAutoRefreshPreservesUnboundedViewport(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	for i := 0; i < 35; i++ {
+		clusterID := int64(100 + i)
+		if err := seedTUICluster(ctx, st, repoID, clusterID, 1000+i, fmt.Sprintf("cluster %02d", i)); err != nil {
+			t.Fatalf("seed cluster %d: %v", clusterID, err)
+		}
+	}
+	clusters, err := st.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 0, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+	if len(clusters) <= 20 {
+		t.Fatalf("seeded viewport has %d clusters, want more than refresh floor", len(clusters))
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+	if err := seedTUICluster(ctx, st, repoID, 200, 2000, "new refresh cluster"); err != nil {
+		t.Fatalf("seed new cluster: %v", err)
+	}
+
+	model.autoRefreshFromStore()
+
+	if len(model.payload.Clusters) <= 20 {
+		t.Fatalf("auto refresh collapsed viewport to %d clusters", len(model.payload.Clusters))
+	}
+	if len(model.payload.Clusters) != 36 {
+		t.Fatalf("auto refresh clusters = %d, want 36", len(model.payload.Clusters))
+	}
+	if model.status != "Auto refreshed 36 cluster(s)" {
+		t.Fatalf("auto refresh status = %q", model.status)
+	}
+}
+
 func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
