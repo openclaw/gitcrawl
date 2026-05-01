@@ -178,6 +178,37 @@ func TestEmbedRetriesOn429AndHonorsRetryAfter(t *testing.T) {
 	}
 }
 
+func TestEmbedDoesNotSleepAfterFinalRetryableError(t *testing.T) {
+	var calls int32
+	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(embeddingResponse{Error: &struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		}{Message: "rate limited", Type: "rate_limit_exceeded"}})
+	})
+	defer server.Close()
+
+	var slept []time.Duration
+	retry := RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Hour, MaxElapsed: time.Hour}
+	client := New(Options{APIKey: "test", BaseURL: server.URL, Retry: &retry, Sleep: func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}})
+	_, err := client.Embed(context.Background(), "model", []string{"hi"})
+	if err == nil {
+		t.Fatalf("expected final retryable error")
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
+	}
+	if len(slept) != 2 {
+		t.Fatalf("slept %d times, want 2 before final attempt: %v", len(slept), slept)
+	}
+}
+
 func TestEmbedDoesNotRetryInsufficientQuota(t *testing.T) {
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

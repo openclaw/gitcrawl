@@ -147,6 +147,9 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 				return nil, err
 			}
 			lastErr = err
+			if attempt+1 >= c.retry.MaxAttempts {
+				return nil, err
+			}
 			delay := c.backoff(attempt, c.retry.BaseDelay, 0)
 			if !c.canSleep(deadline, delay) {
 				return nil, err
@@ -161,6 +164,9 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 		}
 		lastErr = apiErr
 		if !apiErr.Retryable() {
+			return nil, apiErr
+		}
+		if attempt+1 >= c.retry.MaxAttempts {
 			return nil, apiErr
 		}
 		base := c.retry.BaseDelay
