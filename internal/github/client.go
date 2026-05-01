@@ -31,9 +31,10 @@ type Options struct {
 }
 
 type ListIssuesOptions struct {
-	State string
-	Since string
-	Limit int
+	State         string
+	Since         string
+	Limit         int
+	ExpectedTotal int
 }
 
 type RequestError struct {
@@ -113,33 +114,37 @@ func (c *Client) ListRepositoryIssues(ctx context.Context, owner, repo string, o
 		values.Set("since", options.Since)
 	}
 	path := fmt.Sprintf("/repos/%s/%s/issues?%s", pathEscape(owner), pathEscape(repo), values.Encode())
-	return c.paginate(ctx, path, options.Limit, reporter)
+	return c.paginate(ctx, path, options.Limit, options.ExpectedTotal, reporter)
 }
 
 func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100", pathEscape(owner), pathEscape(repo), number)
-	return c.paginate(ctx, path, 0, reporter)
+	return c.paginate(ctx, path, 0, 0, reporter)
 }
 
 func (c *Client) ListPullReviews(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", pathEscape(owner), pathEscape(repo), number)
-	return c.paginate(ctx, path, 0, reporter)
+	return c.paginate(ctx, path, 0, 0, reporter)
 }
 
 func (c *Client) ListPullReviewComments(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=100", pathEscape(owner), pathEscape(repo), number)
-	return c.paginate(ctx, path, 0, reporter)
+	return c.paginate(ctx, path, 0, 0, reporter)
 }
 
 func (c *Client) ListPullFiles(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/files?per_page=100", pathEscape(owner), pathEscape(repo), number)
-	return c.paginate(ctx, path, 0, reporter)
+	return c.paginate(ctx, path, 0, 0, reporter)
 }
 
-func (c *Client) paginate(ctx context.Context, firstPath string, limit int, reporter Reporter) ([]map[string]any, error) {
+func (c *Client) paginate(ctx context.Context, firstPath string, limit int, expectedItems int, reporter Reporter) ([]map[string]any, error) {
 	var out []map[string]any
 	nextPath := firstPath
 	page := 0
+	totalPages := 0
+	if expectedItems > 0 {
+		totalPages = (expectedItems + 99) / 100
+	}
 	for nextPath != "" {
 		page++
 		var rows []map[string]any
@@ -156,11 +161,22 @@ func (c *Client) paginate(ctx context.Context, firstPath string, limit int, repo
 			rows = rows[:limit-len(out)]
 		}
 		out = append(out, rows...)
-		reporter.Printf("[github] page %d fetched count=%d accumulated=%d", page, len(rows), len(out))
+		linkHeader := resp.Header.Get("Link")
+		if last := lastPage(linkHeader); last > totalPages {
+			totalPages = last
+		}
+		if totalPages > 0 && page > totalPages {
+			totalPages = page
+		}
+		if totalPages > 0 {
+			reporter.Printf("[github] page %d/%d fetched count=%d accumulated=%d", page, totalPages, len(rows), len(out))
+		} else {
+			reporter.Printf("[github] page %d fetched count=%d accumulated=%d", page, len(rows), len(out))
+		}
 		if limit > 0 && len(out) >= limit {
 			break
 		}
-		nextPath = nextPage(resp.Header.Get("Link"))
+		nextPath = nextPage(linkHeader)
 		if nextPath != "" && c.pageDelay > 0 {
 			select {
 			case <-ctx.Done():
@@ -281,6 +297,26 @@ func nextPage(linkHeader string) string {
 		return parsed.Path + "?" + parsed.RawQuery
 	}
 	return ""
+}
+
+func lastPage(linkHeader string) int {
+	for _, part := range strings.Split(linkHeader, ",") {
+		sections := strings.Split(part, ";")
+		if len(sections) < 2 {
+			continue
+		}
+		if strings.TrimSpace(sections[1]) != `rel="last"` {
+			continue
+		}
+		rawURL := strings.Trim(strings.TrimSpace(sections[0]), "<>")
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return 0
+		}
+		page, _ := strconv.Atoi(parsed.Query().Get("page"))
+		return page
+	}
+	return 0
 }
 
 func pathEscape(value string) string {

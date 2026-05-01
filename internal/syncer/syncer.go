@@ -103,9 +103,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	} else {
 		var err error
 		rows, err = s.client.ListRepositoryIssues(ctx, options.Owner, options.Repo, gh.ListIssuesOptions{
-			State: state,
-			Since: since,
-			Limit: options.Limit,
+			State:         state,
+			Since:         since,
+			Limit:         options.Limit,
+			ExpectedTotal: expectedIssueTotal(repoRaw, state, since, options.Limit),
 		}, options.Reporter)
 		if err != nil {
 			return Stats{}, err
@@ -433,6 +434,20 @@ func jsonID(value any) string {
 	default:
 		return ""
 	}
+}
+
+func expectedIssueTotal(repoRaw map[string]any, state, since string, limit int) int {
+	if state != "open" || since != "" {
+		return 0
+	}
+	count := intValue(repoRaw["open_issues_count"])
+	if count <= 0 {
+		return 0
+	}
+	if limit > 0 && limit < count {
+		return limit
+	}
+	return count
 }
 
 func intValue(value any) int {

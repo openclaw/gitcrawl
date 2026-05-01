@@ -20,7 +20,7 @@ func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 		}
 		switch r.URL.Query().Get("page") {
 		case "":
-			w.Header().Set("Link", `<`+serverURL(r)+`?page=2>; rel="next"`)
+			w.Header().Set("Link", `<`+serverURL(r)+`?page=2>; rel="next", <`+serverURL(r)+`?page=2>; rel="last"`)
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 1}, {"number": 2}})
 		case "2":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 3}})
@@ -30,8 +30,10 @@ func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	}))
 	defer server.Close()
 
+	var messages []string
+	reporter := Reporter(func(message string) { messages = append(messages, message) })
 	client := New(Options{Token: "token", BaseURL: server.URL, PageDelay: -1})
-	rows, err := client.ListRepositoryIssues(context.Background(), "openclaw", "gitcrawl", ListIssuesOptions{Limit: 3}, nil)
+	rows, err := client.ListRepositoryIssues(context.Background(), "openclaw", "gitcrawl", ListIssuesOptions{Limit: 3}, reporter)
 	if err != nil {
 		t.Fatalf("list issues: %v", err)
 	}
@@ -40,6 +42,76 @@ func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	}
 	if intValue(rows[2]["number"]) != 3 {
 		t.Fatalf("last number: %#v", rows[2]["number"])
+	}
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, "page 1/2 fetched") || !strings.Contains(joined, "page 2/2 fetched") {
+		t.Fatalf("expected page X/Y log lines, got:\n%s", joined)
+	}
+}
+
+func TestListRepositoryIssuesUsesExpectedTotalWhenNoLastLink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("page") {
+		case "":
+			// Cursor-style pagination: only "next", no "last".
+			w.Header().Set("Link", `<`+serverURL(r)+`?page=2>; rel="next"`)
+			rows := make([]map[string]any, 100)
+			for i := range rows {
+				rows[i] = map[string]any{"number": i + 1}
+			}
+			_ = json.NewEncoder(w).Encode(rows)
+		case "2":
+			rows := make([]map[string]any, 50)
+			for i := range rows {
+				rows[i] = map[string]any{"number": 100 + i + 1}
+			}
+			_ = json.NewEncoder(w).Encode(rows)
+		default:
+			t.Fatalf("unexpected page: %s", r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	var messages []string
+	reporter := Reporter(func(message string) { messages = append(messages, message) })
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	rows, err := client.ListRepositoryIssues(context.Background(), "openclaw", "gitcrawl", ListIssuesOptions{ExpectedTotal: 150}, reporter)
+	if err != nil {
+		t.Fatalf("list issues: %v", err)
+	}
+	if len(rows) != 150 {
+		t.Fatalf("rows: got %d want 150", len(rows))
+	}
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, "page 1/2 fetched") || !strings.Contains(joined, "page 2/2 fetched") {
+		t.Fatalf("expected page X/Y log lines from hint, got:\n%s", joined)
+	}
+}
+
+func TestPaginateRaisesTotalWhenActualExceedsHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("page") {
+		case "":
+			w.Header().Set("Link", `<`+serverURL(r)+`?page=2>; rel="next"`)
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 1}})
+		case "2":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 2}})
+		default:
+			t.Fatalf("unexpected page: %s", r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	var messages []string
+	reporter := Reporter(func(message string) { messages = append(messages, message) })
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	// Hint underestimates (1 page) but the API actually returns 2.
+	if _, err := client.ListRepositoryIssues(context.Background(), "o", "r", ListIssuesOptions{ExpectedTotal: 1}, reporter); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, "page 2/2 fetched") {
+		t.Fatalf("expected total to be raised to actual page count, got:\n%s", joined)
 	}
 }
 
@@ -130,6 +202,15 @@ func TestNextPageAndReporterBranches(t *testing.T) {
 	}
 	if got := nextPage(`<bad-url>; rel="last"`); got != "" {
 		t.Fatalf("bad next page = %q", got)
+	}
+	if got := lastPage(header); got != 9 {
+		t.Fatalf("last page = %d", got)
+	}
+	if got := lastPage(`<https://api.github.test/x?page=3>; rel="next"`); got != 0 {
+		t.Fatalf("last page without rel=last = %d", got)
+	}
+	if got := lastPage(`<%zz>; rel="last"`); got != 0 {
+		t.Fatalf("last page bad url = %d", got)
 	}
 	var messages []string
 	Reporter(func(message string) { messages = append(messages, message) }).Printf("hello %d", 1)
