@@ -1,8 +1,8 @@
 # gitcrawl
 
-`gitcrawl` is a local-first GitHub issue and pull request crawler for maintainer triage.
+<img width="1797" height="1096" alt="Screenshot 2026-04-30 at 00 45 36" src="https://github.com/user-attachments/assets/54a0a6cf-5862-451d-9552-5d18656976ff" />
 
-Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and the terminal UI. There is no local HTTP API.
+`gitcrawl` is a local-first GitHub issue and pull request crawler for maintainer triage. Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and the terminal UI. There is no local HTTP API.
 
 ## Status
 
