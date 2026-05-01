@@ -37,10 +37,11 @@ type ListIssuesOptions struct {
 }
 
 type RequestError struct {
-	Method string
-	URL    string
-	Status int
-	Body   string
+	Method  string
+	URL     string
+	Status  int
+	Body    string
+	Headers http.Header
 }
 
 func (e *RequestError) Error() string {
@@ -63,13 +64,12 @@ func New(options Options) *Client {
 	if userAgent == "" {
 		userAgent = "gitcrawl"
 	}
-	pageDelay := options.PageDelay
 	return &Client{
 		httpClient: httpClient,
 		baseURL:    baseURL,
 		token:      options.Token,
 		userAgent:  userAgent,
-		pageDelay:  pageDelay,
+		pageDelay:  options.PageDelay,
 	}
 }
 
@@ -185,6 +185,26 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body io.Reader
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {
+	resp, err := c.doOnce(ctx, method, path, body, reporter)
+	if err == nil {
+		return resp, nil
+	}
+	wait, ok := rateLimitWait(err)
+	if !ok {
+		return nil, err
+	}
+	reporter.Printf("[github] rate-limit retry wait=%s", wait.Round(time.Second))
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
+	return c.doOnce(ctx, method, path, body, reporter)
+}
+
+func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {
 	fullURL := c.baseURL + path
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
@@ -206,7 +226,39 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, re
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return nil, &RequestError{Method: method, URL: path, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	return nil, &RequestError{
+		Method:  method,
+		URL:     path,
+		Status:  resp.StatusCode,
+		Body:    strings.TrimSpace(string(data)),
+		Headers: resp.Header,
+	}
+}
+
+func rateLimitWait(err error) (time.Duration, bool) {
+	reqErr, ok := err.(*RequestError)
+	if !ok {
+		return 0, false
+	}
+	if reqErr.Status != http.StatusForbidden && reqErr.Status != http.StatusTooManyRequests {
+		return 0, false
+	}
+	if v := strings.TrimSpace(reqErr.Headers.Get("Retry-After")); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second, true
+		}
+	}
+	if reqErr.Headers.Get("X-RateLimit-Remaining") != "0" {
+		return 0, false
+	}
+	secs, err := strconv.ParseInt(strings.TrimSpace(reqErr.Headers.Get("X-RateLimit-Reset")), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if wait := time.Until(time.Unix(secs, 0)); wait > 0 {
+		return wait, true
+	}
+	return time.Second, true
 }
 
 func nextPage(linkHeader string) string {
