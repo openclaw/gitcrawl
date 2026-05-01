@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Route config path handling and SQLite openers through `crawlkit` so GitHub archive tooling shares the same foundation as the Slack, Discord, and Notion crawlers.
+- Keep the existing `gitcrawl tui` as the family reference terminal interface and add CI smoke coverage for its help surface.
+
 ## 0.1.1 - 2026-04-30
 
 - Fix portable store refreshes when local Git pull configuration tries to rebase onto multiple branch merge refs.

@@ -76,4 +76,5 @@ go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=$(git de
 ```bash
 go test ./...
 go build ./cmd/gitcrawl
+go run ./cmd/gitcrawl help tui
 ```
