@@ -34,10 +34,15 @@ var (
 )
 
 const tuiAutoRefreshInterval = 15 * time.Second
+const tuiWheelScrollDelay = 16 * time.Millisecond
+const tuiWheelMaxBufferedDelta = 6
 const tuiWheelSettleDelay = 90 * time.Millisecond
 
 type tuiAutoRefreshMsg struct{}
 type tuiRemoteRefreshTickMsg struct{}
+type tuiWheelScrollMsg struct {
+	seq int
+}
 type tuiWheelSettledMsg struct {
 	seq int
 }
@@ -136,6 +141,10 @@ type clusterBrowserModel struct {
 	lastClickX       int
 	lastClickY       int
 	lastClickAt      time.Time
+	wheelScrollSeq   int
+	wheelPending     bool
+	wheelFocus       tuiFocus
+	wheelDelta       int
 	wheelSeq         int
 	detailView       viewport.Model
 	searchInput      textinput.Model
@@ -336,6 +345,14 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.autoRefreshFromStore()
 		return m, m.autoRefreshCmd()
+	case tuiWheelScrollMsg:
+		if msg.seq != m.wheelScrollSeq {
+			return m, nil
+		}
+		cmd := m.applyQueuedWheelScroll()
+		m.keepVisible()
+		m.syncComponents()
+		return m, cmd
 	case tuiWheelSettledMsg:
 		if msg.seq != m.wheelSeq {
 			return m, nil
@@ -373,6 +390,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 		m.keepVisible()
 	case tea.KeyMsg:
+		m.cancelQueuedWheelScroll()
 		if m.menuOpen {
 			return m.updateMenu(msg)
 		}
@@ -1135,6 +1153,9 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if msg.Button != tea.MouseButtonLeft && msg.Button != tea.MouseButtonRight && !isMouseWheel(msg.Button) {
 		return nil
+	}
+	if !isMouseWheel(msg.Button) {
+		m.cancelQueuedWheelScroll()
 	}
 	if m.menuOpen {
 		m.handleMenuMouse(layout, msg)
@@ -2514,12 +2535,62 @@ func (m *clusterBrowserModel) mouseWheel(layout tuiLayout, msg tea.MouseMsg, del
 	m.clearLastClick()
 	switch {
 	case layout.clusters.contains(msg.X, msg.Y):
+		return m.queueWheelScroll(focusClusters, delta)
+	case layout.members.contains(msg.X, msg.Y):
+		return m.queueWheelScroll(focusMembers, delta)
+	case layout.detail.contains(msg.X, msg.Y):
+		return m.queueWheelScroll(focusDetail, delta)
+	default:
+		return m.queueWheelScroll(m.focus, delta)
+	}
+}
+
+func (m *clusterBrowserModel) queueWheelScroll(focus tuiFocus, delta int) tea.Cmd {
+	if delta == 0 {
+		return nil
+	}
+	if m.wheelPending && m.wheelFocus != focus {
+		m.cancelQueuedWheelScroll()
+	}
+	m.focus = focus
+	m.wheelFocus = focus
+	m.wheelDelta = clampInt(m.wheelDelta+delta, -tuiWheelMaxBufferedDelta, tuiWheelMaxBufferedDelta)
+	if m.wheelPending {
+		return nil
+	}
+	m.wheelPending = true
+	m.wheelScrollSeq++
+	seq := m.wheelScrollSeq
+	return tea.Tick(tuiWheelScrollDelay, func(time.Time) tea.Msg {
+		return tuiWheelScrollMsg{seq: seq}
+	})
+}
+
+func (m *clusterBrowserModel) cancelQueuedWheelScroll() {
+	if !m.wheelPending && m.wheelDelta == 0 {
+		return
+	}
+	m.wheelPending = false
+	m.wheelDelta = 0
+	m.wheelScrollSeq++
+}
+
+func (m *clusterBrowserModel) applyQueuedWheelScroll() tea.Cmd {
+	delta := m.wheelDelta
+	focus := m.wheelFocus
+	m.wheelPending = false
+	m.wheelDelta = 0
+	if delta == 0 {
+		return nil
+	}
+	switch focus {
+	case focusClusters:
 		m.focus = focusClusters
 		return m.moveClusterByWheel(delta)
-	case layout.members.contains(msg.X, msg.Y):
+	case focusMembers:
 		m.focus = focusMembers
 		m.move(delta)
-	case layout.detail.contains(msg.X, msg.Y):
+	case focusDetail:
 		m.focus = focusDetail
 		m.move(delta)
 	default:

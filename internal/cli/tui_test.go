@@ -424,7 +424,9 @@ func TestTUIFastWheelScrollKeepsFrameStable(t *testing.T) {
 	model.width = 190
 	model.height = 34
 	layout := model.layout()
+	initialSelected := model.selected
 
+	queued := 0
 	for i := 0; i < 80; i++ {
 		cmd := model.handleMouse(tea.MouseMsg{
 			X:      layout.clusters.x + 2,
@@ -432,11 +434,29 @@ func TestTUIFastWheelScrollKeepsFrameStable(t *testing.T) {
 			Action: tea.MouseActionPress,
 			Button: tea.MouseButtonWheelDown,
 		})
-		if cmd == nil && model.selected < len(model.payload.Clusters)-1 {
-			t.Fatal("cluster wheel movement should defer detail reload until scrolling settles")
+		if cmd != nil {
+			queued++
 		}
 		model.keepVisible()
 		model.syncComponents()
+	}
+	if queued != 1 {
+		t.Fatalf("wheel burst queued %d frame ticks, want 1", queued)
+	}
+	if model.selected != initialSelected {
+		t.Fatalf("wheel burst moved immediately to %d, want %d", model.selected, initialSelected)
+	}
+	if model.wheelDelta != tuiWheelMaxBufferedDelta {
+		t.Fatalf("wheel burst delta = %d, want capped %d", model.wheelDelta, tuiWheelMaxBufferedDelta)
+	}
+	updated, cmd := model.Update(tuiWheelScrollMsg{seq: model.wheelScrollSeq})
+	model = updated.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("cluster wheel frame should defer detail reload until scrolling settles")
+	}
+	wantSelected := clampInt(initialSelected+tuiWheelMaxBufferedDelta, 0, len(model.payload.Clusters)-1)
+	if model.selected != wantSelected {
+		t.Fatalf("wheel burst selected = %d, want capped movement to %d", model.selected, wantSelected)
 	}
 
 	view := model.View()
