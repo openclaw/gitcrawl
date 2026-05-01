@@ -1864,6 +1864,8 @@ func (a *App) runPortable(ctx context.Context, args []string) error {
 		return usageErr(fmt.Errorf("portable requires a subcommand"))
 	}
 	switch args[0] {
+	case "help", "--help", "-h":
+		return a.printCommandUsage("portable")
 	case "prune":
 		return a.runPortablePrune(ctx, args[1:])
 	default:
@@ -2205,7 +2207,7 @@ func (a *App) runMetadata(args []string) error {
 		"search":          {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
 		"tui":             {Title: "Terminal cluster browser", Argv: []string{"gitcrawl", "tui"}},
 		"tui-json":        {Title: "Terminal cluster data", Argv: []string{"gitcrawl", "tui", "--json"}, JSON: true},
-		"portable":        {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "--json"}, JSON: true, Mutates: true},
+		"portable":        {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "prune", "--json"}, JSON: true, Mutates: true},
 		"clusters":        {Title: "Clusters", Argv: []string{"gitcrawl", "clusters", "--json"}, JSON: true},
 		"legacy-sync-api": {Title: "Legacy sync-status alias", Argv: []string{"gitcrawl", "sync-status"}, Legacy: true, Deprecated: true},
 	}
@@ -2767,6 +2769,9 @@ func (a *App) printUsage() {
 
 func (a *App) printCommandUsage(command string) error {
 	switch command {
+	case "portable":
+		fmt.Fprint(a.Stdout, portableUsageText)
+		return nil
 	case "tui":
 		fmt.Fprint(a.Stdout, tuiUsageText)
 		return nil
@@ -2832,4 +2837,13 @@ Press p to switch between repositories already present in the local store.
 Press n to load neighbors for the selected issue or PR.
 Enter from the members pane also loads neighbors before opening detail.
 The TUI quietly refreshes from the local store every 15 seconds and leaves the current status alone when nothing changed.
+`
+
+const portableUsageText = `gitcrawl portable manages local portable-store snapshots.
+
+Usage:
+  gitcrawl portable prune [--body-chars N] [--no-vacuum] [--json]
+
+Subcommands:
+  prune               prune volatile payloads from the configured portable store
 `
