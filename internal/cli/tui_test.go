@@ -526,6 +526,70 @@ func TestTUIMouseHeaderSortsClusterRows(t *testing.T) {
 	}
 }
 
+func TestTUIClusterAgeHeaderTogglesDirection(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	columns := clusterColumns(maxInt(24, model.layout().clusters.w-4), model.payload.Sort)
+	ageX := columnLeftEdge(columns, len(columns)-1)
+
+	model.sortClustersFromHeader(ageX)
+	if model.payload.Sort != "oldest" {
+		t.Fatalf("age header sort = %q, want oldest", model.payload.Sort)
+	}
+	if model.payload.Clusters[0].ID != 1 {
+		t.Fatalf("oldest sort first cluster id = %d, want 1", model.payload.Clusters[0].ID)
+	}
+
+	columns = clusterColumns(maxInt(24, model.layout().clusters.w-4), model.payload.Sort)
+	model.sortClustersFromHeader(columnLeftEdge(columns, len(columns)-1))
+	if model.payload.Sort != "recent" {
+		t.Fatalf("age header second sort = %q, want recent", model.payload.Sort)
+	}
+	if model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("recent sort first cluster id = %d, want 2", model.payload.Clusters[0].ID)
+	}
+}
+
+func TestTUIMemberAgeHeaderTogglesDirection(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.detail = store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 10, Kind: "issue", State: "open", Title: "Older", UpdatedAtGitHub: "2026-04-27T10:00:00Z"}},
+		{Thread: store.Thread{ID: 2, Number: 11, Kind: "issue", State: "open", Title: "Newer", UpdatedAtGitHub: "2026-04-27T11:00:00Z"}},
+	}}
+	model.hasDetail = true
+	model.sortMembers()
+	columns := memberColumns(maxInt(24, model.layout().members.w-4), model.memberSort)
+	ageX := columnLeftEdge(columns, 2)
+
+	model.sortMembersFromHeader(ageX)
+	if model.memberSort != memberSortRecent {
+		t.Fatalf("member age header sort = %q, want recent", model.memberSort)
+	}
+	if model.memberRows[0].member.Thread.ID != 2 {
+		t.Fatalf("recent member first id = %d, want 2", model.memberRows[0].member.Thread.ID)
+	}
+
+	columns = memberColumns(maxInt(24, model.layout().members.w-4), model.memberSort)
+	model.sortMembersFromHeader(columnLeftEdge(columns, 2))
+	if model.memberSort != memberSortOldest {
+		t.Fatalf("member age header second sort = %q, want oldest", model.memberSort)
+	}
+	if model.memberRows[0].member.Thread.ID != 1 {
+		t.Fatalf("oldest member first id = %d, want 1", model.memberRows[0].member.Thread.ID)
+	}
+}
+
 func TestTUIClusterRowsShowClusterIDs(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",

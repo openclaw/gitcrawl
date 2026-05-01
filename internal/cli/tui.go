@@ -77,6 +77,7 @@ type tuiMemberSort string
 const (
 	memberSortKind   tuiMemberSort = "kind"
 	memberSortRecent tuiMemberSort = "recent"
+	memberSortOldest tuiMemberSort = "oldest"
 	memberSortNumber tuiMemberSort = "number"
 	memberSortState  tuiMemberSort = "state"
 	memberSortTitle  tuiMemberSort = "title"
@@ -1538,8 +1539,10 @@ func (m clusterBrowserModel) appendViewMenuItems(items *[]tuiMenuItem) {
 		tuiMenuSection("View"),
 		tuiMenuItem{label: "Sort clusters by size", action: "sort-size"},
 		tuiMenuItem{label: "Sort clusters by recent", action: "sort-recent"},
+		tuiMenuItem{label: "Sort clusters by oldest", action: "sort-oldest"},
 		tuiMenuItem{label: "Member sort grouped", action: "member-sort-kind"},
 		tuiMenuItem{label: "Member sort recent", action: "member-sort-recent"},
+		tuiMenuItem{label: "Member sort oldest", action: "member-sort-oldest"},
 		tuiMenuItem{label: "Filter clusters...", action: "filter"},
 	}
 	if strings.TrimSpace(m.search) != "" {
@@ -1678,6 +1681,12 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.loadSelectedCluster()
 		m.status = "Sort: recent"
 		return true
+	case "sort-oldest":
+		m.payload.Sort = "oldest"
+		m.sortClusters()
+		m.loadSelectedCluster()
+		m.status = "Sort: oldest"
+		return true
 	case "member-sort-kind":
 		m.memberSort = memberSortKind
 		m.sortMembers()
@@ -1687,6 +1696,11 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.memberSort = memberSortRecent
 		m.sortMembers()
 		m.status = "Member sort: recent"
+		return true
+	case "member-sort-oldest":
+		m.memberSort = memberSortOldest
+		m.sortMembers()
+		m.status = "Member sort: oldest"
 		return true
 	case "refresh":
 		m.refreshFromStore()
@@ -2684,7 +2698,10 @@ func clusterColumns(width int, sortMode string) []table.Column {
 		cntTitle = "cnt*"
 	}
 	if sortMode == "recent" {
-		ageTitle = "age*"
+		ageTitle = "age-"
+	}
+	if sortMode == "oldest" {
+		ageTitle = "age+"
 	}
 	return []table.Column{
 		{Title: "id", Width: idW},
@@ -2715,7 +2732,10 @@ func memberColumns(width int, sortMode tuiMemberSort) []table.Column {
 		stateTitle = "st*"
 	}
 	if sortMode == memberSortRecent {
-		ageTitle = "age*"
+		ageTitle = "age-"
+	}
+	if sortMode == memberSortOldest {
+		ageTitle = "age+"
 	}
 	if sortMode == memberSortTitle {
 		titleTitle = "title*"
@@ -2788,6 +2808,14 @@ func (m *clusterBrowserModel) sortClusters() {
 				return left.MemberCount > right.MemberCount
 			}
 		}
+		if m.payload.Sort == "oldest" {
+			leftUpdated := parseTime(left.UpdatedAt)
+			rightUpdated := parseTime(right.UpdatedAt)
+			if !leftUpdated.Equal(rightUpdated) {
+				return leftUpdated.Before(rightUpdated)
+			}
+			return left.ID < right.ID
+		}
 		return parseTime(left.UpdatedAt).After(parseTime(right.UpdatedAt))
 	})
 	m.selected = clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1))
@@ -2798,7 +2826,11 @@ func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
 	if relativeX < columnRightEdge(columns, 1) {
 		m.payload.Sort = "size"
 	} else if relativeX >= columnLeftEdge(columns, len(columns)-1) {
-		m.payload.Sort = "recent"
+		if m.payload.Sort == "recent" {
+			m.payload.Sort = "oldest"
+		} else {
+			m.payload.Sort = "recent"
+		}
 	} else if m.payload.Sort == "recent" {
 		m.payload.Sort = "size"
 	} else {
@@ -3184,7 +3216,11 @@ func (m *clusterBrowserModel) sortMembersFromHeader(relativeX int) {
 	case relativeX < columnRightEdge(columns, 1):
 		m.memberSort = memberSortState
 	case relativeX < columnRightEdge(columns, 2):
-		m.memberSort = memberSortRecent
+		if m.memberSort == memberSortRecent {
+			m.memberSort = memberSortOldest
+		} else {
+			m.memberSort = memberSortRecent
+		}
 	default:
 		if m.memberSort == memberSortTitle {
 			m.memberSort = memberSortKind
@@ -3252,6 +3288,8 @@ func (m *clusterBrowserModel) sortMembers() {
 		switch m.memberSort {
 		case memberSortRecent:
 			return parseTime(left.UpdatedAtGitHub).After(parseTime(right.UpdatedAtGitHub))
+		case memberSortOldest:
+			return parseTime(left.UpdatedAtGitHub).Before(parseTime(right.UpdatedAtGitHub))
 		case memberSortNumber:
 			return left.Number < right.Number
 		case memberSortState:
@@ -3724,7 +3762,7 @@ func nextFocus(current tuiFocus, delta int) tuiFocus {
 }
 
 func nextMemberSort(current tuiMemberSort) tuiMemberSort {
-	order := []tuiMemberSort{memberSortKind, memberSortRecent, memberSortNumber, memberSortState, memberSortTitle}
+	order := []tuiMemberSort{memberSortKind, memberSortRecent, memberSortOldest, memberSortNumber, memberSortState, memberSortTitle}
 	for index, item := range order {
 		if item == current {
 			return order[(index+1)%len(order)]
