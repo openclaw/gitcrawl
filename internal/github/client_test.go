@@ -3,10 +3,14 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
@@ -170,6 +174,91 @@ func TestClientErrorAndHelperBranches(t *testing.T) {
 	}
 	if got := intValue("bad"); got != 0 {
 		t.Fatalf("bad int = %d", got)
+	}
+}
+
+func TestRateLimitRetriesOn403WithRemainingZero(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Unix()))
+			http.Error(w, "rate limited", http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	row, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+	if err != nil {
+		t.Fatalf("get repo: %v", err)
+	}
+	if intValue(row["id"]) != 1 {
+		t.Fatalf("row = %#v", row)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("calls = %d want 2", got)
+	}
+}
+
+func TestRateLimitRetriesOn429WithRetryAfter(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 2})
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	row, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+	if err != nil {
+		t.Fatalf("get repo: %v", err)
+	}
+	if intValue(row["id"]) != 2 {
+		t.Fatalf("row = %#v", row)
+	}
+}
+
+func TestRateLimitRespectsContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(time.Hour).Unix()))
+		http.Error(w, "rate limited", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := client.GetRepo(ctx, "openclaw", "gitcrawl", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNonRateLimit403IsNotRetried(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	if _, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("calls = %d want 1", got)
 	}
 }
 
