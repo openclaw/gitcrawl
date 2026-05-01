@@ -976,7 +976,7 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
 	limitRaw := fs.String("limit", "", "maximum cluster rows")
-	sortMode := fs.String("sort", "size", "sort mode: recent|size")
+	sortMode := fs.String("sort", "size", "sort mode: recent|oldest|size")
 	includeClosed := fs.Bool("include-closed", false, "deprecated; clusters include closed rows by default")
 	hideClosed := fs.Bool("hide-closed", false, "hide locally closed clusters")
 	jsonOut := fs.Bool("json", false, "write JSON output")
@@ -1000,7 +1000,7 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 		return usageErr(err)
 	}
 	sort := strings.TrimSpace(*sortMode)
-	if sort != "recent" && sort != "size" {
+	if sort != "recent" && sort != "oldest" && sort != "size" {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
 
@@ -1040,7 +1040,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	minSizeRaw := fs.String("min-size", "", "minimum active member count")
 	limitRaw := fs.String("limit", "", "maximum cluster rows")
-	sortMode := fs.String("sort", "", "sort mode: recent|size")
+	sortMode := fs.String("sort", "", "sort mode: recent|oldest|size")
 	includeClosed := fs.Bool("include-closed", false, "deprecated; closed clusters are shown by default")
 	hideClosed := fs.Bool("hide-closed", false, "hide locally closed clusters")
 	jsonOut := fs.Bool("json", false, "write JSON output")
@@ -1090,7 +1090,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 	if sort == "" {
 		sort = "size"
 	}
-	if sort != "recent" && sort != "size" {
+	if sort != "recent" && sort != "oldest" && sort != "size" {
 		return usageErr(fmt.Errorf("unsupported sort %q", sort))
 	}
 	showClosed := !*hideClosed || *includeClosed
@@ -2707,7 +2707,7 @@ No API server is provided. There is intentionally no serve command.
 const tuiUsageText = `gitcrawl tui opens the local terminal cluster browser.
 
 Usage:
-  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|size] [--hide-closed]
+  gitcrawl tui [owner/repo] [--limit N] [--min-size N] [--sort recent|oldest|size] [--hide-closed]
 
 If owner/repo is omitted, gitcrawl uses the most recently updated repository in the local database.
 The TUI starts with ghcrawl-style cluster display defaults: --min-size 5, --sort size, and closed historical clusters visible. Pass --min-size 1 for singleton clusters or --hide-closed to focus open-only.

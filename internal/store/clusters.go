@@ -133,6 +133,8 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 	orderBy := `latest_updated_at desc, c.id desc`
 	if options.Sort == "size" {
 		orderBy = `c.member_count desc, c.id asc`
+	} else if options.Sort == "oldest" {
+		orderBy = `latest_updated_at asc, c.id asc`
 	}
 	limit := options.Limit
 	if limit <= 0 {
@@ -212,6 +214,8 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 	orderBy := `coalesce(cg.updated_at, '') desc, cg.id desc`
 	if options.Sort == "size" {
 		orderBy = `member_count desc, cg.id asc`
+	} else if options.Sort == "oldest" {
+		orderBy = `coalesce(cg.updated_at, '') asc, cg.id asc`
 	}
 	limit := options.Limit
 	if limit <= 0 {
@@ -374,6 +378,15 @@ func sortClusterSummaries(clusters []ClusterSummary, sortMode string) {
 			}
 			if left.UpdatedAt != right.UpdatedAt {
 				return left.UpdatedAt > right.UpdatedAt
+			}
+			return left.ID < right.ID
+		}
+		if sortMode == "oldest" {
+			if left.UpdatedAt != right.UpdatedAt {
+				return left.UpdatedAt < right.UpdatedAt
+			}
+			if left.MemberCount != right.MemberCount {
+				return left.MemberCount > right.MemberCount
 			}
 			return left.ID < right.ID
 		}

@@ -63,6 +63,19 @@ func TestListClusterSummaries(t *testing.T) {
 	}
 }
 
+func TestSortClusterSummariesOldest(t *testing.T) {
+	clusters := []ClusterSummary{
+		{ID: 2, MemberCount: 1, UpdatedAt: "2026-04-27T11:00:00Z"},
+		{ID: 1, MemberCount: 5, UpdatedAt: "2026-04-27T10:00:00Z"},
+	}
+
+	sortClusterSummaries(clusters, "oldest")
+
+	if clusters[0].ID != 1 || clusters[1].ID != 2 {
+		t.Fatalf("oldest sort order = %d,%d; want 1,2", clusters[0].ID, clusters[1].ID)
+	}
+}
+
 func TestDurableClusterSummariesUsePrimaryOpenMembers(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

@@ -424,7 +424,9 @@ func TestTUIFastWheelScrollKeepsFrameStable(t *testing.T) {
 	model.width = 190
 	model.height = 34
 	layout := model.layout()
+	initialSelected := model.selected
 
+	queued := 0
 	for i := 0; i < 80; i++ {
 		cmd := model.handleMouse(tea.MouseMsg{
 			X:      layout.clusters.x + 2,
@@ -432,11 +434,29 @@ func TestTUIFastWheelScrollKeepsFrameStable(t *testing.T) {
 			Action: tea.MouseActionPress,
 			Button: tea.MouseButtonWheelDown,
 		})
-		if cmd == nil && model.selected < len(model.payload.Clusters)-1 {
-			t.Fatal("cluster wheel movement should defer detail reload until scrolling settles")
+		if cmd != nil {
+			queued++
 		}
 		model.keepVisible()
 		model.syncComponents()
+	}
+	if queued != 1 {
+		t.Fatalf("wheel burst queued %d frame ticks, want 1", queued)
+	}
+	if model.selected != initialSelected {
+		t.Fatalf("wheel burst moved immediately to %d, want %d", model.selected, initialSelected)
+	}
+	if model.wheelDelta != tuiWheelMaxBufferedDelta {
+		t.Fatalf("wheel burst delta = %d, want capped %d", model.wheelDelta, tuiWheelMaxBufferedDelta)
+	}
+	updated, cmd := model.Update(tuiWheelScrollMsg{seq: model.wheelScrollSeq})
+	model = updated.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("cluster wheel frame should defer detail reload until scrolling settles")
+	}
+	wantSelected := clampInt(initialSelected+tuiWheelMaxBufferedDelta, 0, len(model.payload.Clusters)-1)
+	if model.selected != wantSelected {
+		t.Fatalf("wheel burst selected = %d, want capped movement to %d", model.selected, wantSelected)
 	}
 
 	view := model.View()
@@ -523,6 +543,70 @@ func TestTUIMouseHeaderSortsClusterRows(t *testing.T) {
 	}
 	if model.payload.Clusters[0].ID != 2 {
 		t.Fatalf("size sort first cluster id = %d, want 2", model.payload.Clusters[0].ID)
+	}
+}
+
+func TestTUIClusterAgeHeaderTogglesDirection(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	columns := clusterColumns(maxInt(24, model.layout().clusters.w-4), model.payload.Sort)
+	ageX := columnLeftEdge(columns, len(columns)-1)
+
+	model.sortClustersFromHeader(ageX)
+	if model.payload.Sort != "oldest" {
+		t.Fatalf("age header sort = %q, want oldest", model.payload.Sort)
+	}
+	if model.payload.Clusters[0].ID != 1 {
+		t.Fatalf("oldest sort first cluster id = %d, want 1", model.payload.Clusters[0].ID)
+	}
+
+	columns = clusterColumns(maxInt(24, model.layout().clusters.w-4), model.payload.Sort)
+	model.sortClustersFromHeader(columnLeftEdge(columns, len(columns)-1))
+	if model.payload.Sort != "recent" {
+		t.Fatalf("age header second sort = %q, want recent", model.payload.Sort)
+	}
+	if model.payload.Clusters[0].ID != 2 {
+		t.Fatalf("recent sort first cluster id = %d, want 2", model.payload.Clusters[0].ID)
+	}
+}
+
+func TestTUIMemberAgeHeaderTogglesDirection(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.detail = store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{
+		{Thread: store.Thread{ID: 1, Number: 10, Kind: "issue", State: "open", Title: "Older", UpdatedAtGitHub: "2026-04-27T10:00:00Z"}},
+		{Thread: store.Thread{ID: 2, Number: 11, Kind: "issue", State: "open", Title: "Newer", UpdatedAtGitHub: "2026-04-27T11:00:00Z"}},
+	}}
+	model.hasDetail = true
+	model.sortMembers()
+	columns := memberColumns(maxInt(24, model.layout().members.w-4), model.memberSort)
+	ageX := columnLeftEdge(columns, 2)
+
+	model.sortMembersFromHeader(ageX)
+	if model.memberSort != memberSortRecent {
+		t.Fatalf("member age header sort = %q, want recent", model.memberSort)
+	}
+	if model.memberRows[0].member.Thread.ID != 2 {
+		t.Fatalf("recent member first id = %d, want 2", model.memberRows[0].member.Thread.ID)
+	}
+
+	columns = memberColumns(maxInt(24, model.layout().members.w-4), model.memberSort)
+	model.sortMembersFromHeader(columnLeftEdge(columns, 2))
+	if model.memberSort != memberSortOldest {
+		t.Fatalf("member age header second sort = %q, want oldest", model.memberSort)
+	}
+	if model.memberRows[0].member.Thread.ID != 1 {
+		t.Fatalf("oldest member first id = %d, want 1", model.memberRows[0].member.Thread.ID)
 	}
 }
 
@@ -621,6 +705,19 @@ func TestTUIRenderedRowsStyleOpenAndClosedStates(t *testing.T) {
 	if fmt.Sprint(openCluster.GetBackground()) == fmt.Sprint(closedCluster.GetBackground()) {
 		t.Fatalf("open and closed cluster backgrounds should differ")
 	}
+	if fmt.Sprint(openCluster.GetForeground()) != tuiOpenRowFG {
+		t.Fatalf("open cluster foreground = %v, want %s", openCluster.GetForeground(), tuiOpenRowFG)
+	}
+	if fmt.Sprint(openCluster.GetBackground()) != tuiOpenRowBG {
+		t.Fatalf("open cluster background = %v, want %s", openCluster.GetBackground(), tuiOpenRowBG)
+	}
+	if fmt.Sprint(closedCluster.GetForeground()) != tuiClosedRowFG {
+		t.Fatalf("closed cluster foreground = %v, want %s", closedCluster.GetForeground(), tuiClosedRowFG)
+	}
+	selectedCluster := clusterRowStyle(store.ClusterSummary{Status: "active"}, true, true)
+	if fmt.Sprint(selectedCluster.GetBackground()) != tuiOpenSelectedBG {
+		t.Fatalf("selected cluster background = %v, want %s", selectedCluster.GetBackground(), tuiOpenSelectedBG)
+	}
 	clusterView := renderStyledTable([]table.Column{{Title: "id", Width: 8}, {Title: "state", Width: 8}}, []table.Row{{"C1", "OPEN"}, {"C2", "CLOSED"}}, 0, 2, 20, "#5bc0eb", func(index int) lipgloss.Style {
 		if index == 0 {
 			return openCluster
@@ -646,6 +743,12 @@ func TestTUIRenderedRowsStyleOpenAndClosedStates(t *testing.T) {
 	}
 	if fmt.Sprint(openMember.GetBackground()) == fmt.Sprint(closedMember.GetBackground()) {
 		t.Fatalf("open and closed member backgrounds should differ")
+	}
+	if fmt.Sprint(openMember.GetForeground()) != tuiOpenRowFG {
+		t.Fatalf("open member foreground = %v, want %s", openMember.GetForeground(), tuiOpenRowFG)
+	}
+	if fmt.Sprint(closedMember.GetForeground()) != tuiClosedRowFG {
+		t.Fatalf("closed member foreground = %v, want %s", closedMember.GetForeground(), tuiClosedRowFG)
 	}
 	memberView := renderStyledTable([]table.Column{{Title: "number", Width: 8}, {Title: "st", Width: 8}}, []table.Row{{"#1", "opn"}, {"#2", "cls"}}, 0, 2, 20, "#9bc53d", func(index int) lipgloss.Style {
 		if index == 0 {
@@ -909,14 +1012,13 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	if !model.menuFloating {
 		t.Fatal("expected right click action menu to float")
 	}
+	if model.menuTitle != "Cluster Actions" || model.menuContext != focusClusters {
+		t.Fatalf("cluster context menu title/context = %q/%q", model.menuTitle, model.menuContext)
+	}
 	if model.selected != 1 {
 		t.Fatalf("right click selected %d, want 1", model.selected)
 	}
-	labels := make([]string, 0, len(model.menuItems))
-	for _, item := range model.menuItems {
-		labels = append(labels, item.label)
-	}
-	joinedLabels := strings.Join(labels, "\n")
+	joinedLabels := strings.Join(menuLabels(model.menuItems), "\n")
 	for _, want := range []string{"Copy cluster ID", "Copy cluster name", "Copy cluster title", "Copy cluster summary"} {
 		if !strings.Contains(joinedLabels, want) {
 			t.Fatalf("expected cluster action %q, got %+v", want, model.menuItems)
@@ -924,6 +1026,57 @@ func TestTUIRightClickOpensActionMenu(t *testing.T) {
 	}
 	if !strings.Contains(joinedLabels, "Copy visible clusters") {
 		t.Fatalf("expected visible cluster action menu item, got %+v", model.menuItems)
+	}
+	if strings.Contains(joinedLabels, "Copy selected URL") {
+		t.Fatalf("cluster menu should not include selected member actions:\n%s", joinedLabels)
+	}
+}
+
+func TestTUIRightClickMemberRowOpensMemberActions(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   sampleTUIClusters(),
+	})
+	model.width = 140
+	model.height = 32
+	model.memberRows = []memberRow{
+		{label: "ISSUES (1)"},
+		{
+			selectable: true,
+			member: store.ClusterMemberDetail{Thread: store.Thread{
+				Number:  42,
+				Kind:    "issue",
+				State:   "open",
+				Title:   "Selected issue",
+				HTMLURL: "https://github.com/openclaw/openclaw/issues/42",
+			}},
+		},
+	}
+	layout := model.layout()
+
+	model.handleMouse(tea.MouseMsg{
+		X:      layout.members.x + 2,
+		Y:      layout.members.y + 4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonRight,
+	})
+
+	if !model.menuOpen || !model.menuFloating {
+		t.Fatalf("expected floating member action menu, open=%v floating=%v", model.menuOpen, model.menuFloating)
+	}
+	if model.menuTitle != "Member Actions" || model.menuContext != focusMembers {
+		t.Fatalf("member context menu title/context = %q/%q", model.menuTitle, model.menuContext)
+	}
+	joinedLabels := strings.Join(menuLabels(model.menuItems), "\n")
+	if !strings.Contains(joinedLabels, "Open #42 in browser") {
+		t.Fatalf("member menu should include selected thread action:\n%s", joinedLabels)
+	}
+	if !strings.Contains(joinedLabels, "Copy cluster summary") {
+		t.Fatalf("member menu should keep cluster context actions:\n%s", joinedLabels)
+	}
+	if strings.Contains(joinedLabels, "Copy visible clusters") {
+		t.Fatalf("member menu should not include cluster-table bulk actions:\n%s", joinedLabels)
 	}
 }
 
@@ -961,11 +1114,10 @@ func TestTUIRightClickMemberHeaderOpensClusterActions(t *testing.T) {
 	if !model.menuOpen {
 		t.Fatal("expected right click to open action menu")
 	}
-	labels := make([]string, 0, len(model.menuItems))
-	for _, item := range model.menuItems {
-		labels = append(labels, item.label)
+	if model.menuTitle != "Cluster Actions" || model.menuContext != focusClusters {
+		t.Fatalf("member header context menu title/context = %q/%q", model.menuTitle, model.menuContext)
 	}
-	joinedLabels := strings.Join(labels, "\n")
+	joinedLabels := strings.Join(menuLabels(model.menuItems), "\n")
 	if strings.Contains(joinedLabels, "Copy selected URL") {
 		t.Fatalf("member header menu should not use stale selected thread:\n%s", joinedLabels)
 	}
@@ -3510,6 +3662,54 @@ func TestTUIAutoRefreshIsQuietUntilClustersChange(t *testing.T) {
 	}
 }
 
+func TestTUIAutoRefreshPreservesUnboundedViewport(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	for i := 0; i < 35; i++ {
+		clusterID := int64(100 + i)
+		if err := seedTUICluster(ctx, st, repoID, clusterID, 1000+i, fmt.Sprintf("cluster %02d", i)); err != nil {
+			t.Fatalf("seed cluster %d: %v", clusterID, err)
+		}
+	}
+	clusters, err := st.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 0, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+	if len(clusters) <= 20 {
+		t.Fatalf("seeded viewport has %d clusters, want more than refresh floor", len(clusters))
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+	if err := seedTUICluster(ctx, st, repoID, 200, 2000, "new refresh cluster"); err != nil {
+		t.Fatalf("seed new cluster: %v", err)
+	}
+
+	model.autoRefreshFromStore()
+
+	if len(model.payload.Clusters) <= 20 {
+		t.Fatalf("auto refresh collapsed viewport to %d clusters", len(model.payload.Clusters))
+	}
+	if len(model.payload.Clusters) != 36 {
+		t.Fatalf("auto refresh clusters = %d, want 36", len(model.payload.Clusters))
+	}
+	if model.status != "Auto refreshed 36 cluster(s)" {
+		t.Fatalf("auto refresh status = %q", model.status)
+	}
+}
+
 func TestTUIEmptyStateSuggestsRecoveryActions(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -3751,6 +3951,14 @@ func seedTUICluster(ctx context.Context, st *store.Store, repoID, clusterID int6
 		values(?, ?, 'member', 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
 	`, clusterID, threadID)
 	return err
+}
+
+func menuLabels(items []tuiMenuItem) []string {
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		labels = append(labels, item.label)
+	}
+	return labels
 }
 
 func seedTUIClusterPair(ctx context.Context, st *store.Store, repoID, clusterID int64, firstNumber, secondNumber int) (int64, int64, error) {
