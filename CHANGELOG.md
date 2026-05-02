@@ -5,6 +5,7 @@
 - Add crawlkit control metadata/status surfaces with command-local `metadata --json`, `status --json`, and `doctor --json`.
 - Include the primary SQLite database inventory in status JSON so local control surfaces can discover archive storage without opening live stores.
 - Route config path handling and SQLite openers through `crawlkit` so GitHub archive tooling shares the same foundation as the Slack, Discord, and Notion crawlers.
+- Keep shared crawl app TUI nomenclature aligned while `gitcrawl tui` remains the richer cluster-browser reference implementation.
 - Keep the existing `gitcrawl tui` as the family reference terminal interface and add CI smoke coverage for its help surface.
 
 ## 0.1.1 - 2026-04-30
