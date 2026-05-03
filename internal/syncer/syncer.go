@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/openclaw/gitcrawl/internal/documents"
 	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
+	"github.com/vincentkoc/crawlkit/progress"
 )
 
 type GitHubClient interface {
@@ -39,6 +41,7 @@ type Options struct {
 	Numbers         []int
 	IncludeComments bool
 	Reporter        gh.Reporter
+	Logger          *slog.Logger
 }
 
 type Stats struct {
@@ -121,6 +124,15 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		MetadataOnly:   !options.IncludeComments,
 		StartedAt:      started,
 	}
+	tracker := progress.New(options.Logger, progress.Options{
+		Name:  "sync",
+		Unit:  "threads",
+		Total: int64(len(rows)),
+		Attrs: []any{
+			"repository", stats.Repository,
+			"state", state,
+		},
+	})
 	persist := func(st *store.Store) error {
 		for _, row := range rows {
 			thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
@@ -147,6 +159,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			} else {
 				stats.IssuesSynced++
 			}
+			tracker.Add(1,
+				"number", thread.Number,
+				"kind", thread.Kind,
+				"thread_state", thread.State,
+			)
 		}
 		if len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0 {
 			closed, err := s.applyClosedOverlapSweep(ctx, st, repoID, options, since)
@@ -171,13 +188,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 	if !options.IncludeComments {
 		if err := s.store.WithTx(ctx, persist); err != nil {
+			tracker.Finish(err)
 			return Stats{}, err
 		}
+		tracker.Finish(nil)
 		return stats, nil
 	}
 	if err := persist(s.store); err != nil {
+		tracker.Finish(err)
 		return Stats{}, err
 	}
+	tracker.Finish(nil)
 	return stats, nil
 }
 

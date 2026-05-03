@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1793,11 +1794,23 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		Reporter: func(message string) {
 			fmt.Fprintln(a.Stderr, message)
 		},
+		Logger: progressLogger(a.Stderr),
 	})
 	if err != nil {
 		return syncer.Stats{}, err
 	}
 	return stats, nil
+}
+
+func progressLogger(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
 }
 
 func (a *App) runInit(ctx context.Context, args []string) error {
