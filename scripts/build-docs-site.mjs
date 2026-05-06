@@ -431,10 +431,7 @@ function tocFromHtml(html) {
   const re = /<h([23]) id="([^"]+)">([\s\S]*?)<\/h[23]>/g;
   let m;
   while ((m = re.exec(html))) {
-    const text = m[3]
-      .replace(/<a class="anchor"[^>]*>.*?<\/a>/, "")
-      .replace(/<[^>]+>/g, "")
-      .trim();
+    const text = htmlTextContent(m[3]).replace(/^#/, "").trim();
     items.push({ level: Number(m[1]), id: m[2], text });
   }
   if (items.length < 2) return "";
@@ -583,6 +580,33 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function htmlTextContent(fragment) {
+  let out = "";
+  let inTag = false;
+  for (const char of fragment) {
+    if (char === "<") {
+      inTag = true;
+      continue;
+    }
+    if (inTag) {
+      if (char === ">") inTag = false;
+      continue;
+    }
+    out += char;
+  }
+  return decodeHtmlText(out);
+}
+
+function decodeHtmlText(value) {
+  return String(value).replace(/&(amp|lt|gt|quot|#39);/g, (_, entity) => ({
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    "#39": "'",
+  })[entity]);
 }
 
 function validateLinks(outputDir) {
