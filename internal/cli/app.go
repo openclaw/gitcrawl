@@ -1091,6 +1091,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 			if cfgErr := cfg.Normalize(); cfgErr != nil {
 				return cfgErr
 			}
+			cfg.ApplyRuntimeEnv()
 			sort, sortErr := resolveTUISort(*sortMode, cfg)
 			if sortErr != nil {
 				return sortErr
@@ -1838,7 +1839,7 @@ func parseSyncWith(value string) (map[string]bool, error) {
 }
 
 func (a *App) syncRepository(ctx context.Context, owner, repo string, options syncOptions) (syncer.Stats, error) {
-	cfg, err := config.Load(a.configPath)
+	cfg, err := config.LoadRuntime(a.configPath)
 	if err != nil {
 		return syncer.Stats{}, err
 	}
@@ -2211,7 +2212,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	a.applyCommandJSON(*jsonOut)
 	_ = ctx
 
-	cfg, err := config.Load(a.configPath)
+	cfg, err := config.LoadRuntime(a.configPath)
 	configExists := true
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -2222,6 +2223,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		if err := cfg.Normalize(); err != nil {
 			return err
 		}
+		cfg.ApplyRuntimeEnv()
 	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return err
@@ -2313,7 +2315,7 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	if fs.NArg() != 0 {
 		return usageErr(fmt.Errorf("status takes flags only"))
 	}
-	cfg, err := config.Load(a.configPath)
+	cfg, err := config.LoadRuntime(a.configPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -2322,6 +2324,7 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 		if err := cfg.Normalize(); err != nil {
 			return err
 		}
+		cfg.ApplyRuntimeEnv()
 	}
 	status := store.Status{DBPath: cfg.DBPath}
 	if _, err := os.Stat(cfg.DBPath); err == nil {

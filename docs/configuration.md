@@ -64,7 +64,7 @@ checkout_dir = "/Users/me/.config/gitcrawl/portable"
 | `embed_model` | `text-embedding-3-small` | OpenAI embedding model |
 | `embed_dimensions` | `1024` | Must match the model |
 | `embedding_basis` | `title_original` | Only `title_original` is implemented |
-| `[env]` | _(empty)_ | Sets process env at startup; useful for tokens you do not want in your shell rc |
+| `[env]` | _(empty)_ | Config-backed fallback after real process env for env-derived values such as tokens, DB path, and model overrides |
 | `[portable_store]` | _(empty)_ | Used when working from a shared, Git-backed cache |
 
 ## Environment variables

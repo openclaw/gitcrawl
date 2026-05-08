@@ -16,15 +16,16 @@ const (
 )
 
 type Config struct {
-	Version        int          `toml:"version"`
-	DBPath         string       `toml:"db_path"`
-	CacheDir       string       `toml:"cache_dir"`
-	VectorDir      string       `toml:"vector_dir"`
-	LogDir         string       `toml:"log_dir"`
-	GitHub         GitHubConfig `toml:"github"`
-	OpenAI         OpenAIConfig `toml:"openai"`
-	EmbeddingBasis string       `toml:"embedding_basis"`
-	TUI            TUIConfig    `toml:"tui"`
+	Version        int               `toml:"version"`
+	DBPath         string            `toml:"db_path"`
+	CacheDir       string            `toml:"cache_dir"`
+	VectorDir      string            `toml:"vector_dir"`
+	LogDir         string            `toml:"log_dir"`
+	Env            map[string]string `toml:"env"`
+	GitHub         GitHubConfig      `toml:"github"`
+	OpenAI         OpenAIConfig      `toml:"openai"`
+	EmbeddingBasis string            `toml:"embedding_basis"`
+	TUI            TUIConfig         `toml:"tui"`
 }
 
 type GitHubConfig struct {
@@ -105,6 +106,15 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+func LoadRuntime(path string) (Config, error) {
+	cfg, err := Load(path)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ApplyRuntimeEnv()
+	return cfg, nil
+}
+
 func Save(path string, cfg Config) error {
 	if err := cfg.Normalize(); err != nil {
 		return err
@@ -151,10 +161,10 @@ func (c *Config) Normalize() error {
 		c.OpenAI.APIKeyEnv = def.OpenAI.APIKeyEnv
 	}
 	if c.OpenAI.SummaryModel == "" {
-		c.OpenAI.SummaryModel = envOrDefault("GITCRAWL_SUMMARY_MODEL", def.OpenAI.SummaryModel)
+		c.OpenAI.SummaryModel = def.OpenAI.SummaryModel
 	}
 	if c.OpenAI.EmbedModel == "" {
-		c.OpenAI.EmbedModel = envOrDefault("GITCRAWL_EMBED_MODEL", def.OpenAI.EmbedModel)
+		c.OpenAI.EmbedModel = def.OpenAI.EmbedModel
 	}
 	if c.OpenAI.EmbedDimensions <= 0 {
 		c.OpenAI.EmbedDimensions = def.OpenAI.EmbedDimensions
@@ -171,32 +181,53 @@ func (c *Config) Normalize() error {
 	if c.TUI.DefaultSort == "" {
 		c.TUI.DefaultSort = def.TUI.DefaultSort
 	}
-	c.DBPath = expandHome(envOrDefault("GITCRAWL_DB_PATH", c.DBPath))
+	c.DBPath = expandHome(c.DBPath)
 	c.CacheDir = expandHome(c.CacheDir)
 	c.VectorDir = expandHome(c.VectorDir)
 	c.LogDir = expandHome(c.LogDir)
 	return nil
 }
 
+func (c *Config) ApplyRuntimeEnv() {
+	c.OpenAI.SummaryModel = c.envOrDefault("GITCRAWL_SUMMARY_MODEL", c.OpenAI.SummaryModel)
+	c.OpenAI.EmbedModel = c.envOrDefault("GITCRAWL_EMBED_MODEL", c.OpenAI.EmbedModel)
+	c.DBPath = expandHome(c.envOrDefault("GITCRAWL_DB_PATH", c.DBPath))
+}
+
 func ResolveGitHubToken(cfg Config) TokenResolution {
-	if value := strings.TrimSpace(os.Getenv(cfg.GitHub.TokenEnv)); value != "" {
-		return TokenResolution{Value: value, Source: cfg.GitHub.TokenEnv}
-	}
-	return TokenResolution{}
+	return cfg.resolveEnv(cfg.GitHub.TokenEnv)
 }
 
 func ResolveOpenAIKey(cfg Config) TokenResolution {
-	if value := strings.TrimSpace(os.Getenv(cfg.OpenAI.APIKeyEnv)); value != "" {
-		return TokenResolution{Value: value, Source: cfg.OpenAI.APIKeyEnv}
+	return cfg.resolveEnv(cfg.OpenAI.APIKeyEnv)
+}
+
+func (c Config) resolveEnv(primary string) TokenResolution {
+	primary = strings.TrimSpace(primary)
+	if primary == "" {
+		return TokenResolution{}
+	}
+	if value := strings.TrimSpace(os.Getenv(primary)); value != "" {
+		return TokenResolution{Value: value, Source: primary}
+	}
+	if value := c.configEnv(primary); value != "" {
+		return TokenResolution{Value: value, Source: fmt.Sprintf("config.toml [env].%s", primary)}
 	}
 	return TokenResolution{}
 }
 
-func envOrDefault(primary, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(primary)); value != "" {
-		return value
+func (c Config) envOrDefault(primary, fallback string) string {
+	if resolved := c.resolveEnv(primary); resolved.Value != "" {
+		return resolved.Value
 	}
 	return fallback
+}
+
+func (c Config) configEnv(primary string) string {
+	if c.Env == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Env[primary])
 }
 
 func expandHome(path string) string {

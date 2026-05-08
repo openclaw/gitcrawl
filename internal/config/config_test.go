@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	crawlconfig "github.com/vincentkoc/crawlkit/config"
 )
 
 func TestSaveLoadRoundTrip(t *testing.T) {
@@ -13,6 +15,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	cfg := Default()
 	cfg.DBPath = filepath.Join(dir, "gitcrawl.db")
 	cfg.OpenAI.SummaryModel = "gpt-5-mini"
+	cfg.Env = map[string]string{
+		"GITHUB_TOKEN": "config-gh",
+	}
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -27,6 +32,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if loaded.OpenAI.SummaryModel != "gpt-5-mini" {
 		t.Fatalf("summary model mismatch: %q", loaded.OpenAI.SummaryModel)
 	}
+	if loaded.Env["GITHUB_TOKEN"] != "config-gh" {
+		t.Fatalf("env table mismatch: %#v", loaded.Env)
+	}
 }
 
 func TestResolvePathUsesEnv(t *testing.T) {
@@ -39,7 +47,7 @@ func TestResolvePathUsesEnv(t *testing.T) {
 	}
 }
 
-func TestNormalizeUsesDBEnv(t *testing.T) {
+func TestApplyRuntimeEnvUsesDBEnv(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "override.db")
 	t.Setenv("GITCRAWL_DB_PATH", dbPath)
@@ -49,6 +57,7 @@ func TestNormalizeUsesDBEnv(t *testing.T) {
 	if err := cfg.Normalize(); err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
+	cfg.ApplyRuntimeEnv()
 	if cfg.DBPath != dbPath {
 		t.Fatalf("db path: got %q want %q", cfg.DBPath, dbPath)
 	}
@@ -89,6 +98,187 @@ func TestResolveTokens(t *testing.T) {
 	}
 }
 
+func TestResolveTokensFromConfigEnv(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	cfg := Default()
+	cfg.Env = map[string]string{
+		"GITHUB_TOKEN":   "config-gh",
+		"OPENAI_API_KEY": "config-openai",
+	}
+	if got := ResolveGitHubToken(cfg); got.Value != "config-gh" || got.Source != "config.toml [env].GITHUB_TOKEN" {
+		t.Fatalf("github token config env mismatch: %#v", got)
+	}
+	if got := ResolveOpenAIKey(cfg); got.Value != "config-openai" || got.Source != "config.toml [env].OPENAI_API_KEY" {
+		t.Fatalf("openai key config env mismatch: %#v", got)
+	}
+
+	t.Setenv("GITHUB_TOKEN", "process-gh")
+	if got := ResolveGitHubToken(cfg); got.Value != "process-gh" || got.Source != "GITHUB_TOKEN" {
+		t.Fatalf("process env should win: %#v", got)
+	}
+}
+
+func TestResolveTokensFromCustomConfigEnv(t *testing.T) {
+	t.Setenv("CUSTOM_GITHUB_TOKEN", "")
+	t.Setenv("CUSTOM_OPENAI_KEY", "")
+
+	cfg := Default()
+	cfg.GitHub.TokenEnv = "CUSTOM_GITHUB_TOKEN"
+	cfg.OpenAI.APIKeyEnv = "CUSTOM_OPENAI_KEY"
+	cfg.Env = map[string]string{
+		"CUSTOM_GITHUB_TOKEN": "config-custom-gh",
+		"CUSTOM_OPENAI_KEY":   "config-custom-openai",
+		"GITHUB_TOKEN":        "ignored-default-gh",
+		"OPENAI_API_KEY":      "ignored-default-openai",
+	}
+	if got := ResolveGitHubToken(cfg); got.Value != "config-custom-gh" || got.Source != "config.toml [env].CUSTOM_GITHUB_TOKEN" {
+		t.Fatalf("custom github token config env mismatch: %#v", got)
+	}
+	if got := ResolveOpenAIKey(cfg); got.Value != "config-custom-openai" || got.Source != "config.toml [env].CUSTOM_OPENAI_KEY" {
+		t.Fatalf("custom openai key config env mismatch: %#v", got)
+	}
+
+	cfg.Env["CUSTOM_GITHUB_TOKEN"] = "   "
+	if got := ResolveGitHubToken(cfg); got.Value != "" || got.Source != "" {
+		t.Fatalf("empty config env should be ignored: %#v", got)
+	}
+}
+
+func TestApplyRuntimeEnvUsesConfigEnvFallback(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "config-env.db")
+	t.Setenv("GITCRAWL_DB_PATH", "")
+	t.Setenv("GITCRAWL_SUMMARY_MODEL", "")
+	t.Setenv("GITCRAWL_EMBED_MODEL", "")
+
+	cfg := Config{
+		Env: map[string]string{
+			"GITCRAWL_DB_PATH":       dbPath,
+			"GITCRAWL_SUMMARY_MODEL": "summary-config",
+			"GITCRAWL_EMBED_MODEL":   "embed-config",
+		},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	cfg.ApplyRuntimeEnv()
+	if cfg.DBPath != dbPath {
+		t.Fatalf("db path: got %q want %q", cfg.DBPath, dbPath)
+	}
+	if cfg.OpenAI.SummaryModel != "summary-config" || cfg.OpenAI.EmbedModel != "embed-config" {
+		t.Fatalf("config env models not used: %+v", cfg.OpenAI)
+	}
+}
+
+func TestLoadRuntimeUsesConfigEnvModelOverrides(t *testing.T) {
+	t.Setenv("GITCRAWL_SUMMARY_MODEL", "")
+	t.Setenv("GITCRAWL_EMBED_MODEL", "")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[env]
+GITCRAWL_SUMMARY_MODEL = "summary-from-config-env"
+GITCRAWL_EMBED_MODEL = "embed-from-config-env"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadRuntime(path)
+	if err != nil {
+		t.Fatalf("load runtime config: %v", err)
+	}
+	if cfg.OpenAI.SummaryModel != "summary-from-config-env" || cfg.OpenAI.EmbedModel != "embed-from-config-env" {
+		t.Fatalf("load skipped config env model overrides: %+v", cfg.OpenAI)
+	}
+}
+
+func TestLoadDoesNotApplyRuntimeEnvFallback(t *testing.T) {
+	t.Setenv("GITCRAWL_SUMMARY_MODEL", "summary-from-process")
+	t.Setenv("GITCRAWL_EMBED_MODEL", "")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[env]
+GITCRAWL_SUMMARY_MODEL = "summary-from-config-env"
+GITCRAWL_EMBED_MODEL = "embed-from-config-env"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.OpenAI.SummaryModel != Default().OpenAI.SummaryModel || cfg.OpenAI.EmbedModel != Default().OpenAI.EmbedModel {
+		t.Fatalf("load should not apply runtime fallback: %+v", cfg.OpenAI)
+	}
+}
+
+func TestSaveDoesNotApplyConfigEnvFallback(t *testing.T) {
+	t.Setenv("GITCRAWL_SUMMARY_MODEL", "process-summary")
+	t.Setenv("GITCRAWL_EMBED_MODEL", "")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg := Default()
+	cfg.OpenAI.SummaryModel = "explicit-summary"
+	cfg.OpenAI.EmbedModel = "explicit-embed"
+	cfg.Env = map[string]string{
+		"GITCRAWL_SUMMARY_MODEL": "config-summary",
+		"GITCRAWL_EMBED_MODEL":   "config-embed",
+	}
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	var raw Config
+	if err := crawlconfig.LoadTOML(path, &raw); err != nil {
+		t.Fatalf("load raw config: %v", err)
+	}
+	if raw.OpenAI.SummaryModel != "explicit-summary" {
+		t.Fatalf("save applied process env fallback: %q", raw.OpenAI.SummaryModel)
+	}
+	if raw.OpenAI.EmbedModel != "explicit-embed" {
+		t.Fatalf("save applied config env fallback: %q", raw.OpenAI.EmbedModel)
+	}
+}
+
+func TestLoadThenSaveDoesNotMaterializeRuntimeEnvFallback(t *testing.T) {
+	t.Setenv("GITCRAWL_SUMMARY_MODEL", "process-summary")
+	t.Setenv("GITCRAWL_EMBED_MODEL", "")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[env]
+GITCRAWL_SUMMARY_MODEL = "config-summary"
+GITCRAWL_EMBED_MODEL = "config-embed"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.EmbeddingBasis = "title_original"
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	var raw Config
+	if err := crawlconfig.LoadTOML(path, &raw); err != nil {
+		t.Fatalf("load raw config: %v", err)
+	}
+	if raw.OpenAI.SummaryModel == "process-summary" || raw.OpenAI.SummaryModel == "config-summary" {
+		t.Fatalf("load/save materialized summary fallback: %q", raw.OpenAI.SummaryModel)
+	}
+	if raw.OpenAI.EmbedModel == "config-embed" {
+		t.Fatalf("load/save materialized embed fallback: %q", raw.OpenAI.EmbedModel)
+	}
+}
+
 func TestNormalizeDefaultsAndRuntimeDirs(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -106,8 +296,8 @@ func TestNormalizeDefaultsAndRuntimeDirs(t *testing.T) {
 	if cfg.Version != 1 || cfg.GitHub.TokenEnv == "" || cfg.OpenAI.APIKeyEnv == "" {
 		t.Fatalf("defaults not filled: %+v", cfg)
 	}
-	if cfg.OpenAI.SummaryModel != "summary-env" || cfg.OpenAI.EmbedModel != "embed-env" {
-		t.Fatalf("env models not used: %+v", cfg.OpenAI)
+	if cfg.OpenAI.SummaryModel != Default().OpenAI.SummaryModel || cfg.OpenAI.EmbedModel != Default().OpenAI.EmbedModel {
+		t.Fatalf("normalize should not apply runtime env: %+v", cfg.OpenAI)
 	}
 	if !filepath.IsAbs(cfg.DBPath) || !strings.Contains(cfg.DBPath, dir) {
 		t.Fatalf("home path not expanded: %s", cfg.DBPath)
