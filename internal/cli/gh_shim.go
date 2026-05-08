@@ -365,6 +365,7 @@ func (a *App) execRealGH(ctx context.Context, args []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = a.Stdout
 	cmd.Stderr = a.Stderr
+	cmd.Env = a.realGHEnv()
 	return cmd.Run()
 }
 

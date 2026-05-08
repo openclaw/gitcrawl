@@ -84,6 +84,58 @@ func cacheGHReadErrors() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv("GITCRAWL_GH_CACHE_ERRORS")), "0")
 }
 
+func (a *App) realGHEnv() []string {
+	env := os.Environ()
+	cfg, err := config.LoadRuntime(a.configPath)
+	if err != nil {
+		return env
+	}
+	token := config.ResolveGitHubToken(cfg)
+	if token.Value == "" {
+		return env
+	}
+	tokenEnv := strings.TrimSpace(cfg.GitHub.TokenEnv)
+	if tokenEnv == "" {
+		tokenEnv = config.DefaultTokenEnv
+	}
+	env = setEnvValue(env, tokenEnv, token.Value)
+	if tokenEnv != config.DefaultTokenEnv && !envValueNonEmpty(env, config.DefaultTokenEnv) {
+		env = setEnvValue(env, config.DefaultTokenEnv, token.Value)
+	}
+	return env
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return env
+	}
+	entry := key + "=" + value
+	prefix := key + "="
+	out := append([]string(nil), env...)
+	for index, existing := range out {
+		if strings.HasPrefix(existing, prefix) {
+			out[index] = entry
+			return out
+		}
+	}
+	return append(out, entry)
+}
+
+func envValueNonEmpty(env []string, key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	prefix := key + "="
+	for _, existing := range env {
+		if strings.HasPrefix(existing, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(existing, prefix)) != ""
+		}
+	}
+	return false
+}
+
 func (a *App) captureRealGH(ctx context.Context, args []string) (string, string, int, error) {
 	ghPath, err := resolveRealGHPath()
 	if err != nil {
@@ -94,6 +146,7 @@ func (a *App) captureRealGH(ctx context.Context, args []string) (string, string,
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.Env = a.realGHEnv()
 	err = cmd.Run()
 	exitCode := 0
 	if err != nil {

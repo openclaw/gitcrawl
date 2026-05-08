@@ -66,6 +66,62 @@ func TestGHShimFallsBackForUnsupportedRead(t *testing.T) {
 	}
 }
 
+func TestGHShimPassThroughUsesConfigEnvToken(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+[env]
+GITHUB_TOKEN = "config-token"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho token:$GITHUB_TOKEN args:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "gh", "auth", "status"}); err != nil {
+		t.Fatalf("pass-through: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "token:config-token args:auth status" {
+		t.Fatalf("pass-through output = %q", got)
+	}
+}
+
+func TestGHShimCachedFallbackUsesConfigEnvToken(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+[env]
+GITHUB_TOKEN = "config-token"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho token:$GITHUB_TOKEN args:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "gh", "repo", "view", "openclaw/gitcrawl"}); err != nil {
+		t.Fatalf("cached fallback: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "token:config-token args:repo view openclaw/gitcrawl" {
+		t.Fatalf("cached fallback output = %q", got)
+	}
+}
+
 func TestGHShimFallsBackForEmptyOpenIssueListWithoutBroadSync(t *testing.T) {
 	ctx := context.Background()
 	configPath := seedGHShimEmptyRepo(t, ctx)
