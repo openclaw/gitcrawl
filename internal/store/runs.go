@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -92,6 +93,50 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, repoID int64) (time.Ti
 		return time.Time{}, fmt.Errorf("parse last successful sync %q: %w", lastSync, err)
 	}
 	return parsed, nil
+}
+
+func (s *Store) LastSuccessfulListSyncAt(ctx context.Context, repoID int64, state string) (time.Time, error) {
+	scopes := listSyncScopesForState(state)
+	if len(scopes) == 0 {
+		return time.Time{}, nil
+	}
+	placeholders := make([]string, len(scopes))
+	args := make([]any, 0, 1+len(scopes))
+	args = append(args, repoID)
+	for i, scope := range scopes {
+		placeholders[i] = "?"
+		args = append(args, scope)
+	}
+	var lastSync string
+	err := s.q().QueryRowContext(ctx, `
+		select coalesce(max(finished_at), '')
+		from sync_runs
+		where repo_id = ? and status in ('success', 'completed') and scope in (`+strings.Join(placeholders, ",")+`)
+	`, args...).Scan(&lastSync)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read last successful list sync: %w", err)
+	}
+	if lastSync == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, lastSync)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse last successful list sync %q: %w", lastSync, err)
+	}
+	return parsed, nil
+}
+
+func listSyncScopesForState(state string) []string {
+	switch strings.TrimSpace(strings.ToLower(state)) {
+	case "", "open":
+		return []string{"open", "all"}
+	case "closed":
+		return []string{"closed", "all"}
+	case "all":
+		return []string{"all"}
+	default:
+		return nil
+	}
 }
 
 func runTable(kind string) (string, error) {

@@ -125,6 +125,8 @@ When a local issue or PR read misses the cache, the shim can auto-hydrate exactl
 
 This keeps `gh issue view`, `gh pr view`, `gh pr checks`, and `gh run` reads cheap and fresh without manual sync orchestration. Disable with `GITCRAWL_GH_AUTO_HYDRATE=0` if you want the shim to be strictly cache-or-fallthrough.
 
+When the configured database comes from a portable store, auto-hydration writes to the local runtime mirror, not the Git checkout. Broad empty open-issue discovery is also guarded: if `gh issue list` or empty-query `gh search issues --state open` would return no rows but the repo only has targeted sync history, the shim falls through to the real `gh` instead of treating that incomplete local snapshot as authoritative.
+
 ## Cache inspection: `xcache`
 
 ```bash

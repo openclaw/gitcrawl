@@ -2,25 +2,21 @@
 
 ## Unreleased
 
+## 0.3.1 - 2026-05-08
+
+- Fix gh-shim portable-store auto-hydration so exact issue/PR refreshes write to the runtime mirror instead of dirtying the Git checkout, clear stale portable refresh locks, and make empty open issue discovery fall through when only targeted sync history exists.
+- Keep `cluster-detail` aligned with the default cluster list by showing closed historical members unless `--hide-closed` is passed, and fail fast when `GITCRAWL_GH_PATH` points back at the `gitcrawl` shim.
+
 ## 0.3.0 - 2026-05-08
 
 - Bump routine release workflow dependencies.
-- Add a repo-local `gitcrawl` agent skill for local archive, freshness,
-  gh-shim, cluster, and verification workflows.
-- Accept full GitHub issue and pull request URLs anywhere `gitcrawl` expects a
-  thread number, including sync filters, gh-shim views/diffs, governance
-  commands, neighbor lookup, embedding, and TUI jumps.
-- Document read-only SQLite query examples in the repo-local agent skill so
-  agents can do exact local archive counts without mutating state.
-- Document the crawlkit control surface now available on `main`, including
-  `metadata --json`, `status --json`, and `doctor --json` for local launchers
-  and CI.
-- Clarify that `gitcrawl tui` remains the reference terminal browser for the
-  crawl app family while shared `crawlkit/tui` converges on the same panes,
-  sorting, action menus, and status chrome.
+- Add a repo-local `gitcrawl` agent skill for local archive, freshness, gh-shim, cluster, and verification workflows.
+- Accept full GitHub issue and pull request URLs anywhere `gitcrawl` expects a thread number, including sync filters, gh-shim views/diffs, governance commands, neighbor lookup, embedding, and TUI jumps.
+- Document read-only SQLite query examples in the repo-local agent skill so agents can do exact local archive counts without mutating state.
+- Document the crawlkit control surface now available on `main`, including `metadata --json`, `status --json`, and `doctor --json` for local launchers and CI.
+- Clarify that `gitcrawl tui` remains the reference terminal browser for the crawl app family while shared `crawlkit/tui` converges on the same panes, sorting, action menus, and status chrome.
 - Add command-reference coverage for the read-only metadata/status commands.
-- Add broader CLI, gh-shim, TUI, and store regression coverage for the verified
-  release surface.
+- Add broader CLI, gh-shim, TUI, and store regression coverage for the verified release surface.
 
 ## 0.2.1 - 2026-05-05
 

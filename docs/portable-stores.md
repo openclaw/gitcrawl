@@ -56,6 +56,7 @@ Write commands (`embed`, `refresh`, `cluster`, neighbor generation) need to pers
 This separation means:
 
 - You can `gitcrawl embed` against a portable store without dirtying the Git checkout
+- gh-shim exact-thread auto-hydration writes into the same runtime mirror
 - Local cluster overrides (`close-cluster`, exclusions, canonicals) live in the runtime mirror
 - Only the publishing workflow writes back into the portable checkout
 

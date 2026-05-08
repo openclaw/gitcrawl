@@ -88,7 +88,7 @@ gitcrawl cluster-explain owner/repo --id 123    # alias
 | `--id <n>` | _(required)_ | Cluster ID |
 | `--member-limit <n>` | _(no limit)_ | Maximum members to return |
 | `--body-chars <n>` | `280` | Body snippet length per member |
-| `--include-closed` | _(off)_ | Include closed members |
+| `--hide-closed` | _(off)_ | Hide locally closed members |
 
 `cluster-explain` is the same command — it exists so the verb reads naturally in agent prompts ("explain why these things ended up together").
 

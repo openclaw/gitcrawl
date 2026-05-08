@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,8 @@ type localRuntime struct {
 const portableStoreRefreshTimeout = 15 * time.Second
 const portableStoreRefreshTTL = 2 * time.Minute
 const portableStoreRefreshFailureBackoff = time.Minute
+
+var errPortableStoreDirty = errors.New("portable store checkout has local changes")
 
 func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	cfg, err := config.LoadRuntime(a.configPath)
@@ -91,7 +94,7 @@ func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
 		return nil
 	}
 	if !gitWorktreeClean(ctx, root) {
-		return nil
+		return errPortableStoreDirty
 	}
 	pullCtx, cancel := context.WithTimeout(ctx, portableStoreRefreshTimeout)
 	defer cancel()
@@ -169,6 +172,7 @@ func refreshPortableStoreForDBIfDue(ctx context.Context, sourceDBPath, mirrorPat
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		return err
 	}
+	removeStalePortableRefreshLock(lockPath, now)
 	lock, locked := tryGHCommandCacheLock(lockPath)
 	if !locked {
 		return nil
@@ -194,6 +198,17 @@ func refreshPortableStoreForDBIfDue(ctx context.Context, sourceDBPath, mirrorPat
 	state.LastFailure = ""
 	state.Error = ""
 	return writePortableStoreRefreshState(statePath, state)
+}
+
+func removeStalePortableRefreshLock(path string, now time.Time) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if now.Sub(info.ModTime()) <= 2*portableStoreRefreshTimeout {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 func portableStoreRefreshInterval() time.Duration {

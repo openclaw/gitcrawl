@@ -64,7 +64,7 @@ func candidateRealGHPaths() []string {
 	seen := map[string]bool{}
 	unique := paths[:0]
 	for _, path := range paths {
-		if path = strings.TrimSpace(path); path != "" && !seen[path] {
+		if path = strings.TrimSpace(path); path != "" && !seen[path] && !isGitcrawlShimPath(path) {
 			seen[path] = true
 			unique = append(unique, path)
 		}

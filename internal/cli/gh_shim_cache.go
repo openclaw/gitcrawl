@@ -85,24 +85,16 @@ func cacheGHReadErrors() bool {
 }
 
 func (a *App) captureRealGH(ctx context.Context, args []string) (string, string, int, error) {
-	ghPath := strings.TrimSpace(os.Getenv("GITCRAWL_GH_PATH"))
-	if ghPath == "" {
-		if _, err := os.Stat("/opt/homebrew/opt/gh/bin/gh"); err == nil {
-			ghPath = "/opt/homebrew/opt/gh/bin/gh"
-		} else {
-			var err error
-			ghPath, err = exec.LookPath("gh")
-			if err != nil {
-				return "", "", 127, fmt.Errorf("real gh not found; set GITCRAWL_GH_PATH")
-			}
-		}
+	ghPath, err := resolveRealGHPath()
+	if err != nil {
+		return "", "", 127, err
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, ghPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if err != nil {
 		exitCode = 1

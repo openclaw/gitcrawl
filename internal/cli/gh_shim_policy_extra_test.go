@@ -228,6 +228,18 @@ func TestGHShimCachePolicyExtraBranches(t *testing.T) {
 	if strings.TrimSpace(ghOut.String()) != "real-gh:" {
 		t.Fatalf("empty gh shim output = %q", ghOut.String())
 	}
+	shimPath := filepath.Join(t.TempDir(), "gitcrawl-gh")
+	if err := os.WriteFile(shimPath, []byte("#!/bin/sh\necho shim\n"), 0o755); err != nil {
+		t.Fatalf("write fake shim: %v", err)
+	}
+	shimLink := filepath.Join(t.TempDir(), "gh")
+	if err := os.Symlink(shimPath, shimLink); err != nil {
+		t.Fatalf("symlink fake shim: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", shimLink)
+	if _, err := resolveRealGHPath(); err == nil || !strings.Contains(err.Error(), "gitcrawl shim") {
+		t.Fatalf("shim path should fail fast, err=%v", err)
+	}
 	t.Setenv("GITCRAWL_GH_STALE_GRACE", "3m")
 	if got := ghCommandCacheStaleGrace([]string{"api", "users/octocat"}); got != 3*time.Minute {
 		t.Fatalf("env stale grace = %s", got)

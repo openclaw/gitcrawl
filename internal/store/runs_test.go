@@ -111,3 +111,42 @@ func TestLastSuccessfulSyncAt(t *testing.T) {
 		t.Fatalf("last sync = %s, want %s", lastSync, want)
 	}
 }
+
+func TestLastSuccessfulListSyncAtIgnoresTargetedRuns(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID: repoID, Kind: "sync", Scope: "numbers:13", Status: "success",
+		StartedAt: "2026-04-26T00:03:00Z", FinishedAt: "2026-04-26T00:03:30Z",
+	}); err != nil {
+		t.Fatalf("record targeted run: %v", err)
+	}
+	if lastSync, err := st.LastSuccessfulListSyncAt(ctx, repoID, "open"); err != nil || !lastSync.IsZero() {
+		t.Fatalf("targeted run should not count as broad list sync: last=%s err=%v", lastSync, err)
+	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID: repoID, Kind: "sync", Scope: "all", Status: "success",
+		StartedAt: "2026-04-26T00:04:00Z", FinishedAt: "2026-04-26T00:04:30Z",
+	}); err != nil {
+		t.Fatalf("record all run: %v", err)
+	}
+	lastSync, err := st.LastSuccessfulListSyncAt(ctx, repoID, "open")
+	if err != nil {
+		t.Fatalf("last broad sync: %v", err)
+	}
+	want, _ := time.Parse(time.RFC3339Nano, "2026-04-26T00:04:30Z")
+	if !lastSync.Equal(want) {
+		t.Fatalf("last broad sync = %s, want %s", lastSync, want)
+	}
+}

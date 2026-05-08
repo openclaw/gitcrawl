@@ -69,12 +69,22 @@ func TestGHSearchCacheStaleUsesRepoSyncRuns(t *testing.T) {
 	if _, err := st.RecordRun(ctx, store.RunRecord{
 		RepoID:     repoID,
 		Kind:       "sync",
+		Scope:      "numbers:13",
+		Status:     "success",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		FinishedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("record targeted sync: %v", err)
+	}
+	if _, err := st.RecordRun(ctx, store.RunRecord{
+		RepoID:     repoID,
+		Kind:       "sync",
 		Scope:      "open",
 		Status:     "success",
 		StartedAt:  finishedAt,
 		FinishedAt: finishedAt,
 	}); err != nil {
-		t.Fatalf("record sync: %v", err)
+		t.Fatalf("record broad sync: %v", err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
@@ -82,14 +92,14 @@ func TestGHSearchCacheStaleUsesRepoSyncRuns(t *testing.T) {
 
 	run := New()
 	run.configPath = configPath
-	stale, lastSync, err := run.ghSearchCacheStale(ctx, "openclaw", "openclaw", 2*time.Hour)
+	stale, lastSync, err := run.ghSearchCacheStale(ctx, "openclaw", "openclaw", "open", 2*time.Hour)
 	if err != nil {
 		t.Fatalf("freshness check: %v", err)
 	}
 	if stale || lastSync.IsZero() {
 		t.Fatalf("expected cache to be fresh, stale=%v lastSync=%s", stale, lastSync)
 	}
-	stale, _, err = run.ghSearchCacheStale(ctx, "openclaw", "openclaw", 30*time.Minute)
+	stale, _, err = run.ghSearchCacheStale(ctx, "openclaw", "openclaw", "open", 30*time.Minute)
 	if err != nil {
 		t.Fatalf("stale freshness check: %v", err)
 	}
@@ -110,7 +120,7 @@ func TestGHSearchCacheStaleWhenRepoMissing(t *testing.T) {
 
 	run := New()
 	run.configPath = configPath
-	stale, lastSync, err := run.ghSearchCacheStale(ctx, "openclaw", "missing", time.Minute)
+	stale, lastSync, err := run.ghSearchCacheStale(ctx, "openclaw", "missing", "open", time.Minute)
 	if err != nil {
 		t.Fatalf("freshness check: %v", err)
 	}

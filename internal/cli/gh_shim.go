@@ -206,6 +206,22 @@ func (a *App) runGHThreadList(ctx context.Context, resource string, args []strin
 	if err != nil {
 		return err
 	}
+	if len(threads) == 0 && ghThreadListNeedsLiveEmptyCheck(ghThreadListRequest{
+		Kind:     ghResourceKind(resource),
+		State:    strings.TrimSpace(*stateRaw),
+		Query:    strings.TrimSpace(*searchRaw),
+		Author:   strings.TrimSpace(*authorRaw),
+		Assignee: strings.TrimSpace(*assigneeRaw),
+		Labels:   labels.Values(),
+	}) {
+		fresh, err := a.localGHThreadListHasBroadSync(ctx, repoValue, strings.TrimSpace(*stateRaw))
+		if err != nil {
+			return err
+		}
+		if !fresh {
+			return localGHUnsupported(fmt.Errorf("empty local %s list has no broad %s sync", resource, ghDefaultListState(*stateRaw)))
+		}
+	}
 	jsonFields := strings.TrimSpace(*jsonFieldsRaw)
 	if jsonFields != "" || strings.TrimSpace(*jqRaw) != "" || a.format == FormatJSON {
 		if jsonFields == "" {
@@ -293,6 +309,34 @@ func (a *App) localGHThreads(ctx context.Context, req ghThreadListRequest) ([]st
 	})
 }
 
+func ghThreadListNeedsLiveEmptyCheck(req ghThreadListRequest) bool {
+	if req.Kind != "issue" || strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.Author) != "" || strings.TrimSpace(req.Assignee) != "" || len(req.Labels) > 0 {
+		return false
+	}
+	return ghDefaultListState(req.State) == "open"
+}
+
+func (a *App) localGHThreadListHasBroadSync(ctx context.Context, repoValue, state string) (bool, error) {
+	owner, repoName, err := parseOwnerRepo(repoValue)
+	if err != nil {
+		return false, err
+	}
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		return false, localGHUnsupported(err)
+	}
+	defer rt.Store.Close()
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return false, localGHUnsupported(err)
+	}
+	lastSync, err := rt.Store.LastSuccessfulListSyncAt(ctx, repo.ID, state)
+	if err != nil {
+		return false, err
+	}
+	return !lastSync.IsZero(), nil
+}
+
 func (a *App) resolveGHRepo(ctx context.Context, explicit string) (string, error) {
 	if strings.TrimSpace(explicit) != "" {
 		return strings.TrimSpace(explicit), nil
@@ -313,17 +357,9 @@ func (a *App) resolveGHRepo(ctx context.Context, explicit string) (string, error
 }
 
 func (a *App) execRealGH(ctx context.Context, args []string) error {
-	ghPath := strings.TrimSpace(os.Getenv("GITCRAWL_GH_PATH"))
-	if ghPath == "" {
-		if _, err := os.Stat("/opt/homebrew/opt/gh/bin/gh"); err == nil {
-			ghPath = "/opt/homebrew/opt/gh/bin/gh"
-		} else {
-			var err error
-			ghPath, err = exec.LookPath("gh")
-			if err != nil {
-				return fmt.Errorf("real gh not found; set GITCRAWL_GH_PATH")
-			}
-		}
+	ghPath, err := resolveRealGHPath()
+	if err != nil {
+		return err
 	}
 	cmd := exec.CommandContext(ctx, ghPath, args...)
 	cmd.Stdin = os.Stdin

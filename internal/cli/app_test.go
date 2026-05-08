@@ -153,6 +153,15 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.Contains(helpOut.String(), "cluster browser") {
 		t.Fatalf("tui help output = %q", helpOut.String())
 	}
+	for _, topic := range []string{"metadata", "status", "init", "configure", "doctor", "sync", "refresh", "embed", "threads", "search", "cluster", "clusters", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
+		helpOut.Reset()
+		if err := help.printCommandUsage(topic); err != nil {
+			t.Fatalf("%s help: %v", topic, err)
+		}
+		if !strings.Contains(helpOut.String(), "Usage:") {
+			t.Fatalf("%s help output = %q", topic, helpOut.String())
+		}
+	}
 	if err := New().Run(ctx, []string{"--config", configPath, "status", "extra"}); err == nil {
 		t.Fatal("status extra arg should fail")
 	}
@@ -980,7 +989,7 @@ func TestGlobalCommandBranches(t *testing.T) {
 	}{
 		{args: []string{"--help"}, wantOut: "Usage:"},
 		{args: []string{"help"}, wantOut: "Usage:"},
-		{args: []string{"help", "sync"}, wantErr: true, exitCode: 2},
+		{args: []string{"help", "sync"}, wantOut: "gitcrawl sync"},
 		{args: []string{"--version"}, wantOut: "dev"},
 		{args: []string{"version"}, wantOut: "dev"},
 		{args: []string{"--json", "version"}, wantOut: `"version"`},
@@ -2325,6 +2334,36 @@ func TestClustersDefaultShowsActivePrimaryMembers(t *testing.T) {
 	}
 	if len(all.Clusters) != 1 || all.Clusters[0].MemberCount != 1 {
 		t.Fatalf("hide-closed should focus active members, got %#v", all.Clusters)
+	}
+
+	stdout.Reset()
+	detail := New()
+	detail.Stdout = &stdout
+	if err := detail.Run(ctx, []string{"--config", configPath, "--json", "cluster-detail", "openclaw/openclaw", "--id", "90"}); err != nil {
+		t.Fatalf("cluster-detail: %v", err)
+	}
+	var detailPayload struct {
+		Members []store.ClusterMemberDetail `json:"members"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &detailPayload); err != nil {
+		t.Fatalf("decode cluster detail: %v\n%s", err, stdout.String())
+	}
+	if len(detailPayload.Members) != 2 {
+		t.Fatalf("default cluster-detail should match visible cluster members, got %#v", detailPayload.Members)
+	}
+
+	stdout.Reset()
+	hideDetail := New()
+	hideDetail.Stdout = &stdout
+	if err := hideDetail.Run(ctx, []string{"--config", configPath, "--json", "cluster-detail", "openclaw/openclaw", "--id", "90", "--hide-closed"}); err != nil {
+		t.Fatalf("cluster-detail hide closed: %v", err)
+	}
+	detailPayload.Members = nil
+	if err := json.Unmarshal(stdout.Bytes(), &detailPayload); err != nil {
+		t.Fatalf("decode hide-closed cluster detail: %v\n%s", err, stdout.String())
+	}
+	if len(detailPayload.Members) != 1 || detailPayload.Members[0].Thread.Number != 90 {
+		t.Fatalf("hide-closed cluster-detail should focus open members, got %#v", detailPayload.Members)
 	}
 }
 

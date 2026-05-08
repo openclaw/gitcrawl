@@ -66,6 +66,22 @@ func TestPortableRuntimeUtilityBranches(t *testing.T) {
 	if recentPortableRefresh("", now, time.Minute) || recentPortableRefresh("bad", now, time.Minute) || !recentPortableRefresh(now.Format(time.RFC3339Nano), now, time.Minute) {
 		t.Fatal("recent refresh classification mismatch")
 	}
+	lockPath := filepath.Join(dir, "refresh.lock")
+	if err := os.WriteFile(lockPath, []byte("123\n"), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	removeStalePortableRefreshLock(lockPath, now)
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("fresh lock should remain: %v", err)
+	}
+	old := now.Add(-3 * portableStoreRefreshTimeout)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatalf("age lock: %v", err)
+	}
+	removeStalePortableRefreshLock(lockPath, now)
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("stale lock should be removed, err=%v", err)
+	}
 	t.Setenv("GITCRAWL_PORTABLE_REFRESH_TTL", "0")
 	if got := portableStoreRefreshInterval(); got != 0 {
 		t.Fatalf("zero ttl = %s", got)

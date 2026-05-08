@@ -1306,7 +1306,8 @@ func (a *App) runClusterDetail(ctx context.Context, args []string) error {
 	clusterIDRaw := fs.String("id", "", "cluster id")
 	memberLimitRaw := fs.String("member-limit", "", "maximum member rows")
 	bodyCharsRaw := fs.String("body-chars", "", "maximum body snippet characters")
-	includeClosed := fs.Bool("include-closed", false, "include closed clusters and members")
+	includeClosed := fs.Bool("include-closed", false, "deprecated; closed cluster members are shown by default")
+	hideClosed := fs.Bool("hide-closed", false, "hide locally closed members")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "member-limit": true, "body-chars": true})); err != nil {
 		return usageErr(err)
@@ -1347,7 +1348,7 @@ func (a *App) runClusterDetail(ctx context.Context, args []string) error {
 	detail, err := rt.Store.ClusterDetail(ctx, store.ClusterDetailOptions{
 		RepoID:        repo.ID,
 		ClusterID:     int64(clusterID),
-		IncludeClosed: *includeClosed,
+		IncludeClosed: *includeClosed || !*hideClosed,
 		MemberLimit:   memberLimit,
 		BodyChars:     bodyChars,
 	})
@@ -1850,14 +1851,14 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return syncer.Stats{}, err
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
+	rt, err := a.openLocalRuntime(ctx)
 	if err != nil {
 		return syncer.Stats{}, err
 	}
-	defer st.Close()
+	defer rt.Store.Close()
 
 	client := gh.New(gh.Options{Token: token.Value, BaseURL: githubBaseURL()})
-	service := syncer.New(client, st)
+	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:            owner,
 		Repo:             repo,
@@ -2954,7 +2955,14 @@ func (a *App) printUsage() {
 }
 
 func (a *App) printCommandUsage(command string) error {
+	if text, ok := commandUsageTexts[command]; ok {
+		fmt.Fprint(a.Stdout, text)
+		return nil
+	}
 	switch command {
+	case "cluster-explain":
+		fmt.Fprint(a.Stdout, commandUsageTexts["cluster-detail"])
+		return nil
 	case "portable":
 		fmt.Fprint(a.Stdout, portableUsageText)
 		return nil
@@ -2985,6 +2993,7 @@ Core commands:
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
   refresh              run sync, enrichment, embedding, and clustering pipeline
+  embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
   cluster              build durable clusters from local thread vectors
   close-thread         locally hide one issue or pull request row
@@ -3009,6 +3018,131 @@ Core commands:
 
 No API server is provided. There is intentionally no serve command.
 `
+
+var commandUsageTexts = map[string]string{
+	"metadata": `gitcrawl metadata prints crawlkit control metadata.
+
+Usage:
+  gitcrawl metadata [--json]
+`,
+	"status": `gitcrawl status prints fast read-only archive status.
+
+Usage:
+  gitcrawl status [--json]
+`,
+	"init": `gitcrawl init creates a local config and SQLite database.
+
+Usage:
+  gitcrawl init [--db path] [--portable-store URL] [--json]
+`,
+	"configure": `gitcrawl configure updates model fields in the config.
+
+Usage:
+  gitcrawl configure [--summary-model name] [--embed-model name] [--embedding-basis title_original] [--json]
+`,
+	"doctor": `gitcrawl doctor checks config, token, and database readiness.
+
+Usage:
+  gitcrawl doctor [--json]
+`,
+	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
+
+Usage:
+  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-details] [--include-pr-details] [--json]
+`,
+	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
+
+Usage:
+  gitcrawl refresh owner/repo [--state open|closed|all] [--sync-if-stale duration] [--no-sync] [--no-embed] [--no-cluster] [--json]
+`,
+	"embed": `gitcrawl embed generates OpenAI embeddings for local thread documents.
+
+Usage:
+  gitcrawl embed owner/repo [--number ref] [--limit N] [--force] [--include-closed] [--json]
+`,
+	"threads": `gitcrawl threads lists local issue and pull request rows.
+
+Usage:
+  gitcrawl threads owner/repo [--include-closed] [--numbers refs] [--limit N] [--json]
+`,
+	"search": `gitcrawl search queries local thread documents, or accepts gh-shaped issue and PR search.
+
+Usage:
+  gitcrawl search owner/repo --query text [--mode keyword|semantic] [--limit N] [--json]
+  gitcrawl search issues|prs <query> -R owner/repo [--state open|closed|all] [--json fields] [--limit N]
+`,
+	"cluster": `gitcrawl cluster builds durable clusters from local thread vectors.
+
+Usage:
+  gitcrawl cluster owner/repo [--threshold N] [--min-size N] [--max-cluster-size N] [--k N] [--cross-kind-threshold N] [--limit N] [--model name] [--basis semantic|references|hybrid] [--include-closed] [--json]
+`,
+	"clusters": `gitcrawl clusters lists latest display clusters with durable fallback.
+
+Usage:
+  gitcrawl clusters owner/repo [--sort size|recent|oldest] [--min-size N] [--limit N] [--hide-closed] [--json]
+`,
+	"durable-clusters": `gitcrawl durable-clusters lists governed durable cluster groups.
+
+Usage:
+  gitcrawl durable-clusters owner/repo [--include-closed] [--sort size|recent|oldest] [--min-size N] [--limit N] [--json]
+`,
+	"cluster-detail": `gitcrawl cluster-detail dumps one cluster and its member rows.
+
+Usage:
+  gitcrawl cluster-detail owner/repo --id N [--member-limit N] [--body-chars N] [--hide-closed] [--json]
+`,
+	"neighbors": `gitcrawl neighbors lists vector-nearest local issue and pull request rows.
+
+Usage:
+  gitcrawl neighbors owner/repo --number ref [--limit N] [--json]
+`,
+	"runs": `gitcrawl runs lists local pipeline run history.
+
+Usage:
+  gitcrawl runs owner/repo [--kind sync|summary|embedding|cluster] [--limit N] [--json]
+`,
+	"close-thread": `gitcrawl close-thread locally hides one issue or pull request row.
+
+Usage:
+  gitcrawl close-thread owner/repo --number ref [--reason text] [--json]
+`,
+	"reopen-thread": `gitcrawl reopen-thread clears a local thread hide.
+
+Usage:
+  gitcrawl reopen-thread owner/repo --number ref [--json]
+`,
+	"close-cluster": `gitcrawl close-cluster locally hides one durable cluster.
+
+Usage:
+  gitcrawl close-cluster owner/repo --id N [--reason text] [--json]
+`,
+	"reopen-cluster": `gitcrawl reopen-cluster clears a local cluster hide.
+
+Usage:
+  gitcrawl reopen-cluster owner/repo --id N [--json]
+`,
+	"exclude-cluster-member": `gitcrawl exclude-cluster-member locally removes one row from a durable cluster.
+
+Usage:
+  gitcrawl exclude-cluster-member owner/repo --id N --number ref [--reason text] [--json]
+`,
+	"include-cluster-member": `gitcrawl include-cluster-member restores one row to a durable cluster.
+
+Usage:
+  gitcrawl include-cluster-member owner/repo --id N --number ref [--json]
+`,
+	"set-cluster-canonical": `gitcrawl set-cluster-canonical sets the canonical row for a durable cluster.
+
+Usage:
+  gitcrawl set-cluster-canonical owner/repo --id N --number ref [--reason text] [--json]
+`,
+	"gh": `gitcrawl gh runs a gh-compatible local cache shim with fallback to real gh.
+
+Usage:
+  gitcrawl gh <gh command>
+  gitcrawl gh xcache stats|keys|gc|flush|reset|snapshot [--json]
+`,
+}
 
 const tuiUsageText = `gitcrawl tui opens the local terminal cluster browser.
 

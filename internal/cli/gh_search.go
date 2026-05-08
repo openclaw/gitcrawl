@@ -104,6 +104,15 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(threads) == 0 && ghSearchNeedsLiveEmptyCheck(kind, query, state) {
+		lastSync, err := rt.Store.LastSuccessfulListSyncAt(ctx, repo.ID, state)
+		if err != nil {
+			return err
+		}
+		if lastSync.IsZero() {
+			return localGHUnsupported(fmt.Errorf("empty local %s search has no broad %s sync", args[0], ghDefaultListState(state)))
+		}
+	}
 
 	jsonFields := strings.TrimSpace(*jsonFieldsRaw)
 	if jsonFields != "" || a.format == FormatJSON {
@@ -126,7 +135,7 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 }
 
 func (a *App) syncGHSearchIfStale(ctx context.Context, owner, repoName, state string, maxAge time.Duration) error {
-	stale, lastSync, err := a.ghSearchCacheStale(ctx, owner, repoName, maxAge)
+	stale, lastSync, err := a.ghSearchCacheStale(ctx, owner, repoName, state, maxAge)
 	if err != nil {
 		return err
 	}
@@ -142,7 +151,7 @@ func (a *App) syncGHSearchIfStale(ctx context.Context, owner, repoName, state st
 	return err
 }
 
-func (a *App) ghSearchCacheStale(ctx context.Context, owner, repoName string, maxAge time.Duration) (bool, time.Time, error) {
+func (a *App) ghSearchCacheStale(ctx context.Context, owner, repoName, state string, maxAge time.Duration) (bool, time.Time, error) {
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -158,7 +167,7 @@ func (a *App) ghSearchCacheStale(ctx context.Context, owner, repoName string, ma
 		}
 		return false, time.Time{}, err
 	}
-	lastSync, err := rt.Store.LastSuccessfulSyncAt(ctx, repo.ID)
+	lastSync, err := rt.Store.LastSuccessfulListSyncAt(ctx, repo.ID, state)
 	if err != nil {
 		return false, time.Time{}, err
 	}
@@ -166,6 +175,20 @@ func (a *App) ghSearchCacheStale(ctx context.Context, owner, repoName string, ma
 		return true, time.Time{}, nil
 	}
 	return time.Since(lastSync) > maxAge, lastSync, nil
+}
+
+func ghSearchNeedsLiveEmptyCheck(kind, query, state string) bool {
+	if strings.TrimSpace(query) != "" || kind != "issue" {
+		return false
+	}
+	return ghDefaultListState(state) == "open"
+}
+
+func ghDefaultListState(state string) string {
+	if strings.TrimSpace(state) == "" {
+		return "open"
+	}
+	return strings.TrimSpace(state)
 }
 
 func parseGHSearchQuery(value string) (query string, repo string, state string) {
