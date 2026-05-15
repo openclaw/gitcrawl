@@ -302,7 +302,7 @@ func sqliteIdentifier(value string) string {
 
 func (s *Store) tableExists(ctx context.Context, table string) bool {
 	var name string
-	err := s.db.QueryRowContext(ctx, `select name from sqlite_master where type in ('table', 'virtual table') and name = ?`, table).Scan(&name)
+	err := s.q().QueryRowContext(ctx, `select name from sqlite_master where type in ('table', 'virtual table') and name = ?`, table).Scan(&name)
 	return err == nil && name == table
 }
 

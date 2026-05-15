@@ -441,6 +441,29 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 }
 
+func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	s := New(fakeGitHub{}, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true}); err != nil {
+		t.Fatalf("sync with comments: %v", err)
+	}
+	assertDocumentFTSCount(t, st, "same", 1)
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
+	if err != nil {
+		t.Fatalf("metadata sync: %v", err)
+	}
+	if !stats.MetadataOnly || stats.CommentsSynced != 0 {
+		t.Fatalf("metadata stats = %#v", stats)
+	}
+	assertDocumentFTSCount(t, st, "same", 1)
+}
+
 func TestSyncHydratesPullReviewComments(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -922,4 +945,15 @@ func testProgressLogger(out *bytes.Buffer) *slog.Logger {
 			return attr
 		},
 	}))
+}
+
+func assertDocumentFTSCount(t *testing.T, st *store.Store, query string, want int) {
+	t.Helper()
+	var got int
+	if err := st.DB().QueryRowContext(context.Background(), `select count(*) from documents_fts where documents_fts match ?`, query).Scan(&got); err != nil {
+		t.Fatalf("query document index: %v", err)
+	}
+	if got != want {
+		t.Fatalf("document FTS count for %q: got %d want %d", query, got, want)
+	}
 }

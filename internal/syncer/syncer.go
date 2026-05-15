@@ -162,6 +162,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 				stats.CommentsSynced += len(comments)
+			} else {
+				var err error
+				comments, err = st.ListComments(ctx, thread.ID)
+				if err != nil {
+					return err
+				}
 			}
 			if options.IncludePRDetails && thread.Kind == "pull_request" {
 				count, err := s.syncPullReviewThreads(ctx, st, options, thread)
