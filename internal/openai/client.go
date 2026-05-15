@@ -100,9 +100,7 @@ func New(options Options) *Client {
 	if options.Retry != nil {
 		retry = *options.Retry
 	}
-	if retry.MaxAttempts <= 0 {
-		retry.MaxAttempts = 1
-	}
+	retry = normalizeRetryConfig(retry)
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -121,6 +119,23 @@ func New(options Options) *Client {
 		sleep:      sleep,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+}
+
+func normalizeRetryConfig(retry RetryConfig) RetryConfig {
+	defaults := DefaultRetryConfig()
+	if retry.MaxAttempts <= 0 {
+		retry.MaxAttempts = 1
+	}
+	if retry.BaseDelay <= 0 {
+		retry.BaseDelay = defaults.BaseDelay
+	}
+	if retry.OverloadedBase <= 0 {
+		retry.OverloadedBase = defaults.OverloadedBase
+	}
+	if retry.MaxDelay <= 0 {
+		retry.MaxDelay = defaults.MaxDelay
+	}
+	return retry
 }
 
 func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]float64, error) {

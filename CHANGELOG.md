@@ -2,6 +2,7 @@
 
 ## 0.3.5 - Unreleased
 
+- Preserve OpenAI retry backoff defaults when callers provide partial retry overrides.
 - Preserve existing comment text in search documents during metadata-only syncs.
 - Fail PR-detail syncs when GitHub review-thread hydration fails instead of recording a successful partial refresh.
 - Fetch all paginated GitHub review-thread comments instead of keeping only the first review-thread comment page.

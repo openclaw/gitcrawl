@@ -234,6 +234,36 @@ func TestEmbedRetriesOn429AndHonorsRetryAfter(t *testing.T) {
 	}
 }
 
+func TestEmbedPartialRetryConfigUsesDefaultMaxDelay(t *testing.T) {
+	var calls int32
+	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		writeSingleVector(w)
+	})
+	defer server.Close()
+
+	var slept []time.Duration
+	retry := RetryConfig{MaxAttempts: 2, BaseDelay: time.Millisecond, MaxElapsed: time.Hour}
+	client := New(Options{APIKey: "test", BaseURL: server.URL, Retry: &retry, Sleep: func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}})
+	if _, err := client.Embed(context.Background(), "model", []string{"hi"}); err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if len(slept) != 1 || slept[0] != 2*time.Second {
+		t.Fatalf("expected default max delay to preserve 2s Retry-After, got %v", slept)
+	}
+}
+
 func TestEmbedDoesNotSleepAfterFinalRetryableError(t *testing.T) {
 	var calls int32
 	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
