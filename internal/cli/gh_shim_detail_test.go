@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -145,6 +147,89 @@ func TestGHShimViewAndListUseLocalCache(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "12\tManifest cache update") {
 		t.Fatalf("human pr list = %q", got)
+	}
+}
+
+func TestGHShimUnsupportedChecksAndRunJSONFieldsFallback(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	ghPath := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho fallback:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "pr checks",
+			args: []string{"--config", configPath, "gh", "pr", "checks", "12", "-R", "openclaw/openclaw", "--json", "missingField"},
+			want: "fallback:pr checks 12 -R openclaw/openclaw --json missingField",
+		},
+		{
+			name: "run list",
+			args: []string{"--config", configPath, "gh", "run", "list", "-R", "openclaw/openclaw", "--branch", "manifest-cache", "--json", "missingField"},
+			want: "fallback:run list -R openclaw/openclaw --branch manifest-cache --json missingField",
+		},
+		{
+			name: "run view",
+			args: []string{"--config", configPath, "gh", "run", "view", "99", "-R", "openclaw/openclaw", "--json", "missingField"},
+			want: "fallback:run view 99 -R openclaw/openclaw --json missingField",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := New()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			run.Stdout = &stdout
+			run.Stderr = &stderr
+			if err := run.Run(ctx, tc.args); err != nil {
+				t.Fatalf("fallback: %v", err)
+			}
+			if got := strings.TrimSpace(stdout.String()); got != tc.want {
+				t.Fatalf("fallback output = %q, want %q", got, tc.want)
+			}
+			if got := strings.TrimSpace(stderr.String()); got != "" {
+				t.Fatalf("fallback stderr = %q", got)
+			}
+		})
+	}
+}
+
+func TestGHShimCachedUnsupportedChecksAndRunJSONFieldsFail(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "pr checks",
+			args: []string{"--config", configPath, "gh", "--cached", "pr", "checks", "12", "-R", "openclaw/openclaw", "--json", "missingField"},
+		},
+		{
+			name: "run list",
+			args: []string{"--config", configPath, "gh", "--cached", "run", "list", "-R", "openclaw/openclaw", "--branch", "manifest-cache", "--json", "missingField"},
+		},
+		{
+			name: "run view",
+			args: []string{"--config", configPath, "gh", "--cached", "run", "view", "99", "-R", "openclaw/openclaw", "--json", "missingField"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := New().Run(ctx, tc.args)
+			if err == nil {
+				t.Fatal("unsupported cached --json field should fail")
+			}
+			if !isLocalGHUnsupported(err) || !strings.Contains(err.Error(), "missingField") {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
 

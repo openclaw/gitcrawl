@@ -69,11 +69,16 @@ func (a *App) runGHRunList(ctx context.Context, args []string, controls ghShimCo
 	if len(runs) == 0 {
 		return localGHUnsupported(fmt.Errorf("no cached workflow runs"))
 	}
-	a.writeGHLocalRunNotice()
 	if strings.TrimSpace(*jsonFieldsRaw) != "" || strings.TrimSpace(*jqRaw) != "" || a.format == FormatJSON {
 		fields := firstNonEmpty(strings.TrimSpace(*jsonFieldsRaw), "databaseId,workflowName,status,conclusion,url,createdAt,updatedAt")
-		return a.writeJSONValue(ghWorkflowRunJSONRows(runs, fields), strings.TrimSpace(*jqRaw))
+		rows, err := ghWorkflowRunJSONRows(runs, fields)
+		if err != nil {
+			return localGHUnsupported(err)
+		}
+		a.writeGHLocalRunNotice()
+		return a.writeJSONValue(rows, strings.TrimSpace(*jqRaw))
 	}
+	a.writeGHLocalRunNotice()
 	for _, run := range runs {
 		if _, err := fmt.Fprintf(a.Stdout, "%s\t%s\t%s\t%s\n", run.RunID, run.WorkflowName, run.Status, run.HTMLURL); err != nil {
 			return err
@@ -115,11 +120,16 @@ func (a *App) runGHRunView(ctx context.Context, args []string) error {
 		if run.RunID != runID {
 			continue
 		}
-		a.writeGHLocalRunNotice()
 		if strings.TrimSpace(*jsonFieldsRaw) != "" || strings.TrimSpace(*jqRaw) != "" || a.format == FormatJSON {
 			fields := firstNonEmpty(strings.TrimSpace(*jsonFieldsRaw), "databaseId,workflowName,status,conclusion,url,createdAt,updatedAt")
-			return a.writeJSONValue(ghWorkflowRunJSONRows([]store.WorkflowRun{run}, fields)[0], strings.TrimSpace(*jqRaw))
+			rows, err := ghWorkflowRunJSONRows([]store.WorkflowRun{run}, fields)
+			if err != nil {
+				return localGHUnsupported(err)
+			}
+			a.writeGHLocalRunNotice()
+			return a.writeJSONValue(rows[0], strings.TrimSpace(*jqRaw))
 		}
+		a.writeGHLocalRunNotice()
 		_, err := fmt.Fprintf(a.Stdout, "run: %s\nworkflow: %s\nstatus: %s\nurl: %s\n", run.RunID, run.WorkflowName, run.Status, run.HTMLURL)
 		return err
 	}
@@ -147,7 +157,7 @@ func (a *App) localGHWorkflowRuns(ctx context.Context, repoValue string, options
 	return rt.Store.ListWorkflowRuns(ctx, repo.ID, options)
 }
 
-func ghWorkflowRunJSONRows(runs []store.WorkflowRun, fieldsRaw string) []map[string]any {
+func ghWorkflowRunJSONRows(runs []store.WorkflowRun, fieldsRaw string) ([]map[string]any, error) {
 	fields := parseJSONFields(fieldsRaw)
 	rows := make([]map[string]any, 0, len(runs))
 	for _, run := range runs {
@@ -180,9 +190,11 @@ func ghWorkflowRunJSONRows(runs []store.WorkflowRun, fieldsRaw string) []map[str
 				row[field] = run.CreatedAtGH
 			case "updatedAt":
 				row[field] = run.UpdatedAtGH
+			default:
+				return nil, fmt.Errorf("unsupported gh run --json field %q", field)
 			}
 		}
 		rows = append(rows, row)
 	}
-	return rows
+	return rows, nil
 }

@@ -313,7 +313,10 @@ func TestGHMetricsSearchRunsAndXCacheBranches(t *testing.T) {
 		HTMLURL: "https://example.com/run", Event: "push", HeadBranch: "main", HeadSHA: "abc",
 		CreatedAtGH: "2026-05-08T00:00:00Z", UpdatedAtGH: "2026-05-08T00:01:00Z",
 	}, {RunID: "not-number", WorkflowName: "Deploy"}}
-	runRows := ghWorkflowRunJSONRows(runs, "databaseId,id,number,workflowName,name,displayTitle,status,conclusion,url,event,headBranch,headSha,createdAt,updatedAt")
+	runRows, err := ghWorkflowRunJSONRows(runs, "databaseId,id,number,workflowName,name,displayTitle,status,conclusion,url,event,headBranch,headSha,createdAt,updatedAt")
+	if err != nil {
+		t.Fatalf("run rows: %v", err)
+	}
 	if runRows[0]["databaseId"] != int64(99) || runRows[1]["databaseId"] != "not-number" {
 		t.Fatalf("run rows = %+v", runRows)
 	}

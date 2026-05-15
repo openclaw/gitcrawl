@@ -232,7 +232,10 @@ func (a *App) runGHPRChecks(ctx context.Context, args []string) error {
 	}
 	if strings.TrimSpace(*jsonFieldsRaw) != "" || strings.TrimSpace(*jqRaw) != "" || a.format == FormatJSON {
 		fields := firstNonEmpty(strings.TrimSpace(*jsonFieldsRaw), "name,state,conclusion,detailsUrl,workflow")
-		rows := ghPRChecksJSONRows(cache.Checks, fields)
+		rows, err := ghPRChecksJSONRows(cache.Checks, fields)
+		if err != nil {
+			return localGHUnsupported(err)
+		}
 		return a.writeJSONValue(rows, strings.TrimSpace(*jqRaw))
 	}
 	for _, check := range cache.Checks {
@@ -243,7 +246,7 @@ func (a *App) runGHPRChecks(ctx context.Context, args []string) error {
 	return nil
 }
 
-func ghPRChecksJSONRows(checks []store.PullRequestCheck, fieldsRaw string) []map[string]any {
+func ghPRChecksJSONRows(checks []store.PullRequestCheck, fieldsRaw string) ([]map[string]any, error) {
 	fields := parseJSONFields(fieldsRaw)
 	rows := make([]map[string]any, 0, len(checks))
 	for _, check := range checks {
@@ -266,9 +269,11 @@ func ghPRChecksJSONRows(checks []store.PullRequestCheck, fieldsRaw string) []map
 				row[field] = check.StartedAt
 			case "completedAt":
 				row[field] = check.CompletedAt
+			default:
+				return nil, fmt.Errorf("unsupported gh pr checks --json field %q", field)
 			}
 		}
 		rows = append(rows, row)
 	}
-	return rows
+	return rows, nil
 }
