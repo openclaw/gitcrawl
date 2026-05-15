@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -273,7 +274,21 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body io.Reader
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {
-	resp, err := c.doOnce(ctx, method, path, body, reporter)
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, fmt.Errorf("read github request body: %w", err)
+		}
+	}
+	bodyReader := func() io.Reader {
+		if body == nil {
+			return nil
+		}
+		return bytes.NewReader(bodyBytes)
+	}
+	resp, err := c.doOnce(ctx, method, path, bodyReader(), reporter)
 	if err == nil {
 		return resp, nil
 	}
@@ -289,7 +304,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, re
 		return nil, ctx.Err()
 	case <-timer.C:
 	}
-	return c.doOnce(ctx, method, path, body, reporter)
+	return c.doOnce(ctx, method, path, bodyReader(), reporter)
 }
 
 func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {

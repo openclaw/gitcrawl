@@ -2,6 +2,7 @@
 
 ## 0.3.5 - Unreleased
 
+- Replay GitHub request bodies on rate-limit retries so GraphQL POST retries keep their JSON payload.
 - Send GitHub Enterprise GraphQL requests to `/api/graphql` when the REST API base URL ends in `/api/v3`.
 - Reject durable cluster saves with empty member lists instead of leaving stale active memberships.
 - Preserve multiple thread embeddings for the same thread when basis or model differs.

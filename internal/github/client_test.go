@@ -320,6 +320,39 @@ func TestListPullReviewThreadsUsesEnterpriseGraphQLEndpoint(t *testing.T) {
 	}
 }
 
+func TestListPullReviewThreadsRetriesWithBody(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body graphqlEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode graphql request %d: %v", atomic.LoadInt32(&calls)+1, err)
+		}
+		if body.Query == "" || body.Variables["owner"] != "openclaw" || body.Variables["repo"] != "gitcrawl" {
+			t.Fatalf("graphql request body = %+v", body)
+		}
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"reviewThreads": map[string]any{
+				"nodes":    []map[string]any{},
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+			},
+		}}}})
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	if _, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 8, nil); err != nil {
+		t.Fatalf("list review threads: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("calls = %d, want 2", got)
+	}
+}
+
 func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
