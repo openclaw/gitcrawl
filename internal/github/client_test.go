@@ -294,6 +294,74 @@ func TestListPullReviewThreadsDecodesGraphQLEnvelope(t *testing.T) {
 	}
 }
 
+func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/graphql" {
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+		var body graphqlEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch calls {
+		case 1:
+			if body.Variables["threadID"] != nil {
+				t.Fatalf("first request should fetch review threads, variables=%+v", body.Variables)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"reviewThreads": map[string]any{
+					"nodes": []map[string]any{{
+						"id":         "PRRT_1",
+						"isResolved": false,
+						"comments": map[string]any{
+							"nodes":    []map[string]any{{"id": "PRRC_1"}},
+							"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "comment-cursor-1"},
+						},
+					}},
+					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+				},
+			}}}})
+		case 2:
+			if body.Variables["threadID"] != "PRRT_1" || body.Variables["cursor"] != "comment-cursor-1" {
+				t.Fatalf("comment page variables = %+v", body.Variables)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+				"node": map[string]any{
+					"comments": map[string]any{
+						"nodes":    []map[string]any{{"id": "PRRC_2"}},
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+					},
+				},
+			}})
+		default:
+			t.Fatalf("unexpected graphql call %d", calls)
+		}
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	rows, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 8, nil)
+	if err != nil {
+		t.Fatalf("list review threads: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d", calls)
+	}
+	if len(rows) != 1 || rows[0]["id"] != "PRRT_1" {
+		t.Fatalf("rows = %#v", rows)
+	}
+	comments, ok := rows[0]["comments"].(map[string]any)
+	if !ok {
+		t.Fatalf("comments = %#v", rows[0]["comments"])
+	}
+	nodes, ok := comments["nodes"].([]map[string]any)
+	if !ok || len(nodes) != 2 || nodes[1]["id"] != "PRRC_2" {
+		t.Fatalf("comment nodes = %#v", comments["nodes"])
+	}
+}
+
 func TestNextPageAndReporterBranches(t *testing.T) {
 	header := `<https://api.github.test/repos/o/r/issues?page=2&state=open>; rel="next", <https://api.github.test/repos/o/r/issues?page=9>; rel="last"`
 	if got := nextPage(header, "https://api.github.test"); got != "/repos/o/r/issues?page=2&state=open" {
