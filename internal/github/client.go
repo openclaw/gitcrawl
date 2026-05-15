@@ -17,6 +17,7 @@ type Reporter func(message string)
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
+	graphQLURL string
 	token      string
 	userAgent  string
 	pageDelay  time.Duration
@@ -86,6 +87,7 @@ func New(options Options) *Client {
 	return &Client{
 		httpClient: httpClient,
 		baseURL:    baseURL,
+		graphQLURL: graphQLURLForBaseURL(baseURL),
 		token:      options.Token,
 		userAgent:  userAgent,
 		pageDelay:  options.PageDelay,
@@ -291,7 +293,10 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, re
 }
 
 func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {
-	fullURL := c.baseURL + path
+	fullURL := path
+	if !isAbsoluteURL(path) {
+		fullURL = c.baseURL + path
+	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
 		return nil, err
@@ -323,6 +328,27 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		Body:    strings.TrimSpace(string(data)),
 		Headers: resp.Header,
 	}
+}
+
+func isAbsoluteURL(value string) bool {
+	return strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "http://")
+}
+
+func graphQLURLForBaseURL(baseURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return trimmed + "/graphql"
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(path, "/api/v3") {
+		parsed.Path = strings.TrimSuffix(path, "/api/v3") + "/api/graphql"
+	} else {
+		parsed.Path = path + "/graphql"
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (c *Client) observeRateLimit(header http.Header) {

@@ -294,6 +294,32 @@ func TestListPullReviewThreadsDecodesGraphQLEnvelope(t *testing.T) {
 	}
 }
 
+func TestListPullReviewThreadsUsesEnterpriseGraphQLEndpoint(t *testing.T) {
+	var graphQLPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		graphQLPath = r.URL.Path
+		if r.URL.Path != "/api/graphql" {
+			http.Error(w, "wrong graphql endpoint", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"reviewThreads": map[string]any{
+				"nodes":    []map[string]any{},
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+			},
+		}}}})
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL + "/api/v3", PageDelay: -1})
+	if _, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 8, nil); err != nil {
+		t.Fatalf("list review threads: %v", err)
+	}
+	if graphQLPath != "/api/graphql" {
+		t.Fatalf("graphql path = %q, want /api/graphql", graphQLPath)
+	}
+}
+
 func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

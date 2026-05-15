@@ -221,7 +221,7 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 		return fmt.Errorf("encode graphql request: %w", err)
 	}
 	var envelope graphqlResponseEnvelope
-	if err := c.doJSON(ctx, http.MethodPost, "/graphql", bytes.NewReader(payload), reporter, &envelope); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.graphQLURL, bytes.NewReader(payload), reporter, &envelope); err != nil {
 		return err
 	}
 	if len(envelope.Errors) > 0 {
