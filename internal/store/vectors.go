@@ -43,9 +43,7 @@ func (s *Store) UpsertThreadVector(ctx context.Context, vector ThreadVector) err
 	_, err = s.db.ExecContext(ctx, `
 		insert into thread_vectors(thread_id, basis, model, dimensions, content_hash, vector_json, vector_backend, created_at, updated_at)
 		values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(thread_id) do update set
-			basis=excluded.basis,
-			model=excluded.model,
+		on conflict(thread_id, basis, model) do update set
 			dimensions=excluded.dimensions,
 			content_hash=excluded.content_hash,
 			vector_json=excluded.vector_json,

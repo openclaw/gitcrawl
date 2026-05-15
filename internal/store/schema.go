@@ -292,7 +292,7 @@ create table if not exists document_embeddings (
 );
 
 create table if not exists thread_vectors (
-  thread_id integer primary key references threads(id) on delete cascade,
+  thread_id integer not null references threads(id) on delete cascade,
   basis text not null,
   model text not null,
   dimensions integer not null,
@@ -300,7 +300,8 @@ create table if not exists thread_vectors (
   vector_json text not null,
   vector_backend text not null,
   created_at text not null,
-  updated_at text not null
+  updated_at text not null,
+  primary key(thread_id, basis, model)
 );
 
 create table if not exists thread_fingerprints (

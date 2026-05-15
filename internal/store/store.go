@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	schemaVersion = 1
+	schemaVersion = 2
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -183,6 +183,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureThreadVectorsCompositeKey(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
@@ -206,6 +209,68 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) ensureThreadVectorsCompositeKey(ctx context.Context) error {
+	if !s.hasTable(ctx, "thread_vectors") || s.threadVectorsHaveCompositeKey(ctx) {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin thread vector key migration: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`drop index if exists idx_thread_vectors_basis_model`,
+		`alter table thread_vectors rename to thread_vectors_old`,
+		`create table thread_vectors (
+			thread_id integer not null references threads(id) on delete cascade,
+			basis text not null,
+			model text not null,
+			dimensions integer not null,
+			content_hash text not null,
+			vector_json text not null,
+			vector_backend text not null,
+			created_at text not null,
+			updated_at text not null,
+			primary key(thread_id, basis, model)
+		)`,
+		`insert into thread_vectors(thread_id, basis, model, dimensions, content_hash, vector_json, vector_backend, created_at, updated_at)
+			select thread_id, basis, model, dimensions, content_hash, vector_json, vector_backend, created_at, updated_at
+			from thread_vectors_old`,
+		`drop table thread_vectors_old`,
+		`create index if not exists idx_thread_vectors_basis_model on thread_vectors(basis, model)`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate thread vector key: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit thread vector key migration: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) threadVectorsHaveCompositeKey(ctx context.Context) bool {
+	rows, err := s.db.QueryContext(ctx, `pragma table_info(thread_vectors)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	pk := map[string]int{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false
+		}
+		if primaryKey > 0 {
+			pk[name] = primaryKey
+		}
+	}
+	return pk["thread_id"] == 1 && pk["basis"] == 2 && pk["model"] == 3
 }
 
 func (s *Store) hasTable(ctx context.Context, table string) bool {

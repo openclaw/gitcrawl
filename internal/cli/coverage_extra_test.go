@@ -194,6 +194,20 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 	}
 }
 
+func TestDedupeThreadVectorsByThreadPrefersNewest(t *testing.T) {
+	vectors := dedupeThreadVectorsByThread([]store.ThreadVector{
+		{ThreadID: 1, Basis: "z_basis", Model: "model", UpdatedAt: "2026-05-15T00:00:00.12Z", Vector: []float64{1, 0}},
+		{ThreadID: 1, Basis: "a_basis", Model: "model", UpdatedAt: "2026-05-15T00:00:00.123Z", Vector: []float64{0, 1}},
+		{ThreadID: 2, Basis: "z_basis", Model: "model", UpdatedAt: "2026-05-15T00:00:00Z", Vector: []float64{0.5, 0.5}},
+	})
+	if len(vectors) != 2 {
+		t.Fatalf("vectors = %#v, want one row per thread", vectors)
+	}
+	if vectors[0].ThreadID != 1 || vectors[0].Basis != "a_basis" {
+		t.Fatalf("did not keep newest duplicate vector: %#v", vectors)
+	}
+}
+
 func TestCLIAppUsageBranches(t *testing.T) {
 	ctx := context.Background()
 	configPath := filepath.Join(t.TempDir(), "config.toml")

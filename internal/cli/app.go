@@ -416,7 +416,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			return err
 		}
 		if len(vectors) == 0 {
-			fallbackQuery := store.ThreadVectorQuery{RepoID: repo.ID}
+			fallbackQuery := store.ThreadVectorQuery{RepoID: repo.ID, IncludeClosed: stateIncludesClosed(*state)}
 			fallbackVectors, err := rt.Store.ListThreadVectorsFiltered(ctx, fallbackQuery)
 			if err != nil {
 				_ = rt.Store.Close()
@@ -424,7 +424,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			}
 			if len(fallbackVectors) > 0 {
 				query = fallbackQuery
-				vectors = fallbackVectors
+				vectors = dedupeThreadVectorsByThread(fallbackVectors)
 			}
 		}
 		retireMissing := minSize <= 1 && !stateIncludesClosed(*state)
@@ -639,7 +639,50 @@ func semanticSearchVectors(ctx context.Context, st *store.Store, query store.Thr
 		return storedVectors, nil
 	}
 	query.Basis = ""
-	return st.ListThreadVectorsFiltered(ctx, query)
+	fallbackVectors, err := st.ListThreadVectorsFiltered(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return dedupeThreadVectorsByThread(fallbackVectors), nil
+}
+
+func dedupeThreadVectorsByThread(vectors []store.ThreadVector) []store.ThreadVector {
+	out := make([]store.ThreadVector, 0, len(vectors))
+	indexByThreadID := make(map[int64]int, len(vectors))
+	for _, candidate := range vectors {
+		index, ok := indexByThreadID[candidate.ThreadID]
+		if !ok {
+			indexByThreadID[candidate.ThreadID] = len(out)
+			out = append(out, candidate)
+			continue
+		}
+		if threadVectorPreferred(candidate, out[index]) {
+			out[index] = candidate
+		}
+	}
+	return out
+}
+
+func threadVectorPreferred(candidate, current store.ThreadVector) bool {
+	if candidate.UpdatedAt != current.UpdatedAt {
+		return threadVectorTimestampAfter(candidate.UpdatedAt, current.UpdatedAt)
+	}
+	if candidate.CreatedAt != current.CreatedAt {
+		return threadVectorTimestampAfter(candidate.CreatedAt, current.CreatedAt)
+	}
+	if candidate.Basis != current.Basis {
+		return candidate.Basis < current.Basis
+	}
+	return candidate.Model < current.Model
+}
+
+func threadVectorTimestampAfter(candidate, current string) bool {
+	candidateTime, candidateErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(candidate))
+	currentTime, currentErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(current))
+	if candidateErr == nil && currentErr == nil {
+		return candidateTime.After(currentTime)
+	}
+	return candidate > current
 }
 
 func threadVectorsWithDimensions(vectors []store.ThreadVector, dimensions int) []store.ThreadVector {
@@ -871,7 +914,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		}
 		if len(fallbackVectors) > 0 {
 			query = fallbackQuery
-			vectors = fallbackVectors
+			vectors = dedupeThreadVectorsByThread(fallbackVectors)
 		}
 	}
 	if limit > 0 && len(vectors) > limit {
