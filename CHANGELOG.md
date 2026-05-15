@@ -2,6 +2,7 @@
 
 ## 0.3.5 - Unreleased
 
+- Keep `gh xcache gc` from expiring stable PR diff cache entries with the short fallback TTL while the PR head SHA is unchanged.
 - Fall back or fail for unsupported local `gh pr checks` and `gh run` JSON fields instead of silently omitting them.
 - Refuse to use the running `gitcrawl` executable as the real `gh` backend, including hard-linked shim paths, to avoid recursive gh-shim fallthrough.
 - Report duplicate OpenAI embedding response indexes explicitly instead of letting a later row overwrite an earlier vector.

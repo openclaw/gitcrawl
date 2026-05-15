@@ -405,7 +405,7 @@ func (a *App) gcGHCommandCache() (ghCommandCacheGCResult, error) {
 		if !entry.Type().IsRegular() || !isGHCommandCacheEntryFile(name) {
 			continue
 		}
-		key, ok := ghCommandCacheKeyInfoFromDirEntry(dir, entry)
+		key, ok := a.ghCommandCacheKeyInfoFromDirEntry(context.Background(), dir, entry)
 		if ok && key.Expired {
 			if err := os.Remove(path); err == nil {
 				result.Removed++
@@ -440,7 +440,7 @@ func (a *App) collectGHCommandCacheKeys(dir string) ([]ghCommandCacheKeyInfo, in
 		if !entry.Type().IsRegular() || !isGHCommandCacheEntryFile(name) {
 			continue
 		}
-		key, ok := ghCommandCacheKeyInfoFromDirEntry(dir, entry)
+		key, ok := a.ghCommandCacheKeyInfoFromDirEntry(context.Background(), dir, entry)
 		if ok {
 			keys = append(keys, key)
 		}
@@ -452,6 +452,19 @@ func (a *App) collectGHCommandCacheKeys(dir string) ([]ghCommandCacheKeyInfo, in
 }
 
 func ghCommandCacheKeyInfoFromDirEntry(dir string, entry os.DirEntry) (ghCommandCacheKeyInfo, bool) {
+	return ghCommandCacheKeyInfoFromDirEntryCached(dir, entry, nil)
+}
+
+func (a *App) ghCommandCacheKeyInfoFromDirEntry(ctx context.Context, dir string, entry os.DirEntry) (ghCommandCacheKeyInfo, bool) {
+	return ghCommandCacheKeyInfoFromDirEntryCached(dir, entry, func(cached ghCommandCacheEntry) string {
+		if repo, number, _, ok := parseStablePRDiffIdentity(cached.StableIdentity); ok {
+			return a.ghStablePRDiffIdentity(ctx, repo, number)
+		}
+		return a.ghCommandStableIdentity(ctx, cached.Args)
+	})
+}
+
+func ghCommandCacheKeyInfoFromDirEntryCached(dir string, entry os.DirEntry, currentStableIdentity func(ghCommandCacheEntry) string) (ghCommandCacheKeyInfo, bool) {
 	name := entry.Name()
 	info, err := entry.Info()
 	if err != nil {
@@ -465,7 +478,12 @@ func ghCommandCacheKeyInfoFromDirEntry(dir string, entry os.DirEntry) (ghCommand
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return ghCommandCacheKeyInfo{}, false
 	}
-	ttl := ghCommandCacheTTL(cached.Args)
+	stablePRDiff := cached.StableIdentity != ""
+	stableChanged := false
+	if stablePRDiff && currentStableIdentity != nil {
+		stableChanged = currentStableIdentity(cached) != cached.StableIdentity
+	}
+	ttl := ghCommandCacheTTLBase(cached.Args, stablePRDiff)
 	age := time.Since(cached.CreatedAt)
 	return ghCommandCacheKeyInfo{
 		Key:       strings.TrimSuffix(name, ".json"),
@@ -475,6 +493,6 @@ func ghCommandCacheKeyInfoFromDirEntry(dir string, entry os.DirEntry) (ghCommand
 		Args:      cached.Args,
 		Tags:      cached.Tags,
 		Bytes:     info.Size(),
-		Expired:   cached.CreatedAt.IsZero() || age > ghCommandCacheEntryTTL(cached, ttl),
+		Expired:   stableChanged || cached.CreatedAt.IsZero() || age > ghCommandCacheEntryTTL(cached, ttl),
 	}, true
 }

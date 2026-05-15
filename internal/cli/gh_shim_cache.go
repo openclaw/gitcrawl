@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,8 +37,9 @@ func (a *App) execRealGHMaybeCached(ctx context.Context, args []string, controls
 	if err != nil {
 		return a.execRealGH(ctx, args)
 	}
-	ttl := a.ghCommandCacheTTL(ctx, args)
-	entryPath := filepath.Join(cacheDir, a.ghCommandCacheKey(ctx, args)+".json")
+	stableIdentity := a.ghCommandStableIdentity(ctx, args)
+	ttl := ghCommandCacheTTLBase(args, stableIdentity != "")
+	entryPath := filepath.Join(cacheDir, a.ghCommandCacheKeyWithStableIdentity(ctx, args, stableIdentity)+".json")
 	staleEntry, hasStaleEntry := readGHCommandCacheEntry(entryPath)
 	bypassCache := false
 	if a.shouldBypassGHCacheForLiveness(ctx, args, controls) {
@@ -92,12 +94,13 @@ func (a *App) execRealGHMaybeCached(ctx context.Context, args []string, controls
 			_ = a.recordGHRateLimitFromOutput(ctx, args, stdout)
 		}
 		_ = writeGHCommandCache(entryPath, ghCommandCacheEntry{
-			CreatedAt: time.Now().UTC(),
-			Args:      append([]string(nil), args...),
-			Tags:      a.ghCommandCacheTags(ctx, args),
-			ExitCode:  exitCode,
-			Stdout:    stdout,
-			Stderr:    stderr,
+			CreatedAt:      time.Now().UTC(),
+			Args:           append([]string(nil), args...),
+			Tags:           a.ghCommandCacheTags(ctx, args),
+			StableIdentity: stableIdentity,
+			ExitCode:       exitCode,
+			Stdout:         stdout,
+			Stderr:         stderr,
 		})
 	}
 	_, _ = io.WriteString(a.Stdout, stdout)
@@ -235,12 +238,13 @@ func isGHCommandCacheEntryFile(name string) bool {
 }
 
 type ghCommandCacheEntry struct {
-	CreatedAt time.Time `json:"created_at"`
-	Args      []string  `json:"args"`
-	Tags      []string  `json:"tags,omitempty"`
-	ExitCode  int       `json:"exit_code"`
-	Stdout    string    `json:"stdout"`
-	Stderr    string    `json:"stderr"`
+	CreatedAt      time.Time `json:"created_at"`
+	Args           []string  `json:"args"`
+	Tags           []string  `json:"tags,omitempty"`
+	StableIdentity string    `json:"stable_identity,omitempty"`
+	ExitCode       int       `json:"exit_code"`
+	Stdout         string    `json:"stdout"`
+	Stderr         string    `json:"stderr"`
 }
 
 func (a *App) writeGHCommandCacheEntry(entry ghCommandCacheEntry) error {
@@ -462,13 +466,17 @@ func waitGHCommandCache(entryPath, lockPath string, ttl time.Duration, staleEntr
 }
 
 func (a *App) ghCommandCacheKey(ctx context.Context, args []string) string {
+	return a.ghCommandCacheKeyWithStableIdentity(ctx, args, a.ghCommandStableIdentity(ctx, args))
+}
+
+func (a *App) ghCommandCacheKeyWithStableIdentity(ctx context.Context, args []string, stableIdentity string) string {
 	material := strings.Join([]string{
 		"v4",
 		config.ResolvePath(a.configPath),
 		ghCommandCacheScope(args),
 		os.Getenv("GH_HOST"),
 		ghCommandCacheRepoEnv(args),
-		a.ghCommandStableIdentity(ctx, args),
+		stableIdentity,
 		strings.Join(canonicalGHCommandArgs(args), "\x00"),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(material))
@@ -546,6 +554,10 @@ func (a *App) ghCommandStableIdentity(ctx context.Context, args []string) string
 	if !ok {
 		return ""
 	}
+	return a.ghStablePRDiffIdentity(ctx, repo, number)
+}
+
+func (a *App) ghStablePRDiffIdentity(ctx context.Context, repo string, number int) string {
 	thread, err := a.localGHThread(ctx, repo, "pull_request", number)
 	if err != nil {
 		return ""
@@ -569,4 +581,24 @@ func (a *App) ghCommandStableIdentity(ctx context.Context, args []string) string
 		return ""
 	}
 	return fmt.Sprintf("pr-diff:%s:%d:%s", repo, number, sha)
+}
+
+func parseStablePRDiffIdentity(value string) (repo string, number int, sha string, ok bool) {
+	rest, ok := strings.CutPrefix(value, "pr-diff:")
+	if !ok {
+		return "", 0, "", false
+	}
+	repo, rest, ok = strings.Cut(rest, ":")
+	if !ok {
+		return "", 0, "", false
+	}
+	numberRaw, sha, ok := strings.Cut(rest, ":")
+	if !ok {
+		return "", 0, "", false
+	}
+	parsed, err := strconv.Atoi(numberRaw)
+	if err != nil || repo == "" || parsed <= 0 || sha == "" {
+		return "", 0, "", false
+	}
+	return repo, parsed, sha, true
 }

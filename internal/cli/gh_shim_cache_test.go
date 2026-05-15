@@ -1412,6 +1412,111 @@ func TestGHShimXCacheGCRemovesExpiredEntries(t *testing.T) {
 	}
 }
 
+func TestGHShimXCacheGCKeepsStablePRDiffEntries(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	ghPath := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho diff:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_REPO", "openclaw/openclaw")
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	args := []string{"--config", configPath, "gh", "pr", "diff", "12"}
+	if err := run.Run(ctx, args); err != nil {
+		t.Fatalf("cache pr diff: %v", err)
+	}
+	t.Setenv("GH_REPO", "")
+	app := New()
+	app.configPath = configPath
+	cacheDir, err := app.ghCommandCacheDir()
+	if err != nil {
+		t.Fatalf("cache dir: %v", err)
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("read cache dir: %v", err)
+	}
+	var entryPath string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && isGHCommandCacheEntryFile(entry.Name()) {
+			entryPath = filepath.Join(cacheDir, entry.Name())
+			break
+		}
+	}
+	if entryPath == "" {
+		t.Fatal("cached pr diff entry not found")
+	}
+	cached, ok := readGHCommandCacheEntry(entryPath)
+	if !ok {
+		t.Fatalf("read cached entry %s", entryPath)
+	}
+	if cached.StableIdentity == "" {
+		t.Fatalf("stable identity was not persisted: %+v", cached)
+	}
+	cached.CreatedAt = time.Now().Add(-10 * time.Minute)
+	data, err := json.Marshal(cached)
+	if err != nil {
+		t.Fatalf("marshal cache entry: %v", err)
+	}
+	if err := os.WriteFile(entryPath, data, 0o644); err != nil {
+		t.Fatalf("age cache entry: %v", err)
+	}
+
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "gh", "xcache", "gc", "--json"}); err != nil {
+		t.Fatalf("xcache gc unchanged head: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode gc unchanged: %v\n%s", err, stdout.String())
+	}
+	if int(result["removed"].(float64)) != 0 {
+		t.Fatalf("unchanged head gc = %#v", result)
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := st.UpsertPullRequestCache(ctx, store.PullRequestDetail{
+		ThreadID:  prIDForTest(t, ctx, st, repo.ID, 12),
+		RepoID:    repo.ID,
+		Number:    12,
+		HeadSHA:   "def456",
+		RawJSON:   `{"head":{"sha":"def456"}}`,
+		FetchedAt: "2026-04-27T03:00:00Z",
+		UpdatedAt: "2026-04-27T03:00:00Z",
+	}, nil, nil, nil, nil); err != nil {
+		t.Fatalf("update pr cache head: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "gh", "xcache", "gc", "--json"}); err != nil {
+		t.Fatalf("xcache gc changed head: %v", err)
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode gc changed: %v\n%s", err, stdout.String())
+	}
+	if int(result["removed"].(float64)) != 1 {
+		t.Fatalf("changed head gc = %#v", result)
+	}
+}
+
 func TestGHShimCoalescesConcurrentReadOnlyFallbacks(t *testing.T) {
 	ctx := context.Background()
 	configPath := seedGHShimRepo(t, ctx)
