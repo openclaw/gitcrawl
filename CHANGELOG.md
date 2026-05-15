@@ -2,6 +2,7 @@
 
 ## 0.3.5 - Unreleased
 
+- Reject durable cluster saves with empty member lists instead of leaving stale active memberships.
 - Preserve multiple thread embeddings for the same thread when basis or model differs.
 - Preserve OpenAI retry backoff defaults when callers provide partial retry overrides.
 - Preserve existing comment text in search documents during metadata-only syncs.

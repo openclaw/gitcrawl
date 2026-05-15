@@ -871,3 +871,43 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 		t.Fatal("locally closed cluster should stay hidden after reappearing")
 	}
 }
+
+func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	input := DurableClusterInput{
+		StableKey:              "members-empty",
+		StableSlug:             "cluster-empty",
+		RepresentativeThreadID: threadIDs[0],
+		Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0], Role: "canonical"}},
+	}
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("seed durable cluster: %v", err)
+	}
+	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 301, false)
+	if err != nil {
+		t.Fatalf("cluster id: %v", err)
+	}
+
+	input.Members = nil
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err == nil {
+		t.Fatal("empty member cluster should fail")
+	}
+
+	var activeMembers int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from cluster_memberships where cluster_id = ? and state = 'active'`, clusterID).Scan(&activeMembers); err != nil {
+		t.Fatalf("count active members: %v", err)
+	}
+	if activeMembers != 1 {
+		t.Fatalf("active members = %d, want 1", activeMembers)
+	}
+	if _, err := st.ClusterIDForThreadNumber(ctx, repoID, 301, false); err != nil {
+		t.Fatalf("cluster should remain available after rejected save: %v", err)
+	}
+}

@@ -729,6 +729,9 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 		result.RunID = runID
 		seenClusterIDs := make([]int64, 0, len(inputs))
 		for _, input := range inputs {
+			if len(input.Members) == 0 {
+				return fmt.Errorf("durable cluster %q has no members", strings.TrimSpace(input.StableKey))
+			}
 			clusterID, err := tx.upsertDurableCluster(ctx, repoID, runID, input, now)
 			if err != nil {
 				return err
