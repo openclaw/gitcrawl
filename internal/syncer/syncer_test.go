@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -269,6 +270,10 @@ type emptyHeadPullGitHub struct {
 	runsCalled   bool
 }
 
+type failingReviewThreadsGitHub struct {
+	pullDetailsGitHub
+}
+
 type txProbePullDetailsGitHub struct {
 	fakeGitHub
 	st                    *store.Store
@@ -316,6 +321,10 @@ func (g *emptyHeadPullGitHub) ListWorkflowRuns(ctx context.Context, owner, repo 
 
 func (pullDetailsGitHub) ListPullReviewThreads(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
 	return pullCommentGitHub{}.ListPullReviewThreads(ctx, owner, repo, number, reporter)
+}
+
+func (failingReviewThreadsGitHub) ListPullReviewThreads(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	return nil, errors.New("graphql unavailable")
 }
 
 func (pullDetailsGitHub) ListPullFiles(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
@@ -528,6 +537,39 @@ func TestSyncHydratesPullRequestDetails(t *testing.T) {
 	}
 	if fetchedAt == "" {
 		t.Fatal("missing review thread sync marker")
+	}
+}
+
+func TestSyncPullRequestDetailsFailsOnReviewThreadFetchError(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	s := New(failingReviewThreadsGitHub{}, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+	_, err = s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{8}, IncludePRDetails: true})
+	if err == nil || !strings.Contains(err.Error(), "list pull request review threads for #8") {
+		t.Fatalf("sync error = %v", err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil {
+		t.Fatalf("threads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("threads = %+v", threads)
+	}
+	fetchedAt, err := st.PullRequestReviewThreadsFetchedAt(ctx, threads[0].ID)
+	if err != nil {
+		t.Fatalf("review thread marker: %v", err)
+	}
+	if fetchedAt != "" {
+		t.Fatalf("review thread marker should stay empty after failed fetch, got %q", fetchedAt)
 	}
 }
 

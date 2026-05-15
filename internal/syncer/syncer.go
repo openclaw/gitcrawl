@@ -413,8 +413,7 @@ func (s *Syncer) syncComments(ctx context.Context, options Options, thread store
 func (s *Syncer) syncPullReviewThreads(ctx context.Context, st *store.Store, options Options, thread store.Thread) (int, error) {
 	rows, err := s.client.ListPullReviewThreads(ctx, options.Owner, options.Repo, thread.Number, options.Reporter)
 	if err != nil {
-		options.Reporter.Printf("[sync] review threads skipped number=%d err=%v", thread.Number, err)
-		return 0, nil
+		return 0, fmt.Errorf("list pull request review threads for #%d: %w", thread.Number, err)
 	}
 	fetchedAt := s.now().Format(time.RFC3339Nano)
 	threads := make([]store.PullRequestReviewThread, 0, len(rows))
