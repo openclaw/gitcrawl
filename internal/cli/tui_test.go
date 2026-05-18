@@ -4017,3 +4017,61 @@ func seedTUIClusterPair(ctx context.Context, st *store.Store, repoID, clusterID 
 	}
 	return firstID, secondID, nil
 }
+
+// TestTUILoadSelectedClusterPreservesMemberSelection guards the regression
+// where every reload path (auto-refresh, manual refresh, sort/filter toggles)
+// snapped the member selection back to the first row, because
+// loadSelectedCluster wiped memberRows/memberIndex before sortMembers could
+// capture the prior selection.
+func TestTUILoadSelectedClusterPreservesMemberSelection(t *testing.T) {
+	cluster := store.ClusterSummary{
+		ID: 1, Source: store.ClusterSourceRun, Status: "active",
+		MemberCount: 4, UpdatedAt: "2026-04-27T00:00:00Z",
+	}
+	detail := store.ClusterDetail{
+		Cluster: cluster,
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 101, Number: 101, Kind: "issue", State: "open", Title: "alpha"}},
+			{Thread: store.Thread{ID: 102, Number: 102, Kind: "issue", State: "open", Title: "bravo"}},
+			{Thread: store.Thread{ID: 103, Number: 103, Kind: "issue", State: "open", Title: "charlie"}},
+			{Thread: store.Thread{ID: 104, Number: 104, Kind: "issue", State: "open", Title: "delta"}},
+		},
+	}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   []store.ClusterSummary{cluster},
+	})
+	model.detailCache[clusterSummaryKey(cluster)] = detail
+
+	model.loadSelectedCluster()
+
+	// Select a member that is not the first selectable row.
+	var wantThreadID int64
+	seenSelectable := 0
+	for i, row := range model.memberRows {
+		if !row.selectable {
+			continue
+		}
+		seenSelectable++
+		if seenSelectable == 2 {
+			model.memberIndex = i
+			wantThreadID = row.member.Thread.ID
+			break
+		}
+	}
+	if wantThreadID == 0 {
+		t.Fatalf("could not pick a non-first member; memberRows=%d", len(model.memberRows))
+	}
+
+	// Simulate an auto-refresh reload of the same cluster.
+	model.loadSelectedCluster()
+
+	got, ok := model.selectedMember()
+	if !ok {
+		t.Fatalf("no member selected after reload")
+	}
+	if got.Thread.ID != wantThreadID {
+		t.Fatalf("member selection not preserved across reload: got thread %d, want %d", got.Thread.ID, wantThreadID)
+	}
+}

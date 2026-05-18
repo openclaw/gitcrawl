@@ -3338,6 +3338,17 @@ func (m *clusterBrowserModel) sortMembersFromHeader(relativeX int) {
 }
 
 func (m *clusterBrowserModel) loadSelectedCluster() {
+	// Capture the currently selected member before the state below is wiped.
+	// sortMembers tries to restore the selection itself, but it reads
+	// selectedMember() which depends on memberRows/memberIndex that this
+	// function clears first, so on every reload path (auto-refresh, manual
+	// refresh, sort/filter toggles, ...) that restore is a no-op and the
+	// selection silently snaps back to the first row. Snapshot the stable
+	// thread id here and re-apply it after the rebuild.
+	prevMemberID := int64(0)
+	if member, ok := m.selectedMember(); ok {
+		prevMemberID = member.Thread.ID
+	}
 	m.detailView.GotoTop()
 	m.memberOff = 0
 	m.memberIndex = -1
@@ -3350,6 +3361,7 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	cacheKey := clusterSummaryKey(cluster)
 	if cached, ok := m.detailCache[cacheKey]; ok {
 		m.applyClusterDetail(cached)
+		m.restoreMemberSelection(prevMemberID)
 		return
 	}
 	if m.store == nil {
@@ -3369,6 +3381,26 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	}
 	m.detailCache[clusterSummaryKey(detail.Cluster)] = detail
 	m.applyClusterDetail(detail)
+	m.restoreMemberSelection(prevMemberID)
+}
+
+// restoreMemberSelection re-selects the member whose thread matches id after a
+// reload rebuilt memberRows. Threads are disjoint across clusters (a thread
+// belongs to at most one cluster), so a match implies the same cluster is
+// still selected and the user's selection should survive the refresh. When id
+// is absent — the cluster was switched, or the member was filtered out — the
+// first-selectable default chosen by sortMembers stands.
+func (m *clusterBrowserModel) restoreMemberSelection(id int64) {
+	if id == 0 || len(m.memberRows) == 0 {
+		return
+	}
+	for index, row := range m.memberRows {
+		if row.selectable && row.member.Thread.ID == id {
+			m.memberIndex = index
+			m.keepVisible()
+			return
+		}
+	}
 }
 
 func (m *clusterBrowserModel) applyClusterDetail(detail store.ClusterDetail) {

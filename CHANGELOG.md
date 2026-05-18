@@ -2,6 +2,9 @@
 
 ## 0.4.1 - 2026-05-18
 
+- Keep the highlighted member selected in the TUI when the cluster list
+  auto-refreshes, is manually refreshed, or is re-sorted/filtered, instead of
+  silently snapping the selection back to the first row.
 - Add cached release checks with `gitcrawl check-update` and passive terminal
   notices when a newer OpenClaw release is available.
 
