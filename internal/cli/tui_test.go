@@ -4017,3 +4017,56 @@ func seedTUIClusterPair(ctx context.Context, st *store.Store, repoID, clusterID 
 	}
 	return firstID, secondID, nil
 }
+
+// TestTUIDetailViewportScrollsWithKeyboard guards the regression where the
+// detail pane could not be scrolled by any input. detailView.SetContent was
+// only called from renderDetail (a View() value-receiver copy), so the
+// persistent viewport never had content and LineUp/LineDown/wheel were no-ops.
+func TestTUIDetailViewportScrollsWithKeyboard(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+	model.detail = store.ClusterDetail{
+		Cluster: model.payload.Clusters[0],
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{
+				ID: 10, Number: 10, Kind: "issue", State: "open",
+				Title: strings.Repeat("a long detail title that wraps many times ", 40),
+			}},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+
+	// Small terminal so detail content overflows its viewport, then focus the
+	// detail pane (clusters -> members -> detail).
+	var updated tea.Model = model
+	for _, msg := range []tea.Msg{
+		tea.WindowSizeMsg{Width: 120, Height: 16},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyTab},
+	} {
+		next, _ := updated.Update(msg)
+		updated = next
+	}
+	model = updated.(clusterBrowserModel)
+
+	if model.focus != focusDetail {
+		t.Fatalf("focus = %q, want detail", model.focus)
+	}
+	if model.detailView.TotalLineCount() <= model.detailView.Height {
+		t.Fatalf("detail content does not overflow viewport (persistent SetContent missing): lines=%d height=%d",
+			model.detailView.TotalLineCount(), model.detailView.Height)
+	}
+
+	before := model.detailView.YOffset
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(clusterBrowserModel)
+	if model.detailView.YOffset <= before {
+		t.Fatalf("detail pane did not scroll on KeyDown: YOffset %d -> %d", before, model.detailView.YOffset)
+	}
+}

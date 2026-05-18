@@ -344,6 +344,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.autoRefreshCmd()
 		}
 		m.autoRefreshFromStore()
+		m.keepVisible()
+		m.syncComponents()
 		return m, m.autoRefreshCmd()
 	case tuiWheelScrollMsg:
 		if msg.seq != m.wheelScrollSeq {
@@ -379,6 +381,8 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.refreshFromStore()
+			m.keepVisible()
+			m.syncComponents()
 			m.status = "Remote data refreshed"
 			return m, nil
 		}
@@ -734,19 +738,31 @@ func (m clusterBrowserModel) renderMembers(rect tuiRect) string {
 	return paneStyle(focusMembers, m.focus, rect.w, rect.h).Render(lipgloss.JoinVertical(lipgloss.Left, paneTitle(focusMembers, m.focus, m.memberPositionLabel()), tableView))
 }
 
-func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
+// detailPaneText builds the full text shown in the detail pane for the given
+// content width. It is the single source of truth for both the per-frame
+// render (renderDetail) and the persistent viewport content set in
+// syncComponents, so scrolling and display never diverge.
+func (m clusterBrowserModel) detailPaneText(width int) string {
 	mode := "full"
 	if m.compactDetail {
 		mode = "compact"
 	}
-	lines := append([]string{paneTitle(focusDetail, m.focus, mode)}, m.detailLines(rect.w-4)...)
+	lines := append([]string{paneTitle(focusDetail, m.focus, mode)}, m.detailLines(width)...)
 	if m.showHelp {
-		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.helpLines(rect.w-4)...)
+		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.helpLines(width)...)
 	}
 	if m.menuOpen && !m.menuFloating {
-		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.menuLines(rect.w-4)...)
+		lines = append([]string{paneTitle(focusDetail, m.focus, mode)}, m.menuLines(width)...)
 	}
-	m.detailView.SetContent(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
+}
+
+func (m clusterBrowserModel) renderDetail(rect tuiRect) string {
+	// renderDetail runs from View() on a value copy, so the SetContent here
+	// only ever affects this frame's copy. The persistent viewport content is
+	// set in syncComponents (Update path); without that, the live model's
+	// viewport stays empty and keyboard/wheel scrolling has nothing to move.
+	m.detailView.SetContent(m.detailPaneText(rect.w - 4))
 	return paneStyle(focusDetail, m.focus, rect.w, rect.h).Render(m.detailView.View())
 }
 
@@ -2706,6 +2722,11 @@ func (m *clusterBrowserModel) syncComponents() {
 	m.detailView.Height = detailH
 	m.detailView.MouseWheelEnabled = true
 	m.detailView.MouseWheelDelta = 3
+	// Set content on the persistent viewport (this runs from Update, which
+	// keeps the model) so the line count is real and keyboard/wheel scrolling
+	// has something to move. renderDetail repeats this on the View() copy for
+	// per-frame display freshness.
+	m.detailView.SetContent(m.detailPaneText(detailW))
 	m.searchInput.Width = maxInt(20, m.width-16)
 }
 

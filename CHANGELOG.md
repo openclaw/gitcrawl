@@ -2,6 +2,9 @@
 
 ## 0.4.1 - 2026-05-18
 
+- Make the TUI detail pane scrollable again with the keyboard, mouse wheel,
+  and trackpad; its viewport content was only set on the render copy, so the
+  live pane never had anything to scroll.
 - Add cached release checks with `gitcrawl check-update` and passive terminal
   notices when a newer OpenClaw release is available.
 
