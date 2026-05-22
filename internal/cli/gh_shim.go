@@ -188,6 +188,7 @@ func (a *App) runGHThreadView(ctx context.Context, resource string, args []strin
 			if _, syncErr := a.syncRepository(ctx, owner, repoName, syncOptions{
 				Numbers:          []int{number},
 				IncludePRDetails: resource == "pr",
+				Quiet:            true,
 			}); syncErr != nil {
 				return localGHUnsupported(syncErr)
 			}

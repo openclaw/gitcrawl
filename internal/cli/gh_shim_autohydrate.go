@@ -34,6 +34,7 @@ func (a *App) loadGHPullRequestCache(ctx context.Context, repoValue string, numb
 	if _, syncErr := a.syncRepository(ctx, owner, repoName, syncOptions{
 		Numbers:          []int{number},
 		IncludePRDetails: true,
+		Quiet:            true,
 	}); syncErr != nil {
 		return store.PullRequestCache{}, localGHUnsupported(syncErr)
 	}

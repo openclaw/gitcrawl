@@ -200,9 +200,14 @@ func TestGHShimPRStatusAutoHydratesIncompleteCacheAndCountsBodylessApproval(t *t
 
 	run := New()
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	run.Stdout = &stdout
+	run.Stderr = &stderr
 	if err := run.Run(ctx, []string{"--config", configPath, "gh", "pr", "status", "12", "-R", "openclaw/openclaw", "--compact"}); err != nil {
 		t.Fatalf("status should be ready after auto-hydrate: %v\n%s", err, stdout.String())
+	}
+	if strings.Contains(stderr.String(), "sync progress") || strings.Contains(stderr.String(), "database is locked") {
+		t.Fatalf("auto-hydrate wrote noisy stderr: %q", stderr.String())
 	}
 	var row map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &row); err != nil {

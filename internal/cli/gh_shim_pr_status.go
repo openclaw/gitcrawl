@@ -215,6 +215,7 @@ func (a *App) hydrateGHPRStatus(ctx context.Context, repoValue string, number in
 		Numbers:          []int{number},
 		IncludeComments:  true,
 		IncludePRDetails: true,
+		Quiet:            true,
 	}); err != nil {
 		return localGHUnsupported(err)
 	}
