@@ -3259,7 +3259,7 @@ func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummar
 	}
 	prevMemberID := int64(0)
 	prevDetailOffset := m.detailView.YOffset
-	if currentKey != "" && m.currentClusterKey() == currentKey {
+	if currentKey != "" && m.hasDetail && clusterSummaryKey(m.detail.Cluster) == currentKey {
 		if member, ok := m.selectedMember(); ok {
 			prevMemberID = member.Thread.ID
 		}

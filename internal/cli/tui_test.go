@@ -4201,6 +4201,82 @@ func TestTUILoadSelectedClusterDoesNotRestoreAcrossOverlappingClusters(t *testin
 	}
 }
 
+func TestTUIApplyClusterRefreshDoesNotRestoreStaleWheelSelection(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	sharedID, err := st.UpsertThread(ctx, store.Thread{RepoID: repoID, GitHubID: "301", Number: 301, Kind: "issue", State: "open", Title: "shared", HTMLURL: "https://github.com/openclaw/openclaw/issues/301", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "shared", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("shared thread: %v", err)
+	}
+	otherID, err := st.UpsertThread(ctx, store.Thread{RepoID: repoID, GitHubID: "201", Number: 201, Kind: "issue", State: "open", Title: "other", HTMLURL: "https://github.com/openclaw/openclaw/issues/201", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "other", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("other thread: %v", err)
+	}
+	for _, row := range []struct {
+		clusterID int64
+		threadID  int64
+		role      string
+		title     string
+	}{
+		{clusterID: 1, threadID: sharedID, role: "representative", title: "first"},
+		{clusterID: 2, threadID: otherID, role: "representative", title: "second"},
+		{clusterID: 2, threadID: sharedID, role: "member", title: "second"},
+	} {
+		if row.role == "representative" {
+			if _, err := st.DB().ExecContext(ctx, `
+				insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
+				values(?, ?, ?, ?, 'active', ?, ?, '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+			`, row.clusterID, repoID, fmt.Sprintf("cluster-%d", row.clusterID), row.title, row.threadID, row.title); err != nil {
+				t.Fatalf("cluster group %d: %v", row.clusterID, err)
+			}
+		}
+		if _, err := st.DB().ExecContext(ctx, `
+			insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at)
+			values(?, ?, ?, 'active', 'system', '{}', '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
+		`, row.clusterID, row.threadID, row.role); err != nil {
+			t.Fatalf("cluster membership %d/%d: %v", row.clusterID, row.threadID, err)
+		}
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	first, second := clusters[0], clusters[1]
+	if first.ID != 1 {
+		first, second = second, first
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   []store.ClusterSummary{first, second},
+	})
+	model.loadSelectedCluster()
+	model.detailView.YOffset = 6
+	model.selected = 1
+
+	model.applyClusterRefresh([]store.ClusterSummary{second, first}, model.currentClusterKey())
+
+	got, ok := model.selectedMember()
+	if !ok {
+		t.Fatal("no member selected after refresh")
+	}
+	if got.Thread.Number != 201 {
+		t.Fatalf("stale wheel refresh selected #%d, want #201", got.Thread.Number)
+	}
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("stale wheel refresh offset = %d, want 0", model.detailView.YOffset)
+	}
+}
+
 func TestTUIApplyClusterRefreshPreservesMemberSelectionAfterReorder(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
