@@ -4063,6 +4063,7 @@ func TestTUILoadSelectedClusterPreservesMemberSelection(t *testing.T) {
 	if wantThreadID == 0 {
 		t.Fatalf("could not pick a non-first member; memberRows=%d", len(model.memberRows))
 	}
+	model.detailView.YOffset = 4
 
 	// Simulate an auto-refresh reload of the same cluster.
 	model.loadSelectedCluster()
@@ -4073,6 +4074,53 @@ func TestTUILoadSelectedClusterPreservesMemberSelection(t *testing.T) {
 	}
 	if got.Thread.ID != wantThreadID {
 		t.Fatalf("member selection not preserved across reload: got thread %d, want %d", got.Thread.ID, wantThreadID)
+	}
+	if model.detailView.YOffset != 4 {
+		t.Fatalf("detail offset after preserved reload = %d, want 4", model.detailView.YOffset)
+	}
+}
+
+func TestTUISortPreservesSelectedClusterAndMember(t *testing.T) {
+	first := store.ClusterSummary{ID: 1, Source: store.ClusterSourceRun, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"}
+	second := store.ClusterSummary{ID: 2, Source: store.ClusterSourceRun, Status: "active", MemberCount: 10, UpdatedAt: "2026-04-27T00:00:00Z"}
+	firstDetail := store.ClusterDetail{
+		Cluster: first,
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 101, Number: 101, Kind: "issue", State: "open", Title: "alpha"}},
+			{Thread: store.Thread{ID: 102, Number: 102, Kind: "issue", State: "open", Title: "bravo"}},
+		},
+	}
+	secondDetail := store.ClusterDetail{
+		Cluster: second,
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 201, Number: 201, Kind: "issue", State: "open", Title: "charlie"}},
+		},
+	}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   []store.ClusterSummary{first, second},
+	})
+	model.detailCache[clusterSummaryKey(first)] = firstDetail
+	model.detailCache[clusterSummaryKey(second)] = secondDetail
+	model.loadSelectedCluster()
+	model.memberIndex = memberRowIndex(model.memberRows, 102)
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = next.(clusterBrowserModel)
+
+	if model.payload.Sort != "size" {
+		t.Fatalf("sort = %q, want size", model.payload.Sort)
+	}
+	if model.payload.Clusters[model.selected].ID != first.ID {
+		t.Fatalf("selected cluster after sort = %d, want %d", model.payload.Clusters[model.selected].ID, first.ID)
+	}
+	got, ok := model.selectedMember()
+	if !ok {
+		t.Fatal("no member selected after sort")
+	}
+	if got.Thread.ID != 102 {
+		t.Fatalf("selected member after sort = %d, want 102", got.Thread.ID)
 	}
 }
 

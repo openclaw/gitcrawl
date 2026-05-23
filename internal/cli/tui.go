@@ -459,7 +459,7 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.payload.Sort = "recent"
 			}
-			m.sortClusters()
+			m.sortClustersPreservingSelection()
 			m.loadSelectedCluster()
 			m.status = "Sort: " + m.payload.Sort
 		case "m":
@@ -1720,19 +1720,19 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		return true
 	case "sort-size":
 		m.payload.Sort = "size"
-		m.sortClusters()
+		m.sortClustersPreservingSelection()
 		m.loadSelectedCluster()
 		m.status = "Sort: size"
 		return true
 	case "sort-recent":
 		m.payload.Sort = "recent"
-		m.sortClusters()
+		m.sortClustersPreservingSelection()
 		m.loadSelectedCluster()
 		m.status = "Sort: recent"
 		return true
 	case "sort-oldest":
 		m.payload.Sort = "oldest"
-		m.sortClusters()
+		m.sortClustersPreservingSelection()
 		m.loadSelectedCluster()
 		m.status = "Sort: oldest"
 		return true
@@ -2954,6 +2954,20 @@ func (m *clusterBrowserModel) sortClusters() {
 	m.selected = clampInt(m.selected, 0, maxInt(0, len(m.payload.Clusters)-1))
 }
 
+func (m *clusterBrowserModel) sortClustersPreservingSelection() {
+	currentKey := m.currentClusterKey()
+	m.sortClusters()
+	if currentKey == "" {
+		return
+	}
+	for index, cluster := range m.payload.Clusters {
+		if clusterSummaryKey(cluster) == currentKey {
+			m.selected = index
+			return
+		}
+	}
+}
+
 func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
 	columns := clusterColumns(maxInt(24, m.layout().clusters.w-4), m.payload.Sort)
 	if relativeX < columnRightEdge(columns, 1) {
@@ -2969,7 +2983,7 @@ func (m *clusterBrowserModel) sortClustersFromHeader(relativeX int) {
 	} else {
 		m.payload.Sort = "recent"
 	}
-	m.sortClusters()
+	m.sortClustersPreservingSelection()
 	m.loadSelectedCluster()
 	m.status = "Sort: " + m.payload.Sort
 }
@@ -3418,6 +3432,7 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	if member, ok := m.selectedMember(); ok {
 		prevMemberID = member.Thread.ID
 	}
+	prevDetailOffset := m.detailView.YOffset
 	m.detailView.GotoTop()
 	m.memberOff = 0
 	m.memberIndex = -1
@@ -3430,7 +3445,9 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	cacheKey := clusterSummaryKey(cluster)
 	if cached, ok := m.detailCache[cacheKey]; ok {
 		m.applyClusterDetail(cached)
-		m.restoreMemberSelection(prevMemberID)
+		if m.restoreMemberSelection(prevMemberID) {
+			m.detailView.YOffset = prevDetailOffset
+		}
 		return
 	}
 	if m.store == nil {
@@ -3450,7 +3467,9 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	}
 	m.detailCache[clusterSummaryKey(detail.Cluster)] = detail
 	m.applyClusterDetail(detail)
-	m.restoreMemberSelection(prevMemberID)
+	if m.restoreMemberSelection(prevMemberID) {
+		m.detailView.YOffset = prevDetailOffset
+	}
 }
 
 // restoreMemberSelection re-selects the member whose thread matches id after a
@@ -3459,17 +3478,18 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 // still selected and the user's selection should survive the refresh. When id
 // is absent — the cluster was switched, or the member was filtered out — the
 // first-selectable default chosen by sortMembers stands.
-func (m *clusterBrowserModel) restoreMemberSelection(id int64) {
+func (m *clusterBrowserModel) restoreMemberSelection(id int64) bool {
 	if id == 0 || len(m.memberRows) == 0 {
-		return
+		return false
 	}
 	for index, row := range m.memberRows {
 		if row.selectable && row.member.Thread.ID == id {
 			m.memberIndex = index
 			m.keepVisible()
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func (m *clusterBrowserModel) applyClusterDetail(detail store.ClusterDetail) {
