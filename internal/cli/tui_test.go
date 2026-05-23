@@ -4278,6 +4278,24 @@ func TestTUISelectVisibleClusterID(t *testing.T) {
 	}
 }
 
+func TestTUIApplyClusterFiltersPreservesClusterSource(t *testing.T) {
+	runCluster := store.ClusterSummary{ID: 7, Source: store.ClusterSourceRun, Status: "active", StableSlug: "run", MemberCount: 2, UpdatedAt: "2026-04-27T00:00:00Z"}
+	durableCluster := store.ClusterSummary{ID: 7, Source: store.ClusterSourceDurable, Status: "active", StableSlug: "durable", MemberCount: 2, UpdatedAt: "2026-04-27T00:00:00Z"}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   []store.ClusterSummary{runCluster, durableCluster},
+	})
+	model.selected = 1
+
+	model.applyClusterFilters()
+
+	if got := clusterSummaryKey(model.payload.Clusters[model.selected]); got != clusterSummaryKey(durableCluster) {
+		t.Fatalf("selected cluster key = %q, want %q", got, clusterSummaryKey(durableCluster))
+	}
+}
+
 // TestTUIDetailViewportScrollsWithKeyboard guards the regression where the
 // detail pane could not be scrolled by any input. detailView.SetContent was
 // only called from renderDetail (a View() value-receiver copy), so the

@@ -3363,10 +3363,7 @@ func (m *clusterBrowserModel) relaxFiltersIfEmpty() bool {
 }
 
 func (m *clusterBrowserModel) applyClusterFilters() {
-	currentID := int64(0)
-	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
-		currentID = m.payload.Clusters[m.selected].ID
-	}
+	currentKey := m.currentClusterKey()
 	query := strings.ToLower(strings.TrimSpace(m.search))
 	next := make([]store.ClusterSummary, 0, len(m.allClusters))
 	for _, cluster := range m.allClusters {
@@ -3387,9 +3384,9 @@ func (m *clusterBrowserModel) applyClusterFilters() {
 		m.payload.Clusters = m.payload.Clusters[:m.payload.Limit]
 	}
 	m.selected = 0
-	if currentID != 0 {
+	if currentKey != "" {
 		for index, cluster := range m.payload.Clusters {
-			if cluster.ID == currentID {
+			if clusterSummaryKey(cluster) == currentKey {
 				m.selected = index
 				break
 			}
