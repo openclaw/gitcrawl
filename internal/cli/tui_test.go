@@ -4076,6 +4076,79 @@ func TestTUILoadSelectedClusterPreservesMemberSelection(t *testing.T) {
 	}
 }
 
+func TestTUIApplyClusterRefreshPreservesMemberSelectionAfterReorder(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, _, err := seedTUIClusterPair(ctx, st, repoID, 1, 101, 102); err != nil {
+		t.Fatalf("seed cluster 1: %v", err)
+	}
+	if _, _, err := seedTUIClusterPair(ctx, st, repoID, 2, 201, 202); err != nil {
+		t.Fatalf("seed cluster 2: %v", err)
+	}
+	clusters, err := st.ListClusterSummaries(ctx, store.ClusterSummaryOptions{RepoID: repoID, IncludeClosed: false, MinSize: 1, Limit: 20, Sort: "recent"})
+	if err != nil {
+		t.Fatalf("clusters: %v", err)
+	}
+	if len(clusters) != 2 {
+		t.Fatalf("clusters length = %d, want 2", len(clusters))
+	}
+	first, second := clusters[0], clusters[1]
+	if first.ID != 1 {
+		first, second = second, first
+	}
+
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		MinSize:    1,
+		Clusters:   []store.ClusterSummary{first, second},
+	})
+	model.loadSelectedCluster()
+	model.memberIndex = memberRowIndex(model.memberRows, 102)
+	currentKey := model.currentClusterKey()
+
+	model.applyClusterRefresh([]store.ClusterSummary{second, first}, currentKey)
+
+	if model.payload.Clusters[model.selected].ID != 1 {
+		t.Fatalf("selected cluster = %d, want 1", model.payload.Clusters[model.selected].ID)
+	}
+	got, ok := model.selectedMember()
+	if !ok {
+		t.Fatal("no selected member after refresh")
+	}
+	if got.Thread.Number != 102 {
+		t.Fatalf("member selection after reorder = #%d, want #102", got.Thread.Number)
+	}
+}
+
+func TestTUISelectVisibleClusterID(t *testing.T) {
+	clusters := sampleTUIClusters()
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   clusters,
+	})
+
+	targetID := clusters[1].ID
+	if !model.selectVisibleClusterID(targetID) {
+		t.Fatal("selectVisibleClusterID returned false for visible cluster")
+	}
+	if model.payload.Clusters[model.selected].ID != targetID {
+		t.Fatalf("selected cluster = %d, want %d", model.payload.Clusters[model.selected].ID, targetID)
+	}
+	if model.selectVisibleClusterID(999) {
+		t.Fatal("selectVisibleClusterID returned true for missing cluster")
+	}
+}
+
 // TestTUIDetailViewportScrollsWithKeyboard guards the regression where the
 // detail pane could not be scrolled by any input. detailView.SetContent was
 // only called from renderDetail (a View() value-receiver copy), so the

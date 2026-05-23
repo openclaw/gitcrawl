@@ -3243,6 +3243,12 @@ func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummar
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
 	}
+	prevMemberID := int64(0)
+	if currentKey != "" && m.currentClusterKey() == currentKey {
+		if member, ok := m.selectedMember(); ok {
+			prevMemberID = member.Thread.ID
+		}
+	}
 	if m.payload.Limit <= 0 && len(clusters) > 0 && len(clusters) < len(m.allClusters) {
 		clusters = mergeClusterSummaries(clusters, m.allClusters)
 	}
@@ -3256,6 +3262,7 @@ func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummar
 			if clusterSummaryKey(cluster) == currentKey {
 				m.selected = index
 				m.loadSelectedCluster()
+				m.restoreMemberSelection(prevMemberID)
 				break
 			}
 		}
