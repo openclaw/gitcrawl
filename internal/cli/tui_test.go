@@ -4075,3 +4075,255 @@ func TestTUILoadSelectedClusterPreservesMemberSelection(t *testing.T) {
 		t.Fatalf("member selection not preserved across reload: got thread %d, want %d", got.Thread.ID, wantThreadID)
 	}
 }
+
+// TestTUIDetailViewportScrollsWithKeyboard guards the regression where the
+// detail pane could not be scrolled by any input. detailView.SetContent was
+// only called from renderDetail (a View() value-receiver copy), so the
+// persistent viewport never had content and LineUp/LineDown/wheel were no-ops.
+func TestTUIDetailViewportScrollsWithKeyboard(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+	model.detail = store.ClusterDetail{
+		Cluster: model.payload.Clusters[0],
+		Members: []store.ClusterMemberDetail{
+			{
+				Thread: store.Thread{
+					ID: 10, Number: 10, Kind: "issue", State: "open",
+					Title: strings.Repeat("a long detail title that wraps many times ", 40),
+				},
+				BodySnippet: strings.Repeat("body line\n", 60),
+			},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+
+	// Small terminal so detail content overflows its viewport, then focus the
+	// detail pane (clusters -> members -> detail).
+	var updated tea.Model = model
+	for _, msg := range []tea.Msg{
+		tea.WindowSizeMsg{Width: 120, Height: 16},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyTab},
+	} {
+		next, _ := updated.Update(msg)
+		updated = next
+	}
+	model = updated.(clusterBrowserModel)
+
+	if model.focus != focusDetail {
+		t.Fatalf("focus = %q, want detail", model.focus)
+	}
+	if model.detailView.TotalLineCount() <= model.detailView.Height {
+		t.Fatalf("detail content does not overflow viewport (persistent SetContent missing): lines=%d height=%d",
+			model.detailView.TotalLineCount(), model.detailView.Height)
+	}
+
+	before := model.detailView.YOffset
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(clusterBrowserModel)
+	if model.detailView.YOffset <= before {
+		t.Fatalf("detail pane did not scroll on KeyDown: YOffset %d -> %d", before, model.detailView.YOffset)
+	}
+}
+
+func TestTUISyncComponentsClampsDetailViewportAfterResize(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+	model.detail = store.ClusterDetail{
+		Cluster: model.payload.Clusters[0],
+		Members: []store.ClusterMemberDetail{
+			{
+				Thread: store.Thread{
+					ID: 10, Number: 10, Kind: "issue", State: "open",
+					Title: strings.Repeat("a long detail title that wraps many times ", 40),
+				},
+				BodySnippet: strings.Repeat("body line\n", 60),
+			},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+	model.width = 120
+	model.height = 16
+	model.syncComponents()
+	model.detailView.GotoBottom()
+	if model.detailView.YOffset == 0 {
+		t.Fatalf("test setup did not produce overflowing detail content: lines=%d height=%d",
+			model.detailView.TotalLineCount(), model.detailView.Height)
+	}
+
+	model.height = 80
+	model.syncComponents()
+
+	if model.detailView.PastBottom() {
+		t.Fatalf("detail viewport offset remains past bottom after resize: offset=%d lines=%d height=%d",
+			model.detailView.YOffset, model.detailView.TotalLineCount(), model.detailView.Height)
+	}
+}
+
+func TestTUISyncComponentsResetsDetailViewportWhenContentModeChanges(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+	model.detail = store.ClusterDetail{
+		Cluster: model.payload.Clusters[0],
+		Members: []store.ClusterMemberDetail{
+			{
+				Thread: store.Thread{
+					ID: 10, Number: 10, Kind: "issue", State: "open",
+					Title: strings.Repeat("a long detail title that wraps many times ", 40),
+				},
+				BodySnippet: strings.Repeat("body line\n", 60),
+			},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+	model.width = 120
+	model.height = 16
+	model.syncComponents()
+	model.detailView.GotoBottom()
+	if model.detailView.YOffset == 0 {
+		t.Fatalf("test setup did not produce overflowing detail content: lines=%d height=%d",
+			model.detailView.TotalLineCount(), model.detailView.Height)
+	}
+
+	model.showHelp = true
+	model.syncComponents()
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("help content reused detail scroll offset: got %d, want 0", model.detailView.YOffset)
+	}
+
+	model.detailView.GotoBottom()
+	model.showHelp = false
+	model.syncComponents()
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("detail content reused help scroll offset: got %d, want 0", model.detailView.YOffset)
+	}
+}
+
+func TestTUIUpdateSyncsDetailViewportAfterMenuKey(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters: []store.ClusterSummary{
+			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
+		},
+	})
+	model.detail = store.ClusterDetail{
+		Cluster: model.payload.Clusters[0],
+		Members: []store.ClusterMemberDetail{
+			{
+				Thread: store.Thread{
+					ID: 10, Number: 10, Kind: "issue", State: "open",
+					Title: strings.Repeat("a long detail title that wraps many times ", 40),
+				},
+				BodySnippet: strings.Repeat("body line\n", 60),
+			},
+		},
+	}
+	model.hasDetail = true
+	model.sortMembers()
+	model.width = 120
+	model.height = 16
+	model.syncComponents()
+	model.detailView.GotoBottom()
+	if model.detailView.YOffset == 0 {
+		t.Fatalf("test setup did not produce overflowing detail content: lines=%d height=%d",
+			model.detailView.TotalLineCount(), model.detailView.Height)
+	}
+
+	model.menuOpen = true
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	model = next.(clusterBrowserModel)
+
+	if !model.showHelp {
+		t.Fatal("menu help key did not enable help")
+	}
+	if model.detailContentKey != "help" {
+		t.Fatalf("detail content key = %q, want help", model.detailContentKey)
+	}
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("menu key reused stale detail scroll offset: got %d, want 0", model.detailView.YOffset)
+	}
+}
+
+func TestTUIUpdateSyncsDetailViewportAfterSearchJumpShortcuts(t *testing.T) {
+	newModel := func() clusterBrowserModel {
+		model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+			Repository: "openclaw/openclaw",
+			Sort:       "recent",
+			Clusters: []store.ClusterSummary{
+				{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
+			},
+		})
+		model.detail = store.ClusterDetail{
+			Cluster: model.payload.Clusters[0],
+			Members: []store.ClusterMemberDetail{
+				{
+					Thread: store.Thread{
+						ID: 10, Number: 10, Kind: "issue", State: "open",
+						Title: strings.Repeat("a long detail title that wraps many times ", 40),
+					},
+					BodySnippet: strings.Repeat("body line\n", 60),
+				},
+			},
+		}
+		model.hasDetail = true
+		model.sortMembers()
+		model.width = 120
+		model.height = 8
+		model.showHelp = true
+		model.syncComponents()
+		model.detailView.GotoBottom()
+		if model.detailView.YOffset == 0 {
+			t.Fatalf("test setup did not produce overflowing help content: lines=%d height=%d",
+				model.detailView.TotalLineCount(), model.detailView.Height)
+		}
+		return model
+	}
+
+	for _, tc := range []struct {
+		name        string
+		key         rune
+		wantSearch  bool
+		wantJumping bool
+	}{
+		{name: "search", key: '/', wantSearch: true},
+		{name: "jump", key: '#', wantJumping: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newModel()
+			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+			model = next.(clusterBrowserModel)
+
+			if model.searching != tc.wantSearch || model.jumping != tc.wantJumping {
+				t.Fatalf("mode after %q: searching=%v jumping=%v", string(tc.key), model.searching, model.jumping)
+			}
+			if model.showHelp {
+				t.Fatalf("%q shortcut left help visible", string(tc.key))
+			}
+			if model.detailContentKey == "help" {
+				t.Fatalf("%q shortcut left stale help content key", string(tc.key))
+			}
+			if model.detailView.YOffset != 0 {
+				t.Fatalf("%q shortcut reused stale help scroll offset: got %d, want 0", string(tc.key), model.detailView.YOffset)
+			}
+		})
+	}
+}

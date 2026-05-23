@@ -301,8 +301,12 @@ func ghSearchJSONValue(thread store.Thread, field string) (any, error) {
 		return thread.MergedAtGitHub, nil
 	case "labels":
 		return ghLabelsFromJSON(thread.LabelsJSON), nil
+	case "assignees":
+		return ghUsersFromJSON(thread.AssigneesJSON), nil
 	case "isDraft":
 		return thread.IsDraft, nil
+	case "closed":
+		return strings.EqualFold(thread.State, "closed"), nil
 	case "author":
 		return map[string]any{"login": thread.AuthorLogin, "type": thread.AuthorType}, nil
 	case "body":
@@ -310,6 +314,27 @@ func ghSearchJSONValue(thread store.Thread, field string) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported --json field %q", field)
 	}
+}
+
+func ghUsersFromJSON(raw string) []map[string]any {
+	var users []map[string]any
+	if err := json.Unmarshal([]byte(raw), &users); err == nil {
+		if users == nil {
+			return []map[string]any{}
+		}
+		return users
+	}
+	var logins []string
+	if err := json.Unmarshal([]byte(raw), &logins); err != nil {
+		return []map[string]any{}
+	}
+	users = make([]map[string]any, 0, len(logins))
+	for _, login := range logins {
+		if strings.TrimSpace(login) != "" {
+			users = append(users, map[string]any{"login": login})
+		}
+	}
+	return users
 }
 
 type ghLabel struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,7 +23,7 @@ func TestGHShimViewAndListUseLocalCache(t *testing.T) {
 	run := New()
 	var stdout bytes.Buffer
 	run.Stdout = &stdout
-	if err := run.Run(ctx, []string{"--config", configPath, "gh", "pr", "view", "12", "-R", "openclaw/openclaw", "--json", "number,title,isDraft,author,comments"}); err != nil {
+	if err := run.Run(ctx, []string{"--config", configPath, "gh", "pr", "view", "12", "-R", "openclaw/openclaw", "--json", "number,title,isDraft,author,comments,assignees,baseRefName,maintainerCanModify,mergeCommit"}); err != nil {
 		t.Fatalf("gh pr view: %v", err)
 	}
 	var view map[string]any
@@ -30,8 +31,11 @@ func TestGHShimViewAndListUseLocalCache(t *testing.T) {
 		t.Fatalf("decode view: %v\n%s", err, stdout.String())
 	}
 	comments := view["comments"].([]any)
-	if int(view["number"].(float64)) != 12 || view["isDraft"] != true || len(comments) != 1 || comments[0].(map[string]any)["body"] != "cache path looks good" {
+	if int(view["number"].(float64)) != 12 || view["isDraft"] != true || len(comments) != 1 || comments[0].(map[string]any)["body"] != "cache path looks good" || view["baseRefName"] != "main" || view["maintainerCanModify"] != true {
 		t.Fatalf("view = %#v", view)
+	}
+	if view["mergeCommit"] != nil {
+		t.Fatalf("mergeCommit = %#v, want nil for open PR", view["mergeCommit"])
 	}
 
 	stdout.Reset()
@@ -147,6 +151,83 @@ func TestGHShimViewAndListUseLocalCache(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "12\tManifest cache update") {
 		t.Fatalf("human pr list = %q", got)
+	}
+}
+
+func TestGHShimPRChecksWatchFalseUsesLocalCache(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "gh", "pr", "checks", "12", "-R", "openclaw/openclaw", "--watch=false", "--json", "name,state"}); err != nil {
+		t.Fatalf("gh pr checks --watch=false: %v", err)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &rows); err != nil {
+		t.Fatalf("decode checks: %v\n%s", err, stdout.String())
+	}
+	if len(rows) != 1 || rows[0]["name"] != "test" {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+func TestGHReviewDecisionIgnoresStaleReviews(t *testing.T) {
+	decision := ghReviewDecision([]map[string]any{
+		{"state": "CHANGES_REQUESTED", "isStale": true},
+		{"state": "APPROVED", "isStale": false},
+	})
+	if decision != "APPROVED" {
+		t.Fatalf("decision = %#v, want APPROVED", decision)
+	}
+}
+
+func TestGHCachedReviewFieldsUseLocalRowsOnly(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	app := New()
+	app.configPath = configPath
+	thread, err := app.localGHThread(ctx, "openclaw/openclaw", "pull_request", 12)
+	if err != nil {
+		t.Fatalf("local thread: %v", err)
+	}
+	row, err := app.ghThreadViewJSONRow(ctx, "openclaw/openclaw", thread, "reviewDecision,reviews", ghShimControls{Cached: true})
+	if err != nil {
+		t.Fatalf("cached review row: %v", err)
+	}
+	if row["reviewDecision"] != nil {
+		t.Fatalf("reviewDecision = %#v, want nil", row["reviewDecision"])
+	}
+	if got := len(row["reviews"].([]map[string]any)); got != 0 {
+		t.Fatalf("reviews len = %d, want 0", got)
+	}
+}
+
+func TestGHReviewDecisionUsesLatestPerReviewer(t *testing.T) {
+	decision := ghReviewDecision([]map[string]any{
+		{"id": "r2", "author": map[string]any{"login": "alice"}, "state": "APPROVED"},
+		{"id": "r1", "author": map[string]any{"login": "alice"}, "state": "CHANGES_REQUESTED"},
+	})
+	if decision != "APPROVED" {
+		t.Fatalf("decision = %#v, want APPROVED", decision)
+	}
+}
+
+func TestGHReviewsIncludeMoreThanStatusLatestCap(t *testing.T) {
+	comments := make([]store.Comment, 0, 12)
+	for index := 0; index < 12; index++ {
+		comments = append(comments, store.Comment{
+			GitHubID:        fmt.Sprintf("r%d", index),
+			CommentType:     "pull_review",
+			AuthorLogin:     fmt.Sprintf("reviewer-%d", index),
+			RawJSON:         fmt.Sprintf(`{"state":"COMMENTED","commit_id":"head","submitted_at":"2026-04-27T%02d:00:00Z"}`, index),
+			CreatedAtGitHub: fmt.Sprintf("2026-04-27T%02d:00:00Z", index),
+		})
+	}
+	reviews := ghReviewsJSONValue(comments, "head", false)
+	if len(reviews) != 12 {
+		t.Fatalf("reviews len = %d, want 12", len(reviews))
 	}
 }
 

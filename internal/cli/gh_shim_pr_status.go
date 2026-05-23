@@ -215,6 +215,7 @@ func (a *App) hydrateGHPRStatus(ctx context.Context, repoValue string, number in
 		Numbers:          []int{number},
 		IncludeComments:  true,
 		IncludePRDetails: true,
+		Quiet:            true,
 	}); err != nil {
 		return localGHUnsupported(err)
 	}
@@ -756,6 +757,17 @@ func rawInt(row map[string]any, key string) int {
 		return value
 	default:
 		return 0
+	}
+}
+
+func rawBool(row map[string]any, key string) bool {
+	switch typed := row[key].(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(typed, "true")
+	default:
+		return false
 	}
 }
 

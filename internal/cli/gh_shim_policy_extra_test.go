@@ -76,7 +76,7 @@ func TestGHShimPRCacheAndPolicyHelperBranches(t *testing.T) {
 	if got := ghPRHeadRefFromRawJSON(`{`); got != "" {
 		t.Fatalf("invalid head ref = %q", got)
 	}
-	if !ghPRFieldsNeedFresh([]string{"number", "statusCheckRollup"}) || !ghPRFieldsNeedFresh([]string{"mergeStateStatus"}) || ghPRFieldsNeedFresh([]string{"files"}) {
+	if !ghPRFieldsNeedFresh([]string{"number", "statusCheckRollup"}) || !ghPRFieldsNeedFresh([]string{"mergeStateStatus"}) || !ghPRFieldsNeedFresh([]string{"reviewDecision"}) || ghPRFieldsNeedFresh([]string{"files"}) {
 		t.Fatal("fresh field detection mismatch")
 	}
 	thread := store.Thread{IsDraft: true}

@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	crawlstore "github.com/openclaw/crawlkit/store"
@@ -14,6 +16,18 @@ const (
 	schemaVersion = 2
 	timeLayout    = time.RFC3339Nano
 )
+
+var sqliteBusyRetryDelays = []time.Duration{
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	400 * time.Millisecond,
+	800 * time.Millisecond,
+}
+
+type sqliteCoder interface {
+	Code() int
+}
 
 type Store struct {
 	db      *sql.DB
@@ -101,6 +115,12 @@ func (s *Store) qsql() *storedb.Queries {
 }
 
 func (s *Store) WithTx(ctx context.Context, fn func(*Store) error) error {
+	return withSQLiteBusyRetry(ctx, sqliteBusyRetryDelays, func() error {
+		return s.withTxOnce(ctx, fn)
+	})
+}
+
+func (s *Store) withTxOnce(ctx context.Context, fn func(*Store) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -114,6 +134,48 @@ func (s *Store) WithTx(ctx context.Context, fn func(*Store) error) error {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+func withSQLiteBusyRetry(ctx context.Context, delays []time.Duration, fn func() error) error {
+	attempts := len(delays) + 1
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !IsTransientSQLiteBusy(err) || attempt == len(delays) {
+			break
+		}
+		timer := time.NewTimer(delays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if IsTransientSQLiteBusy(lastErr) {
+		return fmt.Errorf("sqlite busy after %d attempts: %w", attempts, lastErr)
+	}
+	return lastErr
+}
+
+func IsTransientSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if coder, ok := current.(sqliteCoder); ok {
+			code := coder.Code() & 0xff
+			return code == 5 || code == 6
+		}
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "sqlite_busy") ||
+		strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked")
 }
 
 func (s *Store) Status(ctx context.Context) (Status, error) {

@@ -4,12 +4,73 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+type fakeSQLiteCodeError int
+
+func (e fakeSQLiteCodeError) Error() string {
+	return fmt.Sprintf("sqlite code %d", e)
+}
+
+func (e fakeSQLiteCodeError) Code() int {
+	return int(e)
+}
+
+func TestSQLiteBusyRetryRecovers(t *testing.T) {
+	ctx := context.Background()
+	attempts := 0
+	err := withSQLiteBusyRetry(ctx, []time.Duration{0, 0}, func() error {
+		attempts++
+		if attempts < 3 {
+			return fmt.Errorf("upsert thread: %w", fakeSQLiteCodeError(5))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retry should recover: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestSQLiteBusyRetryExhausts(t *testing.T) {
+	ctx := context.Background()
+	attempts := 0
+	err := withSQLiteBusyRetry(ctx, []time.Duration{0, 0}, func() error {
+		attempts++
+		return fmt.Errorf("commit transaction: %w", fakeSQLiteCodeError(6))
+	})
+	if err == nil || !strings.Contains(err.Error(), "sqlite busy after 3 attempts") {
+		t.Fatalf("expected exhausted busy error, got %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestSQLiteBusyRetryDoesNotRetryOtherErrors(t *testing.T) {
+	ctx := context.Background()
+	attempts := 0
+	want := errors.New("database disk image is malformed")
+	err := withSQLiteBusyRetry(ctx, []time.Duration{0, 0}, func() error {
+		attempts++
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
 
 func TestOpenMigratesSchema(t *testing.T) {
 	ctx := context.Background()

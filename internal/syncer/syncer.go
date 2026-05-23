@@ -72,6 +72,21 @@ type Stats struct {
 	FinishedAt          string `json:"finished_at"`
 }
 
+type syncPersistStats struct {
+	ThreadsSynced       int
+	IssuesSynced        int
+	PullRequestsSynced  int
+	CommentsSynced      int
+	ReviewThreadsSynced int
+	PRDetailsSynced     int
+	PRFilesSynced       int
+	PRCommitsSynced     int
+	PRChecksSynced      int
+	WorkflowRunsSynced  int
+	ThreadsClosed       int
+	FinishedAt          string
+}
+
 type threadSyncPayload struct {
 	row                    map[string]any
 	commentRows            []commentRow
@@ -181,7 +196,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			"state", state,
 		},
 	})
+	var persisted syncPersistStats
 	persist := func(st *store.Store) error {
+		attempt := syncPersistStats{}
 		repoID, err := st.UpsertRepository(ctx, store.Repository{
 			Owner:        options.Owner,
 			Name:         options.Repo,
@@ -206,7 +223,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				if err != nil {
 					return err
 				}
-				stats.CommentsSynced += len(comments)
+				attempt.CommentsSynced += len(comments)
 			} else {
 				var err error
 				comments, err = st.ListComments(ctx, thread.ID)
@@ -219,27 +236,27 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				if err != nil {
 					return err
 				}
-				stats.ReviewThreadsSynced += count
+				attempt.ReviewThreadsSynced += count
 				if payload.hasPullDetails {
 					detailStats, err := s.persistPullRequestDetails(ctx, st, thread, payload.pullDetails)
 					if err != nil {
 						return err
 					}
-					stats.PRDetailsSynced++
-					stats.PRFilesSynced += detailStats.files
-					stats.PRCommitsSynced += detailStats.commits
-					stats.PRChecksSynced += detailStats.checks
-					stats.WorkflowRunsSynced += detailStats.runs
+					attempt.PRDetailsSynced++
+					attempt.PRFilesSynced += detailStats.files
+					attempt.PRCommitsSynced += detailStats.commits
+					attempt.PRChecksSynced += detailStats.checks
+					attempt.WorkflowRunsSynced += detailStats.runs
 				}
 			}
 			if _, err := st.UpsertDocument(ctx, documents.BuildWithComments(thread, comments)); err != nil {
 				return err
 			}
-			stats.ThreadsSynced++
+			attempt.ThreadsSynced++
 			if thread.Kind == "pull_request" {
-				stats.PullRequestsSynced++
+				attempt.PullRequestsSynced++
 			} else {
-				stats.IssuesSynced++
+				attempt.IssuesSynced++
 			}
 			tracker.Add(1,
 				"number", thread.Number,
@@ -252,28 +269,47 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if err != nil {
 				return err
 			}
-			stats.ThreadsClosed = closed
+			attempt.ThreadsClosed = closed
 		}
-		stats.FinishedAt = s.now().Format(time.RFC3339Nano)
+		attempt.FinishedAt = s.now().Format(time.RFC3339Nano)
+		runStats := stats
+		applySyncPersistStats(&runStats, attempt)
 		if _, err := st.RecordRun(ctx, store.RunRecord{
 			RepoID:     repoID,
 			Kind:       "sync",
 			Scope:      syncRunScope(state, numbers),
 			Status:     "success",
-			StartedAt:  stats.StartedAt,
-			FinishedAt: stats.FinishedAt,
-			StatsJSON:  mustJSON(stats),
+			StartedAt:  runStats.StartedAt,
+			FinishedAt: runStats.FinishedAt,
+			StatsJSON:  mustJSON(runStats),
 		}); err != nil {
 			return err
 		}
+		persisted = attempt
 		return nil
 	}
 	if err := s.store.WithTx(ctx, persist); err != nil {
 		tracker.Finish(err)
 		return Stats{}, err
 	}
+	applySyncPersistStats(&stats, persisted)
 	tracker.Finish(nil)
 	return stats, nil
+}
+
+func applySyncPersistStats(stats *Stats, persisted syncPersistStats) {
+	stats.ThreadsSynced = persisted.ThreadsSynced
+	stats.IssuesSynced = persisted.IssuesSynced
+	stats.PullRequestsSynced = persisted.PullRequestsSynced
+	stats.CommentsSynced = persisted.CommentsSynced
+	stats.ReviewThreadsSynced = persisted.ReviewThreadsSynced
+	stats.PRDetailsSynced = persisted.PRDetailsSynced
+	stats.PRFilesSynced = persisted.PRFilesSynced
+	stats.PRCommitsSynced = persisted.PRCommitsSynced
+	stats.PRChecksSynced = persisted.PRChecksSynced
+	stats.WorkflowRunsSynced = persisted.WorkflowRunsSynced
+	stats.ThreadsClosed = persisted.ThreadsClosed
+	stats.FinishedAt = persisted.FinishedAt
 }
 
 func uniquePositiveNumbers(numbers []int) []int {

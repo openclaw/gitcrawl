@@ -37,6 +37,9 @@ func (a *App) execRealGHMaybeCached(ctx context.Context, args []string, controls
 	if err != nil {
 		return a.execRealGH(ctx, args)
 	}
+	if rawArgs, jqExpr, ok := ghAPIProjectionCacheArgs(args); ok {
+		return a.execRealGHAPIProjectionMaybeCached(ctx, args, rawArgs, jqExpr, cacheDir, controls)
+	}
 	stableIdentity := a.ghCommandStableIdentity(ctx, args)
 	ttl := ghCommandCacheTTLBase(args, stableIdentity != "")
 	entryPath := filepath.Join(cacheDir, a.ghCommandCacheKeyWithStableIdentity(ctx, args, stableIdentity)+".json")
@@ -106,6 +109,193 @@ func (a *App) execRealGHMaybeCached(ctx context.Context, args []string, controls
 	_, _ = io.WriteString(a.Stdout, stdout)
 	_, _ = io.WriteString(a.Stderr, stderr)
 	return err
+}
+
+func (a *App) execRealGHAPIProjectionMaybeCached(ctx context.Context, originalArgs, rawArgs []string, jqExpr, cacheDir string, controls ghShimControls) error {
+	if _, err := exec.LookPath("jq"); err != nil {
+		return a.execRealGHMaybeCachedWithoutProjection(ctx, originalArgs, cacheDir, controls)
+	}
+	ttl := ghCommandCacheTTLBase(rawArgs, false)
+	entryPath := filepath.Join(cacheDir, a.ghCommandCacheKeyWithStableIdentity(ctx, rawArgs, "")+".json")
+	staleEntry, hasStaleEntry := readGHCommandCacheEntry(entryPath)
+	if !a.shouldBypassGHCacheForLiveness(ctx, originalArgs, controls) {
+		if entry, ok := readGHCommandCache(entryPath, ttl); ok {
+			_ = a.incrementGHXCacheCounter("fallback_hits")
+			a.writeGHCommandCacheLivenessNotice(entry)
+			return a.writeOrFallbackGHAPIProjection(ctx, originalArgs, cacheDir, controls, entry.Stdout, jqExpr)
+		}
+		if hasStaleEntry {
+			if state, low := a.sharedRateLimitLowForArgs(ctx, rawArgs); low && ghCommandCacheEntryCanServeLowBudgetStale(staleEntry, ttl) {
+				_ = a.incrementGHXCacheCounter("stale_hits")
+				_ = a.incrementGHXCacheCounter("low_budget_stale_hits")
+				_, _ = io.WriteString(a.Stderr, state.staleNotice(time.Since(staleEntry.CreatedAt)))
+				return a.writeOrFallbackGHAPIProjection(ctx, originalArgs, cacheDir, controls, staleEntry.Stdout, jqExpr)
+			}
+		}
+		lockPath := entryPath + ".lock"
+		lock, locked := tryGHCommandCacheLock(lockPath)
+		if !locked {
+			if entry, hit, ok := waitGHCommandCache(entryPath, lockPath, ttl, staleEntry, hasStaleEntry); ok {
+				_ = a.incrementGHXCacheCounter(hit)
+				a.writeGHCommandCacheLivenessNotice(entry)
+				return a.writeOrFallbackGHAPIProjection(ctx, originalArgs, cacheDir, controls, entry.Stdout, jqExpr)
+			}
+			lock, locked = tryGHCommandCacheLock(lockPath)
+		}
+		if locked {
+			defer func() {
+				_ = lock.Close()
+				_ = os.Remove(lockPath)
+			}()
+			if entry, ok := readGHCommandCache(entryPath, ttl); ok {
+				_ = a.incrementGHXCacheCounter("fallback_hits")
+				a.writeGHCommandCacheLivenessNotice(entry)
+				return a.writeOrFallbackGHAPIProjection(ctx, originalArgs, cacheDir, controls, entry.Stdout, jqExpr)
+			}
+		}
+	}
+
+	stdout, stderr, exitCode, err := a.captureRealGH(ctx, rawArgs)
+	_ = a.incrementGHXCacheBackendMiss(rawArgs)
+	if err != nil && hasStaleEntry && ghCommandCacheEntryCanServeStale(staleEntry, ttl) && ghCommandOutputLooksRateLimited(stdout, stderr) {
+		_ = a.incrementGHXCacheCounter("stale_hits")
+		_, _ = fmt.Fprintf(a.Stderr, "gitcrawl: GitHub rate limited; serving stale cached gh response from %s ago\n", time.Since(staleEntry.CreatedAt).Round(time.Second))
+		return a.writeOrFallbackGHAPIProjection(ctx, originalArgs, cacheDir, controls, staleEntry.Stdout, jqExpr)
+	}
+	var projectedOut, projectedErr string
+	if err == nil {
+		var projectErr error
+		projectedOut, projectedErr, projectErr = runGHAPIProjection(stdout, jqExpr)
+		if projectErr != nil {
+			return a.execRealGHMaybeCachedWithoutProjection(ctx, originalArgs, cacheDir, controls)
+		}
+	}
+	if err == nil || cacheGHReadErrors() {
+		if err == nil {
+			_ = a.recordGHRateLimitFromOutput(ctx, rawArgs, stdout)
+		}
+		_ = writeGHCommandCache(entryPath, ghCommandCacheEntry{
+			CreatedAt: time.Now().UTC(),
+			Args:      append([]string(nil), rawArgs...),
+			Tags:      a.ghCommandCacheTags(ctx, rawArgs),
+			ExitCode:  exitCode,
+			Stdout:    stdout,
+			Stderr:    stderr,
+		})
+	}
+	if err != nil {
+		_, _ = io.WriteString(a.Stdout, stdout)
+		_, _ = io.WriteString(a.Stderr, stderr)
+		return err
+	}
+	if stderr != "" {
+		_, _ = io.WriteString(a.Stderr, stderr)
+	}
+	_, _ = io.WriteString(a.Stdout, projectedOut)
+	_, _ = io.WriteString(a.Stderr, projectedErr)
+	return nil
+}
+
+func (a *App) execRealGHMaybeCachedWithoutProjection(ctx context.Context, args []string, cacheDir string, controls ghShimControls) error {
+	stableIdentity := a.ghCommandStableIdentity(ctx, args)
+	ttl := ghCommandCacheTTLBase(args, stableIdentity != "")
+	entryPath := filepath.Join(cacheDir, a.ghCommandCacheKeyWithStableIdentity(ctx, args, stableIdentity)+".json")
+	staleEntry, hasStaleEntry := readGHCommandCacheEntry(entryPath)
+	if !a.shouldBypassGHCacheForLiveness(ctx, args, controls) {
+		if entry, ok := readGHCommandCache(entryPath, ttl); ok {
+			_ = a.incrementGHXCacheCounter("fallback_hits")
+			a.writeGHCommandCacheLivenessNotice(entry)
+			return a.writeGHCommandCacheEntry(entry)
+		}
+		if hasStaleEntry {
+			if state, low := a.sharedRateLimitLowForArgs(ctx, args); low && ghCommandCacheEntryCanServeLowBudgetStale(staleEntry, ttl) {
+				_ = a.incrementGHXCacheCounter("stale_hits")
+				_ = a.incrementGHXCacheCounter("low_budget_stale_hits")
+				_, _ = io.WriteString(a.Stderr, state.staleNotice(time.Since(staleEntry.CreatedAt)))
+				return a.writeGHCommandCacheEntry(staleEntry)
+			}
+		}
+	}
+	stdout, stderr, exitCode, err := a.captureRealGH(ctx, args)
+	_ = a.incrementGHXCacheBackendMiss(args)
+	if err != nil && hasStaleEntry && ghCommandCacheEntryCanServeStale(staleEntry, ttl) && ghCommandOutputLooksRateLimited(stdout, stderr) {
+		_ = a.incrementGHXCacheCounter("stale_hits")
+		_, _ = fmt.Fprintf(a.Stderr, "gitcrawl: GitHub rate limited; serving stale cached gh response from %s ago\n", time.Since(staleEntry.CreatedAt).Round(time.Second))
+		return a.writeGHCommandCacheEntry(staleEntry)
+	}
+	if err == nil || cacheGHReadErrors() {
+		if err == nil {
+			_ = a.recordGHRateLimitFromOutput(ctx, args, stdout)
+		}
+		_ = writeGHCommandCache(entryPath, ghCommandCacheEntry{
+			CreatedAt:      time.Now().UTC(),
+			Args:           append([]string(nil), args...),
+			Tags:           a.ghCommandCacheTags(ctx, args),
+			StableIdentity: stableIdentity,
+			ExitCode:       exitCode,
+			Stdout:         stdout,
+			Stderr:         stderr,
+		})
+	}
+	_, _ = io.WriteString(a.Stdout, stdout)
+	_, _ = io.WriteString(a.Stderr, stderr)
+	return err
+}
+
+func ghAPIProjectionCacheArgs(args []string) ([]string, string, bool) {
+	if len(args) == 0 || args[0] != "api" {
+		return nil, "", false
+	}
+	raw := make([]string, 0, len(args))
+	raw = append(raw, "api")
+	jqExpr := ""
+	for index := 1; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--template", "-t", "--input":
+			return nil, "", false
+		case "--jq", "-q":
+			if index+1 >= len(args) {
+				return nil, "", false
+			}
+			jqExpr = args[index+1]
+			index++
+			continue
+		default:
+			if strings.HasPrefix(arg, "--jq=") {
+				jqExpr = strings.TrimPrefix(arg, "--jq=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--template=") || strings.HasPrefix(arg, "--input=") {
+				return nil, "", false
+			}
+			raw = append(raw, arg)
+		}
+	}
+	if strings.TrimSpace(jqExpr) == "" || !cacheableGHRead(raw) {
+		return nil, "", false
+	}
+	return raw, jqExpr, true
+}
+
+func (a *App) writeOrFallbackGHAPIProjection(ctx context.Context, args []string, cacheDir string, controls ghShimControls, stdout string, jqExpr string) error {
+	projectedOut, projectedErr, err := runGHAPIProjection(stdout, jqExpr)
+	if err != nil {
+		return a.execRealGHMaybeCachedWithoutProjection(ctx, args, cacheDir, controls)
+	}
+	_, _ = io.WriteString(a.Stdout, projectedOut)
+	_, _ = io.WriteString(a.Stderr, projectedErr)
+	return nil
+}
+
+func runGHAPIProjection(stdout string, jqExpr string) (string, string, error) {
+	cmd := exec.Command("jq", "-r", jqExpr)
+	cmd.Stdin = strings.NewReader(stdout)
+	var projectedOut, projectedErr bytes.Buffer
+	cmd.Stdout = &projectedOut
+	cmd.Stderr = &projectedErr
+	err := cmd.Run()
+	return projectedOut.String(), projectedErr.String(), err
 }
 
 func cacheGHReadErrors() bool {

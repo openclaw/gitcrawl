@@ -55,8 +55,9 @@ func TestGHShimFallsBackForUnsupportedRead(t *testing.T) {
 		t.Fatalf("write fake gh: %v", err)
 	}
 	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GITCRAWL_GH_AUTO_HYDRATE", "0")
 
-	for _, fields := range []string{"unsupportedField", "reviews", "reviewDecision"} {
+	for _, fields := range []string{"unsupportedField", "closingIssuesReferences", "autoMergeRequest", "isInMergeQueue", "reviewDecision", "reviews", "latestReviews"} {
 		run := New()
 		var stdout bytes.Buffer
 		run.Stdout = &stdout
@@ -200,9 +201,14 @@ func TestGHShimPRStatusAutoHydratesIncompleteCacheAndCountsBodylessApproval(t *t
 
 	run := New()
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	run.Stdout = &stdout
+	run.Stderr = &stderr
 	if err := run.Run(ctx, []string{"--config", configPath, "gh", "pr", "status", "12", "-R", "openclaw/openclaw", "--compact"}); err != nil {
 		t.Fatalf("status should be ready after auto-hydrate: %v\n%s", err, stdout.String())
+	}
+	if strings.Contains(stderr.String(), "sync progress") || strings.Contains(stderr.String(), "database is locked") {
+		t.Fatalf("auto-hydrate wrote noisy stderr: %q", stderr.String())
 	}
 	var row map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &row); err != nil {
@@ -694,7 +700,7 @@ func seedGHShimRepo(t *testing.T, ctx context.Context) string {
 		Additions:        10,
 		Deletions:        2,
 		ChangedFiles:     1,
-		RawJSON:          `{"head":{"sha":"abc123"}}`,
+		RawJSON:          `{"base":{"ref":"main"},"head":{"sha":"abc123"},"maintainer_can_modify":true,"merge_commit_sha":"merge123","auto_merge":null}`,
 		FetchedAt:        fetchedAt,
 		UpdatedAt:        fetchedAt,
 	}, []store.PullRequestFile{{

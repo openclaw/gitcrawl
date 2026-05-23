@@ -22,7 +22,8 @@ func canonicalGHCommandArgs(args []string) []string {
 		"-q": "--jq", "--jq": "--jq",
 		"-t": "--template", "--template": "--template",
 		"-X": "--method", "--method": "--method",
-		"-H": "--header", "--header": "--header",
+		"--cache": "--cache",
+		"-H":      "--header", "--header": "--header",
 		"-f": "--field", "-F": "--field", "--field": "--field", "--raw-field": "--raw-field",
 		"--hostname": "--hostname", "--preview": "--preview",
 		"--state": "--state", "--author": "--author", "--assignee": "--assignee", "--label": "--label",
@@ -38,6 +39,12 @@ func canonicalGHCommandArgs(args []string) []string {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if canonical, ok := valueFlags[arg]; ok {
+			if canonical == "--cache" {
+				if index+1 < len(args) {
+					index++
+				}
+				continue
+			}
 			if index+1 < len(args) {
 				flags = append(flags, canonical+"="+canonicalGHFlagValue(canonical, args[index+1]))
 				index++
@@ -48,6 +55,10 @@ func canonicalGHCommandArgs(args []string) []string {
 		}
 		if strings.HasPrefix(arg, "--") {
 			name, value, hasValue := strings.Cut(arg, "=")
+			if name == "--cache" && hasValue {
+				_ = value
+				continue
+			}
 			if _, ok := valueFlagNames[name]; ok && hasValue {
 				flags = append(flags, name+"="+canonicalGHFlagValue(name, value))
 				continue

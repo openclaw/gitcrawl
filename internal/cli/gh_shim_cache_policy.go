@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -76,6 +77,8 @@ func ghAPIReadOnly(args []string) bool {
 		switch arg {
 		case "--input":
 			return false
+		case "--cache":
+			index++
 		case "-F", "-f", "--field", "--raw-field":
 			if index+1 >= len(args) {
 				return false
@@ -286,8 +289,15 @@ func ghRunCacheTTL(args []string) time.Duration {
 }
 
 func ghAPICacheTTL(args []string) time.Duration {
+	if ttl, ok := ghAPICacheFlagTTL(args); ok {
+		return ttl
+	}
 	route := normalizeGHAPIRoute(args)
 	switch {
+	case ghAPISearchEndpoint(ghAPIPathArg(args)) && ghAPISearchQueryIsStable(args):
+		return 7 * 24 * time.Hour
+	case ghAPISearchEndpoint(ghAPIPathArg(args)):
+		return 15 * time.Minute
 	case route == "api graphql":
 		return 6 * time.Hour
 	case strings.HasPrefix(route, "api users/"):
@@ -359,6 +369,69 @@ func ghAPIContentRefIsStable(args []string) bool {
 		}
 	}
 	return false
+}
+
+func ghAPICacheFlagTTL(args []string) (time.Duration, bool) {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--cache" {
+			if index+1 >= len(args) {
+				return 0, false
+			}
+			ttl, err := time.ParseDuration(args[index+1])
+			return ttl, err == nil && ttl > 0
+		}
+		if strings.HasPrefix(arg, "--cache=") {
+			ttl, err := time.ParseDuration(strings.TrimPrefix(arg, "--cache="))
+			return ttl, err == nil && ttl > 0
+		}
+	}
+	return 0, false
+}
+
+var ghAPIDatedSearchRangeRE = regexp.MustCompile(`(?:^|\s)(?:created|closed|merged):(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})(?:\s|$)`)
+
+func ghAPISearchQueryIsStable(args []string) bool {
+	query := ghAPIFieldValue(args, "q")
+	if query == "" {
+		return false
+	}
+	matches := ghAPIDatedSearchRangeRE.FindStringSubmatch(strings.ReplaceAll(query, "+", " "))
+	if len(matches) != 3 {
+		return false
+	}
+	end, err := time.Parse("2006-01-02", matches[2])
+	if err != nil {
+		return false
+	}
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	return end.Before(today)
+}
+
+func ghAPIFieldValue(args []string, name string) string {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "-f", "-F", "--field", "--raw-field":
+			if index+1 >= len(args) {
+				return ""
+			}
+			if key, value, ok := strings.Cut(args[index+1], "="); ok && key == name {
+				return value
+			}
+			index++
+		default:
+			for _, prefix := range []string{"-f=", "-F=", "--field=", "--raw-field="} {
+				if strings.HasPrefix(arg, prefix) {
+					field := strings.TrimPrefix(arg, prefix)
+					if key, value, ok := strings.Cut(field, "="); ok && key == name {
+						return value
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func ghAPIContentRefIsStableReleaseTag(value string) bool {
@@ -494,7 +567,7 @@ func ghAPIPathArg(args []string) string {
 			continue
 		case "--paginate":
 			continue
-		case "-H", "--header", "--hostname", "--jq", "-q", "--preview", "--template", "-t", "--input":
+		case "-H", "--header", "--hostname", "--jq", "-q", "--preview", "--template", "-t", "--input", "--cache":
 			if index+1 < len(args) && !strings.Contains(arg, "=") {
 				index++
 			}
@@ -503,6 +576,9 @@ func ghAPIPathArg(args []string) string {
 			index++
 			continue
 		default:
+			if strings.HasPrefix(arg, "--cache=") {
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				continue
 			}
@@ -613,6 +689,24 @@ func hasAnyGHFlag(args []string, flags ...string) bool {
 		for _, flag := range flags {
 			if arg == flag || strings.HasPrefix(arg, flag+"=") {
 				return true
+			}
+		}
+	}
+	return false
+}
+
+func ghBoolFlagEnabled(args []string, flag string) bool {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == flag {
+			return true
+		}
+		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "", "1", "t", "true", "yes", "on":
+				return true
+			default:
+				return false
 			}
 		}
 	}

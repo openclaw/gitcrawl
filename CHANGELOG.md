@@ -1,10 +1,22 @@
 # Changelog
 
+## 0.4.4 - Unreleased
+
+- Improve gh-shim cache hit rates for API projections, explicit `--cache` reads, broad run-list fallbacks, stable dated searches, `pr checks --watch=false`, and common local PR view fields.
+
+## 0.4.3 - 2026-05-22
+
+- Update `crawlkit` to v0.7.0.
+- Retry transient SQLite busy/locked cache writes during sync and keep gh-shim auto-hydration quiet so live fallback reads do not surface scary local cache lock noise.
+
 ## 0.4.1 - 2026-05-18
 
 - Keep the highlighted member selected in the TUI when the cluster list
   auto-refreshes, is manually refreshed, or is re-sorted/filtered, instead of
   silently snapping the selection back to the first row.
+- Make the TUI detail pane scrollable again with the keyboard, mouse wheel,
+  and trackpad; its viewport content was only set on the render copy, so the
+  live pane never had anything to scroll.
 - Add cached release checks with `gitcrawl check-update` and passive terminal
   notices when a newer OpenClaw release is available.
 

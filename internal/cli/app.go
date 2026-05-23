@@ -2162,6 +2162,7 @@ type syncOptions struct {
 	Numbers          []int
 	IncludeComments  bool
 	IncludePRDetails bool
+	Quiet            bool
 }
 
 func parseSyncWith(value string) (map[string]bool, error) {
@@ -2201,6 +2202,14 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 
 	client := gh.New(gh.Options{Token: token.Value, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx, token.Value)})
 	service := syncer.New(client, rt.Store)
+	var reporter gh.Reporter
+	var logger *slog.Logger
+	if !options.Quiet {
+		reporter = func(message string) {
+			fmt.Fprintln(a.Stderr, message)
+		}
+		logger = progressLogger(a.Stderr)
+	}
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:            owner,
 		Repo:             repo,
@@ -2210,10 +2219,8 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		Numbers:          options.Numbers,
 		IncludeComments:  options.IncludeComments,
 		IncludePRDetails: options.IncludePRDetails,
-		Reporter: func(message string) {
-			fmt.Fprintln(a.Stderr, message)
-		},
-		Logger: progressLogger(a.Stderr),
+		Reporter:         reporter,
+		Logger:           logger,
 	})
 	if err != nil {
 		return syncer.Stats{}, err

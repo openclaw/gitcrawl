@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -211,7 +212,7 @@ echo "live-$count:$*"
 	}
 }
 
-func TestGHRunListBroadBranchFallsThroughToLive(t *testing.T) {
+func TestGHRunListBroadBranchUsesFallbackCache(t *testing.T) {
 	ctx := context.Background()
 	configPath := seedGHShimRepo(t, ctx)
 	dir := t.TempDir()
@@ -258,11 +259,56 @@ echo "real-gh:$*"
 	if err := run.Run(ctx, []string{"--config", configPath, "gh", "run", "list", "-R", "openclaw/openclaw", "--branch", "main"}); err != nil {
 		t.Fatalf("broad run list: %v\nstderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "real-gh:run list") {
+	if !strings.Contains(stdout.String(), "cached-run-list") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if strings.Contains(stdout.String(), "cached-run-list") {
-		t.Fatalf("served fallthrough cache for broad run list: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if _, err := os.Stat(countPath); !os.IsNotExist(err) {
+		t.Fatalf("fake gh should not be called, count stat err=%v", err)
+	}
+}
+
+func TestGHAPIProjectionCacheReusesRawResponse(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed")
+	}
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "count")
+	ghPath := filepath.Join(dir, "gh")
+	script := `#!/bin/sh
+count=0
+if [ -f "$GH_SHIM_COUNT" ]; then
+  count=$(cat "$GH_SHIM_COUNT")
+fi
+count=$((count + 1))
+printf "%s" "$count" > "$GH_SHIM_COUNT"
+printf '{"number":12,"title":"Manifest cache update"}\n'
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_SHIM_COUNT", countPath)
+	t.Setenv("GITCRAWL_GH_CACHE_TTL", "1m")
+
+	for _, tc := range []struct {
+		jq   string
+		want string
+	}{
+		{".number", "12"},
+		{".title", "Manifest cache update"},
+	} {
+		run := New()
+		var stdout, stderr bytes.Buffer
+		run.Stdout = &stdout
+		run.Stderr = &stderr
+		if err := run.Run(ctx, []string{"--config", configPath, "gh", "api", "repos/openclaw/openclaw/pulls/12", "--jq", tc.jq}); err != nil {
+			t.Fatalf("gh api --jq %s: %v\nstderr=%s", tc.jq, err, stderr.String())
+		}
+		if got := strings.TrimSpace(stdout.String()); got != tc.want {
+			t.Fatalf("projection %s = %q, want %q", tc.jq, got, tc.want)
+		}
 	}
 	countData, err := os.ReadFile(countPath)
 	if err != nil {
@@ -720,6 +766,18 @@ func TestGHShimCommandAwareCacheTTLs(t *testing.T) {
 	}
 	if got := ghCommandCacheTTL([]string{"api", "repos/openclaw/openclaw/actions/runs/123"}); got != 30*time.Second {
 		t.Fatalf("actions run api ttl = %s, want 30s", got)
+	}
+	if got := normalizeGHAPIRoute([]string{"--cache", "30s", "repos/openclaw/openclaw/actions/runs/123/jobs"}); got != "api repos/:owner/:repo/actions/runs/:id/jobs" {
+		t.Fatalf("--cache route = %q", got)
+	}
+	if got := ghCommandCacheTTL([]string{"api", "--cache", "45s", "repos/openclaw/openclaw/actions/runs/123/jobs"}); got != 45*time.Second {
+		t.Fatalf("--cache ttl = %s, want 45s", got)
+	}
+	if got := ghCommandCacheTTL([]string{"api", "--method", "GET", "search/issues", "-f", "q=repo:openclaw/openclaw created:2020-01-01..2020-01-31"}); got != 7*24*time.Hour {
+		t.Fatalf("stable search ttl = %s, want 7d", got)
+	}
+	if got := ghCommandCacheTTL([]string{"api", "--method", "GET", "search/issues", "-f", "q=repo:openclaw/openclaw updated:2020-01-01..2020-01-31"}); got != 15*time.Minute {
+		t.Fatalf("updated search ttl = %s, want 15m", got)
 	}
 	if got := ghCommandCacheTTL([]string{"api", "repos/openclaw/openclaw/pages"}); got != 30*time.Minute {
 		t.Fatalf("pages api ttl = %s, want 30m", got)
