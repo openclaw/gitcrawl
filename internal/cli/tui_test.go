@@ -4124,6 +4124,46 @@ func TestTUISortPreservesSelectedClusterAndMember(t *testing.T) {
 	}
 }
 
+func TestTUIMenuSortPreservesSelectedClusterAndMember(t *testing.T) {
+	first := store.ClusterSummary{ID: 1, Source: store.ClusterSourceRun, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"}
+	second := store.ClusterSummary{ID: 2, Source: store.ClusterSourceRun, Status: "active", MemberCount: 10, UpdatedAt: "2026-04-27T00:00:00Z"}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   []store.ClusterSummary{first, second},
+	})
+	model.detailCache[clusterSummaryKey(first)] = store.ClusterDetail{
+		Cluster: first,
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 101, Number: 101, Kind: "issue", State: "open", Title: "alpha"}},
+			{Thread: store.Thread{ID: 102, Number: 102, Kind: "issue", State: "open", Title: "bravo"}},
+		},
+	}
+	model.detailCache[clusterSummaryKey(second)] = store.ClusterDetail{
+		Cluster: second,
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 201, Number: 201, Kind: "issue", State: "open", Title: "charlie"}},
+		},
+	}
+	model.loadSelectedCluster()
+	model.memberIndex = memberRowIndex(model.memberRows, 102)
+	model.openActionMenu()
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = next.(clusterBrowserModel)
+
+	if model.payload.Clusters[model.selected].ID != first.ID {
+		t.Fatalf("selected cluster after menu sort = %d, want %d", model.payload.Clusters[model.selected].ID, first.ID)
+	}
+	got, ok := model.selectedMember()
+	if !ok {
+		t.Fatal("no member selected after menu sort")
+	}
+	if got.Thread.ID != 102 {
+		t.Fatalf("selected member after menu sort = %d, want 102", got.Thread.ID)
+	}
+}
+
 func TestTUIApplyClusterRefreshPreservesMemberSelectionAfterReorder(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -4161,6 +4201,7 @@ func TestTUIApplyClusterRefreshPreservesMemberSelectionAfterReorder(t *testing.T
 	})
 	model.loadSelectedCluster()
 	model.memberIndex = memberRowIndex(model.memberRows, 102)
+	model.detailView.YOffset = 7
 	currentKey := model.currentClusterKey()
 
 	model.applyClusterRefresh([]store.ClusterSummary{second, first}, currentKey)
@@ -4174,6 +4215,9 @@ func TestTUIApplyClusterRefreshPreservesMemberSelectionAfterReorder(t *testing.T
 	}
 	if got.Thread.Number != 102 {
 		t.Fatalf("member selection after reorder = #%d, want #102", got.Thread.Number)
+	}
+	if model.detailView.YOffset != 7 {
+		t.Fatalf("detail offset after refresh reorder = %d, want 7", model.detailView.YOffset)
 	}
 }
 

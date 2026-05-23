@@ -1024,7 +1024,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.payload.Sort = "recent"
 		}
-		m.sortClusters()
+		m.sortClustersPreservingSelection()
 		m.loadSelectedCluster()
 		m.status = "Sort: " + m.payload.Sort
 	case "m":
@@ -3258,6 +3258,7 @@ func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummar
 		clusters = []store.ClusterSummary{}
 	}
 	prevMemberID := int64(0)
+	prevDetailOffset := m.detailView.YOffset
 	if currentKey != "" && m.currentClusterKey() == currentKey {
 		if member, ok := m.selectedMember(); ok {
 			prevMemberID = member.Thread.ID
@@ -3276,7 +3277,9 @@ func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummar
 			if clusterSummaryKey(cluster) == currentKey {
 				m.selected = index
 				m.loadSelectedCluster()
-				m.restoreMemberSelection(prevMemberID)
+				if m.restoreMemberSelection(prevMemberID) {
+					m.detailView.YOffset = prevDetailOffset
+				}
 				break
 			}
 		}
