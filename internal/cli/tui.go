@@ -147,6 +147,7 @@ type clusterBrowserModel struct {
 	wheelDelta       int
 	wheelSeq         int
 	detailView       viewport.Model
+	detailContentKey string
 	searchInput      textinput.Model
 	detailCache      map[string]store.ClusterDetail
 	neighborCache    map[int64][]tuiNeighbor
@@ -396,18 +397,25 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.cancelQueuedWheelScroll()
 		if m.menuOpen {
-			return m.updateMenu(msg)
+			var cmd tea.Cmd
+			next, cmd := m.updateMenu(msg)
+			m = next.(clusterBrowserModel)
+			m.keepVisible()
+			m.syncComponents()
+			return m, cmd
 		}
 		if m.searching {
 			var cmd tea.Cmd
 			m, cmd = m.handleSearchKey(msg)
 			m.keepVisible()
+			m.syncComponents()
 			return m, cmd
 		}
 		if m.jumping {
 			var cmd tea.Cmd
 			m, cmd = m.handleJumpKey(msg)
 			m.keepVisible()
+			m.syncComponents()
 			return m, cmd
 		}
 		switch msg.String() {
@@ -476,9 +484,13 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toggleClosedVisibility()
 		case "/":
 			cmd := m.startFilterInput()
+			m.keepVisible()
+			m.syncComponents()
 			return m, cmd
 		case "#":
 			cmd := m.startJumpInput()
+			m.keepVisible()
+			m.syncComponents()
 			return m, cmd
 		case "esc":
 			if m.showHelp {
@@ -2726,8 +2738,37 @@ func (m *clusterBrowserModel) syncComponents() {
 	// keeps the model) so the line count is real and keyboard/wheel scrolling
 	// has something to move. renderDetail repeats this on the View() copy for
 	// per-frame display freshness.
+	contentKey := m.detailPaneContentKey()
+	if contentKey != m.detailContentKey {
+		m.detailView.GotoTop()
+		m.detailContentKey = contentKey
+	}
 	m.detailView.SetContent(m.detailPaneText(detailW))
+	if m.detailView.PastBottom() {
+		m.detailView.GotoBottom()
+	}
 	m.searchInput.Width = maxInt(20, m.width-16)
+}
+
+func (m clusterBrowserModel) detailPaneContentKey() string {
+	if m.showHelp {
+		return "help"
+	}
+	if m.menuOpen && !m.menuFloating {
+		return "menu:" + m.menuTitle
+	}
+	mode := "full"
+	if m.compactDetail {
+		mode = "compact"
+	}
+	if member, ok := m.selectedMember(); ok {
+		return fmt.Sprintf("detail:%s:%d", mode, member.Thread.ID)
+	}
+	if len(m.payload.Clusters) > 0 && m.selected >= 0 && m.selected < len(m.payload.Clusters) {
+		cluster := m.payload.Clusters[m.selected]
+		return fmt.Sprintf("detail:%s:cluster:%d:%s", mode, cluster.ID, cluster.Source)
+	}
+	return "detail:" + mode
 }
 
 func renderStyledTable(columns []table.Column, rows []table.Row, offset, height, width int, headerColor string, styleForRow func(index int) lipgloss.Style) string {
