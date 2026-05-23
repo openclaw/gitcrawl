@@ -4164,6 +4164,43 @@ func TestTUIMenuSortPreservesSelectedClusterAndMember(t *testing.T) {
 	}
 }
 
+func TestTUILoadSelectedClusterDoesNotRestoreAcrossOverlappingClusters(t *testing.T) {
+	shared := store.Thread{ID: 301, Number: 301, Kind: "issue", State: "open", Title: "shared"}
+	first := store.ClusterSummary{ID: 1, Source: store.ClusterSourceRun, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"}
+	second := store.ClusterSummary{ID: 2, Source: store.ClusterSourceRun, Status: "active", MemberCount: 2, UpdatedAt: "2026-04-27T00:00:00Z"}
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+		Repository: "openclaw/openclaw",
+		Sort:       "recent",
+		Clusters:   []store.ClusterSummary{first, second},
+	})
+	model.detailCache[clusterSummaryKey(first)] = store.ClusterDetail{
+		Cluster: first,
+		Members: []store.ClusterMemberDetail{{Thread: shared}},
+	}
+	model.detailCache[clusterSummaryKey(second)] = store.ClusterDetail{
+		Cluster: second,
+		Members: []store.ClusterMemberDetail{
+			{Thread: store.Thread{ID: 201, Number: 201, Kind: "issue", State: "open", Title: "other"}},
+			{Thread: shared},
+		},
+	}
+	model.loadSelectedCluster()
+	model.detailView.YOffset = 9
+
+	model.move(1)
+
+	got, ok := model.selectedMember()
+	if !ok {
+		t.Fatal("no member selected after cluster switch")
+	}
+	if got.Thread.ID != 201 {
+		t.Fatalf("overlapping cluster restored shared member %d, want 201", got.Thread.ID)
+	}
+	if model.detailView.YOffset != 0 {
+		t.Fatalf("detail offset after cluster switch = %d, want 0", model.detailView.YOffset)
+	}
+}
+
 func TestTUIApplyClusterRefreshPreservesMemberSelectionAfterReorder(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

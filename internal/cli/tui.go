@@ -3435,6 +3435,10 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	if member, ok := m.selectedMember(); ok {
 		prevMemberID = member.Thread.ID
 	}
+	prevClusterKey := ""
+	if m.hasDetail {
+		prevClusterKey = clusterSummaryKey(m.detail.Cluster)
+	}
 	prevDetailOffset := m.detailView.YOffset
 	m.detailView.GotoTop()
 	m.memberOff = 0
@@ -3445,10 +3449,11 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 		return
 	}
 	cluster := m.payload.Clusters[m.selected]
+	restoreSameCluster := prevClusterKey != "" && prevClusterKey == clusterSummaryKey(cluster)
 	cacheKey := clusterSummaryKey(cluster)
 	if cached, ok := m.detailCache[cacheKey]; ok {
 		m.applyClusterDetail(cached)
-		if m.restoreMemberSelection(prevMemberID) {
+		if restoreSameCluster && m.restoreMemberSelection(prevMemberID) {
 			m.detailView.YOffset = prevDetailOffset
 		}
 		return
@@ -3470,7 +3475,7 @@ func (m *clusterBrowserModel) loadSelectedCluster() {
 	}
 	m.detailCache[clusterSummaryKey(detail.Cluster)] = detail
 	m.applyClusterDetail(detail)
-	if m.restoreMemberSelection(prevMemberID) {
+	if restoreSameCluster && m.restoreMemberSelection(prevMemberID) {
 		m.detailView.YOffset = prevDetailOffset
 	}
 }
