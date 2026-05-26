@@ -109,6 +109,7 @@ checkout_dir = "/Users/me/.config/gitcrawl/portable"
 | `GITCRAWL_GH_LOW_BUDGET_STALE_GRACE` | Override extra stale grace when the shared token budget is low |
 | `GITCRAWL_GH_RATE_LIMIT_LOW_REMAINING` | Remaining core requests threshold for low-budget stale reads (default `250`) |
 | `GITCRAWL_GH_RATE_LIMIT_MAX_AGE` | Max age for trusting the shared rate-limit ledger (default `30m`) |
+| `GITCRAWL_GH_WEB` | Use token-free web reads for supported public GitHub shapes before falling through to `gh` |
 | `GITCRAWL_GH_CACHE_ERRORS` | Set to `0` to avoid caching non-zero read-only fallthroughs |
 
 If `GITCRAWL_GH_PATH` is unset, the shim probes common Homebrew install paths and then your `PATH`. Set it explicitly when you symlink the gitcrawl binary as `gh` (otherwise the shim will recurse into itself).

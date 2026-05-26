@@ -161,8 +161,8 @@ func (a *App) runGHXCacheStats(since time.Duration) error {
 	if stats.Since != "" {
 		_, _ = fmt.Fprintf(a.Stdout, "\nSince: %s\n", stats.Since)
 	}
-	_, _ = fmt.Fprintf(a.Stdout, "\nCounters:\n  local hits:              %d\n  fallback hits:           %d\n  stale hits:              %d\n  low-budget stale hits:   %d\n  live bypasses:           %d\n  backend misses:          %d\n  pass-through writes:     %d\n  hit rate:                %.1f%% (%d/%d reads)\n",
-		stats.Counters.LocalHits, stats.Counters.FallbackHits, stats.Counters.StaleHits, stats.Counters.LowBudgetStaleHits, stats.Counters.LiveBypasses, stats.Counters.BackendMisses, stats.Counters.PassThroughWrites,
+	_, _ = fmt.Fprintf(a.Stdout, "\nCounters:\n  local hits:              %d\n  fallback hits:           %d\n  stale hits:              %d\n  low-budget stale hits:   %d\n  web hits:                %d\n  live bypasses:           %d\n  backend misses:          %d\n  pass-through writes:     %d\n  hit rate:                %.1f%% (%d/%d reads)\n",
+		stats.Counters.LocalHits, stats.Counters.FallbackHits, stats.Counters.StaleHits, stats.Counters.LowBudgetStaleHits, stats.Counters.WebHits, stats.Counters.LiveBypasses, stats.Counters.BackendMisses, stats.Counters.PassThroughWrites,
 		stats.HitRatePercent, stats.CacheHits, stats.TotalReads)
 	_, _ = fmt.Fprintf(a.Stdout, "\nShim:\n  invocation: %s\n  plain gh:   %s\n  gh is shim: %t\n  backend:    %s\n  live env:   %t\n",
 		stats.Shim.Invocation, stats.Shim.PlainGHPath, stats.Shim.PlainGHIsShim, stats.Shim.BackendPath, stats.Shim.LiveEnv)
@@ -328,7 +328,7 @@ func (a *App) ghCommandCacheStats(since time.Duration) (ghCommandCacheStats, err
 		stats.CumulativeCounters = &cumulative
 		stats.Counters = counters.since(since, time.Now())
 	}
-	stats.CacheHits = stats.Counters.LocalHits + stats.Counters.FallbackHits + stats.Counters.StaleHits
+	stats.CacheHits = stats.Counters.LocalHits + stats.Counters.FallbackHits + stats.Counters.StaleHits + stats.Counters.WebHits
 	stats.TotalReads = stats.CacheHits + stats.Counters.BackendMisses
 	if stats.TotalReads > 0 {
 		stats.HitRatePercent = float64(stats.CacheHits) / float64(stats.TotalReads) * 100

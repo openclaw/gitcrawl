@@ -2,6 +2,7 @@
 
 ## 0.4.6 - Unreleased
 
+- Add gh-shim web fallback reads for public PR diffs, commit/compare diff and patch media reads, and content files at an explicit ref, used automatically when the shared GitHub API budget drops below 50%.
 - Serve cached local `gh api` reads for PR files, PR commits, and commit check-runs, including common `--paginate --jq` Codex command shapes.
 - Add an optional TUI focus layout, configurable with `gitcrawl tui --layout focus`, `tui.default_layout`, or `GITCRAWL_TUI_LAYOUT`, thanks @RomneyDa.
 - Add `gitcrawl clusters-report` for Markdown or JSON cluster triage reports, thanks @RomneyDa.

@@ -6,12 +6,16 @@ import (
 )
 
 type ghShimControls struct {
-	Live   bool
-	Cached bool
+	Live        bool
+	Cached      bool
+	WebFallback bool
 }
 
 func parseGHShimControls(args []string) ([]string, ghShimControls) {
-	controls := ghShimControls{Live: envTruthy("GITCRAWL_GH_LIVE")}
+	controls := ghShimControls{
+		Live:        envTruthy("GITCRAWL_GH_LIVE"),
+		WebFallback: envTruthy("GITCRAWL_GH_WEB"),
+	}
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
 		switch arg {
@@ -19,12 +23,15 @@ func parseGHShimControls(args []string) ([]string, ghShimControls) {
 			controls.Live = true
 		case "--cached":
 			controls.Cached = true
+		case "--web-fallback":
+			controls.WebFallback = true
 		default:
 			out = append(out, arg)
 		}
 	}
 	if controls.Cached {
 		controls.Live = false
+		controls.WebFallback = false
 	}
 	return out, controls
 }

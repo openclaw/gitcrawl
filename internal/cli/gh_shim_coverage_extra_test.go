@@ -218,13 +218,13 @@ func TestGHMetricsSearchRunsAndXCacheBranches(t *testing.T) {
 	if incrementGHXCacheCounters(&counters, "unknown", nil) {
 		t.Fatal("unknown counter should not increment")
 	}
-	for _, name := range []string{"local_hits", "fallback_hits", "stale_hits", "low_budget_stale_hits", "live_bypasses", "backend_misses", "pass_through_writes"} {
+	for _, name := range []string{"local_hits", "fallback_hits", "stale_hits", "low_budget_stale_hits", "web_hits", "live_bypasses", "backend_misses", "pass_through_writes"} {
 		if !incrementGHXCacheCounters(&counters, name, []string{"api", "repos/openclaw/openclaw/actions/runs/99"}) {
 			t.Fatalf("counter %s did not increment", name)
 		}
 	}
 	var bucket ghXCacheCounterBucket
-	for _, name := range []string{"local_hits", "fallback_hits", "stale_hits", "low_budget_stale_hits", "live_bypasses", "backend_misses", "pass_through_writes"} {
+	for _, name := range []string{"local_hits", "fallback_hits", "stale_hits", "low_budget_stale_hits", "web_hits", "live_bypasses", "backend_misses", "pass_through_writes"} {
 		if !incrementGHXCacheCounterBucket(&bucket, name, []string{"pr", "view", "12", "-R", "openclaw/openclaw"}) {
 			t.Fatalf("bucket counter %s did not increment", name)
 		}

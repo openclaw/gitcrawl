@@ -126,6 +126,8 @@ Override the config root with `--config <path>` or `GITCRAWL_CONFIG`.
 | Stale-while-revalidate grace | command-aware; override with `GITCRAWL_GH_STALE_GRACE` |
 | Low-budget stale grace | command-aware; override with `GITCRAWL_GH_LOW_BUDGET_STALE_GRACE` |
 | Low-budget threshold | `250` remaining shared core requests; override with `GITCRAWL_GH_RATE_LIMIT_LOW_REMAINING` |
+| Web fallback | `--web-fallback` / `GITCRAWL_GH_WEB=1` for supported public PR diff, commit/compare media, and contents-at-ref reads |
+| Auto web fallback | on by default when shared core remaining is below 50% |
 | Cache read failures | on by default; error TTL is capped (`2m` for rate-limit errors); disable with `GITCRAWL_GH_CACHE_ERRORS=0` |
 
 ## gh shim cache key composition

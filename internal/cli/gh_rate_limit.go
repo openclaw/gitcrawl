@@ -100,6 +100,24 @@ func (a *App) sharedRateLimitStateForTokenHost(token, host string) (ghSharedRate
 	return state, true
 }
 
+func (a *App) hasSharedRateLimitStateForHost(host string) bool {
+	dir, err := a.ghCommandCacheDir()
+	if err != nil {
+		return false
+	}
+	prefix := ghSharedRateLimitFilePrefix + safeFileToken(host) + "_"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), prefix) && strings.HasSuffix(entry.Name(), ".json") {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) sharedRateLimitLow(ctx context.Context) (ghSharedRateLimitState, bool) {
 	return a.sharedRateLimitLowForHost(ctx, ghRateLimitHost())
 }

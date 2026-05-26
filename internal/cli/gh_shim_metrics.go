@@ -13,6 +13,7 @@ type ghXCacheCounters struct {
 	FallbackHits           int64                            `json:"fallback_hits"`
 	StaleHits              int64                            `json:"stale_hits"`
 	LowBudgetStaleHits     int64                            `json:"low_budget_stale_hits,omitempty"`
+	WebHits                int64                            `json:"web_hits,omitempty"`
 	LiveBypasses           int64                            `json:"live_bypasses,omitempty"`
 	BackendMisses          int64                            `json:"backend_misses"`
 	PassThroughWrites      int64                            `json:"pass_through_writes"`
@@ -28,6 +29,7 @@ type ghXCacheCounterBucket struct {
 	FallbackHits           int64            `json:"fallback_hits,omitempty"`
 	StaleHits              int64            `json:"stale_hits,omitempty"`
 	LowBudgetStaleHits     int64            `json:"low_budget_stale_hits,omitempty"`
+	WebHits                int64            `json:"web_hits,omitempty"`
 	LiveBypasses           int64            `json:"live_bypasses,omitempty"`
 	BackendMisses          int64            `json:"backend_misses,omitempty"`
 	PassThroughWrites      int64            `json:"pass_through_writes,omitempty"`
@@ -107,6 +109,8 @@ func incrementGHXCacheCounters(stats *ghXCacheCounters, name string, args []stri
 		stats.StaleHits++
 	case "low_budget_stale_hits":
 		stats.LowBudgetStaleHits++
+	case "web_hits":
+		stats.WebHits++
 	case "live_bypasses":
 		stats.LiveBypasses++
 	case "backend_misses":
@@ -130,6 +134,8 @@ func incrementGHXCacheCounterBucket(bucket *ghXCacheCounterBucket, name string, 
 		bucket.StaleHits++
 	case "low_budget_stale_hits":
 		bucket.LowBudgetStaleHits++
+	case "web_hits":
+		bucket.WebHits++
 	case "live_bypasses":
 		bucket.LiveBypasses++
 	case "backend_misses":
@@ -219,6 +225,7 @@ func (c ghXCacheCounters) since(since time.Duration, now time.Time) ghXCacheCoun
 		out.FallbackHits += bucket.FallbackHits
 		out.StaleHits += bucket.StaleHits
 		out.LowBudgetStaleHits += bucket.LowBudgetStaleHits
+		out.WebHits += bucket.WebHits
 		out.LiveBypasses += bucket.LiveBypasses
 		out.BackendMisses += bucket.BackendMisses
 		out.PassThroughWrites += bucket.PassThroughWrites
