@@ -3,6 +3,7 @@
 ## 0.4.6 - Unreleased
 
 - Mirror public GitHub Actions run pages for common `gh run view --json ...` and `gh api repos/:owner/:repo/actions/runs/:id[/jobs]` status reads so agents can keep triaging CI when the REST API is rate limited.
+- Recover collapsed GitHub Actions job graphs from public job pages so matrix jobs still show names, status, conclusion, and steps when the run page lazy-loads only part of the graph.
 - Add gh-shim web fallback reads for public PR diffs, commit/compare diff and patch media reads, and content files at an explicit ref, used automatically when the shared GitHub API budget drops below 50%.
 - Serve cached local `gh api` reads for PR files, PR commits, and commit check-runs, including common `--paginate --jq` Codex command shapes.
 - Add an optional TUI focus layout, configurable with `gitcrawl tui --layout focus`, `tui.default_layout`, or `GITCRAWL_TUI_LAYOUT`, thanks @RomneyDa.
