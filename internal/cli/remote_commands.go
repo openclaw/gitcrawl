@@ -497,13 +497,31 @@ func stringValue(value map[string]any, keys ...string) string {
 }
 
 func intValue(value map[string]any, keys ...string) int {
-	v := int64Value(value, keys...)
 	const maxInt = int64(1<<(strconv.IntSize-1) - 1)
 	const minInt = -maxInt - 1
-	if v < minInt || v > maxInt {
-		return 0
+	for _, key := range keys {
+		switch v := value[key].(type) {
+		case int:
+			return v
+		case int64:
+			if v >= minInt && v <= maxInt {
+				return int(v)
+			}
+		case float64:
+			if v >= float64(minInt) && v <= float64(maxInt) {
+				return int(v)
+			}
+		case json.Number:
+			if parsed, err := strconv.Atoi(v.String()); err == nil {
+				return parsed
+			}
+		case string:
+			if parsed, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				return parsed
+			}
+		}
 	}
-	return int(v)
+	return 0
 }
 
 func int64Value(value map[string]any, keys ...string) int64 {
