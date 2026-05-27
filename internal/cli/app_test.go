@@ -198,7 +198,9 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 		t.Fatalf("remote doctor output = %s", doctorOut.String())
 	}
 	for _, args := range [][]string{
+		{"--config", configPath, "--json", "remote", "status"},
 		{"--config", configPath, "--json", "remote", "archives"},
+		{"--config", configPath, "--json", "remote", "whoami"},
 		{"--config", configPath, "--json", "whoami"},
 	} {
 		app := New()
