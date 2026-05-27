@@ -3,11 +3,14 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/openclaw/crawlkit/control"
 	crawlremote "github.com/openclaw/crawlkit/remote"
@@ -26,10 +29,146 @@ func (a *App) runRemote(ctx context.Context, args []string) error {
 		return a.runRemoteStatus(ctx, args[1:])
 	case "archives":
 		return a.runRemoteArchives(ctx, args[1:])
+	case "login":
+		return a.runRemoteLogin(ctx, args[1:])
 	case "whoami":
 		return a.runRemoteWhoami(ctx, args[1:])
 	default:
 		return usageErr(fmt.Errorf("unknown remote subcommand %q", args[0]))
+	}
+}
+
+func (a *App) runRemoteLogin(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("remote login", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	endpoint := fs.String("endpoint", "", "remote archive endpoint")
+	noBrowser := fs.Bool("no-browser", false, "print login URL without opening a browser")
+	timeoutRaw := fs.String("timeout", "5m", "login timeout")
+	pollRaw := fs.String("poll-interval", "2s", "login poll interval")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"endpoint": true, "timeout": true, "poll-interval": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() > 1 {
+		return usageErr(fmt.Errorf("remote login accepts at most one endpoint"))
+	}
+	if fs.NArg() == 1 {
+		if *endpoint != "" {
+			return usageErr(fmt.Errorf("use either --endpoint or a positional endpoint"))
+		}
+		*endpoint = fs.Arg(0)
+	}
+	timeout, err := time.ParseDuration(*timeoutRaw)
+	if err != nil || timeout <= 0 {
+		return usageErr(fmt.Errorf("invalid --timeout %q", *timeoutRaw))
+	}
+	pollInterval, err := time.ParseDuration(*pollRaw)
+	if err != nil || pollInterval <= 0 {
+		return usageErr(fmt.Errorf("invalid --poll-interval %q", *pollRaw))
+	}
+	cfg, configExists, err := a.loadConfigOrDefault()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*endpoint) != "" {
+		cfg.Remote.Endpoint = *endpoint
+	}
+	cfg.Remote.Normalize()
+	if cfg.Remote.Endpoint == "" {
+		return usageErr(fmt.Errorf("remote login requires --endpoint or remote.endpoint"))
+	}
+	client, err := crawlremote.NewClientFromConfig(cfg.Remote, crawlremote.Options{UserAgent: "gitcrawl/" + version})
+	if err != nil {
+		return err
+	}
+	pollSecret, err := crawlremote.NewLoginPollSecret()
+	if err != nil {
+		return err
+	}
+	start, err := client.StartGitHubLogin(ctx, crawlremote.LoginPollSecretHash(pollSecret))
+	if err != nil {
+		return err
+	}
+	if !*noBrowser {
+		if err := openURL(start.URL); err != nil && a.format != FormatJSON {
+			_, _ = fmt.Fprintf(a.Stdout, "Open this URL to continue login:\n%s\n", start.URL)
+		}
+	} else if a.format != FormatJSON {
+		_, _ = fmt.Fprintf(a.Stdout, "Open this URL to continue login:\n%s\n", start.URL)
+	}
+	result, err := pollRemoteLogin(ctx, client, start.LoginID, pollSecret, timeout, pollInterval)
+	if err != nil {
+		return err
+	}
+	auth, err := config.StoreRemoteToken(cfg, result.Token)
+	if err != nil {
+		return fmt.Errorf("store remote token: %w", err)
+	}
+	if cfg.Remote.Mode == "" || cfg.Remote.Mode == crawlremote.ModeLocal {
+		cfg.Remote.Mode = crawlremote.ModeCloud
+	}
+	cfg.Remote.Auth = auth
+	if !configExists || strings.TrimSpace(*endpoint) != "" || cfg.Remote.Auth.TokenSource == "keyring" {
+		if err := config.Save(a.configPath, cfg); err != nil {
+			return err
+		}
+	}
+	return a.writeOutput("remote login", map[string]any{
+		"config_path":     config.ResolvePath(a.configPath),
+		"endpoint":        cfg.Remote.Endpoint,
+		"archive":         cfg.Remote.Archive,
+		"login":           result.Login,
+		"org":             result.Org,
+		"owner":           result.Owner,
+		"auth_source":     cfg.Remote.Auth.TokenSource,
+		"keyring_service": cfg.Remote.Auth.KeyringService,
+		"keyring_account": cfg.Remote.Auth.KeyringAccount,
+		"updated":         true,
+	}, true)
+}
+
+func (a *App) loadConfigOrDefault() (config.Config, bool, error) {
+	cfg, err := config.Load(a.configPath)
+	if err == nil {
+		return cfg, true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return config.Config{}, false, err
+	}
+	return config.Default(), false, nil
+}
+
+func pollRemoteLogin(ctx context.Context, client *crawlremote.Client, loginID, pollSecret string, timeout, interval time.Duration) (crawlremote.LoginPollResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		result, err := client.PollGitHubLogin(ctx, loginID, pollSecret)
+		if err != nil {
+			return crawlremote.LoginPollResult{}, err
+		}
+		switch strings.ToLower(strings.TrimSpace(result.Status)) {
+		case "complete":
+			if strings.TrimSpace(result.Token) == "" {
+				return crawlremote.LoginPollResult{}, fmt.Errorf("remote login completed without token")
+			}
+			return result, nil
+		case "error":
+			if result.Error != "" {
+				return crawlremote.LoginPollResult{}, fmt.Errorf("remote login failed: %s", result.Error)
+			}
+			return crawlremote.LoginPollResult{}, fmt.Errorf("remote login failed")
+		case "", "pending":
+		default:
+			return crawlremote.LoginPollResult{}, fmt.Errorf("remote login returned status %q", result.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return crawlremote.LoginPollResult{}, ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -195,7 +334,9 @@ func (a *App) remoteClient(cfg config.Config) (*crawlremote.Client, error) {
 		return nil, fmt.Errorf("remote archive is not configured")
 	}
 	tokenProvider := crawlremote.TokenProvider(crawlremote.EnvTokenProvider{Name: cfg.Remote.TokenEnv})
-	if token := config.ResolveRemoteToken(cfg); token.Value != "" {
+	if token, err := config.ResolveRemoteTokenWithKeyring(cfg); err != nil {
+		return nil, err
+	} else if token.Value != "" {
 		tokenProvider = crawlremote.StaticToken(token.Value)
 	}
 	return crawlremote.NewClientFromConfig(cfg.Remote, crawlremote.Options{

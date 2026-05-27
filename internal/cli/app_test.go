@@ -22,6 +22,7 @@ import (
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
+	"github.com/zalando/go-keyring"
 )
 
 func TestInitWritesConfig(t *testing.T) {
@@ -280,6 +281,93 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	}
 	if payload["repositories"] != float64(1) || payload["threads"] != float64(3) {
 		t.Fatalf("unexpected output: %#v", payload)
+	}
+}
+
+func TestRemoteLoginStoresKeyringToken(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	keyring.MockInit()
+
+	var pollSecretHash string
+	var pollSecret string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch r.URL.Path {
+		case "/v1/auth/github/start":
+			var req crawlremote.LoginStartRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			pollSecretHash = req.PollSecretHash
+			_ = json.NewEncoder(w).Encode(crawlremote.LoginStartResult{LoginID: "login-1", URL: server.URL + "/authorize"})
+		case "/v1/auth/github/poll":
+			var req crawlremote.LoginPollRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req.LoginID != "login-1" {
+				http.Error(w, "wrong login", http.StatusBadRequest)
+				return
+			}
+			pollSecret = req.PollSecret
+			_ = json.NewEncoder(w).Encode(crawlremote.LoginPollResult{Status: "complete", Token: "session-token", Org: "openclaw", Login: "alice"})
+		case "/v1/whoami":
+			if r.Header.Get("authorization") != "Bearer session-token" {
+				http.Error(w, "missing session token", http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(crawlremote.Identity{Owner: "openclaw", Org: "openclaw", Login: "alice", Auth: "github"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	var out bytes.Buffer
+	app.Stdout = &out
+	if err := app.Run(ctx, []string{
+		"--config", configPath,
+		"--json",
+		"remote", "login",
+		"--endpoint", server.URL,
+		"--no-browser",
+		"--timeout", "1s",
+		"--poll-interval", "1ms",
+	}); err != nil {
+		t.Fatalf("remote login: %v", err)
+	}
+	if pollSecretHash == "" || pollSecret == "" || crawlremote.LoginPollSecretHash(pollSecret) != pollSecretHash {
+		t.Fatalf("poll secret/hash not linked: secret=%q hash=%q", pollSecret, pollSecretHash)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Remote.Auth.TokenSource != "keyring" || cfg.Remote.Auth.KeyringService == "" || cfg.Remote.Auth.KeyringAccount == "" {
+		t.Fatalf("remote auth = %#v", cfg.Remote.Auth)
+	}
+	stored, err := keyring.Get(cfg.Remote.Auth.KeyringService, cfg.Remote.Auth.KeyringAccount)
+	if err != nil {
+		t.Fatalf("keyring get: %v", err)
+	}
+	if stored != "session-token" {
+		t.Fatalf("stored token = %q", stored)
+	}
+
+	whoami := New()
+	var whoamiOut bytes.Buffer
+	whoami.Stdout = &whoamiOut
+	if err := whoami.Run(ctx, []string{"--config", configPath, "--json", "whoami"}); err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	if !strings.Contains(whoamiOut.String(), `"login": "alice"`) {
+		t.Fatalf("whoami output = %s", whoamiOut.String())
 	}
 }
 

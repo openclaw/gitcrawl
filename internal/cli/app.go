@@ -3259,6 +3259,7 @@ func (a *App) runMetadata(args []string) error {
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
 		"remote-status":   {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
 		"remote-archives": {Title: "Remote archive list", Argv: []string{"gitcrawl", "remote", "archives", "--json"}, JSON: true},
+		"remote-login":    {Title: "Remote GitHub login", Argv: []string{"gitcrawl", "remote", "login", "--json"}, JSON: true, Mutates: true},
 		"cloud-publish":   {Title: "Publish cloud archive", Argv: []string{"gitcrawl", "cloud", "publish", "--json"}, JSON: true, Mutates: true},
 		"whoami":          {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
 		"check-update":    {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
@@ -4065,6 +4066,7 @@ Core commands:
   status               print fast read-only archive status
   remote status        print remote archive status
   remote archives      list remote archives visible to the current identity
+  remote login         authenticate with GitHub org access for a remote archive
   whoami               print remote archive identity
   cloud publish        publish the local archive to a Worker remote
   init                 create config, optionally from a portable store
@@ -4114,6 +4116,7 @@ Usage:
 Usage:
   gitcrawl remote status [--json]
   gitcrawl remote archives [--json]
+  gitcrawl remote login --endpoint URL [--json]
   gitcrawl remote whoami [--json]
 `,
 	"cloud": `gitcrawl cloud manages Worker-backed remote archives.

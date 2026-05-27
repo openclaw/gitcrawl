@@ -18,6 +18,7 @@ gitcrawl doctor
 gitcrawl metadata --json
 gitcrawl status --json
 gitcrawl init --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw
+gitcrawl remote login --endpoint https://crawl.openclaw.ai --json
 gitcrawl remote status --json
 gitcrawl remote archives --json
 gitcrawl whoami --json
@@ -57,6 +58,7 @@ gitcrawl tui owner/repo
 `gitcrawl clusters` and `gitcrawl tui` match ghcrawl's display view: latest raw run clusters first, closed durable rows merged as historical context, sorted by size by default. Pass `--hide-closed` to focus only currently open clusters. `gitcrawl durable-clusters` stays on governed durable rows and needs `--include-closed` for inactive rows.
 `gitcrawl metadata --json`, `gitcrawl status --json`, and `gitcrawl doctor --json` are crawlkit control surfaces for launchers, local automation, and CI checks. They are read-only and do not mutate archive data.
 `gitcrawl init --remote ... --archive ...` configures a Worker-fronted cloud archive. In `cloud` mode, supported read commands such as `status` and `search owner/repo --query ...` call the remote archive and do not create a local SQLite database. Existing local and Git-backed portable-store workflows remain unchanged.
+`gitcrawl remote login` starts the Worker GitHub OAuth flow, verifies org/team membership server-side, and stores the signed bearer token in the OS keyring.
 `gitcrawl cloud publish` sends the local SQLite repositories and thread rows to a Worker archive through the role-gated ingest endpoint.
 `gitcrawl clusters-report` writes a Markdown report for the top clusters using the same display view, with an at-a-glance table, per-cluster metadata, member tables, and key snippets. Use `--json` for the hydrated report payload.
 `gitcrawl cluster` and `gitcrawl refresh` build ghcrawl-shaped durable clusters by default (`--threshold 0.80`, `--min-size 1`, `--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`): every active vector-backed thread is represented, singleton rows use `singleton_orphan`, multi-member rows use `duplicate_candidate`, and stable IDs are derived from the representative thread. They also add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
