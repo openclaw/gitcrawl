@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -204,6 +205,406 @@ func TestGHShimWebFallbackServesAPICompareMedia(t *testing.T) {
 	}
 }
 
+func TestGHShimWebFallbackServesRunViewAndActionsAPI(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openclaw/openclaw/actions/runs/99":
+			_, _ = w.Write([]byte(testGHWebRunHTML()))
+		case "/openclaw/openclaw/actions/runs/99/job_groups_batch":
+			_, _ = w.Write([]byte(`{"totalCount":3}`))
+		case "/openclaw/openclaw/actions/runs/99/job/111":
+			_, _ = w.Write([]byte(testGHWebJobHTML("Setup", "success")))
+		case "/openclaw/openclaw/actions/runs/99/job/222":
+			_, _ = w.Write([]byte(testGHWebJobHTML("Release", "failure")))
+		case "/openclaw/openclaw/actions/runs/99/job/333":
+			_, _ = w.Write([]byte(`<html><body></body></html>`))
+		default:
+			t.Fatalf("web path = %s", r.URL.Path)
+		}
+	}))
+	defer webServer.Close()
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "count")
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho called > \"$GH_SHIM_COUNT\"\necho fallback:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_SHIM_COUNT", countPath)
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	err := run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "run", "view", "99", "-R", "openclaw/openclaw", "--json", "databaseId,number,workflowName,displayTitle,status,conclusion,url,event,headBranch,headSha,createdAt,jobs"})
+	if err != nil {
+		t.Fatalf("web run view: %v", err)
+	}
+	var view map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &view); err != nil {
+		t.Fatalf("decode run view: %v\n%s", err, stdout.String())
+	}
+	if view["databaseId"].(float64) != 99 || view["number"].(float64) != 1247 || view["workflowName"] != "Full Release Validation" || view["displayTitle"] != "Release main" {
+		t.Fatalf("view basics = %#v", view)
+	}
+	if view["status"] != "completed" || view["conclusion"] != "failure" || view["event"] != "workflow_dispatch" {
+		t.Fatalf("view state = %#v", view)
+	}
+	if view["headBranch"] != "main" || view["headSha"] != "989d449404b8f6c85c3bca54abb336a0870c60f7" || view["createdAt"] != "2026-05-26T22:26:15Z" {
+		t.Fatalf("view ref = %#v", view)
+	}
+	jobs := view["jobs"].([]any)
+	if len(jobs) != 3 {
+		t.Fatalf("jobs = %#v", jobs)
+	}
+	second := jobs[1].(map[string]any)
+	if second["databaseId"].(float64) != 222 || second["name"] != "Run release validation" || second["conclusion"] != "failure" {
+		t.Fatalf("second job = %#v", second)
+	}
+	steps := second["steps"].([]any)
+	if len(steps) != 1 || steps[0].(map[string]any)["name"] != "Release" || steps[0].(map[string]any)["conclusion"] != "failure" {
+		t.Fatalf("steps = %#v", steps)
+	}
+	third := jobs[2].(map[string]any)
+	if third["status"] != "queued" || third["conclusion"] != "" {
+		t.Fatalf("third job = %#v", third)
+	}
+
+	stdout.Reset()
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed")
+	}
+	err = run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "api", "repos/openclaw/openclaw/actions/runs/99/jobs", "--jq", "{total_count, jobs: [.jobs[] | {id,name,status,conclusion,html_url}]}"})
+	if err != nil {
+		t.Fatalf("web api jobs: %v", err)
+	}
+	var jobsPayload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &jobsPayload); err != nil {
+		t.Fatalf("decode jobs: %v\n%s", err, stdout.String())
+	}
+	if jobsPayload["total_count"].(float64) != 3 {
+		t.Fatalf("jobs payload = %#v", jobsPayload)
+	}
+	apiJobs := jobsPayload["jobs"].([]any)
+	apiFirst := apiJobs[0].(map[string]any)
+	if apiFirst["id"].(float64) != 111 || apiFirst["html_url"] != webServer.URL+"/openclaw/openclaw/actions/runs/99/job/111" {
+		t.Fatalf("api first job = %#v", apiFirst)
+	}
+
+	stdout.Reset()
+	err = run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "api", "repos/openclaw/openclaw/actions/runs/99", "--jq", "{id:.id,html_url:.html_url,jobs_url:.jobs_url,status:.status}"})
+	if err != nil {
+		t.Fatalf("web api run: %v", err)
+	}
+	var apiRun map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &apiRun); err != nil {
+		t.Fatalf("decode api run: %v\n%s", err, stdout.String())
+	}
+	if apiRun["id"].(float64) != 99 || apiRun["html_url"] != webServer.URL+"/openclaw/openclaw/actions/runs/99" || apiRun["jobs_url"] != "https://api.github.com/repos/openclaw/openclaw/actions/runs/99/jobs" || apiRun["status"] != "completed" {
+		t.Fatalf("api run = %#v", apiRun)
+	}
+	if _, err := os.Stat(countPath); !os.IsNotExist(err) {
+		t.Fatalf("fake gh should not be called: %v", err)
+	}
+}
+
+func TestGHShimWebFallbackRunMetadataIgnoresCollapsedJobs(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openclaw/openclaw/actions/runs/123456":
+			_, _ = w.Write([]byte(strings.ReplaceAll(testGHWebRunHTML(), "runs/99", "runs/123456")))
+		case "/openclaw/openclaw/actions/runs/123456/job_groups_batch":
+			_, _ = w.Write([]byte(`{"totalCount":4}`))
+		default:
+			t.Fatalf("web path = %s", r.URL.Path)
+		}
+	}))
+	defer webServer.Close()
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "count")
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho called > \"$GH_SHIM_COUNT\"\necho fallback:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_SHIM_COUNT", countPath)
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	err := run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "run", "view", "123456", "-R", "openclaw/openclaw", "--json", "status,conclusion"})
+	if err != nil {
+		t.Fatalf("web run view: %v", err)
+	}
+	var view map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &view); err != nil {
+		t.Fatalf("decode run view: %v\n%s", err, stdout.String())
+	}
+	if view["status"] != "completed" || view["conclusion"] != "failure" {
+		t.Fatalf("view state = %#v", view)
+	}
+	if _, err := os.Stat(countPath); !os.IsNotExist(err) {
+		t.Fatalf("fake gh should not be called: %v", err)
+	}
+}
+
+func TestGHShimWebFallbackJobCardsDoNotRequireJobPages(t *testing.T) {
+	ctx := context.Background()
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openclaw/openclaw/actions/runs/123459":
+			_, _ = w.Write([]byte(strings.ReplaceAll(testGHWebRunHTML(), "runs/99", "runs/123459")))
+		case "/openclaw/openclaw/actions/runs/123459/job_groups_batch":
+			_, _ = w.Write([]byte(`{"totalCount":3}`))
+		default:
+			t.Fatalf("unexpected job-detail fetch path = %s", r.URL.Path)
+		}
+	}))
+	defer webServer.Close()
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run, _, err := fetchGHWebRunSnapshot(ctx, "openclaw", "openclaw", "123459", true, false)
+	if err != nil {
+		t.Fatalf("fetch run snapshot: %v", err)
+	}
+	if len(run.Jobs) != 3 || run.Jobs[1].Name != "Run release validation" || run.Jobs[1].Conclusion != "failure" {
+		t.Fatalf("jobs = %#v", run.Jobs)
+	}
+}
+
+func TestGHShimWebFallbackJobsFallThroughWithoutJobMarkup(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/openclaw/openclaw/actions/runs/123457" {
+			t.Fatalf("web path = %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`<!doctype html><html><body>
+<span class="PageHeader-parentLink-label">Full Release Validation</span>
+<h1 class="PageHeader-title lh-default"><span><span class="markdown-title">Release main</span><span class="color-fg-muted" style="font-weight: 400">#1247</span></span></h1>
+<span class="h4 color-fg-default">Failure</span>
+</body></html>`))
+	}))
+	defer webServer.Close()
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "count")
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho called > \"$GH_SHIM_COUNT\"\necho fallback:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_SHIM_COUNT", countPath)
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	err := run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "run", "view", "123457", "-R", "openclaw/openclaw", "--json", "jobs"})
+	if err != nil {
+		t.Fatalf("fallback run view: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "fallback:run view 123457") {
+		t.Fatalf("expected fake gh fallback, got %q", stdout.String())
+	}
+	if _, err := os.Stat(countPath); err != nil {
+		t.Fatalf("fake gh was not called: %v", err)
+	}
+}
+
+func TestGHShimWebFallbackJobsFallThroughWithoutCompletedJobSteps(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openclaw/openclaw/actions/runs/123458":
+			_, _ = w.Write([]byte(strings.ReplaceAll(testGHWebRunHTML(), "runs/99", "runs/123458")))
+		case "/openclaw/openclaw/actions/runs/123458/job_groups_batch":
+			_, _ = w.Write([]byte(`{"totalCount":3}`))
+		case "/openclaw/openclaw/actions/runs/123458/job/111":
+			_, _ = w.Write([]byte(`<html><body></body></html>`))
+		default:
+			t.Fatalf("web path = %s", r.URL.Path)
+		}
+	}))
+	defer webServer.Close()
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "count")
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho called > \"$GH_SHIM_COUNT\"\necho fallback:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_SHIM_COUNT", countPath)
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	err := run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "run", "view", "123458", "-R", "openclaw/openclaw", "--json", "jobs"})
+	if err != nil {
+		t.Fatalf("fallback run view: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "fallback:run view 123458") {
+		t.Fatalf("expected fake gh fallback, got %q", stdout.String())
+	}
+	if _, err := os.Stat(countPath); err != nil {
+		t.Fatalf("fake gh was not called: %v", err)
+	}
+}
+
+func TestGHShimWebFallbackSkipsUnsupportedRunViewFields(t *testing.T) {
+	ctx := context.Background()
+	app := New()
+	if _, ok := app.parseGHWebRunViewArgs(ctx, []string{"99", "-R", "openclaw/openclaw", "--json", "updatedAt"}); ok {
+		t.Fatal("updatedAt should fall through until web can prove an equivalent value")
+	}
+	if _, ok := app.parseGHWebRunViewArgs(ctx, []string{"99", "-R", "openclaw/openclaw", "--json", "id"}); ok {
+		t.Fatal("id should fall through because gh run view only supports databaseId")
+	}
+	if _, ok := app.parseGHWebRunViewArgs(ctx, []string{"99", "-R", "openclaw/openclaw", "--job", "111", "--json", "status"}); ok {
+		t.Fatal("--job logs should fall through to gh")
+	}
+	if _, ok := parseGHWebAPIJobsArgs([]string{"repos/openclaw/openclaw/actions/runs/99/jobs?per_page=1&page=2"}); ok {
+		t.Fatal("paginated jobs API queries should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`.jobs[] | {id,workflow_name}`, map[string]bool{"jobs": true, "id": true}) {
+		t.Fatal("unsupported jq shorthand fields should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`{id:.id, workflow_id:.["workflow_id"]}`, map[string]bool{"id": true}) {
+		t.Fatal("unsupported jq string-index fields should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`.jobs[]["runner_name"]`, map[string]bool{"jobs": true}) {
+		t.Fatal("unsupported nested jq string-index fields should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`.database_id`, map[string]bool{"id": true}) {
+		t.Fatal("unsupported REST fields should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`{workflow_id, run:{id,status}}`, map[string]bool{"id": true, "status": true}) {
+		t.Fatal("unsupported nested jq shorthand fields should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`{status, hasWorkflow: has("workflow_id")}`, map[string]bool{"status": true}) {
+		t.Fatal("jq object introspection should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`.`, map[string]bool{"status": true}) {
+		t.Fatal("jq identity should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`.jobs[]`) {
+		t.Fatal("whole job object projections should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`{total_count, jobs}`) {
+		t.Fatal("whole jobs array shorthand should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`.jobs[] | length`) {
+		t.Fatal("job object length should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`.jobs[] as $j | $j`) {
+		t.Fatal("job variable re-emits should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`.["jobs"][]`) {
+		t.Fatal("bracket whole job projections should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`{jobs: .["jobs"]}`) {
+		t.Fatal("bracket whole jobs array projections should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`.jobs | sort_by(.name)`) {
+		t.Fatal("job transforms should fall through to gh")
+	}
+	if ghWebJQJobsProjectionSupported(`.jobs[]?`) {
+		t.Fatal("optional whole job object projections should fall through to gh")
+	}
+	if ghWebJQFieldsSupported(`.jobs | map(select(.conclusion=="failure"))`, map[string]bool{"jobs": true, "conclusion": true}) {
+		t.Fatal("jq whole-object transforms should fall through to gh")
+	}
+	if !ghWebJQJobsProjectionSupported(`.jobs[] | {id,name,status}`) {
+		t.Fatal("projected job fields should be supported")
+	}
+	if !ghWebJQJobsProjectionSupported(`.jobs[] | [.status,.conclusion] | @tsv`) {
+		t.Fatal("projected job arrays should be supported")
+	}
+	if !ghWebJQNeedsJobDetails(`.jobs[] | {name,started_at,completed_at}`) {
+		t.Fatal("shorthand time fields should require job details")
+	}
+	if !ghWebJQNeedsJobDetails(`.jobs[] | {name,steps}`) {
+		t.Fatal("shorthand steps should require job details")
+	}
+}
+
+func TestGHShimWebFallbackSkipsUnknownCompletedJobConclusion(t *testing.T) {
+	if _, _, ok := parseGHWebJobState(`<streaming-graph-job data-concluded="true"><svg aria-label="completed mysteriously: "></svg></streaming-graph-job>`); ok {
+		t.Fatal("unknown completed job conclusion should fall through to gh")
+	}
+	status, conclusion, ok := parseGHWebJobState(`<streaming-graph-job data-concluded="true"><svg aria-label="action required: "></svg></streaming-graph-job>`)
+	if !ok || status != "completed" || conclusion != "action_required" {
+		t.Fatalf("action required conclusion = %q %q %v", status, conclusion, ok)
+	}
+	status, conclusion, ok = parseGHWebJobState(`<streaming-graph-job data-concluded="true"><svg aria-label="startup failure: "></svg></streaming-graph-job>`)
+	if !ok || status != "completed" || conclusion != "startup_failure" {
+		t.Fatalf("startup failure conclusion = %q %q %v", status, conclusion, ok)
+	}
+	status, conclusion, ok = parseGHWebJobState(`<streaming-graph-job><svg aria-label="Pending: "></svg></streaming-graph-job>`)
+	if !ok || status != "pending" || conclusion != "" {
+		t.Fatalf("pending status = %q %q %v", status, conclusion, ok)
+	}
+	status, conclusion, ok = parseGHWebJobState(`<streaming-graph-job><svg aria-label="Requested: "></svg></streaming-graph-job>`)
+	if !ok || status != "requested" || conclusion != "" {
+		t.Fatalf("requested status = %q %q %v", status, conclusion, ok)
+	}
+}
+
+func TestGHShimWebFallbackRunStateConclusions(t *testing.T) {
+	status, conclusion := ghWebStatusConclusionFromLabel("Startup failure")
+	if status != "completed" || conclusion != "startup_failure" {
+		t.Fatalf("startup failure run state = %q %q", status, conclusion)
+	}
+	status, conclusion = ghWebStatusConclusionFromLabel("Action required")
+	if status != "completed" || conclusion != "action_required" {
+		t.Fatalf("action required run state = %q %q", status, conclusion)
+	}
+}
+
+func TestGHShimWebFallbackRESTJobsUseNullForMissingTimes(t *testing.T) {
+	run := ghWebRunSnapshot{
+		Owner: "openclaw",
+		Repo:  "openclaw",
+		Jobs: []ghWebRunJob{{
+			ID:     1,
+			Name:   "Queued",
+			Status: "queued",
+			Steps: []ghWebRunStep{{
+				Name:   "Pending",
+				Number: 1,
+				Status: "queued",
+			}},
+		}},
+	}
+	job := run.ghAPIJobsPayload()[0]
+	if job["started_at"] != nil || job["completed_at"] != nil {
+		t.Fatalf("job times = %#v %#v", job["started_at"], job["completed_at"])
+	}
+	step := job["steps"].([]map[string]any)[0]
+	if step["started_at"] != nil || step["completed_at"] != nil {
+		t.Fatalf("step times = %#v %#v", step["started_at"], step["completed_at"])
+	}
+}
+
+func TestGHShimWebFallbackRESTJobsUsesDefaultPageSize(t *testing.T) {
+	run := ghWebRunSnapshot{Owner: "openclaw", Repo: "openclaw"}
+	for index := 0; index < 31; index++ {
+		run.Jobs = append(run.Jobs, ghWebRunJob{ID: int64(index + 1), Name: fmt.Sprintf("Job %d", index+1), Status: "completed", Conclusion: "success"})
+	}
+	if got := len(run.ghAPIJobsPagePayload(30)); got != 30 {
+		t.Fatalf("default page jobs = %d", got)
+	}
+	if got := len(run.ghAPIJobsPayload()); got != 31 {
+		t.Fatalf("full jobs = %d", got)
+	}
+}
+
 func TestGHShimWebFallbackDefaultsWhenBelowHalfLimit(t *testing.T) {
 	ctx := context.Background()
 	configPath := seedGHShimRepo(t, ctx)
@@ -250,6 +651,50 @@ func TestGHShimWebFallbackDefaultsWhenBelowHalfLimit(t *testing.T) {
 	if stats.Counters.WebHits != 1 || stats.Counters.BackendMisses != 0 {
 		t.Fatalf("counters = %+v", stats.Counters)
 	}
+}
+
+func testGHWebRunHTML() string {
+	return `<!doctype html>
+<html>
+<head><title>Release main Fix #12 · openclaw/openclaw@989d449 · GitHub</title></head>
+<body>
+<span class="PageHeader-parentLink-label"> Full Release Validation</span>
+<script type="application/json" data-target="react-partial.embeddedData">{"props":{"jobGroupsFetchUrl":"/openclaw/openclaw/actions/runs/99/job_groups_batch"}}</script>
+<h1 class="PageHeader-title lh-default"><span><span class="markdown-title">Release main</span><span class="color-fg-muted" style="font-weight: 400">#1247</span></span></h1>
+<span class="h4 color-fg-default">Failure</span>
+<relative-time datetime="2026-05-26T22:26:15Z">May 26, 2026 22:26</relative-time>
+<a href="/openclaw/openclaw/commit/989d449404b8f6c85c3bca54abb336a0870c60f7">989d449</a>
+<a class="d-inline-block branch-name" title="main" href="/some-fork/openclaw/tree/refs/heads/main">main</a>
+<div class="text-small color-fg-muted">on: workflow_dispatch</div>
+<streaming-graph-job data-concluded="true">
+<a href="/openclaw/openclaw/actions/runs/99/job/111">
+<svg aria-label="completed successfully: "></svg>
+<span data-target="streaming-graph-job.name">Resolve target ref</span>
+</a>
+<tool-tip>Resolve target ref</tool-tip>
+</streaming-graph-job>
+<streaming-graph-job data-concluded="true">
+<a href="/openclaw/openclaw/actions/runs/99/job/222">
+<svg aria-label="failed: "></svg>
+<span data-target="streaming-graph-job.name">Run release validation</span>
+</a>
+<tool-tip>Run release validation</tool-tip>
+</streaming-graph-job>
+<streaming-graph-job>
+<a href="/openclaw/openclaw/actions/runs/99/job/333">
+<svg aria-label="Queued: "></svg>
+<span data-target="streaming-graph-job.name">Queued release summary</span>
+</a>
+<tool-tip>Queued release summary</tool-tip>
+</streaming-graph-job>
+</body>
+</html>`
+}
+
+func testGHWebJobHTML(stepName, conclusion string) string {
+	return `<html><body>
+<check-step data-name="` + stepName + `" data-number="1" data-conclusion="` + conclusion + `" data-started-at="2026-05-26T22:26:18Z" data-completed-at="2026-05-26T22:26:29Z"></check-step>
+</body></html>`
 }
 
 func TestGHShimWebFallbackDefaultsWithGHAuthTokenBudget(t *testing.T) {

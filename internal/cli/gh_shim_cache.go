@@ -162,6 +162,16 @@ func (a *App) execRealGHAPIProjectionMaybeCached(ctx context.Context, originalAr
 		}
 	}
 
+	if projectedOut, projectedErr, projectErr, ok := a.captureGHWebAPIProjection(ctx, rawArgs, jqExpr, controls); ok {
+		_ = a.incrementGHXCacheCounter("web_hits")
+		if projectErr != nil {
+			return a.execRealGHMaybeCachedWithoutProjection(ctx, originalArgs, cacheDir, controls)
+		}
+		_, _ = io.WriteString(a.Stdout, projectedOut)
+		_, _ = io.WriteString(a.Stderr, projectedErr)
+		return nil
+	}
+
 	stdout, stderr, exitCode, err, fromWeb := a.captureGHWebOrReal(ctx, rawArgs, controls)
 	if fromWeb {
 		_ = a.incrementGHXCacheCounter("web_hits")
