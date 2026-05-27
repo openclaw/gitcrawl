@@ -22,6 +22,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/crawlkit/mirror"
+	crawlremote "github.com/openclaw/crawlkit/remote"
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
 	gh "github.com/openclaw/gitcrawl/internal/github"
@@ -73,6 +74,9 @@ type initResult struct {
 	PortableStoreURL string `json:"portable_store_url,omitempty"`
 	PortableStoreDir string `json:"portable_store_dir,omitempty"`
 	PortableStore    string `json:"portable_store,omitempty"`
+	RemoteMode       string `json:"remote_mode,omitempty"`
+	RemoteEndpoint   string `json:"remote_endpoint,omitempty"`
+	RemoteArchive    string `json:"remote_archive,omitempty"`
 }
 
 type OutputFormat string
@@ -134,6 +138,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runCheckUpdate(ctx, rest[1:])
 	case "metadata":
 		return a.runMetadata(rest[1:])
+	case "whoami":
+		return a.runRemoteWhoami(ctx, rest[1:])
+	case "remote":
+		return a.runRemote(ctx, rest[1:])
 	case "serve":
 		return usageErr(fmt.Errorf("serve is not supported in gitcrawl"))
 	case "init":
@@ -505,6 +513,11 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	}
 	if searchMode != "keyword" && searchMode != "semantic" && searchMode != "hybrid" {
 		return usageErr(fmt.Errorf("unsupported search mode %q", searchMode))
+	}
+	if cfg, err := config.LoadRuntime(a.configPath); err == nil && cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return a.runRemoteSearch(ctx, cfg, owner, repoName, strings.TrimSpace(*query), limit, searchMode)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
@@ -2563,20 +2576,35 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	portableStore := fs.String("portable-store", "", "HTTPS git URL for a portable gitcrawl store")
 	portableDB := fs.String("portable-db", "data/openclaw__openclaw.sync.db", "database path inside portable store")
 	storeDir := fs.String("store-dir", "", "local portable store checkout directory")
+	remoteEndpoint := fs.String("remote", "", "remote archive endpoint")
+	remoteArchive := fs.String("archive", "", "remote archive id")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true, "portable-store": true, "portable-db": true, "store-dir": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true, "portable-store": true, "portable-db": true, "store-dir": true, "remote": true, "archive": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
-	if strings.TrimSpace(*dbPath) != "" && strings.TrimSpace(*portableStore) != "" {
-		return usageErr(fmt.Errorf("use either --db or --portable-store, not both"))
+	localDBPath := strings.TrimSpace(*dbPath)
+	portableStoreURL := strings.TrimSpace(*portableStore)
+	remoteEndpointValue := strings.TrimSpace(*remoteEndpoint)
+	if nonEmptyCount(localDBPath, portableStoreURL, remoteEndpointValue) > 1 {
+		return usageErr(fmt.Errorf("use only one of --db, --portable-store, or --remote"))
 	}
 
 	cfg := config.Default()
-	portableStoreURL := strings.TrimSpace(*portableStore)
 	portableStoreDir := ""
 	portableStoreAction := ""
-	if portableStoreURL != "" {
+	if remoteEndpointValue != "" {
+		archive := strings.TrimSpace(*remoteArchive)
+		if archive == "" {
+			return usageErr(fmt.Errorf("--remote requires --archive"))
+		}
+		cfg.Remote = crawlremote.Config{
+			Mode:     crawlremote.ModeCloud,
+			Endpoint: remoteEndpointValue,
+			Archive:  archive,
+			TokenEnv: crawlremote.DefaultTokenEnv,
+		}
+	} else if portableStoreURL != "" {
 		portableStoreDir = strings.TrimSpace(*storeDir)
 		if portableStoreDir == "" {
 			portableStoreDir = defaultPortableStoreDir(config.ResolvePath(a.configPath), portableStoreURL)
@@ -2595,8 +2623,8 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 			return fmt.Errorf("portable database not found at %s: %w", cfg.DBPath, err)
 		}
 	}
-	if strings.TrimSpace(*dbPath) != "" {
-		cfg.DBPath = strings.TrimSpace(*dbPath)
+	if localDBPath != "" {
+		cfg.DBPath = localDBPath
 	}
 	if err := cfg.Normalize(); err != nil {
 		return err
@@ -2604,10 +2632,12 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	if err := config.Save(a.configPath, cfg); err != nil {
 		return err
 	}
-	if err := config.EnsureRuntimeDirs(cfg); err != nil {
-		return err
+	if !(cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud) {
+		if err := config.EnsureRuntimeDirs(cfg); err != nil {
+			return err
+		}
 	}
-	return a.writeInitOutput(initResult{
+	result := initResult{
 		ConfigPath:       config.ResolvePath(a.configPath),
 		DBPath:           cfg.DBPath,
 		CacheDir:         cfg.CacheDir,
@@ -2615,7 +2645,13 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		PortableStoreURL: portableStoreURL,
 		PortableStoreDir: portableStoreDir,
 		PortableStore:    portableStoreAction,
-	})
+	}
+	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		result.RemoteMode = cfg.Remote.Mode
+		result.RemoteEndpoint = cfg.Remote.Endpoint
+		result.RemoteArchive = cfg.Remote.Archive
+	}
+	return a.writeInitOutput(result)
 }
 
 func (a *App) runPortable(ctx context.Context, args []string) error {
@@ -3011,6 +3047,9 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		}
 		cfg.ApplyRuntimeEnv()
 	}
+	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return a.runRemoteDoctor(ctx, cfg, configExists)
+	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return err
 	}
@@ -3067,6 +3106,52 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"embed_model":           cfg.OpenAI.EmbedModel,
 		"embedding_basis":       cfg.EmbeddingBasis,
 		"api_supported":         false,
+	}, true)
+}
+
+func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExists bool) error {
+	remoteToken := config.ResolveRemoteToken(cfg)
+	remoteStatus := map[string]any{
+		"endpoint": cfg.Remote.Endpoint,
+		"archive":  cfg.Remote.Archive,
+		"mode":     cfg.Remote.Mode,
+		"health":   "unchecked",
+	}
+	if strings.TrimSpace(cfg.Remote.Endpoint) == "" {
+		remoteStatus["health"] = "missing_endpoint"
+	} else if strings.TrimSpace(cfg.Remote.Archive) == "" {
+		remoteStatus["health"] = "missing_archive"
+	} else if remoteToken.Value == "" {
+		remoteStatus["health"] = "missing_token"
+	} else {
+		client, err := a.remoteClient(cfg)
+		if err != nil {
+			remoteStatus["health"] = "error"
+			remoteStatus["error"] = err.Error()
+		} else if status, err := client.Status(ctx, "gitcrawl", cfg.Remote.Archive); err != nil {
+			remoteStatus["health"] = "error"
+			remoteStatus["error"] = err.Error()
+		} else {
+			remoteStatus["health"] = "ok"
+			remoteStatus["last_sync_at"] = status.LastSyncAt
+			remoteStatus["last_ingest_at"] = status.LastIngestAt
+			remoteStatus["counts"] = status.Counts
+		}
+	}
+	openAIKey := config.ResolveOpenAIKey(cfg)
+	return a.writeOutput("doctor", map[string]any{
+		"version":              version,
+		"config_path":          config.ResolvePath(a.configPath),
+		"config_exists":        configExists,
+		"remote":               remoteStatus,
+		"remote_token_present": remoteToken.Value != "",
+		"remote_token_source":  remoteToken.Source,
+		"openai_key_present":   openAIKey.Value != "",
+		"openai_key_source":    openAIKey.Source,
+		"summary_model":        cfg.OpenAI.SummaryModel,
+		"embed_model":          cfg.OpenAI.EmbedModel,
+		"embedding_basis":      cfg.EmbeddingBasis,
+		"api_supported":        false,
 	}, true)
 }
 
@@ -3166,10 +3251,13 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "tui", "portable", "clusters", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "tui", "portable", "remote", "clusters", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
+		"remote-status":   {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
+		"remote-archives": {Title: "Remote archive list", Argv: []string{"gitcrawl", "remote", "archives", "--json"}, JSON: true},
+		"whoami":          {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
 		"check-update":    {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
 		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
 		"sync":            {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
@@ -3205,6 +3293,9 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 		}
 		cfg.ApplyRuntimeEnv()
 	}
+	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return a.runRemoteStatusWithConfig(ctx, cfg)
+	}
 	status := store.Status{DBPath: cfg.DBPath}
 	if _, err := os.Stat(cfg.DBPath); err == nil {
 		st, err := store.OpenReadOnly(ctx, cfg.DBPath)
@@ -3221,6 +3312,18 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	}
 	status.DBPath = cfg.DBPath
 	return a.writeOutput("status", controlStatus(config.ResolvePath(a.configPath), cfg, status), false)
+}
+
+func (a *App) runRemoteStatusWithConfig(ctx context.Context, cfg config.Config) error {
+	client, err := a.remoteClient(cfg)
+	if err != nil {
+		return err
+	}
+	status, err := client.Status(ctx, "gitcrawl", cfg.Remote.Archive)
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("status", remoteControlStatus(config.ResolvePath(a.configPath), cfg, status), false)
 }
 
 func controlStatus(configPath string, cfg config.Config, status store.Status) control.Status {
@@ -3242,6 +3345,36 @@ func controlStatus(configPath string, cfg config.Config, status store.Status) co
 	out.DatabaseBytes = db.Bytes
 	out.WALBytes = fileSize(status.DBPath + "-wal")
 	out.Databases = []control.Database{db}
+	return out
+}
+
+func remoteControlStatus(configPath string, cfg config.Config, status crawlremote.Status) control.Status {
+	counts := append([]control.Count(nil), status.Counts...)
+	summary := fmt.Sprintf("remote archive %s", firstNonEmpty(status.Archive, cfg.Remote.Archive))
+	threadCount := countValue(counts, "threads")
+	repoCount := countValue(counts, "repositories")
+	if threadCount > 0 || repoCount > 0 {
+		summary = fmt.Sprintf("%d threads across %d repositories", threadCount, repoCount)
+	}
+	out := control.NewStatus("gitcrawl", summary)
+	out.State = "current"
+	out.ConfigPath = configPath
+	out.Counts = counts
+	out.LastSyncAt = firstNonEmpty(status.LastSyncAt, status.LastIngestAt)
+	out.Remote = &control.Remote{
+		Enabled:      true,
+		Mode:         firstNonEmpty(status.Mode, cfg.Remote.Mode),
+		Endpoint:     cfg.Remote.Endpoint,
+		Archive:      firstNonEmpty(status.Archive, cfg.Remote.Archive),
+		LastIngestAt: status.LastIngestAt,
+		LastSyncAt:   status.LastSyncAt,
+	}
+	if len(status.Warnings) > 0 {
+		out.Warnings = append(out.Warnings, status.Warnings...)
+	}
+	out.Databases = []control.Database{
+		control.RemoteDatabase("primary", "GitHub archive", "archive", "d1", cfg.Remote.Endpoint, firstNonEmpty(status.Archive, cfg.Remote.Archive), true, counts),
+	}
 	return out
 }
 
@@ -3854,7 +3987,7 @@ func (a *App) writeInitOutput(result initResult) error {
 	case FormatJSON:
 		return a.writeOutput("init", result, true)
 	case FormatLog:
-		_, err := fmt.Fprintf(a.Stdout, "init config_path=%s db_path=%s portable_store=%s\n", result.ConfigPath, result.DBPath, result.PortableStore)
+		_, err := fmt.Fprintf(a.Stdout, "init config_path=%s db_path=%s portable_store=%s remote=%s archive=%s\n", result.ConfigPath, result.DBPath, result.PortableStore, result.RemoteEndpoint, result.RemoteArchive)
 		return err
 	default:
 		lines := []string{
@@ -3871,6 +4004,15 @@ func (a *App) writeInitOutput(result initResult) error {
 				"  url: "+result.PortableStoreURL,
 				"  checkout: "+result.PortableStoreDir,
 				"  state: "+firstNonEmpty(result.PortableStore, "ready"),
+			)
+		}
+		if result.RemoteEndpoint != "" {
+			lines = append(lines,
+				"",
+				"Remote archive",
+				"  endpoint: "+result.RemoteEndpoint,
+				"  archive: "+result.RemoteArchive,
+				"  mode: "+result.RemoteMode,
 			)
 		}
 		_, err := fmt.Fprintln(a.Stdout, strings.Join(lines, "\n"))
@@ -3918,6 +4060,9 @@ Core commands:
   metadata             print crawlkit control metadata
   check-update         check for a newer gitcrawl release
   status               print fast read-only archive status
+  remote status        print remote archive status
+  remote archives      list remote archives visible to the current identity
+  whoami               print remote archive identity
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
@@ -3960,15 +4105,27 @@ Usage:
 Usage:
   gitcrawl status [--json]
 `,
+	"remote": `gitcrawl remote queries a configured Cloudflare-backed archive.
+
+Usage:
+  gitcrawl remote status [--json]
+  gitcrawl remote archives [--json]
+  gitcrawl remote whoami [--json]
+`,
+	"whoami": `gitcrawl whoami prints the configured remote archive identity.
+
+Usage:
+  gitcrawl whoami [--json]
+`,
 	"check-update": `gitcrawl check-update checks GitHub Releases for a newer gitcrawl build.
 
 Usage:
   gitcrawl check-update [--json] [--force]
 `,
-	"init": `gitcrawl init creates a local config and SQLite database.
+	"init": `gitcrawl init creates a local, portable, or cloud archive config.
 
 Usage:
-  gitcrawl init [--db path] [--portable-store URL] [--json]
+  gitcrawl init [--db path] [--portable-store URL] [--remote URL --archive id] [--json]
 `,
 	"configure": `gitcrawl configure updates model fields in the config.
 

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	crawlremote "github.com/openclaw/crawlkit/remote"
+	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -72,6 +74,21 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 	limit, err := parseGHSearchLimit(*limitRaw, *limitShortRaw)
 	if err != nil {
 		return usageErr(err)
+	}
+	if cfg, err := config.LoadRuntime(a.configPath); err == nil && cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return a.runRemoteGHSearch(ctx, cfg, remoteGHSearchOptions{
+			Owner:      owner,
+			Repo:       repoName,
+			Query:      query,
+			Kind:       kind,
+			State:      state,
+			Limit:      limit,
+			JSONFields: strings.TrimSpace(*jsonFieldsRaw),
+			JQ:         strings.TrimSpace(*jqRaw),
+			TextKind:   args[0],
+		})
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	syncIfStale, err := parseGHSearchDuration(*syncIfStaleRaw)
 	if err != nil {

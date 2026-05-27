@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	crawlconfig "github.com/openclaw/crawlkit/config"
+	crawlremote "github.com/openclaw/crawlkit/remote"
 )
 
 const (
@@ -16,16 +17,17 @@ const (
 )
 
 type Config struct {
-	Version        int               `toml:"version"`
-	DBPath         string            `toml:"db_path"`
-	CacheDir       string            `toml:"cache_dir"`
-	VectorDir      string            `toml:"vector_dir"`
-	LogDir         string            `toml:"log_dir"`
-	Env            map[string]string `toml:"env"`
-	GitHub         GitHubConfig      `toml:"github"`
-	OpenAI         OpenAIConfig      `toml:"openai"`
-	EmbeddingBasis string            `toml:"embedding_basis"`
-	TUI            TUIConfig         `toml:"tui"`
+	Version        int                `toml:"version"`
+	DBPath         string             `toml:"db_path"`
+	CacheDir       string             `toml:"cache_dir"`
+	VectorDir      string             `toml:"vector_dir"`
+	LogDir         string             `toml:"log_dir"`
+	Env            map[string]string  `toml:"env"`
+	GitHub         GitHubConfig       `toml:"github"`
+	OpenAI         OpenAIConfig       `toml:"openai"`
+	EmbeddingBasis string             `toml:"embedding_basis"`
+	TUI            TUIConfig          `toml:"tui"`
+	Remote         crawlremote.Config `toml:"remote"`
 }
 
 type GitHubConfig struct {
@@ -83,6 +85,10 @@ func Default() Config {
 		TUI: TUIConfig{
 			DefaultSort:   "size",
 			DefaultLayout: "columns",
+		},
+		Remote: crawlremote.Config{
+			Mode:     crawlremote.ModeLocal,
+			TokenEnv: crawlremote.DefaultTokenEnv,
 		},
 	}
 }
@@ -183,6 +189,7 @@ func (c *Config) Normalize() error {
 	if c.TUI.DefaultLayout == "" {
 		c.TUI.DefaultLayout = def.TUI.DefaultLayout
 	}
+	c.Remote.Normalize()
 	c.DBPath = expandHome(c.DBPath)
 	c.CacheDir = expandHome(c.CacheDir)
 	if vectorDirWasDefault {
@@ -198,6 +205,11 @@ func (c *Config) ApplyRuntimeEnv() {
 	c.OpenAI.SummaryModel = c.envOrDefault("GITCRAWL_SUMMARY_MODEL", c.OpenAI.SummaryModel)
 	c.OpenAI.EmbedModel = c.envOrDefault("GITCRAWL_EMBED_MODEL", c.OpenAI.EmbedModel)
 	c.TUI.DefaultLayout = c.envOrDefault("GITCRAWL_TUI_LAYOUT", c.TUI.DefaultLayout)
+	c.Remote.Mode = c.envOrDefault("GITCRAWL_REMOTE_MODE", c.Remote.Mode)
+	c.Remote.Endpoint = c.envOrDefault("GITCRAWL_REMOTE_ENDPOINT", c.Remote.Endpoint)
+	c.Remote.Archive = c.envOrDefault("GITCRAWL_REMOTE_ARCHIVE", c.Remote.Archive)
+	c.Remote.TokenEnv = c.envOrDefault("GITCRAWL_REMOTE_TOKEN_ENV", c.Remote.TokenEnv)
+	c.Remote.Normalize()
 	vectorDirWasDefault := expandHome(c.VectorDir) == defaultVectorDirForDB(expandHome(c.DBPath))
 	c.DBPath = expandHome(c.envOrDefault("GITCRAWL_DB_PATH", c.DBPath))
 	if vectorDirWasDefault {
@@ -211,6 +223,10 @@ func ResolveGitHubToken(cfg Config) TokenResolution {
 
 func ResolveOpenAIKey(cfg Config) TokenResolution {
 	return cfg.resolveEnv(cfg.OpenAI.APIKeyEnv)
+}
+
+func ResolveRemoteToken(cfg Config) TokenResolution {
+	return cfg.resolveEnv(cfg.Remote.TokenEnv)
 }
 
 func (c Config) resolveEnv(primary string) TokenResolution {

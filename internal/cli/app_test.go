@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openclaw/crawlkit/control"
+	crawlremote "github.com/openclaw/crawlkit/remote"
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -68,6 +70,142 @@ func TestInitDefaultOutputIsHumanReadable(t *testing.T) {
 	}
 	if strings.Contains(out, `"config_path"`) || strings.Contains(out, "{") {
 		t.Fatalf("default init output should not be json, got %q", out)
+	}
+}
+
+func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("CRAWL_REMOTE_TOKEN", "test-token")
+
+	var sawQuery bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("authorization"); got != "Bearer test-token" {
+			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		switch r.URL.EscapedPath() {
+		case "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/status":
+			_ = json.NewEncoder(w).Encode(crawlremote.Status{
+				App:          "gitcrawl",
+				Archive:      "gitcrawl/openclaw__openclaw",
+				Mode:         "cloud",
+				LastIngestAt: "2026-05-27T12:00:00Z",
+				Counts: []control.Count{
+					control.NewCount("repositories", "Repositories", 1),
+					control.NewCount("threads", "Threads", 2),
+				},
+			})
+		case "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/query":
+			var req crawlremote.QueryRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req.Name != "gitcrawl.threads.search" || req.Args["owner"] != "openclaw" || req.Args["repo"] != "openclaw" {
+				http.Error(w, "unexpected query", http.StatusBadRequest)
+				return
+			}
+			sawQuery = true
+			_ = json.NewEncoder(w).Encode(crawlremote.QueryResult{
+				Values: []map[string]any{{
+					"thread_id":    10,
+					"github_id":    "I_kwD",
+					"number":       42,
+					"kind":         "issue",
+					"state":        "open",
+					"title":        "remote search",
+					"html_url":     "https://github.com/openclaw/openclaw/issues/42",
+					"author_login": "alice",
+					"snippet":      "remote search",
+					"score":        0.9,
+				}},
+			})
+		case "/v1/archives":
+			_ = json.NewEncoder(w).Encode(map[string]any{"archives": []crawlremote.Archive{{ID: "gitcrawl/openclaw__openclaw", App: "gitcrawl", Slug: "openclaw__openclaw"}}})
+		case "/v1/whoami":
+			_ = json.NewEncoder(w).Encode(crawlremote.Identity{Owner: "openclaw", Org: "openclaw", Login: "alice"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(dir, "config.toml")
+	initApp := New()
+	var initOut bytes.Buffer
+	initApp.Stdout = &initOut
+	if err := initApp.Run(ctx, []string{"--config", configPath, "--json", "init", "--remote", server.URL, "--archive", "gitcrawl/openclaw__openclaw"}); err != nil {
+		t.Fatalf("remote init: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load remote config: %v", err)
+	}
+	if cfg.Remote.Mode != "cloud" || cfg.Remote.Endpoint != server.URL || cfg.Remote.Archive != "gitcrawl/openclaw__openclaw" {
+		t.Fatalf("remote config = %#v", cfg.Remote)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".config", "gitcrawl", "gitcrawl.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remote init should not create local db, stat err=%v", err)
+	}
+
+	statusApp := New()
+	var statusOut bytes.Buffer
+	statusApp.Stdout = &statusOut
+	if err := statusApp.Run(ctx, []string{"--config", configPath, "--json", "status"}); err != nil {
+		t.Fatalf("remote status: %v", err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(statusOut.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v\n%s", err, statusOut.String())
+	}
+	if status["database_path"] != nil {
+		t.Fatalf("remote status should not expose local database path: %#v", status)
+	}
+	remoteStatus, ok := status["remote"].(map[string]any)
+	if !ok || remoteStatus["archive"] != "gitcrawl/openclaw__openclaw" {
+		t.Fatalf("remote status missing archive: %#v", status)
+	}
+
+	searchApp := New()
+	var searchOut bytes.Buffer
+	searchApp.Stdout = &searchOut
+	if err := searchApp.Run(ctx, []string{"--config", configPath, "--json", "search", "openclaw/openclaw", "--query", "remote"}); err != nil {
+		t.Fatalf("remote search: %v", err)
+	}
+	if !sawQuery || !strings.Contains(searchOut.String(), `"remote search"`) {
+		t.Fatalf("remote search did not use worker query: saw=%v out=%s", sawQuery, searchOut.String())
+	}
+	ghSearchApp := New()
+	var ghSearchOut bytes.Buffer
+	ghSearchApp.Stdout = &ghSearchOut
+	if err := ghSearchApp.Run(ctx, []string{"--config", configPath, "search", "issues", "remote", "-R", "openclaw/openclaw", "--json", "number,title,url"}); err != nil {
+		t.Fatalf("remote gh search: %v", err)
+	}
+	if !strings.Contains(ghSearchOut.String(), `"number": 42`) || !strings.Contains(ghSearchOut.String(), `"url": "https://github.com/openclaw/openclaw/issues/42"`) {
+		t.Fatalf("remote gh search output = %s", ghSearchOut.String())
+	}
+	doctorApp := New()
+	var doctorOut bytes.Buffer
+	doctorApp.Stdout = &doctorOut
+	if err := doctorApp.Run(ctx, []string{"--config", configPath, "--json", "doctor"}); err != nil {
+		t.Fatalf("remote doctor: %v", err)
+	}
+	if !strings.Contains(doctorOut.String(), `"health": "ok"`) || strings.Contains(doctorOut.String(), `"db_path"`) {
+		t.Fatalf("remote doctor output = %s", doctorOut.String())
+	}
+	for _, args := range [][]string{
+		{"--config", configPath, "--json", "remote", "archives"},
+		{"--config", configPath, "--json", "whoami"},
+	} {
+		app := New()
+		var out bytes.Buffer
+		app.Stdout = &out
+		if err := app.Run(ctx, args); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
 	}
 }
 
@@ -165,7 +303,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.Contains(helpOut.String(), "cluster browser") {
 		t.Fatalf("tui help output = %q", helpOut.String())
 	}
-	for _, topic := range []string{"metadata", "status", "init", "configure", "doctor", "sync", "refresh", "embed", "threads", "search", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
+	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "embed", "threads", "search", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
 		helpOut.Reset()
 		if err := help.printCommandUsage(topic); err != nil {
 			t.Fatalf("%s help: %v", topic, err)

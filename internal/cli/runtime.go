@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	crawlremote "github.com/openclaw/crawlkit/remote"
 	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
@@ -38,6 +39,9 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	if err != nil {
 		return localRuntime{}, err
 	}
+	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return localRuntime{}, fmt.Errorf("command requires a local gitcrawl database; config is remote cloud mode")
+	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
 	if _, ok := portableStoreRoot(cfg.DBPath); ok {
@@ -59,6 +63,9 @@ func (a *App) openLocalRuntimeReadOnly(ctx context.Context) (localRuntime, error
 	cfg, err := config.LoadRuntime(a.configPath)
 	if err != nil {
 		return localRuntime{}, err
+	}
+	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return localRuntime{}, fmt.Errorf("command requires a local gitcrawl database; config is remote cloud mode")
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
