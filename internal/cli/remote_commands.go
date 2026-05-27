@@ -497,7 +497,13 @@ func stringValue(value map[string]any, keys ...string) string {
 }
 
 func intValue(value map[string]any, keys ...string) int {
-	return int(int64Value(value, keys...))
+	v := int64Value(value, keys...)
+	const maxInt = int64(1<<(strconv.IntSize-1) - 1)
+	const minInt = -maxInt - 1
+	if v < minInt || v > maxInt {
+		return 0
+	}
+	return int(v)
 }
 
 func int64Value(value map[string]any, keys ...string) int64 {
