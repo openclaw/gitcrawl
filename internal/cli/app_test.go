@@ -209,6 +209,80 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 	}
 }
 
+func TestCloudPublishSendsLocalRows(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+
+	tokenEnv := "GITCRAWL_TEST_PUBLISH_TOKEN"
+	t.Setenv(tokenEnv, "publish-token")
+	seenTables := map[string]crawlremote.IngestRequest{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
+			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/ingest" {
+			http.NotFound(w, r)
+			return
+		}
+		var body crawlremote.IngestRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.Manifest.App != "gitcrawl" || body.Manifest.Archive != "gitcrawl/openclaw__openclaw" {
+			http.Error(w, "manifest mismatch", http.StatusBadRequest)
+			return
+		}
+		seenTables[body.Table] = body
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{Table: body.Table, RowsAccepted: int64(len(body.Rows)), Complete: body.Final})
+	}))
+	defer server.Close()
+
+	app := New()
+	var out bytes.Buffer
+	app.Stdout = &out
+	if err := app.Run(ctx, []string{
+		"--config", cfgPath,
+		"cloud", "publish",
+		"--remote", server.URL,
+		"--archive", "gitcrawl/openclaw__openclaw",
+		"--token-env", tokenEnv,
+		"--json",
+	}); err != nil {
+		t.Fatalf("cloud publish: %v", err)
+	}
+
+	if len(seenTables) != 2 {
+		t.Fatalf("tables = %v, want repositories and threads", seenTables)
+	}
+	if got := len(seenTables["repositories"].Rows); got != 1 {
+		t.Fatalf("repositories rows = %d, want 1", got)
+	}
+	if got := len(seenTables["threads"].Rows); got != 3 {
+		t.Fatalf("threads rows = %d, want 3", got)
+	}
+	if !seenTables["threads"].Final {
+		t.Fatalf("threads batch should finish ingest")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, out.String())
+	}
+	if payload["repositories"] != float64(1) || payload["threads"] != float64(3) {
+		t.Fatalf("unexpected output: %#v", payload)
+	}
+}
+
 func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

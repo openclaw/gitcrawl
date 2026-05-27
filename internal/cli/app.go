@@ -142,6 +142,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runRemoteWhoami(ctx, rest[1:])
 	case "remote":
 		return a.runRemote(ctx, rest[1:])
+	case "cloud":
+		return a.runCloud(ctx, rest[1:])
 	case "serve":
 		return usageErr(fmt.Errorf("serve is not supported in gitcrawl"))
 	case "init":
@@ -3251,12 +3253,13 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "tui", "portable", "remote", "clusters", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
 		"remote-status":   {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
 		"remote-archives": {Title: "Remote archive list", Argv: []string{"gitcrawl", "remote", "archives", "--json"}, JSON: true},
+		"cloud-publish":   {Title: "Publish cloud archive", Argv: []string{"gitcrawl", "cloud", "publish", "--json"}, JSON: true, Mutates: true},
 		"whoami":          {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
 		"check-update":    {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
 		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
@@ -4063,6 +4066,7 @@ Core commands:
   remote status        print remote archive status
   remote archives      list remote archives visible to the current identity
   whoami               print remote archive identity
+  cloud publish        publish the local archive to a Worker remote
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
@@ -4111,6 +4115,11 @@ Usage:
   gitcrawl remote status [--json]
   gitcrawl remote archives [--json]
   gitcrawl remote whoami [--json]
+`,
+	"cloud": `gitcrawl cloud manages Worker-backed remote archives.
+
+Usage:
+  gitcrawl cloud publish --remote URL --archive id [--json]
 `,
 	"whoami": `gitcrawl whoami prints the configured remote archive identity.
 

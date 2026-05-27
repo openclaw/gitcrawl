@@ -2,7 +2,7 @@
 
 ## 0.4.6 - Unreleased
 
-- Add Cloudflare remote archive scaffolding with `[remote]` config, `gitcrawl init --remote`, remote identity/archive/status commands, and cloud-mode search against Worker named queries without creating a local SQLite database.
+- Add Cloudflare remote archive scaffolding with `[remote]` config, `gitcrawl init --remote`, remote identity/archive/status commands, cloud-mode search against Worker named queries, and `gitcrawl cloud publish` ingestion without creating a local SQLite database for readers.
 - Move the `gitcrawl gh` compatibility cache to Octopool with a hard migration error that points users at `octopool login` and `octopool gh ...`.
 - Add an optional TUI focus layout, configurable with `gitcrawl tui --layout focus`, `tui.default_layout`, or `GITCRAWL_TUI_LAYOUT`, thanks @RomneyDa.
 - Add `gitcrawl clusters-report` for Markdown or JSON cluster triage reports, thanks @RomneyDa.
