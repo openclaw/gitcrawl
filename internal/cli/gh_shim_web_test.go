@@ -377,6 +377,94 @@ func TestGHShimWebFallbackJobCardsDoNotRequireJobPages(t *testing.T) {
 	}
 }
 
+func TestGHShimWebFallbackUsesRunPageJobRefsWhenGraphIsLazy(t *testing.T) {
+	ctx := context.Background()
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openclaw/openclaw/actions/runs/123460":
+			_, _ = w.Write([]byte(`<!doctype html><html><body>
+<span class="PageHeader-parentLink-label">CI</span>
+<script type="application/json" data-target="react-partial.embeddedData">{"props":{"jobGroupsFetchUrl":"/openclaw/openclaw/actions/runs/123460/job_groups_batch?attempt=1"}}</script>
+<h1 class="PageHeader-title lh-default"><span><span class="markdown-title">ci: add package smoke test</span><span class="color-fg-muted" style="font-weight: 400">#30</span></span></h1>
+<span class="h4 color-fg-default">Success</span>
+<a href="/openclaw/openclaw/actions/runs/123460/job/111#step:27:2"><strong>Node 24</strong></a>
+<a href="/openclaw/openclaw/actions/runs/123460/job/222#step:27:2"><strong>Node 22</strong></a>
+</body></html>`))
+		case "/openclaw/openclaw/actions/runs/123460/job_groups_batch":
+			_, _ = w.Write([]byte(`{"totalCount":2,"hasMore":true,"jobGroups":[{"name":"Node 22","nonNested":{"jobs":[{"id":222,"displayName":"Node 22","status":"completed","conclusion":"success","href":"/openclaw/openclaw/actions/runs/123460/job/222"}]}}]}`))
+		case "/openclaw/openclaw/actions/runs/123460/job/111":
+			_, _ = w.Write([]byte(testGHWebJobPageHTML("Node 24", "success")))
+		case "/openclaw/openclaw/actions/runs/123460/job/222":
+			_, _ = w.Write([]byte(testGHWebJobPageHTML("Node 22", "success")))
+		default:
+			t.Fatalf("web path = %s", r.URL.Path)
+		}
+	}))
+	defer webServer.Close()
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run, _, err := fetchGHWebRunSnapshot(ctx, "openclaw", "openclaw", "123460", true, false)
+	if err != nil {
+		t.Fatalf("fetch run snapshot: %v", err)
+	}
+	if len(run.Jobs) != 2 {
+		t.Fatalf("jobs = %#v", run.Jobs)
+	}
+	if run.Jobs[0].Name != "Node 24" || run.Jobs[0].Status != "completed" || run.Jobs[0].Conclusion != "success" {
+		t.Fatalf("first job = %#v", run.Jobs[0])
+	}
+	if run.Jobs[1].Name != "Node 22" || run.Jobs[1].Status != "completed" || run.Jobs[1].Conclusion != "success" {
+		t.Fatalf("second job = %#v", run.Jobs[1])
+	}
+}
+
+func TestGHShimWebFallbackLazyCompletedJobsRequireSteps(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedGHShimRepo(t, ctx)
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openclaw/openclaw/actions/runs/123461":
+			_, _ = w.Write([]byte(`<!doctype html><html><body>
+<span class="PageHeader-parentLink-label">CI</span>
+<script type="application/json" data-target="react-partial.embeddedData">{"props":{"jobGroupsFetchUrl":"/openclaw/openclaw/actions/runs/123461/job_groups_batch?attempt=1"}}</script>
+<h1 class="PageHeader-title lh-default"><span><span class="markdown-title">ci</span><span class="color-fg-muted" style="font-weight: 400">#30</span></span></h1>
+<span class="h4 color-fg-default">Success</span>
+<a href="/openclaw/openclaw/actions/runs/123461/job/111"><strong>Node 24</strong></a>
+</body></html>`))
+		case "/openclaw/openclaw/actions/runs/123461/job_groups_batch":
+			_, _ = w.Write([]byte(`{"totalCount":1,"hasMore":false,"jobGroups":[]}`))
+		case "/openclaw/openclaw/actions/runs/123461/job/111":
+			_, _ = w.Write([]byte(`<html><body><span class="two-line-wrapping">Node 24</span><svg aria-label="completed successfully: "></svg></body></html>`))
+		default:
+			t.Fatalf("web path = %s", r.URL.Path)
+		}
+	}))
+	defer webServer.Close()
+	dir := t.TempDir()
+	countPath := filepath.Join(dir, "count")
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\necho called > \"$GH_SHIM_COUNT\"\necho fallback:$*\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GITCRAWL_GH_PATH", ghPath)
+	t.Setenv("GH_SHIM_COUNT", countPath)
+	t.Setenv("GITCRAWL_GH_WEB_BASE_URL", webServer.URL)
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	err := run.Run(ctx, []string{"--config", configPath, "gh", "--web-fallback", "run", "view", "123461", "-R", "openclaw/openclaw", "--json", "jobs"})
+	if err != nil {
+		t.Fatalf("fallback run view: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "fallback:run view 123461") {
+		t.Fatalf("expected fake gh fallback, got %q", stdout.String())
+	}
+	if _, err := os.Stat(countPath); err != nil {
+		t.Fatalf("fake gh was not called: %v", err)
+	}
+}
+
 func TestGHShimWebFallbackJobsFallThroughWithoutJobMarkup(t *testing.T) {
 	ctx := context.Background()
 	configPath := seedGHShimRepo(t, ctx)
@@ -567,6 +655,37 @@ func TestGHShimWebFallbackRunStateConclusions(t *testing.T) {
 	}
 }
 
+func TestGHShimWebFallbackJobStateFromSteps(t *testing.T) {
+	status, conclusion := ghWebJobStateFromSteps([]ghWebRunStep{{Status: "completed", Conclusion: "success"}})
+	if status != "completed" || conclusion != "success" {
+		t.Fatalf("success job state = %q %q", status, conclusion)
+	}
+	status, conclusion = ghWebJobStateFromSteps([]ghWebRunStep{{Status: "completed", Conclusion: "success"}, {Status: "completed", Conclusion: "skipped"}})
+	if status != "completed" || conclusion != "success" {
+		t.Fatalf("success with skipped step state = %q %q", status, conclusion)
+	}
+	status, conclusion = ghWebJobStateFromSteps([]ghWebRunStep{{Status: "completed", Conclusion: "success"}, {Status: "completed", Conclusion: "failure"}})
+	if status != "completed" || conclusion != "failure" {
+		t.Fatalf("failure job state = %q %q", status, conclusion)
+	}
+	status, conclusion = ghWebJobStateFromSteps([]ghWebRunStep{{Status: "in_progress"}})
+	if status != "in_progress" || conclusion != "" {
+		t.Fatalf("running job state = %q %q", status, conclusion)
+	}
+}
+
+func TestGHShimWebFallbackJobPageStateUsesHeader(t *testing.T) {
+	status, conclusion, ok := parseGHWebJobPageState(`<html><body>
+<button aria-label="Subscribe"></button>
+<span class="PageHeader-leadingVisual actions-workflow-runs-status">
+<svg aria-label="completed successfully: "></svg>
+</span>
+</body></html>`)
+	if !ok || status != "completed" || conclusion != "success" {
+		t.Fatalf("job page state = %q %q %v", status, conclusion, ok)
+	}
+}
+
 func TestGHShimWebFallbackRESTJobsUseNullForMissingTimes(t *testing.T) {
 	run := ghWebRunSnapshot{
 		Owner: "openclaw",
@@ -695,6 +814,17 @@ func testGHWebJobHTML(stepName, conclusion string) string {
 	return `<html><body>
 <check-step data-name="` + stepName + `" data-number="1" data-conclusion="` + conclusion + `" data-started-at="2026-05-26T22:26:18Z" data-completed-at="2026-05-26T22:26:29Z"></check-step>
 </body></html>`
+}
+
+func testGHWebJobPageHTML(name, conclusion string) string {
+	return `<html><body>
+	<span class="h4 color-fg-default">Success</span>
+	<span class="two-line-wrapping">` + name + `</span>
+	<span class="PageHeader-leadingVisual actions-workflow-runs-status">
+	<svg aria-label="completed successfully: "></svg>
+	</span>
+	<check-step data-name="Set up job" data-number="1" data-conclusion="` + conclusion + `" data-started-at="2026-05-26T23:54:09Z" data-completed-at="2026-05-26T23:54:12Z"></check-step>
+	</body></html>`
 }
 
 func TestGHShimWebFallbackDefaultsWithGHAuthTokenBudget(t *testing.T) {

@@ -1182,17 +1182,41 @@ func fetchGHWebRunSnapshot(ctx context.Context, owner, repoName, runID string, w
 			return ghWebRunSnapshot{}, status, fmt.Errorf("could not verify GitHub run job count")
 		}
 		if total != len(jobs) {
-			return ghWebRunSnapshot{}, status, fmt.Errorf("GitHub run jobs are collapsed")
+			jobs = mergeGHWebRunJobs(jobs, parseGHWebRunJobRefs(htmlBody, runID))
+			if total != len(jobs) {
+				return ghWebRunSnapshot{}, status, fmt.Errorf("GitHub run jobs are collapsed")
+			}
 		}
-		if withJobDetails {
-			for index := range jobs {
-				details, ok := fetchGHWebJobDetails(ctx, jobs[index].URL, jobs[index].Status == "completed")
-				if !ok {
-					return ghWebRunSnapshot{}, status, fmt.Errorf("could not parse GitHub job page")
-				}
-				jobs[index].StartedAt = details.StartedAt
-				jobs[index].CompletedAt = details.CompletedAt
-				jobs[index].Steps = details.Steps
+		for index := range jobs {
+			needsJobPage := withJobDetails || jobs[index].Name == "" || jobs[index].Status == ""
+			if !needsJobPage {
+				continue
+			}
+			requireSteps := withJobDetails && jobs[index].Status == "completed"
+			details, ok := fetchGHWebJobDetails(ctx, jobs[index].URL, requireSteps)
+			if !ok {
+				return ghWebRunSnapshot{}, status, fmt.Errorf("could not parse GitHub job page")
+			}
+			if withJobDetails && details.Status == "completed" && len(details.Steps) == 0 {
+				return ghWebRunSnapshot{}, status, fmt.Errorf("could not parse GitHub job steps")
+			}
+			if jobs[index].Name == "" {
+				jobs[index].Name = details.Name
+			}
+			if jobs[index].Status == "" {
+				jobs[index].Status = details.Status
+				jobs[index].Conclusion = details.Conclusion
+			}
+			if !withJobDetails {
+				continue
+			}
+			jobs[index].StartedAt = details.StartedAt
+			jobs[index].CompletedAt = details.CompletedAt
+			jobs[index].Steps = details.Steps
+		}
+		for _, job := range jobs {
+			if job.Name == "" || job.Status == "" {
+				return ghWebRunSnapshot{}, status, fmt.Errorf("could not parse GitHub run job")
 			}
 		}
 		run.Jobs = jobs
@@ -1380,15 +1404,64 @@ func parseGHWebRunJobs(htmlBody string) ([]ghWebRunJob, bool) {
 	return jobs, true
 }
 
+func parseGHWebRunJobRefs(htmlBody, runID string) []ghWebRunJob {
+	pattern := fmt.Sprintf(`(?s)<a\b[^>]*href="([^"]*/actions/runs/%s/job/([0-9]+)(?:#[^"]*)?)"[^>]*>(.*?)</a>`, regexp.QuoteMeta(runID))
+	matches := regexp.MustCompile(pattern).FindAllStringSubmatch(htmlBody, -1)
+	jobs := make([]ghWebRunJob, 0, len(matches))
+	seen := make(map[int64]bool)
+	for _, match := range matches {
+		id, err := strconv.ParseInt(match[2], 10, 64)
+		if err != nil || seen[id] {
+			continue
+		}
+		seen[id] = true
+		href := html.UnescapeString(match[1])
+		if before, _, found := strings.Cut(href, "#"); found {
+			href = before
+		}
+		jobs = append(jobs, ghWebRunJob{
+			ID:  id,
+			URL: ghWebBaseURL() + href,
+		})
+	}
+	return jobs
+}
+
+func mergeGHWebRunJobs(primary, extra []ghWebRunJob) []ghWebRunJob {
+	merged := make([]ghWebRunJob, 0, len(primary)+len(extra))
+	byID := make(map[int64]int)
+	for _, job := range primary {
+		byID[job.ID] = len(merged)
+		merged = append(merged, job)
+	}
+	for _, job := range extra {
+		if index, ok := byID[job.ID]; ok {
+			if merged[index].Name == "" {
+				merged[index].Name = job.Name
+			}
+			if merged[index].URL == "" {
+				merged[index].URL = job.URL
+			}
+			continue
+		}
+		byID[job.ID] = len(merged)
+		merged = append(merged, job)
+	}
+	return merged
+}
+
 type ghWebJobDetails struct {
+	Name        string
+	Status      string
+	Conclusion  string
 	StartedAt   string
 	CompletedAt string
 	Steps       []ghWebRunStep
 }
 
 func fetchGHWebJobDetails(ctx context.Context, jobURL string, requireSteps bool) (ghWebJobDetails, bool) {
-	body, status, err := fetchGHWeb(ctx, jobURL, "text/html, */*")
-	if err != nil || status < 200 || status >= 300 {
+	body, httpStatus, err := fetchGHWeb(ctx, jobURL, "text/html, */*")
+	if err != nil || httpStatus < 200 || httpStatus >= 300 {
 		return ghWebJobDetails{}, false
 	}
 	htmlBody := string(body)
@@ -1416,12 +1489,62 @@ func fetchGHWebJobDetails(ctx context.Context, jobURL string, requireSteps bool)
 	if requireSteps && len(steps) == 0 {
 		return ghWebJobDetails{}, false
 	}
-	details := ghWebJobDetails{Steps: steps}
+	jobStatus, conclusion, ok := parseGHWebJobPageState(htmlBody)
+	if !ok {
+		jobStatus, conclusion = ghWebJobStateFromSteps(steps)
+	}
+	details := ghWebJobDetails{
+		Name:       firstNonEmpty(cleanGHWebText(firstRegexSubmatch(htmlBody, `(?s)<span class="two-line-wrapping">(.*?)</span>`)), cleanGHWebText(firstRegexSubmatch(htmlBody, `(?s)<h1[^>]*class="[^"]*PageHeader-title[^"]*"[^>]*>(.*?)</h1>`))),
+		Status:     jobStatus,
+		Conclusion: conclusion,
+		Steps:      steps,
+	}
 	if len(steps) > 0 {
 		details.StartedAt = steps[0].StartedAt
 		details.CompletedAt = steps[len(steps)-1].CompletedAt
 	}
 	return details, true
+}
+
+func ghWebJobStateFromSteps(steps []ghWebRunStep) (string, string) {
+	if len(steps) == 0 {
+		return "", ""
+	}
+	allCompleted := true
+	conclusion := ""
+	sawSkipped := false
+	sawNeutral := false
+	for _, step := range steps {
+		if step.Status != "completed" {
+			allCompleted = false
+		}
+		switch step.Conclusion {
+		case "failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale":
+			return "completed", step.Conclusion
+		case "skipped", "neutral":
+			if step.Conclusion == "skipped" {
+				sawSkipped = true
+			} else {
+				sawNeutral = true
+			}
+		case "success":
+			if conclusion == "" {
+				conclusion = "success"
+			}
+		}
+	}
+	if !allCompleted {
+		return "in_progress", ""
+	}
+	if conclusion == "" {
+		switch {
+		case sawSkipped:
+			conclusion = "skipped"
+		case sawNeutral:
+			conclusion = "neutral"
+		}
+	}
+	return "completed", conclusion
 }
 
 func fetchGHWebRunJobTotal(ctx context.Context, htmlBody string) (int, bool) {
@@ -1478,8 +1601,37 @@ func parseGHWebJobState(htmlBody string) (string, string, bool) {
 	}
 }
 
+func parseGHWebJobPageState(htmlBody string) (string, string, bool) {
+	label := firstRegexSubmatch(htmlBody, `(?s)<span[^>]*class="[^"]*PageHeader-leadingVisual[^"]*"[^>]*>.*?aria-label="([^"]+)"`)
+	if label == "" {
+		label = firstRegexSubmatch(htmlBody, `(?s)<div[^>]*class="[^"]*PageHeader-titleBar[^"]*"[^>]*>.*?aria-label="([^"]+)"`)
+	}
+	if conclusion := ghWebConclusionFromLabel(label); conclusion != "" {
+		return "completed", conclusion, true
+	}
+	label = strings.ToLower(html.UnescapeString(label))
+	switch {
+	case strings.Contains(label, "waiting"):
+		return "waiting", "", true
+	case strings.Contains(label, "queued"):
+		return "queued", "", true
+	case strings.Contains(label, "pending"):
+		return "pending", "", true
+	case strings.Contains(label, "requested"):
+		return "requested", "", true
+	case strings.Contains(label, "in progress"), strings.Contains(label, "running"):
+		return "in_progress", "", true
+	default:
+		return "", "", false
+	}
+}
+
 func parseGHWebConclusion(htmlBody string) string {
-	label := strings.ToLower(html.UnescapeString(firstRegexSubmatch(htmlBody, `aria-label="([^"]+)"`)))
+	return ghWebConclusionFromLabel(firstRegexSubmatch(htmlBody, `aria-label="([^"]+)"`))
+}
+
+func ghWebConclusionFromLabel(label string) string {
+	label = strings.ToLower(html.UnescapeString(label))
 	switch {
 	case strings.Contains(label, "completed successfully") || strings.Contains(label, "success"):
 		return "success"
