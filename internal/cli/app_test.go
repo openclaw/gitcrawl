@@ -371,6 +371,78 @@ func TestRemoteLoginStoresKeyringToken(t *testing.T) {
 	}
 }
 
+func TestRemoteLoginWithGitHubTokenEnvStoresKeyringToken(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	keyring.MockInit()
+	t.Setenv("GITCRAWL_TEST_GITHUB_TOKEN", "github-token")
+
+	var sawToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch r.URL.Path {
+		case "/v1/auth/github/token":
+			var req crawlremote.GitHubTokenLoginRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			sawToken = req.Token
+			_ = json.NewEncoder(w).Encode(crawlremote.LoginPollResult{Status: "complete", Token: "session-token", Org: "openclaw", Login: "alice"})
+		case "/v1/whoami":
+			if r.Header.Get("authorization") != "Bearer session-token" {
+				http.Error(w, "missing session token", http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(crawlremote.Identity{Owner: "openclaw", Org: "openclaw", Login: "alice", Auth: "github"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	var out bytes.Buffer
+	app.Stdout = &out
+	if err := app.Run(ctx, []string{
+		"--config", configPath,
+		"--json",
+		"remote", "login",
+		"--endpoint", server.URL,
+		"--github-token-env", "GITCRAWL_TEST_GITHUB_TOKEN",
+	}); err != nil {
+		t.Fatalf("remote login: %v", err)
+	}
+	if sawToken != "github-token" {
+		t.Fatalf("github token = %q", sawToken)
+	}
+	if !strings.Contains(out.String(), `"login_method": "github-token"`) {
+		t.Fatalf("login output = %s", out.String())
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	stored, err := keyring.Get(cfg.Remote.Auth.KeyringService, cfg.Remote.Auth.KeyringAccount)
+	if err != nil {
+		t.Fatalf("keyring get: %v", err)
+	}
+	if stored != "session-token" {
+		t.Fatalf("stored token = %q", stored)
+	}
+
+	whoami := New()
+	var whoamiOut bytes.Buffer
+	whoami.Stdout = &whoamiOut
+	if err := whoami.Run(ctx, []string{"--config", configPath, "--json", "whoami"}); err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	if !strings.Contains(whoamiOut.String(), `"login": "alice"`) {
+		t.Fatalf("whoami output = %s", whoamiOut.String())
+	}
+}
+
 func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

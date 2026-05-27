@@ -4117,6 +4117,7 @@ Usage:
   gitcrawl remote status [--json]
   gitcrawl remote archives [--json]
   gitcrawl remote login --endpoint URL [--json]
+  gitcrawl remote login --endpoint URL --github-token-env GITHUB_TOKEN [--json]
   gitcrawl remote whoami [--json]
 `,
 	"cloud": `gitcrawl cloud manages Worker-backed remote archives.
