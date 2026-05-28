@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -274,7 +275,7 @@ func TestUploadSQLiteArchiveReturnsRemoteError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remote client: %v", err)
 	}
-	_, err = uploadSQLiteArchive(ctx, client, "gitcrawl", "gitcrawl/openclaw", db, "", crawlremote.IngestManifest{SchemaName: "gitcrawl-cloud-v1"})
+	_, err = uploadSQLiteArchive(ctx, client, "gitcrawl", "gitcrawl/openclaw", db, "", crawlremote.IngestManifest{SchemaName: "gitcrawl-cloud-v1"}, nil)
 	if err == nil {
 		t.Fatal("upload unexpectedly succeeded")
 	}
@@ -454,34 +455,75 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	tokenEnv := "GITCRAWL_TEST_PUBLISH_TOKEN"
 	t.Setenv(tokenEnv, "publish-token")
 	seenTables := map[string]crawlremote.IngestRequest{}
-	var sawSQLiteUpload bool
+	var sawSQLitePart bool
+	var sawSQLiteManifest bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
 			return
 		}
 		if r.Method == http.MethodPut && r.URL.EscapedPath() == "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/sqlite" {
-			sawSQLiteUpload = true
+			uploadKind := r.Header.Get("x-crawl-sqlite-upload")
 			payload, err := io.ReadAll(r.Body)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if !bytes.HasPrefix(payload, []byte("SQLite format 3")) {
-				http.Error(w, "not sqlite", http.StatusBadRequest)
-				return
-			}
-			if r.Header.Get("x-crawl-content-sha256") == "" {
-				http.Error(w, "missing hash", http.StatusBadRequest)
-				return
-			}
 			w.Header().Set("content-type", "application/json")
-			_ = json.NewEncoder(w).Encode(crawlremote.SQLiteUploadResult{
-				App:      "gitcrawl",
-				Archive:  "gitcrawl/openclaw__openclaw",
-				Complete: true,
-				Object:   &crawlremote.SQLiteObject{Key: "v1/gitcrawl/gitcrawl%2Fopenclaw__openclaw/sqlite/current.db", Size: int64(len(payload))},
-			})
+			switch uploadKind {
+			case "bundle-part":
+				sawSQLitePart = true
+				if r.Header.Get("content-type") != "application/gzip" || r.Header.Get("x-crawl-content-sha256") == "" {
+					http.Error(w, "bad bundle part headers", http.StatusBadRequest)
+					return
+				}
+				if !bytes.HasPrefix(payload, []byte{0x1f, 0x8b}) {
+					http.Error(w, "not gzip", http.StatusBadRequest)
+					return
+				}
+				reader, err := gzip.NewReader(bytes.NewReader(payload))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				decompressed, err := io.ReadAll(reader)
+				if closeErr := reader.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if !bytes.HasPrefix(decompressed, []byte("SQLite format 3")) {
+					http.Error(w, "bundle did not contain sqlite", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(crawlremote.SQLiteUploadResult{
+					App:      "gitcrawl",
+					Archive:  "gitcrawl/openclaw__openclaw",
+					Complete: false,
+					Object:   &crawlremote.SQLiteObject{Key: "v1/gitcrawl/gitcrawl%2Fopenclaw__openclaw/sqlite/chunks/current.db.gz.part-0000", Size: int64(len(payload))},
+				})
+			case "bundle-manifest":
+				sawSQLiteManifest = true
+				var manifest crawlremote.SQLiteBundleManifest
+				if err := json.Unmarshal(payload, &manifest); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if manifest.Format != crawlremote.SQLiteGzipChunkedBundleFormat || manifest.Compression.Algorithm != crawlremote.SQLiteGzipCompression || manifest.CompressedObject.Size == 0 {
+					http.Error(w, "bad manifest", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(crawlremote.SQLiteBundleUploadResult{
+					App:      "gitcrawl",
+					Archive:  "gitcrawl/openclaw__openclaw",
+					Complete: true,
+					Bundle:   &crawlremote.SQLiteBundle{Key: "v1/gitcrawl/gitcrawl%2Fopenclaw__openclaw/sqlite/current.manifest.json", Manifest: &manifest},
+				})
+			default:
+				http.Error(w, "missing upload kind", http.StatusBadRequest)
+			}
 			return
 		}
 		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/ingest" {
@@ -529,8 +571,8 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	if !seenTables["threads"].Final {
 		t.Fatalf("threads batch should finish ingest")
 	}
-	if !sawSQLiteUpload {
-		t.Fatalf("cloud publish did not upload sqlite object")
+	if !sawSQLitePart || !sawSQLiteManifest {
+		t.Fatalf("cloud publish did not upload compressed sqlite bundle: part=%v manifest=%v", sawSQLitePart, sawSQLiteManifest)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
@@ -539,8 +581,8 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	if payload["repositories"] != float64(1) || payload["threads"] != float64(3) {
 		t.Fatalf("unexpected output: %#v", payload)
 	}
-	if payload["sqlite_object"] == nil {
-		t.Fatalf("missing sqlite object output: %#v", payload)
+	if payload["sqlite_bundle"] == nil {
+		t.Fatalf("missing sqlite bundle output: %#v", payload)
 	}
 }
 

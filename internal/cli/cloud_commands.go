@@ -107,7 +107,10 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	sqliteObject, err := uploadSQLiteArchive(ctx, client, "gitcrawl", archiveID, rt.Store.DB(), rt.SourceDBPath, manifest)
+	sqliteBundle, err := uploadSQLiteArchive(ctx, client, "gitcrawl", archiveID, rt.Store.DB(), rt.SourceDBPath, manifest, map[string]int64{
+		"repositories": repoAccepted,
+		"threads":      threadAccepted,
+	})
 	if err != nil {
 		return err
 	}
@@ -116,7 +119,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		"archive":       archiveID,
 		"repositories":  repoAccepted,
 		"threads":       threadAccepted,
-		"sqlite_object": sqliteObject,
+		"sqlite_bundle": sqliteBundle,
 	}, true)
 }
 
@@ -190,41 +193,31 @@ func cursorFor(start int) string {
 	return fmt.Sprintf("%d", start)
 }
 
-func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, archive string, db *sql.DB, dbPath string, manifest crawlremote.IngestManifest) (*crawlremote.SQLiteObject, error) {
+func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, archive string, db *sql.DB, dbPath string, manifest crawlremote.IngestManifest, counts map[string]int64) (*crawlremote.SQLiteBundle, error) {
 	snapshotPath, cleanup, err := sqliteSnapshotPath(ctx, db, dbPath)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-	file, err := os.Open(snapshotPath)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite snapshot: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat sqlite snapshot: %w", err)
-	}
-	sum, err := cloudFileSHA256(snapshotPath)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("rewind sqlite snapshot: %w", err)
-	}
-	result, err := client.UploadSQLite(ctx, app, archive, crawlremote.SQLiteUploadRequest{
-		Body:          file,
-		Size:          info.Size(),
-		ContentSHA256: sum,
-		SchemaName:    manifest.SchemaName,
-		SchemaVersion: manifest.SchemaVersion,
-		SchemaHash:    manifest.SchemaHash,
-		SourceSyncAt:  manifest.SourceSyncAt,
+	bundle, err := crawlremote.BuildGzipSQLiteBundle(ctx, crawlremote.SQLiteBundleBuildOptions{
+		App:        app,
+		Archive:    archive,
+		SourcePath: snapshotPath,
+		Counts:     counts,
+		Privacy: map[string]any{
+			"includes_private_messages": false,
+			"includes_raw_json":         false,
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	return result.Object, nil
+	defer bundle.Cleanup()
+	result, err := client.UploadSQLiteBundleFiles(ctx, app, archive, bundle.Manifest, bundle.Parts)
+	if err != nil {
+		return nil, err
+	}
+	return result.Bundle, nil
 }
 
 func sqliteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (string, func(), error) {
