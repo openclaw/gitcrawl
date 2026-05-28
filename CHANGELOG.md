@@ -2,7 +2,10 @@
 
 ## 0.4.6 - Unreleased
 
+- Update `crawlkit` to v0.10.0.
 - Add Cloudflare remote archive scaffolding with `[remote]` config, `gitcrawl init --remote`, GitHub-backed `remote login` with OAuth or token-env bootstrap, remote identity/archive/status commands, cloud-mode search against Worker named queries, and `gitcrawl cloud publish` ingestion without creating a local SQLite database for readers.
+- Mirror the local SQLite archive into the Worker-backed R2 object store during
+  `gitcrawl cloud publish`, alongside the D1 row ingest used for live queries.
 - Move the `gitcrawl gh` compatibility cache to Octopool with a hard migration error that points users at `octopool login` and `octopool gh ...`.
 - Add an optional TUI focus layout, configurable with `gitcrawl tui --layout focus`, `tui.default_layout`, or `GITCRAWL_TUI_LAYOUT`, thanks @RomneyDa.
 - Add `gitcrawl clusters-report` for Markdown or JSON cluster triage reports, thanks @RomneyDa.

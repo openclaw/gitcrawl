@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,6 +52,231 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(wantVectorDir); err != nil {
 		t.Fatalf("stat vector dir: %v", err)
+	}
+}
+
+func TestGitcrawlThreadBodyExpr(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		schema string
+		want   string
+	}{
+		{name: "body and excerpt", schema: "create table threads(id text primary key, body text, body_excerpt text)", want: "coalesce(body, body_excerpt, '')"},
+		{name: "body only", schema: "create table threads(id text primary key, body text)", want: "coalesce(body, '')"},
+		{name: "excerpt only", schema: "create table threads(id text primary key, body_excerpt text)", want: "coalesce(body_excerpt, '')"},
+		{name: "neither", schema: "create table threads(id text primary key)", want: "''"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "threads.db"))
+			if err != nil {
+				t.Fatalf("open sqlite: %v", err)
+			}
+			defer db.Close()
+			if _, err := db.ExecContext(ctx, tc.schema); err != nil {
+				t.Fatalf("create schema: %v", err)
+			}
+			got, err := gitcrawlThreadBodyExpr(ctx, db)
+			if err != nil {
+				t.Fatalf("body expr: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("body expr = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCloudSQLiteSnapshotFallbacks(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close sqlite: %v", err)
+	}
+	fallback := filepath.Join(t.TempDir(), "fallback.db")
+	got, cleanup, err := sqliteSnapshotPath(ctx, db, fallback)
+	if err != nil {
+		t.Fatalf("snapshot fallback: %v", err)
+	}
+	defer cleanup()
+	if got != fallback {
+		t.Fatalf("snapshot fallback path = %q, want %q", got, fallback)
+	}
+	if _, cleanup, err := sqliteSnapshotPath(ctx, db, ""); err == nil {
+		cleanup()
+		t.Fatal("snapshot without fallback unexpectedly succeeded")
+	}
+}
+
+func TestCloudSQLiteSnapshotVacuum(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "create table repositories(id text primary key)"); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "insert into repositories(id) values('r1')"); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+	snapshot, cleanup, err := sqliteSnapshotPath(ctx, db, "")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	defer cleanup()
+	snapshotDB, err := sql.Open("sqlite", snapshot)
+	if err != nil {
+		t.Fatalf("open snapshot: %v", err)
+	}
+	defer snapshotDB.Close()
+	var count int
+	if err := snapshotDB.QueryRowContext(ctx, "select count(*) from repositories").Scan(&count); err != nil {
+		t.Fatalf("query snapshot: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("snapshot count = %d, want 1", count)
+	}
+}
+
+func TestCloudFileSHA256(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload.txt")
+	if err := os.WriteFile(path, []byte("abc"), 0o600); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	got, err := cloudFileSHA256(path)
+	if err != nil {
+		t.Fatalf("hash payload: %v", err)
+	}
+	const want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	if got != want {
+		t.Fatalf("hash = %q, want %q", got, want)
+	}
+	if _, err := cloudFileSHA256(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("missing payload unexpectedly hashed")
+	}
+}
+
+func TestSendIngestRowsBatchesAndAcceptsEmpty(t *testing.T) {
+	ctx := context.Background()
+	var cursors []string
+	var finals []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.EscapedPath() != "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw/ingest" {
+			http.NotFound(w, req)
+			return
+		}
+		var body crawlremote.IngestRequest
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		cursors = append(cursors, body.Cursor)
+		finals = append(finals, body.Final)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{Table: body.Table, RowsAccepted: int64(len(body.Rows)), Complete: body.Final})
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		TokenProvider: crawlremote.StaticToken("token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	manifest := crawlremote.IngestManifest{App: "gitcrawl", Archive: "gitcrawl/openclaw"}
+	empty, err := sendIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", manifest, "repositories", gitcrawlRepositoryColumns, nil, false)
+	if err != nil {
+		t.Fatalf("empty ingest: %v", err)
+	}
+	if empty != 0 {
+		t.Fatalf("empty rows accepted = %d, want 0", empty)
+	}
+	rows := make([][]any, gitcrawlCloudBatchSize+1)
+	for i := range rows {
+		rows[i] = []any{fmt.Sprintf("r%d", i), "openclaw/repo", "openclaw", "repo", "", "", ""}
+	}
+	total, err := sendIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", manifest, "repositories", gitcrawlRepositoryColumns, rows, true)
+	if err != nil {
+		t.Fatalf("batched ingest: %v", err)
+	}
+	if total != int64(len(rows)) {
+		t.Fatalf("rows accepted = %d, want %d", total, len(rows))
+	}
+	if got, want := strings.Join(cursors, ","), ",,250"; got != want {
+		t.Fatalf("cursors = %q, want %q", got, want)
+	}
+	if got, want := fmt.Sprint(finals), "[false false true]"; got != want {
+		t.Fatalf("finals = %s, want %s", got, want)
+	}
+}
+
+func TestRemoteValueCoercionHelpers(t *testing.T) {
+	value := map[string]any{
+		"bool_string":  "true",
+		"bool_number":  json.Number("1"),
+		"int_string":   "42",
+		"int_number":   json.Number("43"),
+		"int64_string": "42000000000",
+		"float_string": "4.25",
+		"float_number": json.Number("5.5"),
+	}
+	if !boolValue(value, "bool_string") || !boolValue(value, "bool_number") || boolValue(value, "missing") {
+		t.Fatalf("bool coercion failed")
+	}
+	if got := intValue(value, "int_string"); got != 42 {
+		t.Fatalf("int string = %d, want 42", got)
+	}
+	if got := intValue(value, "int_number"); got != 43 {
+		t.Fatalf("int number = %d, want 43", got)
+	}
+	if got := int64Value(value, "int64_string"); got != 42000000000 {
+		t.Fatalf("int64 string = %d, want 42000000000", got)
+	}
+	if got := floatValue(value, "float_string"); got != 4.25 {
+		t.Fatalf("float string = %v, want 4.25", got)
+	}
+	if got := floatValue(value, "float_number"); got != 5.5 {
+		t.Fatalf("float number = %v, want 5.5", got)
+	}
+	ref := threadReference{Owner: "openclaw", Repo: "gitcrawl"}
+	if got := ref.FullName(); got != "openclaw/gitcrawl" {
+		t.Fatalf("full name = %q, want openclaw/gitcrawl", got)
+	}
+	if got := (threadReference{Owner: "openclaw"}).FullName(); got != "" {
+		t.Fatalf("partial full name = %q, want empty", got)
+	}
+}
+
+func TestUploadSQLiteArchiveReturnsRemoteError(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "create table repositories(id text primary key)"); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		TokenProvider: crawlremote.StaticToken("token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	_, err = uploadSQLiteArchive(ctx, client, "gitcrawl", "gitcrawl/openclaw", db, "", crawlremote.IngestManifest{SchemaName: "gitcrawl-cloud-v1"})
+	if err == nil {
+		t.Fatal("upload unexpectedly succeeded")
 	}
 }
 
@@ -227,9 +454,34 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	tokenEnv := "GITCRAWL_TEST_PUBLISH_TOKEN"
 	t.Setenv(tokenEnv, "publish-token")
 	seenTables := map[string]crawlremote.IngestRequest{}
+	var sawSQLiteUpload bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.EscapedPath() == "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/sqlite" {
+			sawSQLiteUpload = true
+			payload, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if !bytes.HasPrefix(payload, []byte("SQLite format 3")) {
+				http.Error(w, "not sqlite", http.StatusBadRequest)
+				return
+			}
+			if r.Header.Get("x-crawl-content-sha256") == "" {
+				http.Error(w, "missing hash", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(crawlremote.SQLiteUploadResult{
+				App:      "gitcrawl",
+				Archive:  "gitcrawl/openclaw__openclaw",
+				Complete: true,
+				Object:   &crawlremote.SQLiteObject{Key: "v1/gitcrawl/gitcrawl%2Fopenclaw__openclaw/sqlite/current.db", Size: int64(len(payload))},
+			})
 			return
 		}
 		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/ingest" {
@@ -277,12 +529,18 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	if !seenTables["threads"].Final {
 		t.Fatalf("threads batch should finish ingest")
 	}
+	if !sawSQLiteUpload {
+		t.Fatalf("cloud publish did not upload sqlite object")
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
 		t.Fatalf("decode output: %v\n%s", err, out.String())
 	}
 	if payload["repositories"] != float64(1) || payload["threads"] != float64(3) {
 		t.Fatalf("unexpected output: %#v", payload)
+	}
+	if payload["sqlite_object"] == nil {
+		t.Fatalf("missing sqlite object output: %#v", payload)
 	}
 }
 
