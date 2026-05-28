@@ -17,7 +17,10 @@ import (
 	"github.com/openclaw/gitcrawl/internal/config"
 )
 
-const gitcrawlCloudBatchSize = 250
+const (
+	gitcrawlCloudBatchSize             = 250
+	gitcrawlCloudSQLiteBundleChunkSize = int64(64 * 1024 * 1024)
+)
 
 func (a *App) runCloud(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -203,6 +206,7 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		App:        app,
 		Archive:    archive,
 		SourcePath: snapshotPath,
+		ChunkSize:  gitcrawlCloudSQLiteBundleChunkSize,
 		Counts:     counts,
 		Privacy: map[string]any{
 			"includes_private_messages": false,
