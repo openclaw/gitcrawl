@@ -195,12 +195,13 @@ func TestGHSearchJSONHelpersCoverFieldsAndFallbackLabels(t *testing.T) {
 		ClosedAtGitHub:  "2026-04-30T01:00:00Z",
 		MergedAtGitHub:  "2026-04-30T02:00:00Z",
 		LabelsJSON:      `["bug",""," triage "]`,
+		AssigneesJSON:   `["alice"," bob ",""]`,
 		IsDraft:         true,
 		AuthorLogin:     "alice",
 		AuthorType:      "User",
 		Body:            "body text",
 	}
-	rows, err := ghSearchJSONRows([]store.Thread{thread}, "number,title,state,url,updatedAt,createdAt,closedAt,mergedAt,labels,isDraft,author,body")
+	rows, err := ghSearchJSONRows([]store.Thread{thread}, "number,title,state,url,updatedAt,createdAt,closedAt,mergedAt,labels,assignees,isDraft,author,body")
 	if err != nil {
 		t.Fatalf("json rows: %v", err)
 	}
@@ -210,6 +211,10 @@ func TestGHSearchJSONHelpersCoverFieldsAndFallbackLabels(t *testing.T) {
 	labels := rows[0]["labels"].([]ghLabel)
 	if len(labels) != 2 || labels[1].Name != "triage" {
 		t.Fatalf("labels = %#v", labels)
+	}
+	assignees := rows[0]["assignees"].([]map[string]any)
+	if len(assignees) != 2 || assignees[1]["login"] != " bob " {
+		t.Fatalf("assignees = %#v", assignees)
 	}
 	if labels := ghLabelsFromJSON(`not-json`); labels != nil {
 		t.Fatalf("bad labels = %#v", labels)
@@ -226,5 +231,23 @@ func TestGHSearchJSONHelpersCoverFieldsAndFallbackLabels(t *testing.T) {
 	query, repo, state := parseGHSearchQuery("repo:openclaw/openclaw is:pr is:closed hello world")
 	if query != "hello world" || repo != "openclaw/openclaw" || state != "closed" {
 		t.Fatalf("query=%q repo=%q state=%q", query, repo, state)
+	}
+}
+
+func TestGHSearchLiveEmptyCheckDefaultsToOpenIssues(t *testing.T) {
+	if !ghSearchNeedsLiveEmptyCheck("issue", "", "") {
+		t.Fatal("empty issue search should need live open-list confirmation")
+	}
+	if !ghSearchNeedsLiveEmptyCheck("issue", "   ", " open ") {
+		t.Fatal("explicit open issue search should need live open-list confirmation")
+	}
+	if ghSearchNeedsLiveEmptyCheck("pull_request", "", "") {
+		t.Fatal("pull request searches should not use issue-list fallback")
+	}
+	if ghSearchNeedsLiveEmptyCheck("issue", "label:bug", "") {
+		t.Fatal("query searches should not use broad empty-list fallback")
+	}
+	if got := ghDefaultListState(" closed "); got != "closed" {
+		t.Fatalf("default state = %q", got)
 	}
 }
