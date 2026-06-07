@@ -164,7 +164,7 @@ func TestEmbeddingTasksSkipExistingHashAndForce(t *testing.T) {
 	}
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
-	text := "First vector thread\n\nalpha body"
+	text := "First vector thread\nalpha body"
 	hash := embeddingContentHash("title_original", "test", text)
 	if err := st.UpsertThreadVector(ctx, ThreadVector{ThreadID: threadIDs[0], Basis: "title_original", Model: "test", Dimensions: 2, ContentHash: hash, Vector: []float64{1, 0}, CreatedAt: "2026-04-30T00:00:00Z", UpdatedAt: "2026-04-30T00:00:00Z"}); err != nil {
 		t.Fatalf("upsert existing vector: %v", err)

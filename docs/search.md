@@ -22,15 +22,23 @@ Local full-text and semantic search over the SQLite mirror, plus a `gh search`-c
 ```bash
 gitcrawl search owner/repo --query "download stalls"
 gitcrawl search owner/repo --query "manifest cache" --mode hybrid --limit 30 --json
+gitcrawl search owner/repo --query "RefreshManifest" --scope code --json
+gitcrawl search owner/repo --query "manifest cache" --scope all --json
 ```
 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--query <text>` | _(required)_ | Search text |
 | `--mode keyword\|semantic\|hybrid` | `keyword` | `keyword` uses SQLite FTS, `semantic` uses vector cosine, `hybrid` blends them |
+| `--scope threads\|code\|all` | `threads` | Search GitHub thread documents, indexed source files, or both |
 | `--limit <n>` | _(implementation default)_ | Maximum hits |
 
 **Hybrid mode** is the most robust default — it blends full-text recall with semantic neighbors so typos, synonyms, and stack-trace fragments still surface relevant rows.
+
+Code search is keyword-only. With `--scope all`, the selected thread mode runs
+alongside keyword code search and the result streams are interleaved. Run
+`gitcrawl code index` first; an unindexed repository simply contributes no code
+hits.
 
 JSON output:
 
@@ -121,6 +129,9 @@ gitcrawl tui owner/repo
 ## Limits
 
 - The keyword index covers titles, bodies, and (when synced) comments and review comments.
+- Hydrated PR changed paths and commit subjects are included in thread keyword and embedding documents.
+- Code scope covers the latest locally indexed tracked-text snapshot.
 - Semantic search relies on the local vector store. Run `gitcrawl embed` first.
+- Code documents are not embedded and do not participate in neighbors or clustering.
 - Hybrid mode degrades gracefully: with no vectors, it behaves like keyword.
 - Closed threads are included by the FTS index when synced; locally closed threads are filtered out by the `--hide-closed` flag where applicable.

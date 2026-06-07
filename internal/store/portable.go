@@ -200,7 +200,7 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 		"body_chars":   fmt.Sprintf("%d", bodyChars),
 		"capabilities": "body_excerpts,comment_excerpts,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped",
 		"includes":     "repositories,threads,comments,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs,thread_fingerprints",
-		"excluded":     "raw_json,documents,fts,vectors,code_snapshots,cluster_events,run_history,similarity_edges,blobs",
+		"excluded":     "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs",
 		"exported_at":  time.Now().UTC().Format(timeLayout),
 		"source_path":  s.path,
 	}
@@ -272,6 +272,13 @@ func (s *Store) clearPortableRawJSON(ctx context.Context) (int64, error) {
 
 func canonicalPortableDroppedTables() []string {
 	return []string{
+		"code_documents_fts",
+		"code_documents_fts_config",
+		"code_documents_fts_data",
+		"code_documents_fts_docsize",
+		"code_documents_fts_idx",
+		"code_documents",
+		"code_snapshots",
 		"documents_fts",
 		"documents_fts_config",
 		"documents_fts_data",

@@ -175,6 +175,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runRuns(ctx, rest[1:])
 	case "search":
 		return a.runSearch(ctx, rest[1:])
+	case "code":
+		return a.runCode(ctx, rest[1:])
 	case "gh":
 		return a.runGHShim(ctx, rest[1:])
 	case "configure":
@@ -491,8 +493,9 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	query := fs.String("query", "", "search query")
 	limitRaw := fs.String("limit", "", "maximum hit rows")
 	mode := fs.String("mode", "keyword", "search mode: keyword|semantic|hybrid")
+	scope := fs.String("scope", "threads", "search scope: threads|code|all")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"query": true, "limit": true, "mode": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"query": true, "limit": true, "mode": true, "scope": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -517,7 +520,20 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 	if searchMode != "keyword" && searchMode != "semantic" && searchMode != "hybrid" {
 		return usageErr(fmt.Errorf("unsupported search mode %q", searchMode))
 	}
+	searchScope := strings.TrimSpace(*scope)
+	if searchScope == "" {
+		searchScope = "threads"
+	}
+	if searchScope != "threads" && searchScope != "code" && searchScope != "all" {
+		return usageErr(fmt.Errorf("unsupported search scope %q", searchScope))
+	}
+	if searchScope == "code" && searchMode != "keyword" {
+		return usageErr(fmt.Errorf("code search currently supports --mode keyword only"))
+	}
 	if cfg, err := config.LoadRuntime(a.configPath); err == nil && cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		if searchScope != "threads" {
+			return usageErr(fmt.Errorf("code search requires a local gitcrawl database"))
+		}
 		return a.runRemoteSearch(ctx, cfg, owner, repoName, strings.TrimSpace(*query), limit, searchMode)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -534,9 +550,40 @@ func (a *App) runSearch(ctx context.Context, args []string) error {
 		return err
 	}
 	queryText := strings.TrimSpace(*query)
+	if searchScope == "code" {
+		hits, err := rt.Store.SearchCodeDocuments(ctx, repo.ID, queryText, limit)
+		if err != nil {
+			return err
+		}
+		return a.writeOutput("search", map[string]any{
+			"repository": repo.FullName,
+			"query":      queryText,
+			"mode":       "keyword",
+			"scope":      "code",
+			"hits":       hits,
+		}, true)
+	}
 	hits, effectiveMode, err := a.searchDocuments(ctx, rt, repo.ID, queryText, limit, searchMode)
 	if err != nil {
 		return err
+	}
+	if searchScope == "all" {
+		codeHits, err := rt.Store.SearchCodeDocuments(ctx, repo.ID, queryText, limit)
+		if err != nil {
+			return err
+		}
+		payload := map[string]any{
+			"repository": repo.FullName,
+			"query":      queryText,
+			"mode":       effectiveMode,
+			"code_mode":  "keyword",
+			"scope":      "all",
+			"hits":       mergeScopedSearchHits(hits, codeHits, limit),
+		}
+		if effectiveMode != searchMode {
+			payload["requested_mode"] = searchMode
+		}
+		return a.writeOutput("search", payload, true)
 	}
 	payload := map[string]any{
 		"repository": repo.FullName,
@@ -3439,8 +3486,8 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
-	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "sqlite", "portable"}}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
+	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
 		"remote-status":   {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
@@ -3452,6 +3499,7 @@ func (a *App) runMetadata(args []string) error {
 		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
 		"sync":            {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
 		"search":          {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
+		"code-index":      {Title: "Code index", Argv: []string{"gitcrawl", "code", "index", "--json"}, JSON: true, Mutates: true},
 		"tui":             {Title: "Terminal cluster browser", Argv: []string{"gitcrawl", "tui"}},
 		"tui-json":        {Title: "Terminal cluster data", Argv: []string{"gitcrawl", "tui", "--json"}, JSON: true},
 		"portable":        {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "prune", "--json"}, JSON: true, Mutates: true},
@@ -4261,6 +4309,7 @@ Core commands:
   refresh              run sync, enrichment, embedding, and clustering pipeline
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
+  code index           index tracked text files from a local Git checkout
   cluster              build durable clusters from local thread vectors
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
@@ -4278,7 +4327,7 @@ Core commands:
   cluster-detail       dump one latest run cluster, with durable fallback
   cluster-explain      alias for cluster-detail
   neighbors            list vector-nearest local issue and pull request rows
-  search               search local thread documents; also supports search issues|prs gh syntax
+  search               search local thread and source documents; also supports search issues|prs gh syntax
   gh                   moved to Octopool; prints migration note
   portable prune       prune volatile payloads from a portable store
   tui [owner/repo]     browse clusters in the terminal UI; repo is inferred when omitted
@@ -4359,8 +4408,13 @@ Usage:
 	"search": `gitcrawl search queries local thread documents, or accepts gh-shaped issue and PR search.
 
 Usage:
-  gitcrawl search owner/repo --query text [--mode keyword|semantic|hybrid] [--limit N] [--json]
+  gitcrawl search owner/repo --query text [--scope threads|code|all] [--mode keyword|semantic|hybrid] [--limit N] [--json]
   gitcrawl search issues|prs <query> -R owner/repo [--state open|closed|all] [--json fields] [--limit N] [--sync-if-stale duration]
+`,
+	"code": `gitcrawl code indexes source from a local Git checkout.
+
+Usage:
+  gitcrawl code index owner/repo [--path DIR] [--max-file-bytes N] [--max-total-bytes N] [--max-files N] [--json]
 `,
 	"cluster": `gitcrawl cluster builds durable clusters from local thread vectors.
 

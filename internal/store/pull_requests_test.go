@@ -92,3 +92,38 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 		t.Fatalf("updated cache = %+v", cache)
 	}
 }
+
+func TestPullRequestCacheAndDocumentRollsBackTogether(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	threadID := threadIDs[1]
+	err = st.UpsertPullRequestCacheAndDocument(ctx,
+		PullRequestDetail{
+			ThreadID: threadID, RepoID: repoID, Number: 302,
+			RawJSON: "{}", FetchedAt: "2026-05-05T10:00:00Z", UpdatedAt: "2026-05-05T10:00:00Z",
+		},
+		[]PullRequestFile{{ThreadID: threadID, Path: "cache.go", RawJSON: "{}", FetchedAt: "2026-05-05T10:00:00Z"}},
+		nil, nil, nil,
+		Document{
+			ThreadID: threadID + 999, Title: "invalid", RawText: "invalid",
+			DedupeText: "invalid", UpdatedAt: "2026-05-05T10:00:00Z",
+		},
+	)
+	if err == nil {
+		t.Fatal("invalid document unexpectedly succeeded")
+	}
+	for _, table := range []string{"pull_request_details", "pull_request_files"} {
+		var count int
+		if err := st.DB().QueryRowContext(ctx, `select count(*) from `+table+` where thread_id = ?`, threadID).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows after rollback = %d", table, count)
+		}
+	}
+}

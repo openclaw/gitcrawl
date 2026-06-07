@@ -156,6 +156,10 @@ on conflict(thread_id) do update set
   raw_text=excluded.raw_text,
   dedupe_text=excluded.dedupe_text,
   updated_at=excluded.updated_at
+where documents.title is not excluded.title
+   or documents.body is not excluded.body
+   or documents.raw_text is not excluded.raw_text
+   or documents.dedupe_text is not excluded.dedupe_text
 returning id;
 
 -- name: ListEmbeddingTasks :many

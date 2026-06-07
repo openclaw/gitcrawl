@@ -194,6 +194,30 @@ create table documents (
   updated_at text not null
 );
 
+create table code_snapshots (
+  id integer primary key,
+  repo_id integer not null references repositories(id) on delete cascade,
+  source_root text not null,
+  git_sha text not null,
+  worktree_dirty integer not null default 0,
+  file_count integer not null,
+  byte_count integer not null,
+  indexed_at text not null
+);
+
+create table code_documents (
+  id integer primary key,
+  snapshot_id integer not null references code_snapshots(id) on delete cascade,
+  repo_id integer not null references repositories(id) on delete cascade,
+  path text not null,
+  language text not null,
+  content_hash text not null,
+  text_content text not null,
+  byte_size integer not null,
+  updated_at text not null,
+  unique(snapshot_id, path)
+);
+
 create table thread_vectors (
   thread_id integer not null references threads(id) on delete cascade,
   basis text not null,

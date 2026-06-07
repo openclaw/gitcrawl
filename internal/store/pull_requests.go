@@ -97,6 +97,20 @@ func (s *Store) UpsertPullRequestCache(ctx context.Context, detail PullRequestDe
 	})
 }
 
+func (s *Store) UpsertPullRequestCacheAndDocument(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun, document Document) error {
+	persist := func(st *Store) error {
+		if err := st.upsertPullRequestCache(ctx, detail, files, commits, checks, runs); err != nil {
+			return err
+		}
+		_, err := st.UpsertDocument(ctx, document)
+		return err
+	}
+	if s.queries == nil {
+		return s.WithTx(ctx, persist)
+	}
+	return persist(s)
+}
+
 func (s *Store) upsertPullRequestCache(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun) error {
 	if err := s.qsql().UpsertPullRequestDetail(ctx, storedb.UpsertPullRequestDetailParams{
 		ThreadID:         detail.ThreadID,

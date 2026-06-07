@@ -145,6 +145,54 @@ func TestCloudSQLiteSnapshotVacuum(t *testing.T) {
 	}
 }
 
+func TestCloudSQLiteSnapshotDropsLocalCodeCorpus(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "source.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.ReplaceCodeSnapshot(ctx, store.CodeSnapshot{
+		RepoID: repoID, SourceRoot: "/private/repo", GitSHA: "abc",
+		FileCount: 1, ByteCount: 6, IndexedAt: "2026-06-06T00:00:00Z",
+	}, []store.CodeDocument{{Path: "secret.txt", Language: "txt", ContentHash: "h", Text: "secret", ByteSize: 6, UpdatedAt: "2026-06-06T00:00:00Z"}}); err != nil {
+		t.Fatalf("replace code snapshot: %v", err)
+	}
+	snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, st.DB(), dbPath)
+	if err != nil {
+		t.Fatalf("cloud snapshot: %v", err)
+	}
+	defer cleanup()
+	snapshotDB, err := sql.Open("sqlite", snapshotPath)
+	if err != nil {
+		t.Fatalf("open cloud snapshot: %v", err)
+	}
+	defer snapshotDB.Close()
+	for _, table := range []string{"code_snapshots", "code_documents", "code_documents_fts"} {
+		var count int
+		if err := snapshotDB.QueryRowContext(ctx, `select count(*) from sqlite_schema where name = ?`, table).Scan(&count); err != nil {
+			t.Fatalf("inspect %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("cloud snapshot retained %s", table)
+		}
+	}
+	var sourceCount int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from code_documents`).Scan(&sourceCount); err != nil {
+		t.Fatalf("source code documents: %v", err)
+	}
+	if sourceCount != 1 {
+		t.Fatalf("cloud snapshot mutated source corpus: count=%d", sourceCount)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+}
+
 func TestCloudFileSHA256(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "payload.txt")
 	if err := os.WriteFile(path, []byte("abc"), 0o600); err != nil {
@@ -839,7 +887,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.Contains(helpOut.String(), "cluster browser") {
 		t.Fatalf("tui help output = %q", helpOut.String())
 	}
-	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "embed", "threads", "search", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
+	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
 		helpOut.Reset()
 		if err := help.printCommandUsage(topic); err != nil {
 			t.Fatalf("%s help: %v", topic, err)

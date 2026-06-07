@@ -15,6 +15,7 @@
 - Add extra regression coverage for TUI detail-pane keyboard and wheel scrolling, thanks @RomneyDa.
 - Bound portable-store Git subprocess cancellation so stale fetch helpers cannot hang read-only commands, and expose the last portable refresh failure in `gitcrawl doctor --json`.
 - Backfill a missing or stale source embedding for `gitcrawl neighbors` with a one-row capped embedding request, and show the exact cheap `gitcrawl embed --number ... --limit 1` recovery command when no OpenAI key is configured.
+- Add PR-aware thread indexing for changed paths and commit subjects, plus `gitcrawl code index` and `search --scope code|all` for bounded local full-text search over tracked monorepo source files.
 
 ## 0.4.5 - 2026-05-23
 

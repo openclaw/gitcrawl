@@ -12,6 +12,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - metadata-first GitHub sync for open issues and pull requests
 - optional comment, review, review-comment, PR code, and PR review-thread hydration
 - canonical thread document building
+- bounded local Git source-document indexing
 - FTS search
 - OpenAI summaries and embeddings
 - deterministic fingerprints
@@ -37,6 +38,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - `internal/github`: GitHub API client
 - `internal/syncer`: repository sync workflows
 - `internal/documents`: canonical document generation
+- `internal/codeindex`: tracked source-file scanning
 - `internal/openai`: OpenAI summaries and embeddings
 - `internal/vector`: vector search abstraction
 - `internal/cluster`: similarity and durable cluster governance
@@ -77,6 +79,7 @@ Public commands:
 - `cluster-explain`
 - `neighbors`
 - `search`
+- `code`
 - `gh`
 - `close-thread`
 - `close-cluster`

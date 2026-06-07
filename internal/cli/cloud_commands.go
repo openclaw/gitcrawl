@@ -110,7 +110,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	sqliteBundle, err := uploadSQLiteArchive(ctx, client, "gitcrawl", archiveID, rt.Store.DB(), rt.SourceDBPath, manifest, map[string]int64{
+	sqliteBundle, err := uploadSQLiteArchive(ctx, client, "gitcrawl", archiveID, rt.Store.DB(), rt.Store.Path(), manifest, map[string]int64{
 		"repositories": repoAccepted,
 		"threads":      threadAccepted,
 	})
@@ -197,7 +197,7 @@ func cursorFor(start int) string {
 }
 
 func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, archive string, db *sql.DB, dbPath string, manifest crawlremote.IngestManifest, counts map[string]int64) (*crawlremote.SQLiteBundle, error) {
-	snapshotPath, cleanup, err := sqliteSnapshotPath(ctx, db, dbPath)
+	snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +211,7 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		Privacy: map[string]any{
 			"includes_private_messages": false,
 			"includes_raw_json":         false,
+			"includes_source_code":      false,
 		},
 	})
 	if err != nil {
@@ -222,6 +223,54 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		return nil, err
 	}
 	return result.Bundle, nil
+}
+
+func cloudSQLiteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (string, func(), error) {
+	snapshotPath, cleanup, err := sqliteSnapshotPath(ctx, db, "")
+	if err != nil {
+		source := strings.TrimSpace(dbPath)
+		if source == "" {
+			return "", func() {}, err
+		}
+		if _, statErr := os.Stat(source); statErr != nil {
+			return "", func() {}, fmt.Errorf("stat cloud SQLite source: %w", statErr)
+		}
+		reopened, openErr := sql.Open("sqlite", source)
+		if openErr != nil {
+			return "", func() {}, fmt.Errorf("reopen cloud SQLite source: %w", openErr)
+		}
+		snapshotPath, cleanup, err = sqliteSnapshotPath(ctx, reopened, "")
+		closeErr := reopened.Close()
+		if err != nil {
+			return "", func() {}, err
+		}
+		if closeErr != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("close reopened cloud SQLite source: %w", closeErr)
+		}
+	}
+	snapshotDB, err := sql.Open("sqlite", snapshotPath)
+	if err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("open cloud SQLite snapshot: %w", err)
+	}
+	for _, table := range []string{"code_documents_fts", "code_documents", "code_snapshots"} {
+		if _, err := snapshotDB.ExecContext(ctx, `drop table if exists `+table); err != nil {
+			_ = snapshotDB.Close()
+			cleanup()
+			return "", func() {}, fmt.Errorf("drop local-only cloud snapshot table %s: %w", table, err)
+		}
+	}
+	if _, err := snapshotDB.ExecContext(ctx, `vacuum`); err != nil {
+		_ = snapshotDB.Close()
+		cleanup()
+		return "", func() {}, fmt.Errorf("compact cloud SQLite snapshot: %w", err)
+	}
+	if err := snapshotDB.Close(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("close cloud SQLite snapshot: %w", err)
+	}
+	return snapshotPath, cleanup, nil
 }
 
 func sqliteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (string, func(), error) {

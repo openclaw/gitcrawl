@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/openclaw/gitcrawl/internal/store/storedb"
@@ -26,6 +28,9 @@ func (s *Store) UpsertDocument(ctx context.Context, doc Document) (int64, error)
 		DedupeText: doc.DedupeText,
 		UpdatedAt:  doc.UpdatedAt,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		err = s.q().QueryRowContext(ctx, `select id from documents where thread_id = ?`, doc.ThreadID).Scan(&id)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("upsert document: %w", err)
 	}

@@ -249,7 +249,19 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					attempt.WorkflowRunsSynced += detailStats.runs
 				}
 			}
-			if _, err := st.UpsertDocument(ctx, documents.BuildWithComments(thread, comments)); err != nil {
+			var pullFiles []store.PullRequestFile
+			var pullCommits []store.PullRequestCommit
+			if thread.Kind == "pull_request" {
+				pullFiles, err = st.PullRequestFiles(ctx, thread.ID)
+				if err != nil {
+					return err
+				}
+				pullCommits, err = st.PullRequestCommits(ctx, thread.ID)
+				if err != nil {
+					return err
+				}
+			}
+			if _, err := st.UpsertDocument(ctx, documents.BuildWithContext(thread, comments, pullFiles, pullCommits)); err != nil {
 				return err
 			}
 			attempt.ThreadsSynced++

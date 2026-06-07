@@ -45,13 +45,14 @@ These work on every command.
 | `gitcrawl refresh owner/repo [--no-sync --no-embed --no-cluster ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
 | `gitcrawl embed owner/repo [--number <ref> --limit --force --include-closed --json]` | Generate OpenAI embeddings for thread documents | [Refresh and embed](/refresh-and-embed/#embed) |
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
+| `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
 
 ## Inspect
 
 | Command | Purpose | Docs |
 | --- | --- | --- |
 | `gitcrawl threads owner/repo [--include-closed --numbers --limit --json]` | List threads from local cache | — |
-| `gitcrawl search owner/repo --query <text> [--mode keyword\|semantic\|hybrid --limit --json]` | Local search (direct mode) | [Search](/search/) |
+| `gitcrawl search owner/repo --query <text> [--scope threads\|code\|all --mode keyword\|semantic\|hybrid --limit --json]` | Local thread/source search (direct mode) | [Search](/search/) |
 | `gitcrawl search issues\|prs <query> -R owner/repo [--state --json --limit --sync-if-stale]` | Local search (`gh search` shape) | [Search](/search/#gh-search-compatibility-mode) |
 | `gitcrawl neighbors owner/repo --number <ref> [--limit --threshold --json]` | Vector-similar threads to a specific issue/PR | [Clustering](/clustering/#find-similar-threads-neighbors) |
 

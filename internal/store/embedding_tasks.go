@@ -35,7 +35,7 @@ type EmbeddingTaskOptions struct {
 const (
 	MaxEmbeddingTextRunes       = 6_000
 	MaxEmbeddingTextBytes       = 7_000
-	embeddingContentHashVersion = "embedding:v4"
+	embeddingContentHashVersion = "embedding:v5"
 )
 
 func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOptions) ([]EmbeddingTask, error) {
@@ -112,13 +112,15 @@ func embeddingTextForBasisWithMeta(basis, title, body, rawText, dedupeText, keyS
 	var text string
 	switch basis {
 	case "", "title_original":
-		parts := []string{strings.TrimSpace(title)}
-		if strings.TrimSpace(body) != "" {
-			parts = append(parts, strings.TrimSpace(body))
-		} else if strings.TrimSpace(rawText) != "" {
-			parts = append(parts, strings.TrimSpace(rawText))
+		if strings.TrimSpace(rawText) != "" {
+			text = strings.TrimSpace(rawText)
+		} else {
+			parts := []string{strings.TrimSpace(title)}
+			if strings.TrimSpace(body) != "" {
+				parts = append(parts, strings.TrimSpace(body))
+			}
+			text = strings.TrimSpace(strings.Join(parts, "\n\n"))
 		}
-		text = strings.TrimSpace(strings.Join(parts, "\n\n"))
 	case "dedupe_text":
 		text = strings.TrimSpace(dedupeText)
 	case "llm_key_summary":

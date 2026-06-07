@@ -43,4 +43,21 @@ func TestUpsertDocumentIndexesFTS(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("fts count: got %d want 1", count)
 	}
+
+	if _, err := st.UpsertDocument(ctx, Document{
+		ThreadID:   threadID,
+		Title:      "download stalls",
+		RawText:    "download stalls on large files",
+		DedupeText: "download stalls large files",
+		UpdatedAt:  "2026-04-26T01:00:00Z",
+	}); err != nil {
+		t.Fatalf("unchanged document: %v", err)
+	}
+	var updatedAt string
+	if err := st.DB().QueryRowContext(ctx, `select updated_at from documents where thread_id = ?`, threadID).Scan(&updatedAt); err != nil {
+		t.Fatalf("document timestamp: %v", err)
+	}
+	if updatedAt != "2026-04-26T00:00:00Z" {
+		t.Fatalf("unchanged document updated_at = %q", updatedAt)
+	}
 }

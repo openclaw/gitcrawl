@@ -597,6 +597,8 @@ func TestSyncHydratesPullRequestDetails(t *testing.T) {
 	if fetchedAt == "" {
 		t.Fatal("missing review thread sync marker")
 	}
+	assertDocumentFTSCount(t, st, "internal cache", 1)
+	assertDocumentFTSCount(t, st, "feat cache", 1)
 }
 
 func TestPullRequestDetailsUseFetchTimestampWhenPersistedLater(t *testing.T) {
@@ -661,6 +663,8 @@ func TestPullRequestDetailsUseFetchTimestampWhenPersistedLater(t *testing.T) {
 	if len(runs) != 1 || runs[0].FetchedAt != fetchTime {
 		t.Fatalf("run timestamps = %+v, want %q", runs, fetchTime)
 	}
+	assertDocumentFTSCount(t, st, "internal cache", 1)
+	assertDocumentFTSCount(t, st, "feat cache", 1)
 }
 
 func TestSyncPullRequestDetailsFailsOnReviewThreadFetchError(t *testing.T) {

@@ -36,6 +36,24 @@ A **document** is the canonical text gitcrawl indexes for a thread — title plu
 
 Most users never interact with documents directly; they show up in JSON output as a `document` field on neighbors and search hits.
 
+PR documents include hydrated changed paths and commit subjects when
+`--with pr-details` data is available. Patches remain in the PR-detail cache;
+they are not copied into embedding input.
+
+## Code snapshot
+
+A **code snapshot** is the latest tracked source corpus indexed from a local Git
+checkout with `gitcrawl code index`. It is separate from GitHub threads:
+
+- tracked regular files only
+- valid UTF-8 text only
+- bounded by per-file, aggregate-byte, and file-count limits
+- labeled with the checkout commit and dirty-worktree state
+
+Re-indexing replaces the repository's previous code snapshot. Code documents
+feed local FTS search, but not thread embeddings, neighbors, or duplicate
+clusters.
+
 ## Embedding
 
 An **embedding** is a vector representation of a thread's document, produced by an OpenAI model (default `text-embedding-3-small`, 1024 dimensions). Vectors live in `~/.config/gitcrawl/vectors` and are referenced from the `thread_vectors` table.

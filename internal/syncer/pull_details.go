@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/openclaw/gitcrawl/internal/documents"
 	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
@@ -73,7 +74,12 @@ func (s *Syncer) persistPullRequestDetails(ctx context.Context, st *store.Store,
 	commits := mapPullCommits(thread.ID, rows.commitsRaw, fetchedAt)
 	checks := mapPullChecks(thread.ID, rows.checksRaw, fetchedAt)
 	runs := mapWorkflowRuns(thread.RepoID, rows.runsRaw, fetchedAt)
-	if err := st.UpsertPullRequestCache(ctx, detail, files, commits, checks, runs); err != nil {
+	comments, err := st.ListComments(ctx, thread.ID)
+	if err != nil {
+		return pullDetailStats{}, err
+	}
+	document := documents.BuildWithContext(thread, comments, files, commits)
+	if err := st.UpsertPullRequestCacheAndDocument(ctx, detail, files, commits, checks, runs, document); err != nil {
 		return pullDetailStats{}, err
 	}
 	return pullDetailStats{files: len(files), commits: len(commits), checks: len(checks), runs: len(runs)}, nil

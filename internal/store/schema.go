@@ -264,6 +264,55 @@ create trigger if not exists documents_au after update on documents begin
   values (new.id, new.title, new.body, new.raw_text, new.dedupe_text);
 end;
 
+create table if not exists code_snapshots (
+  id integer primary key,
+  repo_id integer not null references repositories(id) on delete cascade,
+  source_root text not null,
+  git_sha text not null,
+  worktree_dirty integer not null default 0,
+  file_count integer not null,
+  byte_count integer not null,
+  indexed_at text not null
+);
+
+create table if not exists code_documents (
+  id integer primary key,
+  snapshot_id integer not null references code_snapshots(id) on delete cascade,
+  repo_id integer not null references repositories(id) on delete cascade,
+  path text not null,
+  language text not null,
+  content_hash text not null,
+  text_content text not null,
+  byte_size integer not null,
+  updated_at text not null,
+  unique(snapshot_id, path)
+);
+
+create virtual table if not exists code_documents_fts using fts5(
+  path,
+  language,
+  text_content,
+  content='code_documents',
+  content_rowid='id'
+);
+
+create trigger if not exists code_documents_ai after insert on code_documents begin
+  insert into code_documents_fts(rowid, path, language, text_content)
+  values (new.id, new.path, new.language, new.text_content);
+end;
+
+create trigger if not exists code_documents_ad after delete on code_documents begin
+  insert into code_documents_fts(code_documents_fts, rowid, path, language, text_content)
+  values ('delete', old.id, old.path, old.language, old.text_content);
+end;
+
+create trigger if not exists code_documents_au after update on code_documents begin
+  insert into code_documents_fts(code_documents_fts, rowid, path, language, text_content)
+  values ('delete', old.id, old.path, old.language, old.text_content);
+  insert into code_documents_fts(rowid, path, language, text_content)
+  values (new.id, new.path, new.language, new.text_content);
+end;
+
 create table if not exists document_summaries (
   id integer primary key,
   thread_id integer not null references threads(id) on delete cascade,
@@ -505,6 +554,8 @@ create index if not exists idx_pull_request_review_threads_thread_resolved on pu
 create index if not exists idx_pull_request_review_thread_syncs_fetched on pull_request_review_thread_syncs(fetched_at);
 create index if not exists idx_github_workflow_runs_repo_branch on github_workflow_runs(repo_id, head_branch, run_id);
 create index if not exists idx_github_workflow_runs_repo_sha on github_workflow_runs(repo_id, head_sha, run_id);
+create index if not exists idx_code_snapshots_repo_indexed on code_snapshots(repo_id, indexed_at, id);
+create index if not exists idx_code_documents_repo_path on code_documents(repo_id, path);
 create index if not exists idx_thread_fingerprints_hash on thread_fingerprints(fingerprint_hash);
 create index if not exists idx_thread_vectors_basis_model on thread_vectors(basis, model);
 create index if not exists idx_sync_runs_repo_status_id on sync_runs(repo_id, status, id);

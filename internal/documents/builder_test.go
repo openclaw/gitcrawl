@@ -42,3 +42,29 @@ func TestBuildSupportsLegacyStringLabels(t *testing.T) {
 		t.Fatalf("dedupe text: %q", doc.DedupeText)
 	}
 }
+
+func TestBuildIncludesPullRequestPathsAndCommitSubjects(t *testing.T) {
+	doc := BuildWithContext(
+		store.Thread{ID: 8, Title: "Refresh cache", LabelsJSON: "[]"},
+		nil,
+		[]store.PullRequestFile{
+			{Path: "internal/cache/store.go"},
+			{Path: "docs/cache.md", PreviousPath: "docs/old-cache.md"},
+		},
+		[]store.PullRequestCommit{
+			{Message: "fix: refresh manifest cache\n\nLong body"},
+			{Message: "test: cover stale entries"},
+		},
+	)
+	for _, want := range []string{"Changed files:", "internal/cache/store.go", "docs/old-cache.md", "Commits:", "fix: refresh manifest cache"} {
+		if !strings.Contains(doc.RawText, want) {
+			t.Fatalf("raw text missing %q: %s", want, doc.RawText)
+		}
+	}
+	if strings.Contains(doc.RawText, "Long body") {
+		t.Fatalf("commit body leaked into document: %s", doc.RawText)
+	}
+	if !strings.Contains(doc.DedupeText, "internal/cache/store.go") || !strings.Contains(doc.DedupeText, "test: cover stale entries") {
+		t.Fatalf("dedupe text missing pull context: %s", doc.DedupeText)
+	}
+}

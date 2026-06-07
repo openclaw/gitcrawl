@@ -45,6 +45,29 @@ type ClusterRun struct {
 	ErrorText  sql.NullString `json:"error_text"`
 }
 
+type CodeDocument struct {
+	ID          int64  `json:"id"`
+	SnapshotID  int64  `json:"snapshot_id"`
+	RepoID      int64  `json:"repo_id"`
+	Path        string `json:"path"`
+	Language    string `json:"language"`
+	ContentHash string `json:"content_hash"`
+	TextContent string `json:"text_content"`
+	ByteSize    int64  `json:"byte_size"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type CodeSnapshot struct {
+	ID            int64  `json:"id"`
+	RepoID        int64  `json:"repo_id"`
+	SourceRoot    string `json:"source_root"`
+	GitSha        string `json:"git_sha"`
+	WorktreeDirty int64  `json:"worktree_dirty"`
+	FileCount     int64  `json:"file_count"`
+	ByteCount     int64  `json:"byte_count"`
+	IndexedAt     string `json:"indexed_at"`
+}
+
 type Comment struct {
 	ID            int64          `json:"id"`
 	ThreadID      int64          `json:"thread_id"`

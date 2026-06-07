@@ -48,6 +48,8 @@ gitcrawl search owner/repo --query "download stalls"
 gitcrawl search issues "download stalls" -R owner/repo --state open --json number,title,state,url,updatedAt,labels --limit 30
 gitcrawl search prs "manifest cache" -R owner/repo --state open --json number,title,state,url,updatedAt,isDraft,author --limit 20
 gitcrawl search issues "hot loop" -R owner/repo --state open --sync-if-stale 5m --json number,title,url
+gitcrawl code index owner/repo --path /path/to/checkout
+gitcrawl search owner/repo --query "manifest cache" --scope all --json
 gitcrawl sync owner/repo --numbers 123 --with pr-details
 octopool login
 octopool gh api repos/openclaw/openclaw/pulls/123 --jq .number
@@ -69,6 +71,7 @@ Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser boot
 Pass `--numbers` to refresh exact issue or pull request rows without relying on list ordering or updated-time windows.
 Thread-reference inputs accept bare numbers, `#123`, `issues/123`, `pull/123`, `owner/repo#123`, and full GitHub issue/PR URLs. This applies to sync filters, `--number` flags, governance member commands, neighbor/embed lookups, and TUI jump input.
 Pass `--with pr-details` or `--include-pr-details` to hydrate pull request files, commits, checks, workflow runs, and review-thread state for local review.
+`gitcrawl code index owner/repo --path ...` snapshots tracked UTF-8 text files from a local Git checkout into separate source-document tables in a normal local database. Direct search accepts `--scope threads|code|all`; source documents do not enter issue embeddings, duplicate clusters, portable stores, or cloud snapshots.
 `gitcrawl search issues|prs` accepts the common `gh search` shape (`<query> -R owner/repo --state open --json fields --limit N`) and answers from the local SQLite cache. It is intended for discovery without spending GitHub REST search quota; use `gh` for final live verification and GitHub write actions. Pass `--sync-if-stale 5m` to perform one metadata sync before the cached search when the local repository mirror is older than that duration.
 `gitcrawl gh` moved to Octopool. Run `octopool login`, then use `octopool gh ...` or symlink Octopool as `gh` for the shared org cache and pooled GitHub relay.
 The TUI starts at `--min-size 5` and `--sort size`, like ghcrawl's saved default, so the first screen is the useful cluster workload instead of singleton noise. Pass `--min-size 1` when you intentionally want singleton clusters, or `--layout focus` when you want more readable detail text. Mouse support is built in: click rows, wheel panes, and right-click for copy, sort, filter, jump, link, neighbor, local close/reopen, and member triage actions. Press `a` to open the same action menu from the keyboard, `#` to jump directly to an issue or PR number, `p` to switch between repositories already present in the local store, or `n` to load neighbors for the selected issue or PR. Enter from the members pane also loads neighbors before opening detail. The TUI quietly refreshes from the local store every 15 seconds.
