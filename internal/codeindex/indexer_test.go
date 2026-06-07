@@ -63,6 +63,44 @@ func TestScanRejectsFileLimit(t *testing.T) {
 	}
 }
 
+func TestScanRejectsNonRepository(t *testing.T) {
+	if _, err := Scan(context.Background(), Options{Path: t.TempDir()}); err == nil {
+		t.Fatal("non-repository scan unexpectedly succeeded")
+	}
+}
+
+func TestScanRejectsRepositoryWithoutCommit(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-b", "main")
+	if _, err := Scan(context.Background(), Options{Path: root}); err == nil {
+		t.Fatal("repository without HEAD unexpectedly succeeded")
+	}
+}
+
+func TestScanDefaultsToCurrentDirectory(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-b", "main")
+	writeFile(t, filepath.Join(root, "README.md"), "readme")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "seed")
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(previous)
+
+	result, err := Scan(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("scan current directory: %v", err)
+	}
+	if result.FilesIndexed != 1 || result.Documents[0].Path != "README.md" {
+		t.Fatalf("scan result = %#v", result)
+	}
+}
+
 func TestScanSkipsTrackedFilesMissingFromWorktree(t *testing.T) {
 	root := t.TempDir()
 	runGit(t, root, "init", "-b", "main")
@@ -128,6 +166,9 @@ func TestReadFileAtMostBoundsBytesRead(t *testing.T) {
 	if !tooLarge || data != nil {
 		t.Fatalf("bounded read = %q, tooLarge=%v", data, tooLarge)
 	}
+	if _, _, err := readFileAtMost(root, "missing.txt", 4); !os.IsNotExist(err) {
+		t.Fatalf("missing bounded read error = %v", err)
+	}
 }
 
 func TestScanSkipsGitlinkReplacedByRegularFile(t *testing.T) {
@@ -153,6 +194,24 @@ func TestScanSkipsGitlinkReplacedByRegularFile(t *testing.T) {
 	}
 	if result.Documents[0].Path != "README.md" {
 		t.Fatalf("documents = %#v", result.Documents)
+	}
+}
+
+func TestPathAndLanguageClassification(t *testing.T) {
+	for _, path := range []string{"", "..", "../outside", "/absolute"} {
+		if safeRelativePath(path) {
+			t.Fatalf("unsafe path accepted: %q", path)
+		}
+	}
+	for path, want := range map[string]string{
+		"Dockerfile": "dockerfile",
+		"Makefile":   "makefile",
+		"LICENSE":    "text",
+		"main.GO":    "go",
+	} {
+		if got := languageForPath(path); got != want {
+			t.Fatalf("languageForPath(%q) = %q, want %q", path, got, want)
+		}
 	}
 }
 

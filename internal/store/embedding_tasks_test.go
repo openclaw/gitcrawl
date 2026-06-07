@@ -140,6 +140,17 @@ func TestEmbeddingContentHashVersionTracksCurrentInputCaps(t *testing.T) {
 	}
 }
 
+func TestSupportsEmbeddingBasis(t *testing.T) {
+	for _, basis := range []string{"", "title_original", "dedupe_text", "llm_key_summary"} {
+		if !SupportsEmbeddingBasis(basis) {
+			t.Fatalf("supported basis rejected: %q", basis)
+		}
+	}
+	if SupportsEmbeddingBasis("missing") {
+		t.Fatal("unsupported basis accepted")
+	}
+}
+
 func TestListEmbeddingTasksIncludeClosed(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

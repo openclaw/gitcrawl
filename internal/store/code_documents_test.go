@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -101,6 +103,51 @@ func TestPortablePruneDropsCodeCorpus(t *testing.T) {
 	for _, table := range []string{"code_snapshots", "code_documents", "code_documents_fts"} {
 		if st.tableExists(ctx, table) {
 			t.Fatalf("portable prune retained %s", table)
+		}
+	}
+	hits, err := st.SearchCodeDocuments(ctx, repoID, "secret", 10)
+	if err != nil {
+		t.Fatalf("search pruned code corpus: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("pruned code hits = %#v", hits)
+	}
+	if _, err := st.LatestCodeSnapshot(ctx, repoID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("latest pruned snapshot error = %v", err)
+	}
+}
+
+func TestSearchCodeDocumentsHandlesEmptyStates(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	hits, err := st.SearchCodeDocuments(ctx, repoID, "missing", 0)
+	if err != nil {
+		t.Fatalf("search unindexed code: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("unindexed code hits = %#v", hits)
+	}
+	if _, err := st.ReplaceCodeSnapshot(ctx, CodeSnapshot{
+		RepoID: repoID, SourceRoot: "/tmp/gitcrawl", GitSHA: "abc",
+		FileCount: 1, ByteCount: 12, IndexedAt: "2026-06-06T00:00:00Z",
+	}, []CodeDocument{{Path: "README.md", Language: "md", ContentHash: "h", Text: "local archive", ByteSize: 13, UpdatedAt: "2026-06-06T00:00:00Z"}}); err != nil {
+		t.Fatalf("replace snapshot: %v", err)
+	}
+	for _, query := range []string{"", "not-present"} {
+		hits, err := st.SearchCodeDocuments(ctx, repoID, query, 0)
+		if err != nil {
+			t.Fatalf("search %q: %v", query, err)
+		}
+		if len(hits) != 0 {
+			t.Fatalf("search %q hits = %#v", query, hits)
 		}
 	}
 }
