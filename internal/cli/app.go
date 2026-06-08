@@ -657,7 +657,13 @@ func (a *App) semanticSearchDocuments(ctx context.Context, rt localRuntime, repo
 	for _, stored := range storedVectors {
 		items = append(items, vector.Item{ThreadID: stored.ThreadID, Vector: stored.Vector})
 	}
-	neighbors := vector.Query(items, queryVectors[0], limit, 0)
+	neighbors, err := vector.QueryWithOptions(ctx, items, queryVectors[0], vector.QueryOptions{
+		Backend: rt.Config.VectorBackend,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
 	ids := make([]int64, 0, len(neighbors))
 	scoreByThreadID := make(map[int64]float64, len(neighbors))
 	for _, neighbor := range neighbors {
@@ -907,7 +913,14 @@ func (a *App) runNeighbors(ctx context.Context, args []string) error {
 	for _, stored := range vectors {
 		items = append(items, vector.Item{ThreadID: stored.ThreadID, Vector: stored.Vector})
 	}
-	candidates := vector.Query(items, targetVector.Vector, limit*2, targetThread.ID)
+	candidates, err := vector.QueryWithOptions(ctx, items, targetVector.Vector, vector.QueryOptions{
+		Backend:         rt.Config.VectorBackend,
+		Limit:           limit * 2,
+		ExcludeThreadID: targetThread.ID,
+	})
+	if err != nil {
+		return err
+	}
 	filtered := make([]vector.Neighbor, 0, limit)
 	for _, candidate := range candidates {
 		if candidate.Score < threshold {

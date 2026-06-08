@@ -26,6 +26,7 @@ type Config struct {
 	GitHub         GitHubConfig       `toml:"github"`
 	OpenAI         OpenAIConfig       `toml:"openai"`
 	EmbeddingBasis string             `toml:"embedding_basis"`
+	VectorBackend  string             `toml:"vector_backend"`
 	TUI            TUIConfig          `toml:"tui"`
 	Remote         crawlremote.Config `toml:"remote"`
 }
@@ -71,6 +72,7 @@ func Default() Config {
 		VectorDir:      defaultVectorDirForDB(paths.DBPath),
 		LogDir:         paths.LogDir,
 		EmbeddingBasis: "title_original",
+		VectorBackend:  "exact",
 		GitHub: GitHubConfig{
 			TokenEnv: DefaultTokenEnv,
 		},
@@ -183,6 +185,13 @@ func (c *Config) Normalize() error {
 	if c.EmbeddingBasis == "" {
 		c.EmbeddingBasis = def.EmbeddingBasis
 	}
+	c.VectorBackend = strings.ToLower(strings.TrimSpace(c.VectorBackend))
+	if c.VectorBackend == "" {
+		c.VectorBackend = def.VectorBackend
+	}
+	if c.VectorBackend != "exact" && c.VectorBackend != "turbovec" {
+		return fmt.Errorf("unsupported vector_backend %q", c.VectorBackend)
+	}
 	if c.TUI.DefaultSort == "" {
 		c.TUI.DefaultSort = def.TUI.DefaultSort
 	}
@@ -204,6 +213,7 @@ func (c *Config) Normalize() error {
 func (c *Config) ApplyRuntimeEnv() {
 	c.OpenAI.SummaryModel = c.envOrDefault("GITCRAWL_SUMMARY_MODEL", c.OpenAI.SummaryModel)
 	c.OpenAI.EmbedModel = c.envOrDefault("GITCRAWL_EMBED_MODEL", c.OpenAI.EmbedModel)
+	c.VectorBackend = c.envOrDefault("GITCRAWL_VECTOR_BACKEND", c.VectorBackend)
 	c.TUI.DefaultLayout = c.envOrDefault("GITCRAWL_TUI_LAYOUT", c.TUI.DefaultLayout)
 	c.Remote.Mode = c.envOrDefault("GITCRAWL_REMOTE_MODE", c.Remote.Mode)
 	c.Remote.Endpoint = c.envOrDefault("GITCRAWL_REMOTE_ENDPOINT", c.Remote.Endpoint)
@@ -214,6 +224,10 @@ func (c *Config) ApplyRuntimeEnv() {
 	c.DBPath = expandHome(c.envOrDefault("GITCRAWL_DB_PATH", c.DBPath))
 	if vectorDirWasDefault {
 		c.VectorDir = defaultVectorDirForDB(c.DBPath)
+	}
+	c.VectorBackend = strings.ToLower(strings.TrimSpace(c.VectorBackend))
+	if c.VectorBackend == "" {
+		c.VectorBackend = "exact"
 	}
 }
 

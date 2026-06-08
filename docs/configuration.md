@@ -44,6 +44,7 @@ summary_model = "gpt-5.4"
 embed_model = "text-embedding-3-small"
 embed_dimensions = 1024
 embedding_basis = "title_original"
+vector_backend = "exact"
 
 [env]
 GITHUB_TOKEN = "<github-token>"
@@ -63,6 +64,7 @@ checkout_dir = "/Users/me/.config/gitcrawl/portable"
 | `embed_model` | `text-embedding-3-small` | OpenAI embedding model |
 | `embed_dimensions` | `1024` | Must match the model |
 | `embedding_basis` | `title_original` | Only `title_original` is implemented |
+| `vector_backend` | `exact` | Semantic search backend: `exact` or optional `turbovec` via Python `turbovec` |
 | `[tui].default_sort` | `size` | Default TUI cluster ordering |
 | `[tui].default_layout` | `columns` | Default wide-screen TUI layout: `columns`, `right-stack`, or `focus` |
 | `[env]` | _(empty)_ | Config-backed fallback after real process env for env-derived values such as tokens, DB path, and model overrides |
@@ -86,6 +88,7 @@ checkout_dir = "/Users/me/.config/gitcrawl/portable"
 | --- | --- |
 | `GITCRAWL_SUMMARY_MODEL` | Override summary model |
 | `GITCRAWL_EMBED_MODEL` | Override embedding model |
+| `GITCRAWL_VECTOR_BACKEND` | Override semantic vector backend (`exact` or `turbovec`) |
 | `GITCRAWL_OPENAI_RETRY_DISABLED` | Set to `1` to disable OpenAI retry/backoff |
 | `GITCRAWL_OPENAI_BASE_URL` / `OPENAI_BASE_URL` | Custom OpenAI endpoint (e.g., for a proxy) |
 

@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"context"
 	"math"
 
 	crawlvector "github.com/openclaw/crawlkit/vector"
@@ -16,30 +17,58 @@ type Neighbor struct {
 	Score    float64 `json:"score"`
 }
 
+type QueryOptions struct {
+	Backend         string
+	Limit           int
+	ExcludeThreadID int64
+	TurboVec        crawlvector.TurboVecOptions
+}
+
 func Query(items []Item, query []float64, limit int, excludeThreadID int64) []Neighbor {
-	if limit <= 0 {
-		limit = 20
-	}
-	scored := make([]crawlvector.Scored[Neighbor], 0, len(items))
-	for _, item := range items {
-		if item.ThreadID == excludeThreadID {
-			continue
-		}
-		score := Cosine(query, item.Vector)
-		if math.IsNaN(score) || math.IsInf(score, 0) || score <= 0 {
-			continue
-		}
-		neighbor := Neighbor{ThreadID: item.ThreadID, Score: score}
-		scored = append(scored, crawlvector.Scored[Neighbor]{Item: neighbor, Score: score})
-	}
-	top := crawlvector.TopK(scored, limit, func(left, right Neighbor) bool {
-		return left.ThreadID < right.ThreadID
+	neighbors, _ := QueryWithOptions(context.Background(), items, query, QueryOptions{
+		Backend:         crawlvector.BackendExact,
+		Limit:           limit,
+		ExcludeThreadID: excludeThreadID,
 	})
-	out := make([]Neighbor, len(top))
-	for i, item := range top {
-		out[i] = item.Item
+	return neighbors
+}
+
+func QueryWithOptions(ctx context.Context, items []Item, query []float64, opts QueryOptions) ([]Neighbor, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 20
 	}
-	return out
+	candidates := make([]crawlvector.SearchCandidate[Neighbor], 0, len(items))
+	for _, item := range items {
+		if item.ThreadID == opts.ExcludeThreadID {
+			continue
+		}
+		candidates = append(candidates, crawlvector.SearchCandidate[Neighbor]{
+			Item:   Neighbor{ThreadID: item.ThreadID},
+			Vector: crawlvector.Float64To32(item.Vector),
+		})
+	}
+	results, err := crawlvector.Search(ctx, crawlvector.Float64To32(query), candidates, crawlvector.SearchOptions[Neighbor]{
+		Backend:       opts.Backend,
+		Limit:         opts.Limit,
+		InvalidVector: crawlvector.InvalidVectorSkip,
+		TurboVec:      opts.TurboVec,
+		TieLess: func(left, right Neighbor) bool {
+			return left.ThreadID < right.ThreadID
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Neighbor, 0, len(results))
+	for _, result := range results {
+		if math.IsNaN(result.Score) || math.IsInf(result.Score, 0) || result.Score <= 0 {
+			continue
+		}
+		neighbor := result.Item
+		neighbor.Score = result.Score
+		out = append(out, neighbor)
+	}
+	return out, nil
 }
 
 func Cosine(left, right []float64) float64 {

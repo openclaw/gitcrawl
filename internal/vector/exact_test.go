@@ -1,8 +1,13 @@
 package vector
 
 import (
+	"context"
+	"encoding/json"
 	"math"
+	"os"
 	"testing"
+
+	crawlvector "github.com/openclaw/crawlkit/vector"
 )
 
 func TestCosine(t *testing.T) {
@@ -72,5 +77,60 @@ func TestQueryAndCosineEdgeBranches(t *testing.T) {
 	}
 	if got := Cosine([]float64{0}, []float64{1}); got != 0 {
 		t.Fatalf("zero magnitude cosine = %f", got)
+	}
+}
+
+func TestQueryWithTurboVecBackend(t *testing.T) {
+	t.Setenv("CRAWLKIT_TEST_TURBOVEC_HELPER", "1")
+	got, err := QueryWithOptions(context.Background(), []Item{
+		{ThreadID: 1, Vector: []float64{1, 0}},
+		{ThreadID: 2, Vector: []float64{0.8, 0.2}},
+	}, []float64{1, 0}, QueryOptions{
+		Backend: "turbovec",
+		Limit:   2,
+		TurboVec: crawlvector.TurboVecOptions{
+			Command: []string{os.Args[0], "-test.run=TestTurboVecHelperProcess", "--"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("query turbovec: %v", err)
+	}
+	if len(got) != 2 || got[0].ThreadID != 2 || got[0].Score != 0.9 || got[1].ThreadID != 1 {
+		t.Fatalf("neighbors = %#v", got)
+	}
+}
+
+func TestTurboVecHelperProcess(t *testing.T) {
+	if os.Getenv("CRAWLKIT_TEST_TURBOVEC_HELPER") != "1" {
+		return
+	}
+	defer os.Exit(0)
+
+	var request struct {
+		Dimensions int `json:"dimensions"`
+		Limit      int `json:"limit"`
+	}
+	if err := json.NewDecoder(os.Stdin).Decode(&request); err != nil {
+		panic(err)
+	}
+	if request.Dimensions != 2 || request.Limit != 2 {
+		panic("unexpected request")
+	}
+	response := struct {
+		Results []struct {
+			Index int     `json:"index"`
+			Score float64 `json:"score"`
+		} `json:"results"`
+	}{
+		Results: []struct {
+			Index int     `json:"index"`
+			Score float64 `json:"score"`
+		}{
+			{Index: 1, Score: 0.9},
+			{Index: 0, Score: 0.8},
+		},
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(response); err != nil {
+		panic(err)
 	}
 }

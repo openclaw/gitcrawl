@@ -51,6 +51,7 @@ func TestApplyRuntimeEnvUsesDBEnv(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "override.db")
 	t.Setenv("GITCRAWL_DB_PATH", dbPath)
+	t.Setenv("GITCRAWL_VECTOR_BACKEND", "turbovec")
 
 	cfg := Default()
 	cfg.DBPath = ""
@@ -69,6 +70,9 @@ func TestApplyRuntimeEnvUsesDBEnv(t *testing.T) {
 	if cfg.TUI.DefaultLayout != "focus" {
 		t.Fatalf("tui layout: got %q want focus", cfg.TUI.DefaultLayout)
 	}
+	if cfg.VectorBackend != "turbovec" {
+		t.Fatalf("vector backend: got %q want turbovec", cfg.VectorBackend)
+	}
 }
 
 func TestNormalizeDoesNotPersistTUILayoutEnv(t *testing.T) {
@@ -81,6 +85,22 @@ func TestNormalizeDoesNotPersistTUILayoutEnv(t *testing.T) {
 	}
 	if cfg.TUI.DefaultLayout != "columns" {
 		t.Fatalf("tui layout: got %q want columns", cfg.TUI.DefaultLayout)
+	}
+}
+
+func TestNormalizeValidatesVectorBackend(t *testing.T) {
+	cfg := Default()
+	cfg.VectorBackend = "TURBOVEC"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("normalize turbovec: %v", err)
+	}
+	if cfg.VectorBackend != "turbovec" {
+		t.Fatalf("vector backend: got %q want turbovec", cfg.VectorBackend)
+	}
+
+	cfg.VectorBackend = "bogus"
+	if err := cfg.Normalize(); err == nil || !strings.Contains(err.Error(), "unsupported vector_backend") {
+		t.Fatalf("normalize bogus backend err = %v", err)
 	}
 }
 
