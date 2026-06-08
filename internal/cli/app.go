@@ -265,16 +265,6 @@ func parseKongContext(target any, args []string, name string, stdout, stderr io.
 	return parser.Parse(args)
 }
 
-func selectedKongCommand(ctx *kong.Context) string {
-	var selected string
-	for _, path := range ctx.Path {
-		if path.Command != nil {
-			selected = path.Command.Name
-		}
-	}
-	return selected
-}
-
 func (a *App) runConfigure(args []string) error {
 	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

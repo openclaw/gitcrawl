@@ -2,61 +2,12 @@ package cli
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
-
-func resolveRealGHPath() (string, error) {
-	envPath := strings.TrimSpace(os.Getenv("GITCRAWL_GH_PATH"))
-	candidates := []string{}
-	if envPath != "" {
-		candidates = append(candidates, envPath)
-	}
-	candidates = append(candidates,
-		"/opt/homebrew/opt/gh/bin/gh",
-		"/usr/local/opt/gh/bin/gh",
-		"/usr/local/bin/gh",
-		"/usr/bin/gh",
-	)
-	if lookPath, err := exec.LookPath("gh"); err == nil {
-		candidates = append(candidates, lookPath)
-	}
-
-	seen := map[string]bool{}
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" || seen[candidate] {
-			continue
-		}
-		seen[candidate] = true
-		info, err := os.Stat(candidate)
-		if err != nil || info.IsDir() {
-			if envPath != "" && candidate == envPath {
-				return "", fmt.Errorf("real gh not found at GITCRAWL_GH_PATH %q", envPath)
-			}
-			continue
-		}
-		if isGitcrawlShimPath(candidate) {
-			if envPath != "" && candidate == envPath {
-				return "", fmt.Errorf("GITCRAWL_GH_PATH points to the gitcrawl shim (%s); set it to the real gh binary", envPath)
-			}
-			continue
-		}
-		if !usableRealGHPath(candidate) {
-			if envPath != "" && candidate == envPath {
-				return "", fmt.Errorf("GITCRAWL_GH_PATH points to the gitcrawl shim (%s); set it to the real gh binary", envPath)
-			}
-			continue
-		}
-		return candidate, nil
-	}
-	return "", fmt.Errorf("real gh not found; set GITCRAWL_GH_PATH")
-}
 
 func isGitcrawlShimPath(path string) bool {
 	if path == "" {

@@ -431,10 +431,6 @@ func sqliteStoreOpenHealth(ctx context.Context, path string) error {
 	return st.Close()
 }
 
-func sqliteStoreCachedHealth(ctx context.Context, path, statePath string) error {
-	return portableMirrorCachedHealth(ctx, path, "", statePath)
-}
-
 func portableMirrorCachedHealth(ctx context.Context, mirrorPath, sourceDBPath, statePath string) error {
 	manifestModTime, manifestSize, err := portableDBManifestStamp(sourceDBPath)
 	if err != nil {
@@ -469,10 +465,6 @@ func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath
 		return err
 	}
 	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize)
-}
-
-func markSQLiteStoreHealthVerified(path, statePath string) error {
-	return markPortableMirrorHealthVerified(path, statePath, "")
 }
 
 func markPortableMirrorHealthVerified(path, statePath, sourceDBPath string) error {
