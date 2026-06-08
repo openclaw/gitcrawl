@@ -66,7 +66,7 @@ Override the config root with `--config <path>` or `GITCRAWL_CONFIG`.
 | `embed_model` | `text-embedding-3-small` |
 | `embed_dimensions` | `1024` |
 | `embedding_basis` | `title_original` |
-| `vector_backend` | `exact` |
+| `vector_backend` | `exact`; `turbovec` requires Python `turbovec` and dimensions divisible by 8 |
 | `batch_size` (embeddings) | `64` |
 | `concurrency` (embeddings) | `2` |
 | `tui_default_sort` | `size` |

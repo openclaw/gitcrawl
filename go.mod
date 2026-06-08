@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/mattn/go-isatty v0.0.22
-	github.com/openclaw/crawlkit v0.11.1-0.20260608023621-593a155a9b34
+	github.com/openclaw/crawlkit v0.11.1-0.20260608024201-9c66db7f57f7
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.43.0
 )

@@ -83,9 +83,9 @@ func TestQueryAndCosineEdgeBranches(t *testing.T) {
 func TestQueryWithTurboVecBackend(t *testing.T) {
 	t.Setenv("CRAWLKIT_TEST_TURBOVEC_HELPER", "1")
 	got, err := QueryWithOptions(context.Background(), []Item{
-		{ThreadID: 1, Vector: []float64{1, 0}},
-		{ThreadID: 2, Vector: []float64{0.8, 0.2}},
-	}, []float64{1, 0}, QueryOptions{
+		{ThreadID: 1, Vector: []float64{1, 0, 0, 0, 0, 0, 0, 0}},
+		{ThreadID: 2, Vector: []float64{0.8, 0.2, 0, 0, 0, 0, 0, 0}},
+	}, []float64{1, 0, 0, 0, 0, 0, 0, 0}, QueryOptions{
 		Backend: "turbovec",
 		Limit:   2,
 		TurboVec: crawlvector.TurboVecOptions{
@@ -113,7 +113,7 @@ func TestTurboVecHelperProcess(t *testing.T) {
 	if err := json.NewDecoder(os.Stdin).Decode(&request); err != nil {
 		panic(err)
 	}
-	if request.Dimensions != 2 || request.Limit != 2 {
+	if request.Dimensions != 8 || request.Limit != 2 {
 		panic("unexpected request")
 	}
 	response := struct {
