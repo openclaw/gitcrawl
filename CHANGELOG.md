@@ -2,7 +2,8 @@
 
 ## 0.4.6 - Unreleased
 
-- Update `crawlkit` to v0.10.0.
+- Update `crawlkit` to v0.12.0.
+- Add configurable `vector_backend` selection for semantic search and neighbors, including optional Python `turbovec` support when embedding dimensions are divisible by 8, thanks @vincentkoc.
 - Add Cloudflare remote archive scaffolding with `[remote]` config, `gitcrawl init --remote`, GitHub-backed `remote login` with OAuth or token-env bootstrap, remote identity/archive/status commands, cloud-mode search against Worker named queries, and `gitcrawl cloud publish` ingestion without creating a local SQLite database for readers.
 - Mirror the local SQLite archive into the Worker-backed R2 object store during
   `gitcrawl cloud publish`, alongside the D1 row ingest used for live queries.

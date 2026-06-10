@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,6 +46,13 @@ type tuiWheelScrollMsg struct {
 type tuiWheelSettledMsg struct {
 	seq int
 }
+type tuiNeighborsLoadedMsg struct {
+	seq          int
+	threadID     int64
+	threadNumber int
+	neighbors    []tuiNeighbor
+	err          error
+}
 
 type tuiRemoteRefreshMsg struct {
 	changed bool
@@ -67,6 +75,7 @@ type clusterBrowserPayload struct {
 	HideClosed         bool                   `json:"hide_closed,omitempty"`
 	EmbedModel         string                 `json:"embed_model,omitempty"`
 	EmbeddingBasis     string                 `json:"embedding_basis,omitempty"`
+	VectorBackend      string                 `json:"vector_backend,omitempty"`
 	Clusters           []store.ClusterSummary `json:"clusters"`
 }
 
@@ -148,11 +157,15 @@ type clusterBrowserModel struct {
 	wheelFocus       tuiFocus
 	wheelDelta       int
 	wheelSeq         int
+	neighborLoadSeq  int
 	detailView       viewport.Model
 	detailContentKey string
 	searchInput      textinput.Model
 	detailCache      map[string]store.ClusterDetail
 	neighborCache    map[int64][]tuiNeighbor
+	pendingCmd       tea.Cmd
+	neighborLoadStop context.CancelFunc
+	queryNeighbors   func(context.Context, []vector.Item, []float64, vector.QueryOptions) ([]vector.Neighbor, error)
 	detail           store.ClusterDetail
 	hasDetail        bool
 	remoteRefreshing bool
@@ -288,10 +301,14 @@ func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int
 	if !ok {
 		return a.writeOutput("tui", payload, true)
 	}
-	model := newClusterBrowserModel(ctx, st, repoID, payload)
+	tuiCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	model := newClusterBrowserModel(tuiCtx, st, repoID, payload)
 	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	finalModel, err := program.Run()
+	cancel()
 	if final, ok := finalModel.(clusterBrowserModel); ok && final.store != nil && final.store != st {
+		final.cancelNeighborLoad()
 		_ = final.store.Close()
 	}
 	return err
@@ -306,22 +323,23 @@ func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, 
 	search.CharLimit = 80
 	search.Width = 40
 	model := clusterBrowserModel{
-		payload:       payload,
-		allClusters:   clusters,
-		ctx:           ctx,
-		store:         st,
-		repoID:        repoID,
-		focus:         focusClusters,
-		status:        "Ready",
-		showClosed:    !payload.HideClosed,
-		minSize:       maxInt(1, payload.MinSize),
-		memberSort:    memberSortKind,
-		wideLayout:    normalizeTUILayout(payload.Layout),
-		memberIndex:   -1,
-		detailView:    viewport.New(1, 1),
-		searchInput:   search,
-		detailCache:   map[string]store.ClusterDetail{},
-		neighborCache: map[int64][]tuiNeighbor{},
+		payload:        payload,
+		allClusters:    clusters,
+		ctx:            ctx,
+		store:          st,
+		repoID:         repoID,
+		focus:          focusClusters,
+		status:         "Ready",
+		showClosed:     !payload.HideClosed,
+		minSize:        maxInt(1, payload.MinSize),
+		memberSort:     memberSortKind,
+		wideLayout:     normalizeTUILayout(payload.Layout),
+		memberIndex:    -1,
+		detailView:     viewport.New(1, 1),
+		searchInput:    search,
+		detailCache:    map[string]store.ClusterDetail{},
+		neighborCache:  map[int64][]tuiNeighbor{},
+		queryNeighbors: vector.QueryWithOptions,
 	}
 	if payload.DBSource == "remote" && payload.DBRefreshSource != "" && payload.DBRuntimePath != "" {
 		model.remoteRefreshing = true
@@ -391,6 +409,19 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = "Remote data already current"
 		return m, nil
+	case tuiNeighborsLoadedMsg:
+		if msg.seq != m.neighborLoadSeq {
+			return m, nil
+		}
+		m.neighborLoadStop = nil
+		if msg.err != nil {
+			m.status = msg.err.Error()
+			return m, nil
+		}
+		m.applyLoadedNeighbors(msg.threadID, msg.threadNumber, msg.neighbors)
+		m.keepVisible()
+		m.syncComponents()
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -443,10 +474,11 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusClusters {
 				m.focus = focusMembers
 			} else if m.focus == focusMembers {
-				m.loadSelectedThreadNeighbors(10, 0.2)
-				if m.focus != focusDetail {
-					m.focus = focusDetail
-				}
+				m.focus = focusDetail
+				cmd := m.requestSelectedThreadNeighbors(10, 0.2)
+				m.keepVisible()
+				m.syncComponents()
+				return m, cmd
 			}
 		case "o":
 			m.runAction("open")
@@ -469,7 +501,10 @@ func (m clusterBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sortMembers()
 			m.status = "Member sort: " + string(m.memberSort)
 		case "n":
-			m.loadSelectedThreadNeighbors(10, 0.2)
+			cmd := m.requestSelectedThreadNeighbors(10, 0.2)
+			m.keepVisible()
+			m.syncComponents()
+			return m, cmd
 		case "d":
 			m.toggleDetailMode()
 		case "l":
@@ -539,6 +574,7 @@ func (m *clusterBrowserModel) reopenRuntimeStore() error {
 	if strings.TrimSpace(m.payload.DBRuntimePath) == "" {
 		return nil
 	}
+	m.invalidateNeighborLoad()
 	next, err := store.OpenReadOnly(m.ctx, m.payload.DBRuntimePath)
 	if err != nil {
 		return err
@@ -998,7 +1034,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.quitRequested {
 			return m, tea.Quit
 		}
-		return m, nil
+		return m, m.takePendingCmd()
 	}
 	switch msg.String() {
 	case "esc", "q":
@@ -1025,7 +1061,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openRepositoryMenu()
 	case "n":
 		m.closeMenu("")
-		m.loadSelectedThreadNeighbors(10, 0.2)
+		return m, m.requestSelectedThreadNeighbors(10, 0.2)
 	case "r":
 		m.closeMenu("")
 		m.refreshFromStore()
@@ -1076,6 +1112,7 @@ func (m clusterBrowserModel) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.quitRequested {
 				return m, tea.Quit
 			}
+			return m, m.takePendingCmd()
 		}
 	}
 	return m, nil
@@ -1193,7 +1230,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	layout := m.layout()
 	if msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
 		if m.menuOpen {
-			m.handleMenuMouse(layout, msg)
+			return m.handleMenuMouse(layout, msg)
 		}
 		return nil
 	}
@@ -1204,8 +1241,7 @@ func (m *clusterBrowserModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		m.cancelQueuedWheelScroll()
 	}
 	if m.menuOpen {
-		m.handleMenuMouse(layout, msg)
-		return nil
+		return m.handleMenuMouse(layout, msg)
 	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
@@ -1307,14 +1343,14 @@ func (m *clusterBrowserModel) clearLastClick() {
 	m.lastClickAt = time.Time{}
 }
 
-func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg) {
+func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg) tea.Cmd {
 	if msg.Action == tea.MouseActionMotion {
 		index, ok := m.menuIndexAtMouse(layout, msg.X, msg.Y)
 		if !ok {
-			return
+			return nil
 		}
 		if index < 0 || index >= len(m.menuItems) {
-			return
+			return nil
 		}
 		if !m.menuItems[index].selectable() {
 			index = m.nearestSelectableMenuIndex(index, 1)
@@ -1323,44 +1359,45 @@ func (m *clusterBrowserModel) handleMenuMouse(layout tuiLayout, msg tea.MouseMsg
 			m.menuIndex = index
 			m.keepMenuVisible()
 		}
-		return
+		return nil
 	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		m.menuIndex = m.nextSelectableMenuIndex(-1)
 		m.keepMenuVisible()
-		return
+		return nil
 	case tea.MouseButtonWheelDown:
 		m.menuIndex = m.nextSelectableMenuIndex(1)
 		m.keepMenuVisible()
-		return
+		return nil
 	case tea.MouseButtonRight:
 		if msg.Action == tea.MouseActionPress {
 			m.closeMenu("Menu closed")
 		}
-		return
+		return nil
 	}
 	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
-		return
+		return nil
 	}
 	index, ok := m.menuIndexAtMouse(layout, msg.X, msg.Y)
 	if !ok {
 		m.closeMenu("Menu closed")
-		return
+		return nil
 	}
 	if index < 0 || index >= len(m.menuItems) {
-		return
+		return nil
 	}
 	if !m.menuItems[index].selectable() {
 		m.menuIndex = m.nearestSelectableMenuIndex(index, 1)
 		m.keepMenuVisible()
-		return
+		return nil
 	}
 	m.menuIndex = index
 	m.keepMenuVisible()
 	if m.runMenuItem(m.menuItems[m.menuIndex]) {
 		m.closeMenu("")
 	}
+	return m.takePendingCmd()
 }
 
 func (m clusterBrowserModel) menuIndexAtMouse(layout tuiLayout, x, y int) (int, bool) {
@@ -1859,7 +1896,7 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 		m.setSelectedClusterCanonicalLocally()
 		return true
 	case "load-neighbors":
-		m.loadSelectedThreadNeighbors(10, 0.2)
+		m.pendingCmd = m.requestSelectedThreadNeighbors(10, 0.2)
 		return true
 	case "close-thread-confirm":
 		m.openCloseThreadMenu()
@@ -2109,9 +2146,23 @@ func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold f
 		m.status = "No selected thread"
 		return
 	}
+	threadID, threadNumber, neighbors, err := loadThreadNeighbors(m.ctx, m.store, m.repoID, m.payload, m.queryNeighbors, thread.Number, limit, threshold)
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.applyLoadedNeighbors(threadID, threadNumber, neighbors)
+}
+
+func (m *clusterBrowserModel) requestSelectedThreadNeighbors(limit int, threshold float64) tea.Cmd {
+	thread, ok := m.selectedThread()
+	if !ok {
+		m.status = "No selected thread"
+		return nil
+	}
 	if m.store == nil || m.repoID == 0 {
 		m.status = "Neighbors unavailable for this view"
-		return
+		return nil
 	}
 	if limit <= 0 {
 		limit = 10
@@ -2119,34 +2170,108 @@ func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold f
 	if threshold <= 0 {
 		threshold = 0.2
 	}
-	targetThread, targetVector, err := m.store.ThreadVectorByNumber(m.ctx, store.ThreadVectorQuery{
-		RepoID: m.repoID,
-		Model:  m.payload.EmbedModel,
-		Basis:  m.payload.EmbeddingBasis,
-	}, thread.Number)
-	if err != nil {
-		var fallbackErr error
-		targetThread, targetVector, fallbackErr = m.store.ThreadVectorByNumber(m.ctx, store.ThreadVectorQuery{RepoID: m.repoID}, thread.Number)
-		if fallbackErr != nil {
-			m.status = err.Error()
-			return
+	m.cancelNeighborLoad()
+	m.neighborLoadSeq++
+	seq := m.neighborLoadSeq
+	loadCtx, cancel := context.WithCancel(m.ctx)
+	m.neighborLoadStop = cancel
+	repoID := m.repoID
+	payload := m.payload
+	queryNeighbors := m.queryNeighbors
+	threadNumber := thread.Number
+	m.focus = focusDetail
+	m.detailView.GotoTop()
+	m.status = fmt.Sprintf("Loading neighbors for #%d...", threadNumber)
+	return func() tea.Msg {
+		defer cancel()
+		threadID, resolvedNumber, neighbors, err := loadThreadNeighbors(loadCtx, m.store, repoID, payload, queryNeighbors, threadNumber, limit, threshold)
+		return tuiNeighborsLoadedMsg{
+			seq:          seq,
+			threadID:     threadID,
+			threadNumber: resolvedNumber,
+			neighbors:    neighbors,
+			err:          err,
 		}
 	}
-	vectors, err := m.store.ListThreadVectorsFiltered(m.ctx, store.ThreadVectorQuery{
-		RepoID:     m.repoID,
+}
+
+func (m *clusterBrowserModel) applyLoadedNeighbors(threadID int64, threadNumber int, neighbors []tuiNeighbor) {
+	m.neighborCache[threadID] = neighbors
+	if thread, ok := m.selectedThread(); ok && thread.ID == threadID {
+		m.focus = focusDetail
+		m.detailView.GotoTop()
+	}
+	m.status = fmt.Sprintf("Loaded %d neighbors for #%d", len(neighbors), threadNumber)
+}
+
+func (m *clusterBrowserModel) takePendingCmd() tea.Cmd {
+	cmd := m.pendingCmd
+	m.pendingCmd = nil
+	return cmd
+}
+
+func (m *clusterBrowserModel) cancelNeighborLoad() {
+	if m.neighborLoadStop != nil {
+		m.neighborLoadStop()
+		m.neighborLoadStop = nil
+	}
+}
+
+func (m *clusterBrowserModel) invalidateNeighborLoad() {
+	m.cancelNeighborLoad()
+	m.neighborLoadSeq++
+}
+
+func loadThreadNeighbors(ctx context.Context, st *store.Store, repoID int64, payload clusterBrowserPayload, queryNeighbors func(context.Context, []vector.Item, []float64, vector.QueryOptions) ([]vector.Neighbor, error), number, limit int, threshold float64) (int64, int, []tuiNeighbor, error) {
+	if st == nil || repoID == 0 {
+		return 0, 0, nil, errors.New("neighbors unavailable for this view")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 {
+		threshold = 0.2
+	}
+	targetThread, targetVector, err := st.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{
+		RepoID: repoID,
+		Model:  payload.EmbedModel,
+		Basis:  payload.EmbeddingBasis,
+	}, number)
+	if err != nil {
+		var fallbackErr error
+		targetThread, targetVector, fallbackErr = st.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{RepoID: repoID}, number)
+		if fallbackErr != nil {
+			return 0, 0, nil, err
+		}
+	}
+	vectors, err := st.ListThreadVectorsFiltered(ctx, store.ThreadVectorQuery{
+		RepoID:     repoID,
 		Model:      targetVector.Model,
 		Basis:      targetVector.Basis,
 		Dimensions: targetVector.Dimensions,
 	})
 	if err != nil {
-		m.status = err.Error()
-		return
+		return 0, 0, nil, err
 	}
 	items := make([]vector.Item, 0, len(vectors))
 	for _, stored := range vectors {
 		items = append(items, vector.Item{ThreadID: stored.ThreadID, Vector: stored.Vector})
 	}
-	candidates := vector.Query(items, targetVector.Vector, limit*2, targetThread.ID)
+	if queryNeighbors == nil {
+		queryNeighbors = vector.QueryWithOptions
+	}
+	backend := strings.TrimSpace(payload.VectorBackend)
+	if backend == "" {
+		backend = "exact"
+	}
+	candidates, err := queryNeighbors(ctx, items, targetVector.Vector, vector.QueryOptions{
+		Backend:         backend,
+		Limit:           limit * 2,
+		ExcludeThreadID: targetThread.ID,
+	})
+	if err != nil {
+		return 0, 0, nil, err
+	}
 	filtered := make([]vector.Neighbor, 0, limit)
 	for _, candidate := range candidates {
 		if candidate.Score < threshold {
@@ -2161,10 +2286,9 @@ func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold f
 	for _, candidate := range filtered {
 		ids = append(ids, candidate.ThreadID)
 	}
-	threads, err := m.store.ThreadsByIDs(m.ctx, m.repoID, ids)
+	threads, err := st.ThreadsByIDs(ctx, repoID, ids)
 	if err != nil {
-		m.status = err.Error()
-		return
+		return 0, 0, nil, err
 	}
 	neighbors := make([]tuiNeighbor, 0, len(filtered))
 	for _, candidate := range filtered {
@@ -2174,10 +2298,7 @@ func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold f
 		}
 		neighbors = append(neighbors, tuiNeighbor{Thread: neighborThread, Score: candidate.Score})
 	}
-	m.neighborCache[targetThread.ID] = neighbors
-	m.focus = focusDetail
-	m.detailView.GotoTop()
-	m.status = fmt.Sprintf("Loaded %d neighbors for #%d", len(neighbors), targetThread.Number)
+	return targetThread.ID, targetThread.Number, neighbors, nil
 }
 
 func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {
@@ -2323,6 +2444,7 @@ func (m *clusterBrowserModel) openCanonicalMemberMenu() {
 }
 
 func (m *clusterBrowserModel) closeSelectedThreadLocally() {
+	m.invalidateNeighborLoad()
 	thread, ok := m.selectedThread()
 	if !ok {
 		m.status = "No selected thread"
@@ -2342,6 +2464,7 @@ func (m *clusterBrowserModel) closeSelectedThreadLocally() {
 }
 
 func (m *clusterBrowserModel) reopenSelectedThreadLocally() {
+	m.invalidateNeighborLoad()
 	thread, ok := m.selectedThread()
 	if !ok {
 		m.status = "No selected thread"
@@ -2360,6 +2483,7 @@ func (m *clusterBrowserModel) reopenSelectedThreadLocally() {
 }
 
 func (m *clusterBrowserModel) closeSelectedClusterLocally() {
+	m.invalidateNeighborLoad()
 	cluster, ok := m.selectedCluster()
 	if !ok {
 		m.status = "No selected cluster"
@@ -2382,6 +2506,7 @@ func (m *clusterBrowserModel) closeSelectedClusterLocally() {
 }
 
 func (m *clusterBrowserModel) reopenSelectedClusterLocally() {
+	m.invalidateNeighborLoad()
 	cluster, ok := m.selectedCluster()
 	if !ok {
 		m.status = "No selected cluster"
@@ -2404,6 +2529,7 @@ func (m *clusterBrowserModel) reopenSelectedClusterLocally() {
 }
 
 func (m *clusterBrowserModel) excludeSelectedClusterMemberLocally() {
+	m.invalidateNeighborLoad()
 	cluster, clusterOK := m.selectedCluster()
 	member, memberOK := m.selectedMember()
 	if !clusterOK || !memberOK {
@@ -2428,6 +2554,7 @@ func (m *clusterBrowserModel) excludeSelectedClusterMemberLocally() {
 }
 
 func (m *clusterBrowserModel) includeSelectedClusterMemberLocally() {
+	m.invalidateNeighborLoad()
 	cluster, clusterOK := m.selectedCluster()
 	member, memberOK := m.selectedMember()
 	if !clusterOK || !memberOK {
@@ -2451,6 +2578,7 @@ func (m *clusterBrowserModel) includeSelectedClusterMemberLocally() {
 }
 
 func (m *clusterBrowserModel) setSelectedClusterCanonicalLocally() {
+	m.invalidateNeighborLoad()
 	cluster, clusterOK := m.selectedCluster()
 	member, memberOK := m.selectedMember()
 	if !clusterOK || !memberOK {
@@ -3280,6 +3408,7 @@ func (m *clusterBrowserModel) loadClusterSummariesFromStore() ([]store.ClusterSu
 }
 
 func (m *clusterBrowserModel) applyClusterRefresh(clusters []store.ClusterSummary, currentKey string) bool {
+	m.invalidateNeighborLoad()
 	if clusters == nil {
 		clusters = []store.ClusterSummary{}
 	}
@@ -3318,6 +3447,7 @@ func (m *clusterBrowserModel) switchRepository(fullName string) {
 		m.status = "Repository picker unavailable for this view"
 		return
 	}
+	m.invalidateNeighborLoad()
 	fullName = strings.TrimSpace(fullName)
 	if fullName == "" {
 		m.status = "No repository selected"

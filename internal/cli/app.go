@@ -1954,6 +1954,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		HideClosed:         !showClosed,
 		EmbedModel:         rt.Config.OpenAI.EmbedModel,
 		EmbeddingBasis:     rt.Config.EmbeddingBasis,
+		VectorBackend:      rt.Config.VectorBackend,
 		Clusters:           clusters,
 	}
 	if !interactive {
@@ -2005,6 +2006,7 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 		HideClosed:     hideClosed,
 		EmbedModel:     cfg.OpenAI.EmbedModel,
 		EmbeddingBasis: cfg.EmbeddingBasis,
+		VectorBackend:  cfg.VectorBackend,
 		Clusters:       []store.ClusterSummary{},
 	}
 }

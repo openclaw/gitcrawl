@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"strings"
 	"testing"
 
 	crawlvector "github.com/openclaw/crawlkit/vector"
@@ -100,6 +101,49 @@ func TestQueryWithTurboVecBackend(t *testing.T) {
 	}
 }
 
+func TestQueryWithOptionsExactRejectsInvalidQuery(t *testing.T) {
+	_, err := QueryWithOptions(context.Background(), []Item{{ThreadID: 1, Vector: []float64{1, 0}}}, []float64{0, 0}, QueryOptions{Backend: "exact"})
+	if err == nil || !strings.Contains(err.Error(), "query vector is zero") {
+		t.Fatalf("zero query err = %v", err)
+	}
+}
+
+func TestQueryWithTurboVecFallsBackToExactWhenRequestIsTooLarge(t *testing.T) {
+	got, err := QueryWithOptions(context.Background(), []Item{
+		{ThreadID: 1, Vector: []float64{1, 0, 0, 0, 0, 0, 0, 0}},
+		{ThreadID: 2, Vector: []float64{0.8, 0.2, 0, 0, 0, 0, 0, 0}},
+	}, []float64{1, 0, 0, 0, 0, 0, 0, 0}, QueryOptions{
+		Backend: "turbovec",
+		Limit:   2,
+		TurboVec: crawlvector.TurboVecOptions{
+			MaxInputBytes: 600,
+		},
+	})
+	if err != nil {
+		t.Fatalf("query fallback: %v", err)
+	}
+	if len(got) != 2 || got[0].ThreadID != 1 || got[1].ThreadID != 2 {
+		t.Fatalf("neighbors = %#v", got)
+	}
+}
+
+func TestQueryWithTurboVecFallsBackToExactWhenCandidateCountExceedsTieCap(t *testing.T) {
+	items := make([]Item, 0, maxTurboVecTieCandidates+1)
+	for i := 1; i <= maxTurboVecTieCandidates+1; i++ {
+		items = append(items, Item{ThreadID: int64(i), Vector: []float64{1, 0, 0, 0, 0, 0, 0, 0}})
+	}
+	got, err := QueryWithOptions(context.Background(), items, []float64{1, 0, 0, 0, 0, 0, 0, 0}, QueryOptions{
+		Backend: "turbovec",
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("query fallback tie cap: %v", err)
+	}
+	if len(got) != 1 || got[0].ThreadID != 1 {
+		t.Fatalf("neighbors = %#v", got)
+	}
+}
+
 func TestTurboVecHelperProcess(t *testing.T) {
 	if os.Getenv("CRAWLKIT_TEST_TURBOVEC_HELPER") != "1" {
 		return
@@ -107,8 +151,9 @@ func TestTurboVecHelperProcess(t *testing.T) {
 	defer os.Exit(0)
 
 	var request struct {
-		Dimensions int `json:"dimensions"`
-		Limit      int `json:"limit"`
+		Dimensions int         `json:"dimensions"`
+		Limit      int         `json:"limit"`
+		Vectors    [][]float32 `json:"vectors"`
 	}
 	if err := json.NewDecoder(os.Stdin).Decode(&request); err != nil {
 		panic(err)

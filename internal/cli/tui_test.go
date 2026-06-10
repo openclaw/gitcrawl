@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/openclaw/gitcrawl/internal/store"
+	"github.com/openclaw/gitcrawl/internal/vector"
 )
 
 func TestTUILayoutStacksNarrowTerminals(t *testing.T) {
@@ -2651,6 +2652,7 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 		Sort:           "recent",
 		EmbedModel:     "test",
 		EmbeddingBasis: "title_original",
+		VectorBackend:  "exact",
 		Clusters:       sampleTUIClusters(),
 	})
 	model.memberIndex = 0
@@ -2682,7 +2684,12 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 
 	delete(model.neighborCache, targetID)
 	model.focus = focusMembers
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	model = updated.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("keyboard shortcut did not return a neighbor-load command")
+	}
+	updated, _ = model.Update(cmd())
 	model = updated.(clusterBrowserModel)
 	if len(model.neighborCache[targetID]) != 1 {
 		t.Fatalf("keyboard shortcut did not reload neighbors: %+v", model.neighborCache[targetID])
@@ -2690,13 +2697,84 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 
 	delete(model.neighborCache, targetID)
 	model.focus = focusMembers
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(clusterBrowserModel)
+	if cmd == nil {
+		t.Fatal("enter did not return a neighbor-load command")
+	}
+	updated, _ = model.Update(cmd())
 	model = updated.(clusterBrowserModel)
 	if len(model.neighborCache[targetID]) != 1 {
 		t.Fatalf("enter did not load neighbors: %+v", model.neighborCache[targetID])
 	}
 	if model.focus != focusDetail {
 		t.Fatalf("enter focus = %s, want detail", model.focus)
+	}
+}
+
+func TestTUILoadNeighborsUsesConfiguredBackend(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-27T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	targetID, err := seedTUIThreadVector(ctx, st, repoID, 1, "Target issue", []float64{1, 0})
+	if err != nil {
+		t.Fatalf("target: %v", err)
+	}
+	neighborID, err := seedTUIThreadVector(ctx, st, repoID, 2, "Related issue", []float64{0.9, 0.1})
+	if err != nil {
+		t.Fatalf("neighbor: %v", err)
+	}
+	model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{
+		Repository:     "openclaw/openclaw",
+		Sort:           "recent",
+		EmbedModel:     "test",
+		EmbeddingBasis: "title_original",
+		VectorBackend:  "turbovec",
+		Clusters:       sampleTUIClusters(),
+	})
+	model.memberIndex = 0
+	model.hasDetail = true
+	model.memberRows = []memberRow{{
+		selectable: true,
+		member: store.ClusterMemberDetail{Thread: store.Thread{
+			ID:      targetID,
+			Number:  1,
+			Kind:    "issue",
+			State:   "open",
+			Title:   "Target issue",
+			HTMLURL: "https://github.com/openclaw/openclaw/issues/1",
+		}},
+	}}
+	called := false
+	model.queryNeighbors = func(ctx context.Context, items []vector.Item, query []float64, opts vector.QueryOptions) ([]vector.Neighbor, error) {
+		called = true
+		if opts.Backend != "turbovec" {
+			t.Fatalf("backend = %q, want turbovec", opts.Backend)
+		}
+		if opts.ExcludeThreadID != targetID {
+			t.Fatalf("exclude thread = %d, want %d", opts.ExcludeThreadID, targetID)
+		}
+		if opts.Limit != 20 {
+			t.Fatalf("limit = %d, want 20", opts.Limit)
+		}
+		return []vector.Neighbor{{ThreadID: neighborID, Score: 0.91}}, nil
+	}
+
+	model.loadSelectedThreadNeighbors(10, 0.2)
+
+	if !called {
+		t.Fatal("queryNeighbors was not called")
+	}
+	neighbors := model.neighborCache[targetID]
+	if len(neighbors) != 1 || neighbors[0].Thread.ID != neighborID {
+		t.Fatalf("neighbors = %+v, want related thread %d", neighbors, neighborID)
 	}
 }
 
