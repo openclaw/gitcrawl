@@ -11,7 +11,7 @@ require (
 	github.com/mattn/go-isatty v0.0.22
 	github.com/openclaw/crawlkit v0.12.0
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/sys v0.43.0
+	golang.org/x/sys v0.46.0
 )
 
 require (
