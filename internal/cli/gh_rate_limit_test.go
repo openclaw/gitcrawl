@@ -15,6 +15,7 @@ func TestSharedRateLimitStateRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
+	t.Setenv("GITHUB_TOKEN", "")
 	cfg := config.Default()
 	cfg.CacheDir = filepath.Join(dir, "cache")
 	cfg.Env = map[string]string{"GITHUB_TOKEN": "gh-token"}
