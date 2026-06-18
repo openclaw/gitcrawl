@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -44,6 +45,164 @@ func TestResolvePathUsesEnv(t *testing.T) {
 
 	if got := ResolvePath(""); got != path {
 		t.Fatalf("resolve path: got %q want %q", got, path)
+	}
+}
+
+func TestDefaultPathsUseXDGDirs(t *testing.T) {
+	home := t.TempDir()
+	configHome := filepath.Join(home, "xdg-config")
+	dataHome := filepath.Join(home, "xdg-data")
+	cacheHome := filepath.Join(home, "xdg-cache")
+	stateHome := filepath.Join(home, "xdg-state")
+	setTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	cfg := Default()
+	if cfg.DBPath != filepath.Join(dataHome, "gitcrawl", "gitcrawl.db") {
+		t.Fatalf("db path = %q", cfg.DBPath)
+	}
+	if cfg.CacheDir != filepath.Join(cacheHome, "gitcrawl") {
+		t.Fatalf("cache dir = %q", cfg.CacheDir)
+	}
+	if cfg.VectorDir != filepath.Join(dataHome, "gitcrawl", "vectors") {
+		t.Fatalf("vector dir = %q", cfg.VectorDir)
+	}
+	if cfg.LogDir != filepath.Join(stateHome, "gitcrawl", "logs") {
+		t.Fatalf("log dir = %q", cfg.LogDir)
+	}
+	if got := ResolvePath(""); got != filepath.Join(configHome, "gitcrawl", "config.toml") {
+		t.Fatalf("config path = %q", got)
+	}
+}
+
+func TestDefaultPathsUsePlatformFallbacks(t *testing.T) {
+	home := t.TempDir()
+	configHome, dataHome, cacheHome, stateHome := defaultPlatformTestDirs(home)
+	setTestHome(t, home)
+	clearXDGEnv(t)
+
+	cfg := Default()
+	if cfg.DBPath != filepath.Join(dataHome, "gitcrawl", "gitcrawl.db") {
+		t.Fatalf("db path = %q", cfg.DBPath)
+	}
+	if cfg.CacheDir != filepath.Join(cacheHome, "gitcrawl") {
+		t.Fatalf("cache dir = %q", cfg.CacheDir)
+	}
+	if cfg.VectorDir != filepath.Join(dataHome, "gitcrawl", "vectors") {
+		t.Fatalf("vector dir = %q", cfg.VectorDir)
+	}
+	if cfg.LogDir != filepath.Join(stateHome, "gitcrawl", "logs") {
+		t.Fatalf("log dir = %q", cfg.LogDir)
+	}
+	if got := ResolvePath(""); got != filepath.Join(configHome, "gitcrawl", "config.toml") {
+		t.Fatalf("config path = %q", got)
+	}
+}
+
+func TestDefaultPathsPreferExistingLegacyInstallPaths(t *testing.T) {
+	home := t.TempDir()
+	legacy := filepath.Join(home, ".config", "gitcrawl")
+	if err := os.MkdirAll(filepath.Join(legacy, "cache"), 0o755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacy, "logs"), 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "gitcrawl.db"), nil, 0o600); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "config.toml"), nil, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	setTestHome(t, home)
+	clearXDGEnv(t)
+
+	cfg := Default()
+	if cfg.DBPath != filepath.Join(legacy, "gitcrawl.db") {
+		t.Fatalf("db path = %q", cfg.DBPath)
+	}
+	if cfg.CacheDir != filepath.Join(legacy, "cache") {
+		t.Fatalf("cache dir = %q", cfg.CacheDir)
+	}
+	if cfg.VectorDir != filepath.Join(legacy, "vectors") {
+		t.Fatalf("vector dir = %q", cfg.VectorDir)
+	}
+	if cfg.LogDir != filepath.Join(legacy, "logs") {
+		t.Fatalf("log dir = %q", cfg.LogDir)
+	}
+	if got := ResolvePath(""); got != filepath.Join(legacy, "config.toml") {
+		t.Fatalf("config path = %q", got)
+	}
+}
+
+func TestDefaultPathsKeepLegacyInstallWithXDGEnv(t *testing.T) {
+	home := t.TempDir()
+	legacy := filepath.Join(home, ".config", "gitcrawl")
+	configHome := filepath.Join(home, "xdg-config")
+	dataHome := filepath.Join(home, "xdg-data")
+	cacheHome := filepath.Join(home, "xdg-cache")
+	stateHome := filepath.Join(home, "xdg-state")
+	if err := os.MkdirAll(filepath.Join(legacy, "cache"), 0o755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacy, "logs"), 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "gitcrawl.db"), nil, 0o600); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "config.toml"), nil, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	setTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	cfg := Default()
+	if cfg.DBPath != filepath.Join(legacy, "gitcrawl.db") {
+		t.Fatalf("db path = %q", cfg.DBPath)
+	}
+	if cfg.CacheDir != filepath.Join(legacy, "cache") {
+		t.Fatalf("cache dir = %q", cfg.CacheDir)
+	}
+	if cfg.VectorDir != filepath.Join(legacy, "vectors") {
+		t.Fatalf("vector dir = %q", cfg.VectorDir)
+	}
+	if cfg.LogDir != filepath.Join(legacy, "logs") {
+		t.Fatalf("log dir = %q", cfg.LogDir)
+	}
+	if got := ResolvePath(""); got != filepath.Join(legacy, "config.toml") {
+		t.Fatalf("config path = %q", got)
+	}
+}
+
+func TestDefaultPathsPreferNewConfigOverLegacy(t *testing.T) {
+	home := t.TempDir()
+	configHome, _, _, _ := defaultPlatformTestDirs(home)
+	legacyConfig := filepath.Join(home, ".config", "gitcrawl", "config.toml")
+	newConfig := filepath.Join(configHome, "gitcrawl", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(legacyConfig), 0o755); err != nil {
+		t.Fatalf("mkdir legacy: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(newConfig), 0o755); err != nil {
+		t.Fatalf("mkdir new: %v", err)
+	}
+	if err := os.WriteFile(legacyConfig, nil, 0o600); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	if err := os.WriteFile(newConfig, nil, 0o600); err != nil {
+		t.Fatalf("write new: %v", err)
+	}
+	setTestHome(t, home)
+	clearXDGEnv(t)
+
+	if got := ResolvePath(""); got != newConfig {
+		t.Fatalf("config path = %q", got)
 	}
 }
 
@@ -422,7 +581,11 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 
 func TestResolvePathAndSaveErrorBranches(t *testing.T) {
 	t.Setenv(DefaultConfigEnv, "")
-	if got := ResolvePath(""); !strings.HasSuffix(got, filepath.Join(".config", "gitcrawl", "config.toml")) {
+	home := t.TempDir()
+	configHome, _, _, _ := defaultPlatformTestDirs(home)
+	setTestHome(t, home)
+	clearXDGEnv(t)
+	if got := ResolvePath(""); got != filepath.Join(configHome, "gitcrawl", "config.toml") {
 		t.Fatalf("default config path = %q", got)
 	}
 	if got := ResolvePath("~/custom.toml"); !strings.Contains(got, "custom.toml") {
@@ -431,6 +594,38 @@ func TestResolvePathAndSaveErrorBranches(t *testing.T) {
 	dir := t.TempDir()
 	if err := Save(dir, Default()); err == nil {
 		t.Fatal("saving to directory should fail")
+	}
+}
+
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+}
+
+func clearXDGEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
+}
+
+func defaultPlatformTestDirs(home string) (configHome, dataHome, cacheHome, stateHome string) {
+	switch runtime.GOOS {
+	case "darwin":
+		appSupport := filepath.Join(home, "Library", "Application Support")
+		return appSupport, appSupport, filepath.Join(home, "Library", "Caches"), appSupport
+	case "windows":
+		localAppData := filepath.Join(home, "AppData", "Local")
+		return localAppData, localAppData, filepath.Join(localAppData, "cache"), localAppData
+	default:
+		return filepath.Join(home, ".config"),
+			filepath.Join(home, ".local", "share"),
+			filepath.Join(home, ".cache"),
+			filepath.Join(home, ".local", "state")
 	}
 }
 

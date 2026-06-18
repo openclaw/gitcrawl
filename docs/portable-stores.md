@@ -26,14 +26,22 @@ A portable store is just a Git repository whose contents include a SQLite databa
 ```bash
 gitcrawl init \
   --portable-store https://github.com/openclaw/gitcrawl-store.git \
-  --portable-db data/openclaw__openclaw.sync.db \
-  --store-dir ~/.config/gitcrawl/portable
+  --portable-db data/openclaw__openclaw.sync.db
 ```
+
+When `--store-dir` is omitted, gitcrawl clones the store under
+`<config-dir>/stores/<repo-name>`. For the example above, a fresh macOS install
+uses `~/Library/Application Support/gitcrawl/stores/gitcrawl-store`; a Linux
+install using the default config location uses
+`~/.config/gitcrawl/stores/gitcrawl-store`. Pass `--store-dir` when you want a
+fixed checkout path.
 
 `init` will:
 
-1. Clone the portable store to `--store-dir`
-2. Wire `~/.config/gitcrawl/config.toml` to use the database at `--portable-db` inside that checkout
+1. Clone the portable store next to the active config, or to `--store-dir` if provided
+2. Wire the active `config.toml` to use the database at `--portable-db` inside
+   that checkout. With the Linux default config location, that file is
+   `~/.config/gitcrawl/config.toml`.
 3. Create the runtime cache, vector, and log directories in the standard locations
 
 JSON output reports `portable_store_url`, `portable_store_dir`, and `portable_store: cloned|pulled|reset-pulled` so automation can tell what happened.
@@ -100,8 +108,9 @@ gitcrawl refresh owner/repo
 # Prune for a small, shareable footprint.
 gitcrawl portable prune --body-chars 256
 
-# Commit and push using normal Git.
-cd ~/.config/gitcrawl/portable
+# Commit and push using normal Git from the configured portable checkout.
+cd ~/Library/Application\ Support/gitcrawl/stores/gitcrawl-store
+# Linux default: cd ~/.config/gitcrawl/stores/gitcrawl-store
 git add data/openclaw__openclaw.sync.db
 git commit -m "data: refresh openclaw/gitcrawl"
 git push

@@ -22,17 +22,21 @@ cd gitcrawl
 mkdir -p "$HOME/bin"
 go build -o "$HOME/bin/gitcrawl" ./cmd/gitcrawl
 
-# Create config + database under ~/.config/gitcrawl.
+# Create config + database under the platform default runtime paths.
 gitcrawl init
 ```
 
 Defaults written:
 
-- `~/.config/gitcrawl/config.toml`
-- `~/.config/gitcrawl/gitcrawl.db`
-- `~/.config/gitcrawl/cache/`
-- `~/.config/gitcrawl/vectors/`
-- `~/.config/gitcrawl/logs/`
+- Linux config: `${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml`
+- Linux database/vectors: `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/`
+- Linux cache: `${XDG_CACHE_HOME:-~/.cache}/gitcrawl/`
+- Linux logs: `${XDG_STATE_HOME:-~/.local/state}/gitcrawl/logs/`
+- macOS config/database/vectors/logs: `~/Library/Application Support/gitcrawl/`
+- macOS cache: `~/Library/Caches/gitcrawl/`
+
+Existing installs with `~/.config/gitcrawl/config.toml` continue to load that
+config when the new platform config path does not exist.
 
 ## 2. Set credentials
 
@@ -41,7 +45,7 @@ export GITHUB_TOKEN="<github-token>"                 # required for sync
 export OPENAI_API_KEY="<openai-api-key>"             # required for embeddings
 ```
 
-Either set them in your shell profile or store them in `~/.config/gitcrawl/config.toml`:
+Either set them in your shell profile or store them in `config.toml`:
 
 ```toml
 [env]

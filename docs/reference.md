@@ -15,16 +15,23 @@ Lookup tables for paths, environment variables, and defaults.
 
 ## Paths
 
-| Path | Purpose |
-| --- | --- |
-| `~/.config/gitcrawl/config.toml` | Configuration file |
-| `~/.config/gitcrawl/gitcrawl.db` | SQLite database |
-| `~/.config/gitcrawl/cache/` | Local runtime caches |
-| `~/.config/gitcrawl/vectors/` | Vector store backing embeddings |
-| `~/.config/gitcrawl/logs/` | Operational logs |
-| `~/.config/gitcrawl/portable/` | Portable-store checkout (when configured) |
+| Platform | Path | Purpose |
+| --- | --- | --- |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml` | Configuration file |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/gitcrawl.db` | SQLite database |
+| Linux | `${XDG_CACHE_HOME:-~/.cache}/gitcrawl/` | Local runtime caches |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/vectors/` | Vector store backing embeddings |
+| Linux | `${XDG_STATE_HOME:-~/.local/state}/gitcrawl/logs/` | Operational logs |
+| macOS | `~/Library/Application Support/gitcrawl/config.toml` | Configuration file |
+| macOS | `~/Library/Application Support/gitcrawl/gitcrawl.db` | SQLite database |
+| macOS | `~/Library/Caches/gitcrawl/` | Local runtime caches |
+| macOS | `~/Library/Application Support/gitcrawl/vectors/` | Vector store backing embeddings |
+| macOS | `~/Library/Application Support/gitcrawl/logs/` | Operational logs |
+| Legacy installs | `~/.config/gitcrawl/` | Preserved config, database, cache, vectors, logs, and stores until the corresponding new path exists |
 
-Override the config root with `--config <path>` or `GITCRAWL_CONFIG`.
+Existing installs with `~/.config/gitcrawl/config.toml` continue to load that
+config when the new platform config path does not exist. Override the config
+path with `--config <path>` or `GITCRAWL_CONFIG`.
 
 ## Environment variables
 
@@ -32,8 +39,8 @@ Override the config root with `--config <path>` or `GITCRAWL_CONFIG`.
 
 | Variable | Default | Used by | Purpose |
 | --- | --- | --- | --- |
-| `GITCRAWL_CONFIG` | `~/.config/gitcrawl/config.toml` | All commands | Override config path |
-| `GITCRAWL_DB_PATH` | `~/.config/gitcrawl/gitcrawl.db` | All commands | Override database path |
+| `GITCRAWL_CONFIG` | Platform default config path | All commands | Override config path |
+| `GITCRAWL_DB_PATH` | Platform default database path | All commands | Override database path |
 | `GITCRAWL_TUI_LAYOUT` | `columns` | `tui` | Override default wide-screen layout |
 | `GITHUB_TOKEN` | _(none)_ | `sync` | GitHub API token |
 | `OPENAI_API_KEY` | _(none)_ | `embed`, `refresh` | OpenAI API key |
@@ -111,22 +118,47 @@ Override the config root with `--config <path>` or `GITCRAWL_CONFIG`.
 
 stderr always carries error messages. stdout is reserved for command output.
 
-## File-system layout (worked example)
+## File-System Layout
 
-```
+Linux:
+
+```text
 ~/.config/gitcrawl/
+├── config.toml
+└── stores/
+    └── gitcrawl-store/          # portable-store checkout (optional)
+        └── data/
+            └── owner__repo.sync.db
+
+~/.local/share/gitcrawl/
+├── gitcrawl.db                  # SQLite mirror
+├── gitcrawl.db-shm              # SQLite shared-memory file
+├── gitcrawl.db-wal              # SQLite write-ahead log
+└── vectors/                     # vector store backing embeddings
+
+~/.cache/gitcrawl/               # local runtime cache
+```
+
+macOS:
+
+```text
+~/Library/Application Support/gitcrawl/
 ├── config.toml
 ├── gitcrawl.db                  # SQLite mirror
 ├── gitcrawl.db-shm              # SQLite shared-memory file
 ├── gitcrawl.db-wal              # SQLite write-ahead log
-├── cache/
-│   └── pr/                      # local runtime cache
 ├── vectors/                     # vector store backing embeddings
 ├── logs/
-└── portable/                    # portable-store checkout (optional)
-    └── data/
-        └── owner__repo.sync.db
+└── stores/
+    └── gitcrawl-store/          # portable-store checkout (optional)
+        └── data/
+            └── owner__repo.sync.db
+
+~/Library/Caches/gitcrawl/       # local runtime cache
 ```
+
+Older docs showed `cache/pr`; current Gitcrawl stores PR details in SQLite
+instead of a `cache/pr` directory.
 
 ## See also
 

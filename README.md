@@ -79,11 +79,15 @@ The TUI starts at `--min-size 5` and `--sort size`, like ghcrawl's saved default
 
 ## Local Defaults
 
-- config: `~/.config/gitcrawl/config.toml`
-- database: `~/.config/gitcrawl/gitcrawl.db`
-- cache: `~/.config/gitcrawl/cache`
-- vectors: `~/.config/gitcrawl/vectors`
-- logs: `~/.config/gitcrawl/logs`
+- Linux config: `${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml`
+- Linux database/vectors: `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/`
+- Linux cache: `${XDG_CACHE_HOME:-~/.cache}/gitcrawl/`
+- Linux logs: `${XDG_STATE_HOME:-~/.local/state}/gitcrawl/logs/`
+- macOS config/database/vectors/logs: `~/Library/Application Support/gitcrawl/`
+- macOS cache: `~/Library/Caches/gitcrawl/`
+
+Existing installs with `~/.config/gitcrawl/config.toml` continue to load that
+config until the new platform config path exists.
 
 ## Requirements
 

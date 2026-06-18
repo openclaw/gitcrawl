@@ -124,14 +124,24 @@ Gitcrawl portable stores carry repo snapshots only. They do not carry an Octopoo
 Default config path:
 
 ```text
-~/.config/gitcrawl/config.toml
+Linux: ${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml
+macOS: ~/Library/Application Support/gitcrawl/config.toml
 ```
 
 Default database path:
 
 ```text
-~/.config/gitcrawl/gitcrawl.db
+Linux: ${XDG_DATA_HOME:-~/.local/share}/gitcrawl/gitcrawl.db
+macOS: ~/Library/Application Support/gitcrawl/gitcrawl.db
 ```
+
+Existing installs with `~/.config/gitcrawl/config.toml` continue to load that
+config when the new platform config path does not exist.
+
+Path selection is intentionally incremental: existing legacy config, database,
+cache, vector, and log paths are reused per component only while the matching
+new platform path does not exist. Explicit `--config`, `GITCRAWL_CONFIG`,
+`GITCRAWL_DB_PATH`, and configured portable-store paths remain authoritative.
 
 Primary environment variables:
 

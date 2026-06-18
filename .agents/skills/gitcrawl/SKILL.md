@@ -11,10 +11,25 @@ requested scope, or the user asks for current external context.
 
 ## Sources
 
-- Config: `~/.config/gitcrawl/config.toml`
-- DB: resolve with `gitcrawl doctor --json`; portable-store installs may point at `~/.config/gitcrawl/stores/gitcrawl-store/data/openclaw__openclaw.sync.db` instead of the default local DB
-- Cache: `~/.config/gitcrawl/cache`
-- Vectors: `~/.config/gitcrawl/vectors`
+- Config: resolve with `gitcrawl doctor --json`; fresh macOS installs default to
+  `~/Library/Application Support/gitcrawl/config.toml`, while Linux honors
+  `${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml`
+- DB: resolve with `gitcrawl doctor --json`; fresh macOS installs default to
+  `~/Library/Application Support/gitcrawl/gitcrawl.db`, while Linux honors
+  `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/gitcrawl.db`; portable-store
+  installs may point at a configured store database instead of the default local
+  DB
+- Cache: resolve with `gitcrawl init --json` for new installs or from
+  `cache_dir` in config; fresh macOS installs default to
+  `~/Library/Caches/gitcrawl`, while Linux honors
+  `${XDG_CACHE_HOME:-~/.cache}/gitcrawl`
+- Vectors: resolve with `gitcrawl init --json` for new installs or from
+  `vector_dir` in config; fresh macOS installs default to
+  `~/Library/Application Support/gitcrawl/vectors`, while Linux honors
+  `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/vectors`
+- Legacy installs may still resolve config, database, cache, vectors, and logs
+  under `~/.config/gitcrawl/`; check the active config before assuming a
+  migrated path.
 - Repo: `openclaw/gitcrawl`; on ClawSweeper this is checked out at `~/clawsweeper-workspace/gitcrawl`
 - Preferred CLI: `gitcrawl`; fallback to `go run ./cmd/gitcrawl` from a verified repo checkout if the installed binary is stale
 

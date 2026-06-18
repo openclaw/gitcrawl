@@ -98,7 +98,7 @@ Each call records a fresh override row, so the audit history is preserved.
 `gitcrawl cluster-detail` returns active overrides as part of the JSON payload, and `gitcrawl runs --kind cluster` lists when each clustering run was performed. To inspect raw override history you can query SQLite directly:
 
 ```bash
-sqlite3 ~/.config/gitcrawl/gitcrawl.db \
+sqlite3 "$(gitcrawl doctor --json | jq -r .db_path)" \
   "SELECT cluster_id, thread_number, kind, reason, created_at
    FROM cluster_member_overrides ORDER BY created_at DESC LIMIT 20;"
 ```

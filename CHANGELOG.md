@@ -2,6 +2,13 @@
 
 ## 0.6.1 - Unreleased
 
+- Use platform-native default config, data, cache, and log paths for new
+  installs while preserving existing `~/.config/gitcrawl` installs until the new
+  platform path exists. On macOS this moves fresh installs under
+  `~/Library/Application Support/gitcrawl` and `~/Library/Caches/gitcrawl`.
+  Linux continues to honor XDG base directory variables with the usual
+  `~/.config`, `~/.local/share`, `~/.cache`, and `~/.local/state` fallbacks.
+
 ## 0.6.0 - 2026-06-11
 
 - Update `crawlkit` to v0.12.0.

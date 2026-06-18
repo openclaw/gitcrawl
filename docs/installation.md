@@ -85,7 +85,7 @@ See [the gh shim guide](/gh-shim/) for migration details.
 ## Verify the install
 
 ```bash
-gitcrawl init           # creates ~/.config/gitcrawl/{config.toml,gitcrawl.db,...}
+gitcrawl init           # creates config and data under platform default paths
 gitcrawl doctor         # confirms config, database, and credential discovery
 gitcrawl doctor --json  # same, machine-readable
 ```
@@ -96,4 +96,4 @@ gitcrawl doctor --json  # same, machine-readable
 
 - **Release archives:** download the new tarball and replace the binary.
 - **Source builds:** `git pull && go build ...` — the version string comes from `git describe`.
-- **Configuration is forward-compatible.** Existing `config.toml` and `gitcrawl.db` files are reused across versions; no migration step is needed for normal point releases.
+- **Configuration is forward-compatible.** Existing `config.toml` and `gitcrawl.db` files are reused across versions; no migration step is needed for normal point releases. Existing `~/.config/gitcrawl/config.toml` installs continue to load from that path until the new platform config path exists.

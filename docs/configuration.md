@@ -25,15 +25,48 @@ For each setting, gitcrawl looks in this order and uses the first match:
 
 ## Default paths
 
-| Path | Purpose |
-| --- | --- |
-| `~/.config/gitcrawl/config.toml` | Configuration file |
-| `~/.config/gitcrawl/gitcrawl.db` | SQLite database |
-| `~/.config/gitcrawl/cache/` | Local caches |
-| `~/.config/gitcrawl/vectors/` | Vector store backing embeddings |
-| `~/.config/gitcrawl/logs/` | Operational logs |
+Linux uses XDG Base Directory paths. macOS uses the platform's `~/Library`
+locations unless you set XDG environment variables.
 
-Override the config root by setting `GITCRAWL_CONFIG=/path/to/config.toml` or by passing `--config` to any command.
+| Platform | Path | Purpose |
+| --- | --- | --- |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml` | Configuration file |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/gitcrawl.db` | SQLite database |
+| Linux | `${XDG_CACHE_HOME:-~/.cache}/gitcrawl/` | Local caches |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/vectors/` | Vector store backing embeddings |
+| Linux | `${XDG_STATE_HOME:-~/.local/state}/gitcrawl/logs/` | Operational logs |
+| macOS | `~/Library/Application Support/gitcrawl/config.toml` | Configuration file |
+| macOS | `~/Library/Application Support/gitcrawl/gitcrawl.db` | SQLite database |
+| macOS | `~/Library/Caches/gitcrawl/` | Local caches |
+| macOS | `~/Library/Application Support/gitcrawl/vectors/` | Vector store backing embeddings |
+| macOS | `~/Library/Application Support/gitcrawl/logs/` | Operational logs |
+
+Existing installs with `~/.config/gitcrawl/config.toml` continue to load that
+config when the new platform config path does not exist. Override the config
+path by setting `GITCRAWL_CONFIG=/path/to/config.toml` or by passing `--config`
+to any command.
+
+### Path selection edge cases
+
+- `--config` and `GITCRAWL_CONFIG` are exact config-path overrides. They do not
+  move an existing database, cache, vector, log, or portable-store checkout by
+  themselves; those paths come from the loaded config or defaults.
+- Absolute XDG environment variables are honored even on macOS. Relative XDG
+  values are ignored and gitcrawl falls back to the platform default for that
+  path.
+- Legacy fallback is per path, not all-or-nothing. If
+  `~/.config/gitcrawl/config.toml`, `gitcrawl.db`, `cache/`, `vectors/`, or
+  `logs/` exists and the corresponding new platform path does not, gitcrawl
+  reuses that legacy path. If the new platform path exists, the new path wins
+  for that component.
+- Creating `~/Library/Application Support/gitcrawl/config.toml` on macOS opts
+  the config file into the new platform location. It does not delete or migrate
+  the old `~/.config/gitcrawl/` tree.
+- Portable stores default to `<config-dir>/stores/<repo-name>` when
+  `--store-dir` is omitted. Existing configs with
+  `[portable_store].checkout_dir` keep using that explicit checkout.
+- Older docs showed `cache/pr`; current gitcrawl stores PR detail data in
+  SQLite tables instead of a `cache/pr` directory.
 
 ## `config.toml`
 
@@ -53,7 +86,7 @@ OPENAI_API_KEY = "<openai-api-key>"
 [portable_store]
 url = "https://github.com/org/portable-store.git"
 db_path = "data/openclaw__openclaw.sync.db"
-checkout_dir = "/Users/me/.config/gitcrawl/portable"
+checkout_dir = "/Users/me/Library/Application Support/gitcrawl/stores/portable-store"
 ```
 
 ### Notable fields

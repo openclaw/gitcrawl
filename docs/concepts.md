@@ -56,7 +56,11 @@ clusters.
 
 ## Embedding
 
-An **embedding** is a vector representation of a thread's document, produced by an OpenAI model (default `text-embedding-3-small`, 1024 dimensions). Vectors live in `~/.config/gitcrawl/vectors` and are referenced from the `thread_vectors` table.
+An **embedding** is a vector representation of a thread's document, produced by
+an OpenAI model (default `text-embedding-3-small`, 1024 dimensions). Vectors
+live under the platform default data directory and are referenced from the
+`thread_vectors` table. Existing legacy installs may still use
+`~/.config/gitcrawl/vectors`.
 
 The **embedding basis** controls what text gets embedded. The default `title_original` uses title plus an excerpt of the original body. This is configurable via `gitcrawl configure --embedding-basis ...` but only `title_original` is currently implemented.
 
@@ -106,13 +110,21 @@ Every sync, embed, and cluster operation records a **run** in `run_records` with
 
 A **portable store** is a Git-backed publish target for a `gitcrawl.db` plus its derived bodies, designed for sharing a local cache across agents or machines without a hosted service.
 
-`gitcrawl init --portable-store https://github.com/org/repo` clones a portable store into `~/.config/gitcrawl/portable/`, points the runtime at it, and `gitcrawl portable prune --body-chars 256` keeps the published payload small while retaining comments, PR details, checks, and workflow runs. Read-only commands run against portable stores refresh the checkout before reading. See [Portable stores](/portable-stores/).
+`gitcrawl init --portable-store https://github.com/org/repo` clones a portable
+store under `<config-dir>/stores/<repo-name>` by default, points the runtime at
+it, and `gitcrawl portable prune --body-chars 256` keeps the published payload
+small while retaining comments, PR details, checks, and workflow runs. Read-only
+commands run against portable stores refresh the checkout before reading. See
+[Portable stores](/portable-stores/).
 
 ## Cache
 
-The `cache/` directory under `~/.config/gitcrawl/` holds:
+The platform default cache directory holds:
 
 - local runtime caches used by sync/search/cluster workflows.
 - hydrated PR detail rows in SQLite for local review and TUI workflows.
+
+Existing legacy installs may still use `~/.config/gitcrawl/cache`. Gitcrawl no
+longer uses a `cache/pr` directory for PR details; those rows live in SQLite.
 
 The old `gitcrawl gh` command cache moved to Octopool.

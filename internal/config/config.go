@@ -54,7 +54,12 @@ type TokenResolution struct {
 	Source string
 }
 
-var appConfig = crawlconfig.App{Name: "gitcrawl", ConfigEnv: DefaultConfigEnv}
+var appConfig = crawlconfig.App{
+	Name:          "gitcrawl",
+	ConfigEnv:     DefaultConfigEnv,
+	LegacyBaseDir: "~/.config/gitcrawl",
+	PlatformDirs:  true,
+}
 
 func Default() Config {
 	paths, err := appConfig.DefaultPaths()
