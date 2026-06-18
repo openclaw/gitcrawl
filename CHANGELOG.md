@@ -2,12 +2,7 @@
 
 ## 0.6.1 - Unreleased
 
-- Use platform-native default config, data, cache, and log paths for new
-  installs while preserving existing `~/.config/gitcrawl` installs until the new
-  platform path exists. On macOS this moves fresh installs under
-  `~/Library/Application Support/gitcrawl` and `~/Library/Caches/gitcrawl`.
-  Linux continues to honor XDG base directory variables with the usual
-  `~/.config`, `~/.local/share`, `~/.cache`, and `~/.local/state` fallbacks.
+- Use platform-native default config, data, cache, and log paths for new installs while preserving existing `~/.config/gitcrawl` installs until the new platform path exists; macOS uses Application Support and Caches, while Linux continues to honor XDG base directory variables, thanks @joshka.
 
 ## 0.6.0 - 2026-06-11
 
