@@ -10,6 +10,7 @@ import (
 	"time"
 
 	crawlremote "github.com/openclaw/crawlkit/remote"
+	"github.com/openclaw/gitcrawl/internal/config"
 )
 
 func TestRemoteResultHelpersMapRowsAndCoerceTypes(t *testing.T) {
@@ -172,5 +173,23 @@ func TestRemoteAndCloudCommandDispatchErrors(t *testing.T) {
 	}
 	if err := app.runCloud(context.Background(), []string{"unknown"}); err == nil || !strings.Contains(err.Error(), "unknown cloud subcommand") {
 		t.Fatalf("cloud unknown err = %v", err)
+	}
+}
+
+func TestRemoteClientRejectsBearerAuthOverRemoteHTTP(t *testing.T) {
+	const tokenEnv = "GITCRAWL_TEST_REMOTE_HTTP_TOKEN"
+	t.Setenv(tokenEnv, "test-token")
+
+	cfg := config.Default()
+	cfg.Remote = crawlremote.Config{
+		Mode:     crawlremote.ModeCloud,
+		Endpoint: "http://remote.example.test",
+		Archive:  "gitcrawl/example",
+		TokenEnv: tokenEnv,
+	}
+
+	_, err := New().remoteClient(cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot use bearer auth over http") {
+		t.Fatalf("remoteClient error = %v", err)
 	}
 }

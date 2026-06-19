@@ -87,6 +87,12 @@ OPENAI_API_KEY = "<openai-api-key>"
 url = "https://github.com/org/portable-store.git"
 db_path = "data/openclaw__openclaw.sync.db"
 checkout_dir = "/Users/me/Library/Application Support/gitcrawl/stores/portable-store"
+
+[remote]
+mode = "cloud"
+endpoint = "https://crawl.example.com"
+archive = "gitcrawl/org__repo"
+token_env = "CRAWL_REMOTE_TOKEN"
 ```
 
 ### Notable fields
@@ -102,6 +108,12 @@ checkout_dir = "/Users/me/Library/Application Support/gitcrawl/stores/portable-s
 | `[tui].default_layout` | `columns` | Default wide-screen TUI layout: `columns`, `right-stack`, or `focus` |
 | `[env]` | _(empty)_ | Config-backed fallback after real process env for env-derived values such as tokens, DB path, and model overrides |
 | `[portable_store]` | _(empty)_ | Used when working from a shared, Git-backed cache |
+| `[remote]` | _(local mode)_ | Worker-backed archive settings for cloud reads and publishing |
+
+Bearer-authenticated remote endpoints must use HTTPS. Plain HTTP is accepted
+only for loopback endpoints (`localhost`, `127.0.0.1`, or `::1`) used during
+local development. Upgrade any non-local `http://` endpoint to `https://`
+before updating gitcrawl.
 
 ## Environment variables
 
