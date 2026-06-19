@@ -171,6 +171,7 @@ type PullRequestDetail struct {
 
 type PullRequestFile struct {
 	ThreadID     int64          `json:"thread_id"`
+	Position     int64          `json:"position"`
 	Path         string         `json:"path"`
 	Status       sql.NullString `json:"status"`
 	Additions    int64          `json:"additions"`

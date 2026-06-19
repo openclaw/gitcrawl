@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -90,6 +91,181 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	}
 	if cache.Detail.HeadSHA != "head-v2" || len(cache.Files) != 1 || len(cache.Commits) != 0 || len(cache.Checks) != 0 {
 		t.Fatalf("updated cache = %+v", cache)
+	}
+}
+
+func TestPullRequestCacheAllowsDuplicateFilePaths(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	threadID := threadIDs[1]
+	fetchedAt := "2026-05-05T10:00:00Z"
+
+	detail := PullRequestDetail{
+		ThreadID:  threadID,
+		RepoID:    repoID,
+		Number:    302,
+		RawJSON:   "{}",
+		FetchedAt: fetchedAt,
+		UpdatedAt: fetchedAt,
+	}
+	files := []PullRequestFile{
+		// Regression for GitHub PR file lists that contain separate removed and
+		// added entries with the same filename, as seen in jj-vcs/jj#9355.
+		{
+			Path:      "docs/governance/GOVERNANCE.md",
+			Status:    "removed",
+			Deletions: 1,
+			Changes:   1,
+			RawJSON:   `{"filename":"docs/governance/GOVERNANCE.md","status":"removed"}`,
+			FetchedAt: fetchedAt,
+		},
+		{
+			Path:      "docs/governance/GOVERNANCE.md",
+			Status:    "added",
+			Additions: 161,
+			Changes:   161,
+			RawJSON:   `{"filename":"docs/governance/GOVERNANCE.md","status":"added"}`,
+			FetchedAt: fetchedAt,
+		},
+	}
+
+	if err := st.UpsertPullRequestCache(ctx, detail, files, nil, nil, nil); err != nil {
+		t.Fatalf("upsert duplicate-path pr files: %v", err)
+	}
+	cache, err := st.PullRequestCache(ctx, repoID, 302)
+	if err != nil {
+		t.Fatalf("pull request cache: %v", err)
+	}
+	if len(cache.Files) != 2 {
+		t.Fatalf("files len = %d, want 2: %+v", len(cache.Files), cache.Files)
+	}
+	if cache.Files[0].Status != "removed" || cache.Files[0].Position != 0 ||
+		cache.Files[1].Status != "added" || cache.Files[1].Position != 1 {
+		t.Fatalf("files = %+v", cache.Files)
+	}
+
+	if err := st.UpsertPullRequestCache(ctx, detail, files[:1], nil, nil, nil); err != nil {
+		t.Fatalf("replace duplicate-path pr files: %v", err)
+	}
+	cache, err = st.PullRequestCache(ctx, repoID, 302)
+	if err != nil {
+		t.Fatalf("updated pull request cache: %v", err)
+	}
+	if len(cache.Files) != 1 || cache.Files[0].Status != "removed" || cache.Files[0].Position != 0 {
+		t.Fatalf("updated files = %+v", cache.Files)
+	}
+}
+
+func TestOpenMigratesLegacyPullRequestFilesToPositionKey(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	threadID := threadIDs[1]
+	fetchedAt := "2026-05-05T10:00:00Z"
+
+	detail := PullRequestDetail{
+		ThreadID:  threadID,
+		RepoID:    repoID,
+		Number:    302,
+		RawJSON:   "{}",
+		FetchedAt: fetchedAt,
+		UpdatedAt: fetchedAt,
+	}
+	legacyFiles := []PullRequestFile{
+		{Path: "z.go", Status: "modified", Additions: 2, Changes: 2, RawJSON: `{"filename":"z.go"}`, FetchedAt: fetchedAt},
+		{Path: "a.go", Status: "added", Additions: 1, Changes: 1, RawJSON: `{"filename":"a.go"}`, FetchedAt: fetchedAt},
+	}
+	if err := st.UpsertPullRequestCache(ctx, detail, legacyFiles, nil, nil, nil); err != nil {
+		t.Fatalf("seed pr cache: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		drop index if exists idx_pull_request_files_path;
+		drop index if exists idx_pull_request_files_thread_path;
+		alter table pull_request_files rename to pull_request_files_current;
+		create table pull_request_files (
+			thread_id integer not null references threads(id) on delete cascade,
+			path text not null,
+			status text,
+			additions integer not null default 0,
+			deletions integer not null default 0,
+			changes integer not null default 0,
+			previous_path text,
+			patch text,
+			raw_json text not null,
+			fetched_at text not null,
+			primary key(thread_id, path)
+		);
+		insert into pull_request_files(thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
+			select thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
+			from pull_request_files_current;
+		drop table pull_request_files_current;
+		create index if not exists idx_pull_request_files_path on pull_request_files(path);
+		pragma user_version = 3;
+	`)
+	if err != nil {
+		t.Fatalf("seed legacy pull_request_files table: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer st.Close()
+	if !st.pullRequestFilesHavePositionKey(ctx) {
+		t.Fatal("pull_request_files primary key was not migrated")
+	}
+	var version int
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+	cache, err := st.PullRequestCache(ctx, repoID, 302)
+	if err != nil {
+		t.Fatalf("pull request cache: %v", err)
+	}
+	if len(cache.Files) != 2 ||
+		cache.Files[0].Path != "a.go" || cache.Files[0].Position != 0 ||
+		cache.Files[1].Path != "z.go" || cache.Files[1].Position != 1 {
+		t.Fatalf("migrated files = %+v", cache.Files)
+	}
+
+	duplicateFiles := []PullRequestFile{
+		{Path: "docs/governance/GOVERNANCE.md", Status: "removed", Deletions: 1, Changes: 1, RawJSON: `{"filename":"docs/governance/GOVERNANCE.md","status":"removed"}`, FetchedAt: fetchedAt},
+		{Path: "docs/governance/GOVERNANCE.md", Status: "added", Additions: 161, Changes: 161, RawJSON: `{"filename":"docs/governance/GOVERNANCE.md","status":"added"}`, FetchedAt: fetchedAt},
+	}
+	if err := st.UpsertPullRequestCache(ctx, detail, duplicateFiles, nil, nil, nil); err != nil {
+		t.Fatalf("upsert duplicate-path pr files after migration: %v", err)
+	}
+	cache, err = st.PullRequestCache(ctx, repoID, 302)
+	if err != nil {
+		t.Fatalf("updated pull request cache: %v", err)
+	}
+	if len(cache.Files) != 2 ||
+		cache.Files[0].Status != "removed" || cache.Files[0].Position != 0 ||
+		cache.Files[1].Status != "added" || cache.Files[1].Position != 1 {
+		t.Fatalf("duplicate files after migration = %+v", cache.Files)
 	}
 }
 

@@ -3,6 +3,9 @@
 ## 0.6.2 - Unreleased
 
 - Use CrawlKit's shared safe tokenized FTS5 query and SQL LIKE builders, treating `%`, `_`, and backslashes literally in fallback searches, and refresh dependencies.
+- Preserve duplicate PR file entries returned by GitHub, such as a removed file
+  and an added file with the same path in one PR, by storing the fetched file
+  list as a position-keyed snapshot.
 
 ## 0.6.1 - 2026-06-19
 

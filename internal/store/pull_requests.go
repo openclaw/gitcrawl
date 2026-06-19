@@ -27,6 +27,7 @@ type PullRequestDetail struct {
 
 type PullRequestFile struct {
 	ThreadID     int64  `json:"thread_id"`
+	Position     int    `json:"position"`
 	Path         string `json:"path"`
 	Status       string `json:"status,omitempty"`
 	Additions    int    `json:"additions"`
@@ -133,9 +134,15 @@ func (s *Store) upsertPullRequestCache(ctx context.Context, detail PullRequestDe
 	if err := s.qsql().DeletePullRequestFiles(ctx, detail.ThreadID); err != nil {
 		return fmt.Errorf("clear pull request files: %w", err)
 	}
-	for _, file := range files {
+	// The GitHub PR files endpoint returns a snapshot array, not stable file
+	// identities. A path can appear more than once in one response, so replace
+	// the PR's file list and key rows by response position within that snapshot.
+	// See https://github.com/openclaw/gitcrawl/issues/77 for the duplicate-path
+	// bug and why position is snapshot-local rather than a durable file identity.
+	for position, file := range files {
 		if err := s.qsql().InsertPullRequestFile(ctx, storedb.InsertPullRequestFileParams{
 			ThreadID:     detail.ThreadID,
+			Position:     int64(position),
 			Path:         file.Path,
 			Status:       nullString(file.Status),
 			Additions:    int64(file.Additions),
@@ -250,7 +257,7 @@ func (s *Store) PullRequestCache(ctx context.Context, repoID int64, number int) 
 }
 
 func (s *Store) PullRequestFiles(ctx context.Context, threadID int64) ([]PullRequestFile, error) {
-	rows, err := s.qsql().PullRequestFiles(ctx, threadID)
+	rows, err := s.pullRequestFiles(ctx, threadID)
 	if err != nil {
 		return nil, fmt.Errorf("list pull request files: %w", err)
 	}
@@ -258,6 +265,7 @@ func (s *Store) PullRequestFiles(ctx context.Context, threadID int64) ([]PullReq
 	for _, row := range rows {
 		out = append(out, PullRequestFile{
 			ThreadID:     row.ThreadID,
+			Position:     int(row.Position),
 			Path:         row.Path,
 			Status:       stringValue(row.Status),
 			Additions:    int(row.Additions),
@@ -268,6 +276,51 @@ func (s *Store) PullRequestFiles(ctx context.Context, threadID int64) ([]PullReq
 			RawJSON:      row.RawJson,
 			FetchedAt:    row.FetchedAt,
 		})
+	}
+	return out, nil
+}
+
+func (s *Store) pullRequestFiles(ctx context.Context, threadID int64) ([]storedb.PullRequestFile, error) {
+	if s.queries != nil {
+		return s.qsql().PullRequestFiles(ctx, threadID)
+	}
+	if s.hasColumn(ctx, "pull_request_files", "position") {
+		return s.qsql().PullRequestFiles(ctx, threadID)
+	}
+	return s.pullRequestFilesLegacy(ctx, threadID)
+}
+
+func (s *Store) pullRequestFilesLegacy(ctx context.Context, threadID int64) ([]storedb.PullRequestFile, error) {
+	rows, err := s.q().QueryContext(ctx, `
+		select thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
+		from pull_request_files
+		where thread_id = ?
+		order by path`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []storedb.PullRequestFile
+	for rows.Next() {
+		var row storedb.PullRequestFile
+		if err := rows.Scan(
+			&row.ThreadID,
+			&row.Path,
+			&row.Status,
+			&row.Additions,
+			&row.Deletions,
+			&row.Changes,
+			&row.PreviousPath,
+			&row.Patch,
+			&row.RawJson,
+			&row.FetchedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

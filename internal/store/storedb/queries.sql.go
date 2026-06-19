@@ -183,12 +183,13 @@ func (q *Queries) InsertPullRequestCommit(ctx context.Context, arg InsertPullReq
 }
 
 const insertPullRequestFile = `-- name: InsertPullRequestFile :exec
-insert into pull_request_files(thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
-values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
+values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
 `
 
 type InsertPullRequestFileParams struct {
 	ThreadID     int64          `json:"thread_id"`
+	Position     int64          `json:"position"`
 	Path         string         `json:"path"`
 	Status       sql.NullString `json:"status"`
 	Additions    int64          `json:"additions"`
@@ -203,6 +204,7 @@ type InsertPullRequestFileParams struct {
 func (q *Queries) InsertPullRequestFile(ctx context.Context, arg InsertPullRequestFileParams) error {
 	_, err := q.db.ExecContext(ctx, insertPullRequestFile,
 		arg.ThreadID,
+		arg.Position,
 		arg.Path,
 		arg.Status,
 		arg.Additions,
@@ -983,10 +985,10 @@ func (q *Queries) PullRequestDetail(ctx context.Context, arg PullRequestDetailPa
 }
 
 const pullRequestFiles = `-- name: PullRequestFiles :many
-select thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
+select thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
 from pull_request_files
 where thread_id = ?1
-order by path
+order by path, position
 `
 
 func (q *Queries) PullRequestFiles(ctx context.Context, threadID int64) ([]PullRequestFile, error) {
@@ -1000,6 +1002,7 @@ func (q *Queries) PullRequestFiles(ctx context.Context, threadID int64) ([]PullR
 		var i PullRequestFile
 		if err := rows.Scan(
 			&i.ThreadID,
+			&i.Position,
 			&i.Path,
 			&i.Status,
 			&i.Additions,

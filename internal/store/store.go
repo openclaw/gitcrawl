@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 3
+	schemaVersion = 4
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -248,6 +248,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureThreadVectorsCompositeKey(ctx); err != nil {
 		return err
 	}
+	if err := s.ensurePullRequestFilesPositionKey(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
@@ -311,6 +314,88 @@ func (s *Store) ensureThreadVectorsCompositeKey(ctx context.Context) error {
 		return fmt.Errorf("commit thread vector key migration: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ensurePullRequestFilesPositionKey(ctx context.Context) error {
+	if !s.hasTable(ctx, "pull_request_files") || s.pullRequestFilesHavePositionKey(ctx) {
+		return nil
+	}
+	// Existing stores keyed PR files by path. The new key uses the fetched
+	// snapshot position so duplicate GitHub filenames can coexist. Legacy rows
+	// were unique by path, so ordering them by path gives each row a stable
+	// migration position; later syncs replace the full per-PR file snapshot.
+	// See https://github.com/openclaw/gitcrawl/issues/77 for the duplicate-path
+	// bug and why position is snapshot-local rather than a durable file identity.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin pull request files key migration: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`drop index if exists idx_pull_request_files_path`,
+		`drop index if exists idx_pull_request_files_thread_path`,
+		`alter table pull_request_files rename to pull_request_files_old`,
+		`create table pull_request_files (
+			thread_id integer not null references threads(id) on delete cascade,
+			position integer not null default 0,
+			path text not null,
+			status text,
+			additions integer not null default 0,
+			deletions integer not null default 0,
+			changes integer not null default 0,
+			previous_path text,
+			patch text,
+			raw_json text not null,
+			fetched_at text not null,
+			primary key(thread_id, position)
+		)`,
+		`insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
+			select old.thread_id,
+				(select count(*) from pull_request_files_old prior where prior.thread_id = old.thread_id and prior.path < old.path),
+				old.path,
+				old.status,
+				old.additions,
+				old.deletions,
+				old.changes,
+				old.previous_path,
+				old.patch,
+				old.raw_json,
+				old.fetched_at
+			from pull_request_files_old old`,
+		`drop table pull_request_files_old`,
+		`create index if not exists idx_pull_request_files_path on pull_request_files(path)`,
+		`create index if not exists idx_pull_request_files_thread_path on pull_request_files(thread_id, path)`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate pull request files key: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit pull request files key migration: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) pullRequestFilesHavePositionKey(ctx context.Context) bool {
+	rows, err := s.db.QueryContext(ctx, `pragma table_info(pull_request_files)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	pk := map[string]int{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false
+		}
+		if primaryKey > 0 {
+			pk[name] = primaryKey
+		}
+	}
+	return pk["thread_id"] == 1 && pk["position"] == 2
 }
 
 func (s *Store) threadVectorsHaveCompositeKey(ctx context.Context) bool {

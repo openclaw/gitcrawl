@@ -142,6 +142,12 @@ create table if not exists pull_request_details (
 
 create table if not exists pull_request_files (
   thread_id integer not null references threads(id) on delete cascade,
+  -- GitHub can return multiple file entries with the same filename for one PR,
+  -- for example a removed file and an added file at the same path. Store the
+  -- fetched file list as a replaceable snapshot instead of keying by path.
+  -- See https://github.com/openclaw/gitcrawl/issues/77 for the duplicate-path
+  -- bug and why position is snapshot-local rather than a durable file identity.
+  position integer not null default 0,
   path text not null,
   status text,
   additions integer not null default 0,
@@ -151,7 +157,7 @@ create table if not exists pull_request_files (
   patch text,
   raw_json text not null,
   fetched_at text not null,
-  primary key(thread_id, path)
+  primary key(thread_id, position)
 );
 
 create table if not exists pull_request_commits (
@@ -549,6 +555,7 @@ create index if not exists idx_thread_revisions_thread_created on thread_revisio
 create index if not exists idx_thread_changed_files_path on thread_changed_files(path);
 create index if not exists idx_pull_request_details_repo_number on pull_request_details(repo_id, number);
 create index if not exists idx_pull_request_files_path on pull_request_files(path);
+create index if not exists idx_pull_request_files_thread_path on pull_request_files(thread_id, path);
 create index if not exists idx_pull_request_checks_thread_status on pull_request_checks(thread_id, status, conclusion);
 create index if not exists idx_pull_request_review_threads_thread_resolved on pull_request_review_threads(thread_id, is_resolved);
 create index if not exists idx_pull_request_review_thread_syncs_fetched on pull_request_review_thread_syncs(fetched_at);

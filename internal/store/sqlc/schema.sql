@@ -98,6 +98,12 @@ create table pull_request_details (
 
 create table pull_request_files (
   thread_id integer not null references threads(id) on delete cascade,
+  -- GitHub can return multiple file entries with the same filename for one PR,
+  -- for example a removed file and an added file at the same path. Store the
+  -- fetched file list as a replaceable snapshot instead of keying by path.
+  -- See https://github.com/openclaw/gitcrawl/issues/77 for the duplicate-path
+  -- bug and why position is snapshot-local rather than a durable file identity.
+  position integer not null default 0,
   path text not null,
   status text,
   additions integer not null default 0,
@@ -107,7 +113,7 @@ create table pull_request_files (
   patch text,
   raw_json text not null,
   fetched_at text not null,
-  primary key(thread_id, path)
+  primary key(thread_id, position)
 );
 
 create table pull_request_commits (

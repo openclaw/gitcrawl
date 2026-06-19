@@ -270,8 +270,8 @@ on conflict(thread_id) do update set
 delete from pull_request_files where thread_id = sqlc.arg(thread_id);
 
 -- name: InsertPullRequestFile :exec
-insert into pull_request_files(thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
-values(sqlc.arg(thread_id), sqlc.arg(path), sqlc.narg(status), sqlc.arg(additions), sqlc.arg(deletions), sqlc.arg(changes), sqlc.narg(previous_path), sqlc.narg(patch), sqlc.arg(raw_json), sqlc.arg(fetched_at));
+insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
+values(sqlc.arg(thread_id), sqlc.arg(position), sqlc.arg(path), sqlc.narg(status), sqlc.arg(additions), sqlc.arg(deletions), sqlc.arg(changes), sqlc.narg(previous_path), sqlc.narg(patch), sqlc.arg(raw_json), sqlc.arg(fetched_at));
 
 -- name: DeletePullRequestCommits :exec
 delete from pull_request_commits where thread_id = sqlc.arg(thread_id);
@@ -310,10 +310,10 @@ from pull_request_details
 where repo_id = sqlc.arg(repo_id) and number = sqlc.arg(number);
 
 -- name: PullRequestFiles :many
-select thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
+select thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
 from pull_request_files
 where thread_id = sqlc.arg(thread_id)
-order by path;
+order by path, position;
 
 -- name: PullRequestCommits :many
 select thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at
