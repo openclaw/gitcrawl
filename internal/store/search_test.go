@@ -73,6 +73,43 @@ func TestSearchDocumentsEscapesFTSQuery(t *testing.T) {
 	}
 }
 
+func TestSearchDocumentsTreatsLikeWildcardsLiterally(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	for _, thread := range []Thread{
+		{RepoID: repoID, GitHubID: "wildcard-1", Number: 10, Kind: "issue", State: "open", Title: "100% ready", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/10", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "wildcard-1", UpdatedAt: "2026-04-26T00:00:00Z"},
+		{RepoID: repoID, GitHubID: "wildcard-2", Number: 11, Kind: "issue", State: "open", Title: "ordinary title", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/11", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "wildcard-2", UpdatedAt: "2026-04-26T00:00:00Z"},
+	} {
+		if _, err := st.UpsertThread(ctx, thread); err != nil {
+			t.Fatalf("thread %d: %v", thread.Number, err)
+		}
+	}
+
+	hits, err := st.SearchDocuments(ctx, repoID, "%", 10)
+	if err != nil {
+		t.Fatalf("search percent: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Number != 10 {
+		t.Fatalf("percent hits = %#v", hits)
+	}
+	hits, err = st.SearchDocuments(ctx, repoID, "_", 10)
+	if err != nil {
+		t.Fatalf("search underscore: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("underscore hits = %#v", hits)
+	}
+}
+
 func TestSearchThreadsFiltersAuthorAssigneeAndLabels(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

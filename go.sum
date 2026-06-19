@@ -64,8 +64,8 @@ github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc
 github.com/muesli/termenv v0.16.0/go.mod h1:ZRfOIKPFDYQoDFF4Olj7/QJbW60Ol/kL1pU3VfY/Cnk=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
-github.com/openclaw/crawlkit v0.12.3-0.20260619121233-9a636444e780 h1:tIY78FG5kTDLqhbtDfEkgrYNXojKtNxIOwXposua5rs=
-github.com/openclaw/crawlkit v0.12.3-0.20260619121233-9a636444e780/go.mod h1:zOJv5WPWO1AuuXO7zW8NRTxb/ZTkIQXYPrx3StmnMUI=
+github.com/openclaw/crawlkit v0.12.3-0.20260619123950-797628aa9708 h1:zkU7J3m4k6NR9756D0nKudyesPnTToTFsAlfDO0fKlg=
+github.com/openclaw/crawlkit v0.12.3-0.20260619123950-797628aa9708/go.mod h1:zOJv5WPWO1AuuXO7zW8NRTxb/ZTkIQXYPrx3StmnMUI=
 github.com/pelletier/go-toml/v2 v2.4.0 h1:Mwu0mAkUKbittDs3/ADDWXqMmq3EOK2VHiuCkV00Row=
 github.com/pelletier/go-toml/v2 v2.4.0/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

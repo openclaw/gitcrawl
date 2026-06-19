@@ -148,7 +148,7 @@ func (s *Store) searchCodeDocumentsLike(ctx context.Context, snapshot CodeSnapsh
 	if needle == "" {
 		return []CodeSearchHit{}, nil
 	}
-	pattern := "%" + escapeLike(needle) + "%"
+	pattern := "%" + crawlstore.EscapeLike(needle) + "%"
 	rows, err := s.q().QueryContext(ctx, `
 		select id, path, language, substr(text_content, 1, 320)
 		from code_documents

@@ -674,9 +674,6 @@ func TestSearchAndStoreErrorBranches(t *testing.T) {
 	if got := threadSearchOrder(true); !strings.Contains(got, "bm25") {
 		t.Fatalf("fts order = %q", got)
 	}
-	if got := escapeLike(`a%b_c\`); got != `a\%b\_c\\` {
-		t.Fatalf("escape = %q", got)
-	}
 }
 
 func TestOpenBackfillsLegacyPortableColumns(t *testing.T) {

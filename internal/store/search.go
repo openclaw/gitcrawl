@@ -84,7 +84,7 @@ func (s *Store) searchThreads(ctx context.Context, repoID int64, query string, l
 	if needle == "" {
 		return nil, nil
 	}
-	pattern := "%" + escapeLike(needle) + "%"
+	pattern := "%" + crawlstore.EscapeLike(needle) + "%"
 	bodyExpr := s.threadBodyExpr(ctx, "")
 	rows, err := s.db.QueryContext(ctx, `
 		select id, number, kind, state, title, html_url, author_login,
@@ -167,7 +167,7 @@ func (s *Store) searchThreadsLike(ctx context.Context, options ThreadSearchOptio
 	needle := strings.TrimSpace(strings.ToLower(options.Query))
 	bodyExpr := s.threadBodyExpr(ctx, "t")
 	if needle != "" {
-		pattern := "%" + escapeLike(needle) + "%"
+		pattern := "%" + crawlstore.EscapeLike(needle) + "%"
 		where = append(where, `(lower(t.title) like ? escape '\' or lower(coalesce(`+bodyExpr+`, '')) like ? escape '\')`)
 		args = append(args, pattern, pattern)
 	}
@@ -246,16 +246,4 @@ func scanThreadRows(rows *sql.Rows) ([]Thread, error) {
 		return nil, fmt.Errorf("iterate threads: %w", err)
 	}
 	return out, nil
-}
-
-func escapeLike(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		switch r {
-		case '\\', '%', '_':
-			b.WriteRune('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
