@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"unicode"
+
+	crawlstore "github.com/openclaw/crawlkit/store"
 )
 
 type SearchHit struct {
@@ -36,7 +37,7 @@ func (s *Store) SearchDocuments(ctx context.Context, repoID int64, query string,
 	if limit <= 0 {
 		limit = 20
 	}
-	matchQuery := ftsQuery(query)
+	matchQuery := crawlstore.FTS5TokenQuery(query)
 	if matchQuery == "" {
 		return s.searchThreads(ctx, repoID, query, limit)
 	}
@@ -128,7 +129,7 @@ func (s *Store) SearchThreads(ctx context.Context, options ThreadSearchOptions) 
 	if query == "" {
 		return s.searchThreadsFiltered(ctx, options, "")
 	}
-	matchQuery := ftsQuery(query)
+	matchQuery := crawlstore.FTS5TokenQuery(query)
 	if matchQuery != "" {
 		out, err := s.searchThreadsFiltered(ctx, options, matchQuery)
 		if err == nil && len(out) > 0 {
@@ -257,25 +258,4 @@ func escapeLike(value string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-func ftsQuery(value string) string {
-	terms := make([]string, 0)
-	var b strings.Builder
-	flush := func() {
-		if b.Len() == 0 {
-			return
-		}
-		terms = append(terms, `"`+b.String()+`"`)
-		b.Reset()
-	}
-	for _, r := range value {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			b.WriteRune(r)
-			continue
-		}
-		flush()
-	}
-	flush()
-	return strings.Join(terms, " ")
 }
