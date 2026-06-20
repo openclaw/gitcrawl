@@ -69,9 +69,11 @@ type App struct {
 
 type initResult struct {
 	ConfigPath       string `json:"config_path"`
+	RuntimeDir       string `json:"runtime_dir,omitempty"`
 	DBPath           string `json:"db_path"`
 	CacheDir         string `json:"cache_dir"`
 	VectorDir        string `json:"vector_dir"`
+	LogDir           string `json:"log_dir"`
 	PortableStoreURL string `json:"portable_store_url,omitempty"`
 	PortableStoreDir string `json:"portable_store_dir,omitempty"`
 	PortableStore    string `json:"portable_store,omitempty"`
@@ -2750,21 +2752,23 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dbPath := fs.String("db", "", "database path")
+	runtimeDir := fs.String("runtime-dir", "", "root for an isolated database, cache, vectors, and logs")
 	portableStore := fs.String("portable-store", "", "HTTPS git URL for a portable gitcrawl store")
 	portableDB := fs.String("portable-db", "data/openclaw__openclaw.sync.db", "database path inside portable store")
 	storeDir := fs.String("store-dir", "", "local portable store checkout directory")
 	remoteEndpoint := fs.String("remote", "", "remote archive endpoint")
 	remoteArchive := fs.String("archive", "", "remote archive id")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true, "portable-store": true, "portable-db": true, "store-dir": true, "remote": true, "archive": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"db": true, "runtime-dir": true, "portable-store": true, "portable-db": true, "store-dir": true, "remote": true, "archive": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
 	localDBPath := strings.TrimSpace(*dbPath)
+	isolatedRuntimeDir := strings.TrimSpace(*runtimeDir)
 	portableStoreURL := strings.TrimSpace(*portableStore)
 	remoteEndpointValue := strings.TrimSpace(*remoteEndpoint)
-	if nonEmptyCount(localDBPath, portableStoreURL, remoteEndpointValue) > 1 {
-		return usageErr(fmt.Errorf("use only one of --db, --portable-store, or --remote"))
+	if nonEmptyCount(localDBPath, isolatedRuntimeDir, portableStoreURL, remoteEndpointValue) > 1 {
+		return usageErr(fmt.Errorf("use only one of --db, --runtime-dir, --portable-store, or --remote"))
 	}
 
 	cfg := config.Default()
@@ -2803,6 +2807,12 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	if localDBPath != "" {
 		cfg.DBPath = localDBPath
 	}
+	if isolatedRuntimeDir != "" {
+		cfg.DBPath = filepath.Join(isolatedRuntimeDir, "gitcrawl.db")
+		cfg.CacheDir = filepath.Join(isolatedRuntimeDir, "cache")
+		cfg.VectorDir = filepath.Join(isolatedRuntimeDir, "vectors")
+		cfg.LogDir = filepath.Join(isolatedRuntimeDir, "logs")
+	}
 	if err := cfg.Normalize(); err != nil {
 		return err
 	}
@@ -2816,9 +2826,11 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	}
 	result := initResult{
 		ConfigPath:       config.ResolvePath(a.configPath),
+		RuntimeDir:       isolatedRuntimeDir,
 		DBPath:           cfg.DBPath,
 		CacheDir:         cfg.CacheDir,
 		VectorDir:        cfg.VectorDir,
+		LogDir:           cfg.LogDir,
 		PortableStoreURL: portableStoreURL,
 		PortableStoreDir: portableStoreDir,
 		PortableStore:    portableStoreAction,
@@ -4230,7 +4242,7 @@ func (a *App) writeInitOutput(result initResult) error {
 	case FormatJSON:
 		return a.writeOutput("init", result, true)
 	case FormatLog:
-		_, err := fmt.Fprintf(a.Stdout, "init config_path=%s db_path=%s portable_store=%s remote=%s archive=%s\n", result.ConfigPath, result.DBPath, result.PortableStore, result.RemoteEndpoint, result.RemoteArchive)
+		_, err := fmt.Fprintf(a.Stdout, "init config_path=%s runtime_dir=%s db_path=%s portable_store=%s remote=%s archive=%s\n", result.ConfigPath, result.RuntimeDir, result.DBPath, result.PortableStore, result.RemoteEndpoint, result.RemoteArchive)
 		return err
 	default:
 		lines := []string{
@@ -4239,6 +4251,7 @@ func (a *App) writeInitOutput(result initResult) error {
 			"db path: " + result.DBPath,
 			"cache dir: " + result.CacheDir,
 			"vector dir: " + result.VectorDir,
+			"log dir: " + result.LogDir,
 		}
 		if result.PortableStoreURL != "" {
 			lines = append(lines,
@@ -4378,7 +4391,7 @@ Usage:
 	"init": `gitcrawl init creates a local, portable, or cloud archive config.
 
 Usage:
-  gitcrawl init [--db path] [--portable-store URL] [--remote URL --archive id] [--json]
+  gitcrawl init [--db path | --runtime-dir path | --portable-store URL | --remote URL --archive id] [--json]
 `,
 	"configure": `gitcrawl configure updates model fields in the config.
 

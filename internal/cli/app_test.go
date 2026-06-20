@@ -56,6 +56,64 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 }
 
+func TestInitRuntimeDirIsolatesRuntimePaths(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	runtimeDir := filepath.Join(dir, "runtime")
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+
+	if err := app.Run(context.Background(), []string{"--config", configPath, "--json", "init", "--runtime-dir", runtimeDir}); err != nil {
+		t.Fatalf("run isolated init: %v", err)
+	}
+	var result initResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode init output: %v\n%s", err, stdout.String())
+	}
+	if result.RuntimeDir != runtimeDir {
+		t.Fatalf("runtime dir = %q, want %q", result.RuntimeDir, runtimeDir)
+	}
+	wantPaths := map[string]string{
+		"db":      filepath.Join(runtimeDir, "gitcrawl.db"),
+		"cache":   filepath.Join(runtimeDir, "cache"),
+		"vectors": filepath.Join(runtimeDir, "vectors"),
+		"logs":    filepath.Join(runtimeDir, "logs"),
+	}
+	gotPaths := map[string]string{
+		"db":      result.DBPath,
+		"cache":   result.CacheDir,
+		"vectors": result.VectorDir,
+		"logs":    result.LogDir,
+	}
+	for name, want := range wantPaths {
+		if gotPaths[name] != want {
+			t.Errorf("%s path = %q, want %q", name, gotPaths[name], want)
+		}
+	}
+	for _, path := range []string{filepath.Dir(wantPaths["db"]), wantPaths["cache"], wantPaths["vectors"], wantPaths["logs"]} {
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			t.Errorf("runtime directory %q: info=%v err=%v", path, info, err)
+		}
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load isolated config: %v", err)
+	}
+	if loaded.DBPath != wantPaths["db"] || loaded.CacheDir != wantPaths["cache"] || loaded.VectorDir != wantPaths["vectors"] || loaded.LogDir != wantPaths["logs"] {
+		t.Fatalf("isolated config paths = %+v", loaded)
+	}
+}
+
+func TestInitRuntimeDirRejectsOtherArchiveModes(t *testing.T) {
+	dir := t.TempDir()
+	app := New()
+	err := app.Run(context.Background(), []string{"--config", filepath.Join(dir, "config.toml"), "init", "--runtime-dir", filepath.Join(dir, "runtime"), "--db", filepath.Join(dir, "other.db")})
+	if err == nil || !strings.Contains(err.Error(), "use only one of") {
+		t.Fatalf("runtime/db conflict error = %v", err)
+	}
+}
+
 func TestGitcrawlThreadBodyExpr(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {

@@ -30,7 +30,7 @@ These work on every command.
 
 | Command | Purpose | Detailed docs |
 | --- | --- | --- |
-| `gitcrawl init [--db --portable-store --portable-db --store-dir --json]` | Create config, database, runtime directories; optionally clone a portable store | [Installation](/installation/), [Portable stores](/portable-stores/) |
+| `gitcrawl init [--db --runtime-dir --portable-store --portable-db --store-dir --json]` | Create config and runtime directories; isolate all local paths under one root or clone a portable store | [Configuration](/configuration/#path-selection-edge-cases), [Portable stores](/portable-stores/) |
 | `gitcrawl doctor [--json]` | Health check for config, database, credentials, model selection, repo/thread counts | [Configuration](/configuration/#gitcrawl-doctor) |
 | `gitcrawl metadata [--json]` | Print the crawlkit command/control manifest for launchers and automation | — |
 | `gitcrawl status [--json]` | Print read-only archive status, database inventory, and control state | — |

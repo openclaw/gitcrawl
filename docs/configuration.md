@@ -51,6 +51,10 @@ to any command.
 - `--config` and `GITCRAWL_CONFIG` are exact config-path overrides. They do not
   move an existing database, cache, vector, log, or portable-store checkout by
   themselves; those paths come from the loaded config or defaults.
+- `gitcrawl init --runtime-dir <path>` creates a fully isolated local runtime
+  under that directory: `gitcrawl.db`, `cache/`, `vectors/`, and `logs/`.
+  This is useful for temporary archives and reproducible tests. Existing
+  `init --db` behavior remains database-only.
 - Absolute XDG environment variables are honored even on macOS. Relative XDG
   values are ignored and gitcrawl falls back to the platform default for that
   path.
