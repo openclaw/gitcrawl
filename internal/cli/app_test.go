@@ -2075,7 +2075,17 @@ func TestDoctorJSONReportsNewerSchemaWithoutMutation(t *testing.T) {
 		t.Fatalf("read db before: %v", err)
 	}
 
-	payload := runDoctorJSON(t, ctx, configPath)
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	err = doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"})
+	if err == nil {
+		t.Fatalf("newer schema doctor unexpectedly succeeded: %s", stdout.String())
+	}
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &payload); jsonErr != nil {
+		t.Fatalf("parse doctor json: %v\n%s", jsonErr, stdout.String())
+	}
 	schema := doctorMap(t, payload, "db_schema")
 	if got := schema["state"]; got != "newer" {
 		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)

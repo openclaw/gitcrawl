@@ -3357,7 +3357,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	if err := a.writeOutput("doctor", payload, true); err != nil {
 		return err
 	}
-	if runtimeOpenFailure != nil && sourceSchema.State != "newer" {
+	if runtimeOpenFailure != nil {
 		return runtimeOpenFailure
 	}
 	return nil
