@@ -3284,10 +3284,12 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	portableRefreshState := map[string]any{}
 	repairAction := ""
 	runtimeOpenError := ""
+	var runtimeOpenFailure error
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			runtimeOpenError = err.Error()
+			runtimeOpenFailure = err
 		}
 	} else {
 		defer rt.Store.Close()
@@ -3352,7 +3354,13 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	if runtimeOpenError != "" {
 		payload["runtime_open_error"] = runtimeOpenError
 	}
-	return a.writeOutput("doctor", payload, true)
+	if err := a.writeOutput("doctor", payload, true); err != nil {
+		return err
+	}
+	if runtimeOpenFailure != nil && sourceSchema.State != "newer" {
+		return runtimeOpenFailure
+	}
+	return nil
 }
 
 func portableRefreshStatePayload(state portableStoreRefreshState) map[string]any {

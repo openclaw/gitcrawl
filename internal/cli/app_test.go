@@ -2104,6 +2104,36 @@ func TestDoctorJSONReportsNewerSchemaWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONRuntimeOpenErrorReturnsFailureWithPayload(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644); err != nil {
+		t.Fatalf("write corrupt db: %v", err)
+	}
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	err := doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"})
+	if err == nil {
+		t.Fatalf("doctor unexpectedly succeeded: %s", stdout.String())
+	}
+
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &payload); jsonErr != nil {
+		t.Fatalf("parse doctor json: %v\n%s", jsonErr, stdout.String())
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["runtime_open_error"])) == "" {
+		t.Fatalf("runtime_open_error missing: %#v", payload)
+	}
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "error" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+}
+
 func TestDoctorJSONReportsLegacyPendingSchemaWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
