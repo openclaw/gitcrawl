@@ -89,6 +89,148 @@ func TestOpenMigratesSchema(t *testing.T) {
 	}
 }
 
+func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if diag.State != "current" || !diag.Current || diag.PendingMigration || diag.Newer {
+		t.Fatalf("schema diag = %#v, want current", diag)
+	}
+	if diag.CurrentVersion != schemaVersion || diag.SupportedVersion != schemaVersion {
+		t.Fatalf("schema versions = current %d supported %d, want %d", diag.CurrentVersion, diag.SupportedVersion, schemaVersion)
+	}
+	if diag.PRDetails.State != "supported" || !diag.PRDetails.DuplicatePathFilesSupported {
+		t.Fatalf("pr detail diag = %#v, want supported", diag.PRDetails)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("schema diagnostics mutated current database bytes")
+	}
+}
+
+func TestInspectSchemaReportsMissingStore(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "missing.db")
+
+	diag := InspectSchema(ctx, dbPath)
+	if diag.State != "missing" || diag.Exists || diag.SupportedVersion != schemaVersion {
+		t.Fatalf("schema diag = %#v, want missing", diag)
+	}
+	if len(diag.NextSteps) == 0 {
+		t.Fatalf("missing db next steps are empty: %#v", diag)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("schema diagnostics created missing db: %v", err)
+	}
+}
+
+func TestInspectSchemaReportsNewerStoreWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 99`); err != nil {
+		_ = st.Close()
+		t.Fatalf("set newer schema: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if diag.State != "newer" || !diag.Newer || diag.PendingMigration {
+		t.Fatalf("schema diag = %#v, want newer", diag)
+	}
+	if diag.CurrentVersion != 99 || diag.SupportedVersion != schemaVersion {
+		t.Fatalf("schema versions = current %d supported %d", diag.CurrentVersion, diag.SupportedVersion)
+	}
+	if len(diag.NextSteps) == 0 {
+		t.Fatalf("newer db next steps are empty: %#v", diag)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("schema diagnostics mutated newer database bytes")
+	}
+}
+
+func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	seedLegacyPullRequestFilesSchema(t, ctx, dbPath)
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if diag.State != "pending_migration" || !diag.PendingMigration || !diag.Legacy || diag.Newer {
+		t.Fatalf("schema diag = %#v, want pending migration", diag)
+	}
+	if diag.CurrentVersion != 3 || diag.SupportedVersion != schemaVersion {
+		t.Fatalf("schema versions = current %d supported %d", diag.CurrentVersion, diag.SupportedVersion)
+	}
+	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
+		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
+	}
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_4") || !containsString(diag.PendingMigrations, "pull_request_files_position_key") {
+		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
+	}
+	if len(diag.NextSteps) == 0 {
+		t.Fatalf("pending db next steps are empty: %#v", diag)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("schema diagnostics mutated legacy database bytes")
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer raw.Close()
+	var version int
+	if err := raw.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 3 {
+		t.Fatalf("user_version = %d, want 3", version)
+	}
+}
+
 func TestStatusOnEmptyStore(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -151,6 +293,51 @@ func TestOpenReadOnlyDoesNotMutateStore(t *testing.T) {
 	if !bytes.Equal(after, before) {
 		t.Fatal("readonly open mutated database bytes")
 	}
+}
+
+func seedLegacyPullRequestFilesSchema(t *testing.T, ctx context.Context, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `
+		drop index if exists idx_pull_request_files_path;
+		drop index if exists idx_pull_request_files_thread_path;
+		alter table pull_request_files rename to pull_request_files_current;
+		create table pull_request_files (
+			thread_id integer not null references threads(id) on delete cascade,
+			path text not null,
+			status text,
+			additions integer not null default 0,
+			deletions integer not null default 0,
+			changes integer not null default 0,
+			previous_path text,
+			patch text,
+			raw_json text not null,
+			fetched_at text not null,
+			primary key(thread_id, path)
+		);
+		insert into pull_request_files(thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
+			select thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
+			from pull_request_files_current;
+		drop table pull_request_files_current;
+		create index if not exists idx_pull_request_files_path on pull_request_files(path);
+		pragma user_version = 3;
+	`)
+	if err != nil {
+		t.Fatalf("seed legacy pull_request_files table: %v", err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOpenReadOnlySupportsCanonicalPortableStore(t *testing.T) {

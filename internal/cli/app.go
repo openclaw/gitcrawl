@@ -3275,20 +3275,30 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	}
 	storeStatus := store.Status{DBPath: cfg.DBPath}
 	sourceHealth := sqliteDBHealth(ctx, cfg.DBPath, cfg.DBPath)
+	sourceSchema := store.InspectSchema(ctx, cfg.DBPath)
+	dbSchema := sourceSchema
 	runtimeHealth := map[string]any{}
+	var runtimeSchema store.SchemaDiagnostics
+	runtimeSchemaAvailable := false
 	portableStoreStatus := map[string]any{}
 	portableRefreshState := map[string]any{}
 	repairAction := ""
+	runtimeOpenError := ""
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return err
+			runtimeOpenError = err.Error()
 		}
 	} else {
 		defer rt.Store.Close()
 		sourceHealth = sqliteDBHealth(ctx, rt.SourceDBPath, rt.SourceDBPath)
+		sourceSchema = store.InspectSchema(ctx, rt.SourceDBPath)
+		dbSchema = sourceSchema
 		if rt.RemoteSource {
 			runtimeHealth = sqliteDBHealth(ctx, rt.Config.DBPath, rt.SourceDBPath)
+			runtimeSchema = store.InspectSchema(ctx, rt.Config.DBPath)
+			runtimeSchemaAvailable = true
+			dbSchema = runtimeSchema
 			portableStoreStatus = portableStoreGitStatus(ctx, rt.SourceDBPath)
 			state := readPortableStoreRefreshState(portableStoreRefreshStatePath(rt.Config.DBPath))
 			portableRefreshState = portableRefreshStatePayload(state)
@@ -3305,16 +3315,20 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 
 	githubToken := a.resolveGitHubToken(ctx, cfg)
 	openAIKey := config.ResolveOpenAIKey(cfg)
-	return a.writeOutput("doctor", map[string]any{
+	runtimeIdentity := runtimeIdentityPayload()
+	payload := map[string]any{
 		"version":               version,
 		"config_path":           config.ResolvePath(a.configPath),
 		"config_exists":         configExists,
 		"db_path":               cfg.DBPath,
 		"source_db_health":      sourceHealth,
 		"runtime_db_health":     runtimeHealth,
+		"db_schema":             dbSchema,
+		"source_db_schema":      sourceSchema,
 		"portable_store_status": portableStoreStatus,
 		"portable_refresh":      portableRefreshState,
 		"repair_action":         repairAction,
+		"runtime":               runtimeIdentity,
 		"github_token_present":  githubToken.Value != "",
 		"github_token_source":   githubToken.Source,
 		"openai_key_present":    openAIKey.Value != "",
@@ -3328,7 +3342,17 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"embed_model":           cfg.OpenAI.EmbedModel,
 		"embedding_basis":       cfg.EmbeddingBasis,
 		"api_supported":         false,
-	}, true)
+	}
+	if executablePath, ok := runtimeIdentity["executable_path"]; ok {
+		payload["executable_path"] = executablePath
+	}
+	if runtimeSchemaAvailable {
+		payload["runtime_db_schema"] = runtimeSchema
+	}
+	if runtimeOpenError != "" {
+		payload["runtime_open_error"] = runtimeOpenError
+	}
+	return a.writeOutput("doctor", payload, true)
 }
 
 func portableRefreshStatePayload(state portableStoreRefreshState) map[string]any {
@@ -3390,11 +3414,13 @@ func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExis
 		}
 	}
 	openAIKey := config.ResolveOpenAIKey(cfg)
-	return a.writeOutput("doctor", map[string]any{
+	runtimeIdentity := runtimeIdentityPayload()
+	payload := map[string]any{
 		"version":              version,
 		"config_path":          config.ResolvePath(a.configPath),
 		"config_exists":        configExists,
 		"remote":               remoteStatus,
+		"runtime":              runtimeIdentity,
 		"remote_token_present": remoteToken.Value != "",
 		"remote_token_source":  remoteToken.Source,
 		"openai_key_present":   openAIKey.Value != "",
@@ -3403,7 +3429,11 @@ func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExis
 		"embed_model":          cfg.OpenAI.EmbedModel,
 		"embedding_basis":      cfg.EmbeddingBasis,
 		"api_supported":        false,
-	}, true)
+	}
+	if executablePath, ok := runtimeIdentity["executable_path"]; ok {
+		payload["executable_path"] = executablePath
+	}
+	return a.writeOutput("doctor", payload, true)
 }
 
 func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[string]any {
