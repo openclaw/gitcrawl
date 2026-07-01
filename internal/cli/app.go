@@ -161,6 +161,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runStatus(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
+	case "fill-pr-details":
+		return a.runFillPRDetails(ctx, rest[1:])
 	case "threads":
 		return a.runThreads(ctx, rest[1:])
 	case "close-thread":
@@ -2845,6 +2847,204 @@ type syncOptions struct {
 	Quiet            bool
 }
 
+type fillPRDetailsResult struct {
+	Repository       string               `json:"repository"`
+	Selected         int                  `json:"selected"`
+	Filled           int                  `json:"filled"`
+	Remaining        int                  `json:"remaining"`
+	Numbers          []int                `json:"numbers,omitempty"`
+	Order            string               `json:"order"`
+	Limit            int                  `json:"limit,omitempty"`
+	BatchSize        int                  `json:"batch_size"`
+	StoppedReason    string               `json:"stopped_reason,omitempty"`
+	RateLimit        *fillRateLimitResult `json:"rate_limit,omitempty"`
+	StartedAt        string               `json:"started_at"`
+	FinishedAt       string               `json:"finished_at"`
+	Batches          []fillPRDetailsBatch `json:"batches,omitempty"`
+	IncludeComments  bool                 `json:"include_comments,omitempty"`
+	JSONProgress     bool                 `json:"json_progress,omitempty"`
+	ReserveRateLimit int                  `json:"reserve_rate_limit,omitempty"`
+}
+
+type fillPRDetailsBatch struct {
+	Index              int                  `json:"index"`
+	Numbers            []int                `json:"numbers"`
+	PullRequestsSynced int                  `json:"pull_requests_synced"`
+	PRDetailsSynced    int                  `json:"pr_details_synced"`
+	RateLimit          *fillRateLimitResult `json:"rate_limit,omitempty"`
+}
+
+type fillRateLimitResult struct {
+	Host      string `json:"host,omitempty"`
+	Resource  string `json:"resource,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	Remaining int    `json:"remaining"`
+	ResetAt   string `json:"reset_at,omitempty"`
+	Low       bool   `json:"low,omitempty"`
+}
+
+func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("fill-pr-details", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	limitRaw := fs.String("limit", "", "maximum missing PR details to hydrate")
+	order := fs.String("order", "newest-first", "missing PR order: newest-first|oldest-first|open-first")
+	batchSizeRaw := fs.String("batch-size", "50", "PRs to hydrate per sync batch")
+	reserveRaw := fs.String("reserve-rate-limit", "", "stop before starting a batch when remaining GitHub quota is at or below this value")
+	jsonProgress := fs.Bool("json-progress", false, "write newline JSON progress events to stderr")
+	includeComments := fs.Bool("include-comments", false, "also hydrate issue comments and PR reviews while filling details")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"limit": true, "order": true, "batch-size": true, "reserve-rate-limit": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("fill-pr-details requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	batchSize, err := parseOptionalPositiveInt(*batchSizeRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+	reserve, err := parseOptionalPositiveInt(*reserveRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		_ = rt.Store.Close()
+		return fmt.Errorf("repository %s/%s is not in the local archive; run gitcrawl sync first: %w", owner, repoName, err)
+	}
+	numbers, err := rt.Store.MissingPullRequestDetailNumbers(ctx, repo.ID, store.MissingPullRequestDetailOptions{Limit: limit, Order: *order})
+	if closeErr := rt.Store.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	result := fillPRDetailsResult{
+		Repository:       repo.FullName,
+		Selected:         len(numbers),
+		Numbers:          numbers,
+		Order:            strings.TrimSpace(*order),
+		Limit:            limit,
+		BatchSize:        batchSize,
+		StartedAt:        startedAt,
+		IncludeComments:  *includeComments,
+		JSONProgress:     *jsonProgress,
+		ReserveRateLimit: reserve,
+	}
+	for i := 0; i < len(numbers); i += batchSize {
+		if reserve > 0 {
+			if rate, ok := a.currentFillRateLimit(ctx); ok && rate.Remaining <= reserve {
+				result.StoppedReason = "rate-limit-reserve"
+				result.RateLimit = &rate
+				break
+			}
+		}
+		end := i + batchSize
+		if end > len(numbers) {
+			end = len(numbers)
+		}
+		batchNumbers := append([]int(nil), numbers[i:end]...)
+		if *jsonProgress {
+			a.writeFillPRDetailsProgress(fillPRDetailsProgressEvent{
+				Event:      "batch_start",
+				Repository: repo.FullName,
+				Batch:      len(result.Batches) + 1,
+				Numbers:    batchNumbers,
+			})
+		}
+		stats, err := a.syncRepository(ctx, owner, repoName, syncOptions{
+			Numbers:          batchNumbers,
+			IncludeComments:  *includeComments,
+			IncludePRDetails: true,
+			Quiet:            *jsonProgress,
+		})
+		if err != nil {
+			return err
+		}
+		rate, hasRate := a.currentFillRateLimit(ctx)
+		batch := fillPRDetailsBatch{
+			Index:              len(result.Batches) + 1,
+			Numbers:            batchNumbers,
+			PullRequestsSynced: stats.PullRequestsSynced,
+			PRDetailsSynced:    stats.PRDetailsSynced,
+		}
+		if hasRate {
+			batch.RateLimit = &rate
+			result.RateLimit = &rate
+		}
+		result.Batches = append(result.Batches, batch)
+		result.Filled += stats.PRDetailsSynced
+		if *jsonProgress {
+			a.writeFillPRDetailsProgress(fillPRDetailsProgressEvent{
+				Event:      "batch_done",
+				Repository: repo.FullName,
+				Batch:      batch.Index,
+				Numbers:    batchNumbers,
+				Filled:     result.Filled,
+				RateLimit:  batch.RateLimit,
+			})
+		}
+	}
+	result.Remaining = result.Selected - result.Filled
+	if result.Remaining < 0 {
+		result.Remaining = 0
+	}
+	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return a.writeOutput("fill-pr-details", result, true)
+}
+
+type fillPRDetailsProgressEvent struct {
+	Event      string               `json:"event"`
+	Repository string               `json:"repository"`
+	Batch      int                  `json:"batch"`
+	Numbers    []int                `json:"numbers"`
+	Filled     int                  `json:"filled,omitempty"`
+	RateLimit  *fillRateLimitResult `json:"rate_limit,omitempty"`
+}
+
+func (a *App) writeFillPRDetailsProgress(event fillPRDetailsProgressEvent) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(a.Stderr, string(data))
+}
+
+func (a *App) currentFillRateLimit(ctx context.Context) (fillRateLimitResult, bool) {
+	state, ok := a.sharedRateLimitState(ctx)
+	if !ok {
+		return fillRateLimitResult{}, false
+	}
+	result := fillRateLimitResult{
+		Host:      state.Host,
+		Resource:  state.Resource,
+		Limit:     state.Limit,
+		Remaining: state.Remaining,
+		Low:       state.Low,
+	}
+	if !state.ResetAt.IsZero() {
+		result.ResetAt = state.ResetAt.Format(time.RFC3339)
+	}
+	return result, true
+}
+
 func parseSyncWith(value string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, part := range strings.Split(value, ",") {
@@ -4717,6 +4917,7 @@ Core commands:
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
   coverage             report local archive PR-detail completeness
+  fill-pr-details      hydrate locally missing pull request detail rows
   refresh              run sync, enrichment, embedding, and clustering pipeline
   summarize            generate key summaries for current thread revisions
   embed                generate OpenAI embeddings for local thread documents
@@ -4806,6 +5007,11 @@ Usage:
 
 Usage:
   gitcrawl coverage [owner/repo | --repos owner/a,owner/b] [--min-missing-pr-details N] [--json]
+	`,
+	"fill-pr-details": `gitcrawl fill-pr-details hydrates locally missing pull request detail rows.
+
+Usage:
+  gitcrawl fill-pr-details owner/repo [--limit N] [--order newest-first|oldest-first|open-first] [--batch-size N] [--reserve-rate-limit N] [--json-progress] [--json]
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 

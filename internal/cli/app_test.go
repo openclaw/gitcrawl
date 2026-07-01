@@ -5274,6 +5274,135 @@ func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T)
 	}
 }
 
+func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := "2026-06-20T12:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "102", Number: 102, Kind: "pull_request", State: "open",
+		Title: "Fill details", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/102",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h102",
+		UpdatedAtGitHub: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "4990")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		switch r.URL.Path {
+		case "/repos/openclaw/gitcrawl":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/gitcrawl"})
+		case "/repos/openclaw/gitcrawl/issues/102":
+			row := githubIssueJSON(102, "pull_request", "Fill details")
+			row["html_url"] = "https://github.com/openclaw/gitcrawl/pull/102"
+			row["pull_request"] = map[string]any{"url": githubServerURL(r) + "/repos/openclaw/gitcrawl/pulls/102"}
+			_ = json.NewEncoder(w).Encode(row)
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"repository": map[string]any{
+						"pullRequest": map[string]any{
+							"reviewThreads": map[string]any{
+								"nodes":    []map[string]any{},
+								"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							},
+						},
+					},
+				},
+			})
+		case "/repos/openclaw/gitcrawl/pulls/102":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number":          102,
+				"base":            map[string]any{"sha": "base-sha"},
+				"head":            map[string]any{"sha": "head-sha", "ref": "fill-details", "repo": map[string]any{"full_name": "openclaw/gitcrawl"}},
+				"mergeable_state": "clean",
+				"additions":       3,
+				"deletions":       1,
+				"changed_files":   1,
+			})
+		case "/repos/openclaw/gitcrawl/pulls/102/files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"filename": "internal/cli/app.go", "status": "modified", "additions": 3, "deletions": 1, "changes": 4}})
+		case "/repos/openclaw/gitcrawl/pulls/102/commits":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"sha": "commit-sha", "commit": map[string]any{"message": "feat: fill details", "author": map[string]any{"name": "Andy", "date": now}}, "html_url": "https://github.com/openclaw/gitcrawl/commit/commit-sha"}})
+		case "/repos/openclaw/gitcrawl/commits/head-sha/check-runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://example.invalid/check"}}})
+		case "/repos/openclaw/gitcrawl/actions/runs":
+			if r.URL.Query().Get("head_sha") != "head-sha" {
+				t.Fatalf("workflow runs query = %s", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 99, "run_number": 7, "head_sha": "head-sha", "status": "completed", "conclusion": "success", "name": "CI", "html_url": "https://example.invalid/run"}}})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+
+	run := New()
+	var stdout, stderr bytes.Buffer
+	run.Stdout = &stdout
+	run.Stderr = &stderr
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--batch-size", "1", "--json-progress", "--json"}); err != nil {
+		t.Fatalf("fill-pr-details: %v\nstderr=%s", err, stderr.String())
+	}
+	var result struct {
+		Selected int `json:"selected"`
+		Filled   int `json:"filled"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
+	}
+	if result.Selected != 1 || result.Filled != 1 {
+		t.Fatalf("fill result = %+v", result)
+	}
+	if !strings.Contains(stderr.String(), `"event":"batch_start"`) || !strings.Contains(stderr.String(), `"event":"batch_done"`) {
+		t.Fatalf("missing json progress events: %s", stderr.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	cache, err := st.PullRequestCache(ctx, repoID, 102)
+	if err != nil {
+		t.Fatalf("pull request cache: %v", err)
+	}
+	if cache.Detail.HeadSHA != "head-sha" || len(cache.Files) != 1 || len(cache.Commits) != 1 || len(cache.Checks) != 1 {
+		t.Fatalf("cache after fill = %+v", cache)
+	}
+}
+
+func githubServerURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
 func TestRefreshRunsSyncEmbedAndClusterWithLocalServers(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

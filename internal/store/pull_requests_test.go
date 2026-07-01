@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
@@ -93,6 +94,61 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	}
 	if cache.Detail.HeadSHA != "head-v2" || len(cache.Files) != 1 || len(cache.Commits) != 0 || len(cache.Checks) != 0 {
 		t.Fatalf("updated cache = %+v", cache)
+	}
+}
+
+func TestMissingPullRequestDetailNumbersSelectsOnlyUnfilledPRs(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threads := []Thread{
+		{RepoID: repoID, GitHubID: "11", Number: 11, Kind: "pull_request", State: "closed", Title: "old missing", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/11", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h11", UpdatedAtGitHub: "2026-06-01T00:00:00Z", UpdatedAt: now},
+		{RepoID: repoID, GitHubID: "12", Number: 12, Kind: "pull_request", State: "open", Title: "new missing", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/12", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h12", UpdatedAtGitHub: "2026-06-03T00:00:00Z", UpdatedAt: now},
+		{RepoID: repoID, GitHubID: "13", Number: 13, Kind: "pull_request", State: "open", Title: "already filled", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/13", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h13", UpdatedAtGitHub: "2026-06-04T00:00:00Z", UpdatedAt: now},
+		{RepoID: repoID, GitHubID: "14", Number: 14, Kind: "issue", State: "open", Title: "plain issue", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/14", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h14", UpdatedAtGitHub: "2026-06-05T00:00:00Z", UpdatedAt: now},
+	}
+	var filledThreadID int64
+	for _, thread := range threads {
+		id, err := st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("thread %d: %v", thread.Number, err)
+		}
+		if thread.Number == 13 {
+			filledThreadID = id
+		}
+	}
+	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{ThreadID: filledThreadID, RepoID: repoID, Number: 13, RawJSON: "{}", FetchedAt: now, UpdatedAt: now}, nil, nil, nil, nil); err != nil {
+		t.Fatalf("fill pr detail: %v", err)
+	}
+
+	got, err := st.MissingPullRequestDetailNumbers(ctx, repoID, MissingPullRequestDetailOptions{Order: "newest-first"})
+	if err != nil {
+		t.Fatalf("missing newest: %v", err)
+	}
+	if len(got) != 2 || got[0] != 12 || got[1] != 11 {
+		t.Fatalf("newest missing = %v", got)
+	}
+	got, err = st.MissingPullRequestDetailNumbers(ctx, repoID, MissingPullRequestDetailOptions{Order: "oldest-first", Limit: 1})
+	if err != nil {
+		t.Fatalf("missing oldest: %v", err)
+	}
+	if len(got) != 1 || got[0] != 11 {
+		t.Fatalf("oldest limited missing = %v", got)
+	}
+	got, err = st.MissingPullRequestDetailNumbers(ctx, repoID, MissingPullRequestDetailOptions{Order: "open-first"})
+	if err != nil {
+		t.Fatalf("missing open-first: %v", err)
+	}
+	if len(got) != 2 || got[0] != 12 || got[1] != 11 {
+		t.Fatalf("open-first missing = %v", got)
 	}
 }
 
