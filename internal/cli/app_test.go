@@ -5279,10 +5279,12 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
 	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
 	init := New()
 	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -5360,12 +5362,14 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 	defer server.Close()
 	t.Setenv("GITHUB_TOKEN", "test-gh-token")
 	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1m")
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 1, time.Now().Add(-time.Minute), time.Now().Add(-time.Hour))
 
 	run := New()
 	var stdout, stderr bytes.Buffer
 	run.Stdout = &stdout
 	run.Stderr = &stderr
-	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--batch-size", "1", "--json-progress", "--json"}); err != nil {
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--batch-size", "1", "--reserve-rate-limit", "10", "--json-progress", "--json"}); err != nil {
 		t.Fatalf("fill-pr-details: %v\nstderr=%s", err, stderr.String())
 	}
 	var result struct {
@@ -5392,6 +5396,110 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 	}
 	if cache.Detail.HeadSHA != "head-sha" || len(cache.Files) != 1 || len(cache.Commits) != 1 || len(cache.Checks) != 1 {
 		t.Fatalf("cache after fill = %+v", cache)
+	}
+}
+
+func TestFillPRDetailsReserveRateLimitStopsOnFreshLowCache(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := "2026-06-20T12:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "103", Number: 103, Kind: "pull_request", State: "open",
+		Title: "Fill details", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/103",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h103",
+		UpdatedAtGitHub: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1m")
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 5, time.Now().Add(time.Hour), time.Now())
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--reserve-rate-limit", "10", "--json"}); err != nil {
+		t.Fatalf("fill-pr-details: %v", err)
+	}
+	var result struct {
+		Selected      int                  `json:"selected"`
+		Filled        int                  `json:"filled"`
+		Remaining     int                  `json:"remaining"`
+		StoppedReason string               `json:"stopped_reason"`
+		RateLimit     *fillRateLimitResult `json:"rate_limit"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
+	}
+	if result.Selected != 1 || result.Filled != 0 || result.Remaining != 1 || result.StoppedReason != "rate-limit-reserve" {
+		t.Fatalf("fill result = %+v", result)
+	}
+	if result.RateLimit == nil || result.RateLimit.Remaining != 5 {
+		t.Fatalf("rate limit = %+v", result.RateLimit)
+	}
+}
+
+func configureTestGitHubCache(t *testing.T, configPath, cacheDir, token string) {
+	t.Helper()
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.CacheDir = cacheDir
+	if cfg.Env == nil {
+		cfg.Env = map[string]string{}
+	}
+	cfg.Env["GITHUB_TOKEN"] = token
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+}
+
+func writeFillPRDetailsRateLimitState(t *testing.T, cacheDir, token string, remaining int, resetAt, updatedAt time.Time) {
+	t.Helper()
+	dir := filepath.Join(cacheDir, "octopool-migrated-gh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	state := ghSharedRateLimitState{
+		Host:      "github.com",
+		TokenHash: ghRateLimitTokenHash(token),
+		Limit:     5000,
+		Remaining: remaining,
+		ResetAt:   resetAt.UTC(),
+		Resource:  "core",
+		UpdatedAt: updatedAt.UTC(),
+		Source:    "test",
+		Low:       true,
+		Threshold: 10,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal rate limit state: %v", err)
+	}
+	path := filepath.Join(dir, ghSharedRateLimitFilePrefix+"github.com_"+ghRateLimitTokenHash(token)+".json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write rate limit state: %v", err)
 	}
 }
 

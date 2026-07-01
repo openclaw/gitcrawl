@@ -3032,6 +3032,9 @@ func (a *App) currentFillRateLimit(ctx context.Context) (fillRateLimitResult, bo
 	if !ok {
 		return fillRateLimitResult{}, false
 	}
+	if !fillRateLimitStateFresh(state, time.Now().UTC()) {
+		return fillRateLimitResult{}, false
+	}
 	result := fillRateLimitResult{
 		Host:      state.Host,
 		Resource:  state.Resource,
@@ -3043,6 +3046,16 @@ func (a *App) currentFillRateLimit(ctx context.Context) (fillRateLimitResult, bo
 		result.ResetAt = state.ResetAt.Format(time.RFC3339)
 	}
 	return result, true
+}
+
+func fillRateLimitStateFresh(state ghSharedRateLimitState, now time.Time) bool {
+	if !state.ResetAt.IsZero() && !now.Before(state.ResetAt) {
+		return false
+	}
+	if !state.UpdatedAt.IsZero() && now.Sub(state.UpdatedAt) > ghRateLimitStateMaxAge() {
+		return false
+	}
+	return true
 }
 
 func parseSyncWith(value string) (map[string]bool, error) {
