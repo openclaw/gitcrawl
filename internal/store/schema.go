@@ -401,6 +401,21 @@ create table if not exists sync_runs (
   error_text text
 );
 
+create table if not exists sync_attempt_failures (
+  id integer primary key,
+  repo_id integer not null references repositories(id) on delete cascade,
+  thread_id integer references threads(id) on delete set null,
+  number integer not null,
+  operation text not null,
+  error_class text not null,
+  error_message text not null,
+  first_seen_at text not null,
+  last_seen_at text not null,
+  retry_count integer not null default 0,
+  resolved_at text,
+  unique(repo_id, number, operation, error_class)
+);
+
 create table if not exists summary_runs (
   id integer primary key,
   repo_id integer references repositories(id) on delete cascade,
@@ -566,6 +581,8 @@ create index if not exists idx_code_documents_repo_path on code_documents(repo_i
 create index if not exists idx_thread_fingerprints_hash on thread_fingerprints(fingerprint_hash);
 create index if not exists idx_thread_vectors_basis_model on thread_vectors(basis, model);
 create index if not exists idx_sync_runs_repo_status_id on sync_runs(repo_id, status, id);
+create index if not exists idx_sync_attempt_failures_repo_unresolved on sync_attempt_failures(repo_id, resolved_at, last_seen_at);
+create index if not exists idx_sync_attempt_failures_thread on sync_attempt_failures(thread_id, resolved_at);
 create index if not exists idx_cluster_runs_repo_status_id on cluster_runs(repo_id, status, id);
 create index if not exists idx_similarity_edges_repo_score on similarity_edges(repo_id, score);
 create index if not exists idx_cluster_groups_repo_status on cluster_groups(repo_id, status);

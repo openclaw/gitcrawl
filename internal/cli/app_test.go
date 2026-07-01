@@ -2484,6 +2484,85 @@ func TestTUIInfersRepository(t *testing.T) {
 	}
 }
 
+func TestSyncFailuresListsUnresolvedAndHistory(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-06-06T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	for _, number := range []int{83, 84} {
+		threadID, err := st.UpsertThread(ctx, store.Thread{
+			RepoID: repoID, GitHubID: strconv.Itoa(number), Number: number, Kind: "pull_request", State: "open",
+			Title: "hydration failure", HTMLURL: fmt.Sprintf("https://github.com/openclaw/gitcrawl/pull/%d", number),
+			LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: fmt.Sprintf("h%d", number), UpdatedAt: "2026-06-06T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatalf("seed thread %d: %v", number, err)
+		}
+		if _, err := st.RecordSyncAttemptFailure(ctx, store.SyncAttemptFailure{
+			RepoID: repoID, ThreadID: threadID, Number: number, Operation: "pull_request_details", ErrorClass: "error",
+			ErrorMessage: fmt.Sprintf("failure %d", number), FirstSeenAt: "2026-06-06T00:00:00Z", LastSeenAt: "2026-06-06T00:00:00Z",
+		}); err != nil {
+			t.Fatalf("seed failure %d: %v", number, err)
+		}
+		if number == 83 {
+			if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, number, "2026-06-06T00:05:00Z"); err != nil {
+				t.Fatalf("resolve failure %d: %v", number, err)
+			}
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "--json", "sync-failures", "openclaw/gitcrawl"}); err != nil {
+		t.Fatalf("sync-failures: %v", err)
+	}
+	var active struct {
+		Failures []store.SyncAttemptFailure `json:"failures"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &active); err != nil {
+		t.Fatalf("decode active failures: %v\n%s", err, stdout.String())
+	}
+	if len(active.Failures) != 1 || active.Failures[0].Number != 84 || active.Failures[0].ResolvedAt != "" {
+		t.Fatalf("active failures = %+v", active.Failures)
+	}
+
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "--json", "sync-failures", "openclaw/gitcrawl", "--include-resolved"}); err != nil {
+		t.Fatalf("sync-failures history: %v", err)
+	}
+	var history struct {
+		Failures []store.SyncAttemptFailure `json:"failures"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &history); err != nil {
+		t.Fatalf("decode failure history: %v\n%s", err, stdout.String())
+	}
+	if len(history.Failures) != 2 {
+		t.Fatalf("history failures = %+v", history.Failures)
+	}
+}
+
 func TestTUIJSONUsesDefaultsWhenConfigMissing(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

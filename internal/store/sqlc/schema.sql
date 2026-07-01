@@ -262,6 +262,21 @@ create table sync_runs (
   error_text text
 );
 
+create table sync_attempt_failures (
+  id integer primary key,
+  repo_id integer not null references repositories(id) on delete cascade,
+  thread_id integer references threads(id) on delete set null,
+  number integer not null,
+  operation text not null,
+  error_class text not null,
+  error_message text not null,
+  first_seen_at text not null,
+  last_seen_at text not null,
+  retry_count integer not null default 0,
+  resolved_at text,
+  unique(repo_id, number, operation, error_class)
+);
+
 create table summary_runs (
   id integer primary key,
   repo_id integer not null references repositories(id) on delete cascade,

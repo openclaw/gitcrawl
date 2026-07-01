@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 4
+	schemaVersion = 5
 	timeLayout    = time.RFC3339Nano
 )
 

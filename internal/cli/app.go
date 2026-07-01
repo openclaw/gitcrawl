@@ -175,6 +175,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSetClusterCanonical(ctx, rest[1:])
 	case "runs":
 		return a.runRuns(ctx, rest[1:])
+	case "sync-failures":
+		return a.runSyncFailures(ctx, rest[1:])
 	case "search":
 		return a.runSearch(ctx, rest[1:])
 	case "code":
@@ -2256,6 +2258,53 @@ func (a *App) runRuns(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runSyncFailures(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sync-failures", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	includeResolved := fs.Bool("include-resolved", false, "include resolved failure rows")
+	limitRaw := fs.String("limit", "", "maximum failure rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"limit": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("sync-failures requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	failures, err := rt.Store.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{
+		RepoID:          repo.ID,
+		IncludeResolved: *includeResolved,
+		Limit:           limit,
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("sync-failures", map[string]any{
+		"repository":       repo.FullName,
+		"include_resolved": *includeResolved,
+		"failures":         failures,
+	}, true)
+}
+
 func (a *App) runThreads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -4323,6 +4372,7 @@ Core commands:
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
+  sync-failures        list failed sync hydration attempts
   refresh              run sync, enrichment, embedding, and clustering pipeline
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
@@ -4406,6 +4456,11 @@ Usage:
 
 Usage:
   gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-details] [--include-pr-details] [--json]
+`,
+	"sync-failures": `gitcrawl sync-failures lists failed sync hydration attempts.
+
+Usage:
+  gitcrawl sync-failures owner/repo [--include-resolved] [--limit N] [--json]
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -156,12 +157,18 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		if options.IncludePRDetails && kind == "pull_request" {
 			reviewThreads, reviewThreadsFetchedAt, err := s.fetchPullReviewThreadRows(ctx, options, number)
 			if err != nil {
+				if recordErr := s.recordPullRequestSyncFailure(ctx, options, repoRaw, row, "pull_review_threads", err); recordErr != nil {
+					return Stats{}, fmt.Errorf("%w; additionally failed to record sync attempt failure: %v", err, recordErr)
+				}
 				return Stats{}, err
 			}
 			payload.reviewThreads = reviewThreads
 			payload.reviewThreadsFetchedAt = reviewThreadsFetchedAt
 			pullDetails, err := s.fetchPullRequestDetails(ctx, options, number)
 			if err != nil {
+				if recordErr := s.recordPullRequestSyncFailure(ctx, options, repoRaw, row, "pull_request_details", err); recordErr != nil {
+					return Stats{}, fmt.Errorf("%w; additionally failed to record sync attempt failure: %v", err, recordErr)
+				}
 				return Stats{}, err
 			}
 			payload.pullDetails = pullDetails
@@ -242,6 +249,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					if err != nil {
 						return err
 					}
+					if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano)); err != nil {
+						return err
+					}
 					attempt.PRDetailsSynced++
 					attempt.PRFilesSynced += detailStats.files
 					attempt.PRCommitsSynced += detailStats.commits
@@ -307,6 +317,53 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	applySyncPersistStats(&stats, persisted)
 	tracker.Finish(nil)
 	return stats, nil
+}
+
+func (s *Syncer) recordPullRequestSyncFailure(ctx context.Context, options Options, repoRaw, row map[string]any, operation string, syncErr error) error {
+	if syncErr == nil {
+		return nil
+	}
+	return s.store.WithTx(ctx, func(st *store.Store) error {
+		now := s.now().Format(time.RFC3339Nano)
+		repoID, err := st.UpsertRepository(ctx, store.Repository{
+			Owner:        options.Owner,
+			Name:         options.Repo,
+			FullName:     options.Owner + "/" + options.Repo,
+			GitHubRepoID: jsonID(repoRaw["id"]),
+			RawJSON:      mustJSON(repoRaw),
+			UpdatedAt:    now,
+		})
+		if err != nil {
+			return err
+		}
+		thread := mapIssueToThread(repoID, row, now)
+		threadID, err := st.UpsertThread(ctx, thread)
+		if err != nil {
+			return err
+		}
+		_, err = st.RecordSyncAttemptFailure(ctx, store.SyncAttemptFailure{
+			RepoID:       repoID,
+			ThreadID:     threadID,
+			Number:       thread.Number,
+			Operation:    operation,
+			ErrorClass:   syncAttemptErrorClass(syncErr),
+			ErrorMessage: syncErr.Error(),
+			FirstSeenAt:  now,
+			LastSeenAt:   now,
+		})
+		return err
+	})
+}
+
+func syncAttemptErrorClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	default:
+		return "error"
+	}
 }
 
 func applySyncPersistStats(stats *Stats, persisted syncPersistStats) {
