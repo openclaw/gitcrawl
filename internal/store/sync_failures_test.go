@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -86,5 +87,48 @@ func TestSyncAttemptFailureRetryAndResolve(t *testing.T) {
 	}
 	if len(failures) != 1 || failures[0].RetryCount != 2 || failures[0].ResolvedAt != "" {
 		t.Fatalf("reopened failure = %+v", failures)
+	}
+}
+
+func TestListSyncAttemptFailuresTreatsPreLedgerReadOnlyStoreAsEmpty(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+drop table sync_attempt_failures;
+pragma user_version = 4;
+`); err != nil {
+		t.Fatalf("downgrade ledger schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	readOnly, err := OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open read-only store: %v", err)
+	}
+	defer readOnly.Close()
+	failures, err := readOnly.ListSyncAttemptFailures(ctx, SyncAttemptFailureListOptions{RepoID: repoID})
+	if err != nil {
+		t.Fatalf("list failures: %v", err)
+	}
+	if len(failures) != 0 {
+		t.Fatalf("failures = %+v, want empty", failures)
 	}
 }

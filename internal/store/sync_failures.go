@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const syncAttemptFailuresSchemaVersion = 5
+
 type SyncAttemptFailure struct {
 	ID           int64  `json:"id"`
 	RepoID       int64  `json:"repo_id"`
@@ -105,6 +107,16 @@ where repo_id = ?
 func (s *Store) ListSyncAttemptFailures(ctx context.Context, options SyncAttemptFailureListOptions) ([]SyncAttemptFailure, error) {
 	if options.RepoID == 0 {
 		return nil, fmt.Errorf("list sync attempt failures: missing repo id")
+	}
+	if !s.hasTable(ctx, "sync_attempt_failures") {
+		current, err := s.schemaVersion(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list sync attempt failures: %w", err)
+		}
+		if current < syncAttemptFailuresSchemaVersion {
+			return []SyncAttemptFailure{}, nil
+		}
+		return nil, fmt.Errorf("list sync attempt failures: missing sync_attempt_failures table")
 	}
 	limit := options.Limit
 	if limit <= 0 {
