@@ -6,6 +6,8 @@
 
 Full documentation: [gitcrawl.sh](https://gitcrawl.sh)
 
+Maintainer first-run workflow: [docs/maintainer-archive.md](docs/maintainer-archive.md)
+
 ## Status
 
 Early bootstrap. The implementation is being built in small commits.

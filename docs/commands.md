@@ -47,6 +47,8 @@ These work on every command.
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
 | `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
 
+For an end-to-end first-run sequence that combines `status --json`, `doctor --json`, `sync --numbers`, bounded `--sync-if-stale` search, `gitcrawl runs`, and Octopool live reads, see the [maintainer archive workflow](/maintainer-archive/).
+
 ## Inspect
 
 | Command | Purpose | Docs |
