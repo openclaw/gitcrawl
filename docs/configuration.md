@@ -186,8 +186,10 @@ A health check for everything covered above:
 ```bash
 gitcrawl doctor          # human-readable
 gitcrawl doctor --json   # for scripts
+gitcrawl doctor --locks --json
 ```
 
 Reports config path and existence, database path, source/runtime SQLite health, portable-store Git status, last repair action, whether `GITHUB_TOKEN` and `OPENAI_API_KEY` are present (and whether they came from env vs. config), the active summary/embed models, the embedding basis, and counts of repositories, threads, open threads, clusters, plus the last sync timestamp. If the API call surface is unsupported (older Go, missing crypto), `api_supported: false` is reported so you can investigate.
-
 JSON output also reports the active executable and available Go/build metadata under `runtime`, plus read-only schema compatibility under `db_schema` and `source_db_schema`. Portable stores additionally expose `runtime_db_schema` for the runtime mirror. Inspect `state`, `pending_migrations`, `pr_details`, and `next_steps` to distinguish a current store from a pending migration, a newer unsupported schema, or a damaged database. Schema inspection never applies migrations; run a write-path command with the intended binary only after reviewing the reported drift. When the runtime database cannot be opened or its status cannot be read, doctor still writes the JSON diagnostics and includes `runtime_open_error` or `runtime_status_error`, then exits nonzero.
+
+Add `--locks` for read-only SQLite lock diagnostics. The JSON payload includes the database, WAL, SHM, and rollback-journal paths and sizes, read-only open status, `pragma quick_check` status, a `safe_read_only_inspection` flag, and best-effort process detection. On platforms without supported process inspection, `process_detection.available` is `false` and the reason is reported instead of treating missing process data as proof that no writer exists.

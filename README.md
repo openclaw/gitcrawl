@@ -17,6 +17,7 @@ Early bootstrap. The implementation is being built in small commits.
 ```bash
 gitcrawl init
 gitcrawl doctor
+gitcrawl doctor --locks --json
 gitcrawl metadata --json
 gitcrawl status --json
 gitcrawl init --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw
