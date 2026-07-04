@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -175,6 +176,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSetClusterCanonical(ctx, rest[1:])
 	case "runs":
 		return a.runRuns(ctx, rest[1:])
+	case "coverage":
+		return a.runCoverage(ctx, rest[1:])
 	case "search":
 		return a.runSearch(ctx, rest[1:])
 	case "code":
@@ -2256,6 +2259,103 @@ func (a *App) runRuns(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runCoverage(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("coverage", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	minMissingRaw := fs.String("min-missing-pr-details", "", "only show repositories with at least this many PRs missing detail rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-missing-pr-details": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() > 1 {
+		return usageErr(fmt.Errorf("coverage accepts at most one owner/repo filter"))
+	}
+	minMissing, err := parseOptionalNonNegativeInt(*minMissingRaw)
+	if err != nil {
+		return usageErr(fmt.Errorf("min-missing-pr-details: %w", err))
+	}
+
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	opts := store.ArchiveCoverageOptions{MinMissingPRDetails: minMissing}
+	repository := ""
+	if fs.NArg() == 1 {
+		owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+		if err != nil {
+			return usageErr(err)
+		}
+		repo, err := rt.repository(ctx, owner, repoName)
+		if err != nil {
+			return err
+		}
+		opts.RepoID = repo.ID
+		repository = repo.FullName
+	}
+	coverage, err := rt.Store.ArchiveCoverage(ctx, opts)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"repository":                   repository,
+		"min_missing_pr_details":       minMissing,
+		"hydration_failures_available": false,
+		"repositories":                 coverage.Rows,
+		"totals":                       coverage.Totals,
+	}
+	if a.format == FormatJSON {
+		return a.writeOutput("coverage", payload, true)
+	}
+	return a.writeCoverageTable(coverage)
+}
+
+func (a *App) writeCoverageTable(coverage store.ArchiveCoverage) error {
+	tw := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "REPOSITORY\tISSUES\tPRS\tPRS_WITH_DETAILS\tMISSING_PR_DETAILS\tFILES\tCOMMITS\tCHECKS\tREVIEW_THREADS\tWORKFLOW_RUNS\tLAST_SYNC"); err != nil {
+		return err
+	}
+	for _, row := range coverage.Rows {
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+			row.Repository,
+			row.Issues,
+			row.PullRequests,
+			row.PullRequestsWithDetails,
+			row.MissingPRDetails,
+			row.PRFiles,
+			row.PRCommits,
+			row.PRChecks,
+			row.PRReviewThreads,
+			row.WorkflowRuns,
+			row.LastSyncAt,
+		); err != nil {
+			return err
+		}
+	}
+	if len(coverage.Rows) > 1 {
+		row := coverage.Totals
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+			row.Repository,
+			row.Issues,
+			row.PullRequests,
+			row.PullRequestsWithDetails,
+			row.MissingPRDetails,
+			row.PRFiles,
+			row.PRCommits,
+			row.PRChecks,
+			row.PRReviewThreads,
+			row.WorkflowRuns,
+			row.LastSyncAt,
+		); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
 func (a *App) runThreads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -3551,7 +3651,7 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
@@ -3562,6 +3662,7 @@ func (a *App) runMetadata(args []string) error {
 		"whoami":          {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
 		"check-update":    {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
 		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
+		"coverage":        {Title: "Archive coverage", Argv: []string{"gitcrawl", "coverage", "--json"}, JSON: true},
 		"sync":            {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
 		"search":          {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
 		"code-index":      {Title: "Code index", Argv: []string{"gitcrawl", "code", "index", "--json"}, JSON: true, Mutates: true},
@@ -3790,6 +3891,17 @@ func parseOptionalPositiveInt(value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("expected positive integer, got %q", value)
+	}
+	return parsed, nil
+}
+
+func parseOptionalNonNegativeInt(value string) (int, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("expected non-negative integer, got %q", value)
 	}
 	return parsed, nil
 }
@@ -4372,6 +4484,7 @@ Core commands:
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
+  coverage             report local archive PR-detail completeness
   refresh              run sync, enrichment, embedding, and clustering pipeline
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
@@ -4455,6 +4568,11 @@ Usage:
 
 Usage:
   gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-details] [--include-pr-details] [--json]
+`,
+	"coverage": `gitcrawl coverage reports local archive PR-detail completeness.
+
+Usage:
+  gitcrawl coverage [owner/repo] [--min-missing-pr-details N] [--json]
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 
