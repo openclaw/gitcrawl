@@ -3409,6 +3409,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	portableStoreStatus := map[string]any{}
 	portableRefreshState := map[string]any{}
 	repairAction := ""
+	lockDBPath := cfg.DBPath
 	runtimeOpenError := ""
 	var runtimeOpenFailure error
 	runtimeStatusError := ""
@@ -3423,6 +3424,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		}
 	} else {
 		defer rt.Store.Close()
+		lockDBPath = rt.Config.DBPath
 		sourceHealth = sqliteDBHealth(ctx, rt.SourceDBPath, rt.SourceDBPath)
 		sourceSchema = store.InspectSchema(ctx, rt.SourceDBPath)
 		dbSchema = sourceSchema
@@ -3489,7 +3491,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		payload["runtime_status_error"] = runtimeStatusError
 	}
 	if *locks {
-		payload["locks"] = sqliteLockDiagnostic(ctx, cfg.DBPath)
+		payload["locks"] = sqliteLockDiagnostic(ctx, lockDBPath)
 	}
 	if err := a.writeOutput("doctor", payload, true); err != nil {
 		return err
