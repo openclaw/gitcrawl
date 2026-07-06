@@ -2,6 +2,7 @@
 
 ## 0.6.5 - Unreleased
 
+- Update CrawlKit to v0.13.3 for TOML recursion, panic, and deeply nested input hardening.
 - Resolve relative `gitcrawl init` database, runtime, and portable-store filesystem paths before saving them so later SQLite commands open the intended files instead of failing on an invalid URI, and reject unsupported SQLite URI or in-memory `--db` values.
 - Add `gitcrawl doctor --locks --json` for read-only SQLite health, sidecar state, and best-effort writer-process diagnostics, keeping archive health distinct from detected activity. Thanks @TurboTheTurtle.
 - Add read-only per-repository archive coverage reporting with JSON/table output, repository and missing-PR-detail filters, hydration counts, and explicit failure-ledger availability. Thanks @TurboTheTurtle.
