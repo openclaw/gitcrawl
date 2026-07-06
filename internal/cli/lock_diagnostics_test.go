@@ -181,4 +181,25 @@ func TestSQLiteLockDiagnosticRequiresHealthAndProcessProofForIdle(t *testing.T) 
 	if missing.ArchiveHealth != "missing" || missing.ProcessDetection.Available || missing.WriterActivity != "unknown" || missing.AppearsIdle {
 		t.Fatalf("missing archive state = %+v", missing)
 	}
+
+	empty := sqliteLockDiagnostic(ctx, "")
+	if empty.ArchiveHealth != "error" || empty.ReadOnlyOpen != "error" || empty.QuickCheck != "skipped" {
+		t.Fatalf("empty database path state = %+v", empty)
+	}
+}
+
+func TestDefaultDetectDBProcessesReturnsExplicitState(t *testing.T) {
+	report := defaultDetectDBProcesses(context.Background(), filepath.Join(t.TempDir(), "missing.db"))
+	if report.WriterProcesses == nil {
+		t.Fatalf("writer processes must encode as an array: %+v", report)
+	}
+	if report.Method == "" || report.Platform == "" {
+		t.Fatalf("missing detection metadata: %+v", report)
+	}
+	if report.Available && report.Error != "" {
+		t.Fatalf("available detection reported an error: %+v", report)
+	}
+	if !report.Available && report.Error == "" {
+		t.Fatalf("unavailable detection omitted its reason: %+v", report)
+	}
 }
