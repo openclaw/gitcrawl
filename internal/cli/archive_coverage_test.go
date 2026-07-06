@@ -100,6 +100,58 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 	}
 }
 
+func TestCoverageCommandSupportsCanonicalPortableArchive(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedCoverageStore(t, ctx, dbPath)
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.PrunePortablePayloads(ctx, store.PortablePruneOptions{BodyChars: 2000, Vacuum: false}); err != nil {
+		st.Close()
+		t.Fatalf("prune portable archive: %v", err)
+	}
+	var syncRuns int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from sqlite_master where type = 'table' and name = 'sync_runs'`).Scan(&syncRuns); err != nil {
+		st.Close()
+		t.Fatalf("inspect portable archive: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close portable archive: %v", err)
+	}
+	if syncRuns != 0 {
+		t.Fatalf("portable archive retained sync_runs")
+	}
+
+	run := New()
+	var out bytes.Buffer
+	run.Stdout = &out
+	if err := run.Run(ctx, []string{"--config", configPath, "coverage", "--json"}); err != nil {
+		t.Fatalf("coverage portable archive: %v", err)
+	}
+	var payload struct {
+		Repositories []store.ArchiveCoverageRow `json:"repositories"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("decode portable coverage json: %v\n%s", err, out.String())
+	}
+	if len(payload.Repositories) != 2 {
+		t.Fatalf("portable coverage rows = %+v", payload.Repositories)
+	}
+	for _, row := range payload.Repositories {
+		if row.LastSyncAt == "" {
+			t.Fatalf("portable coverage missing last sync: %+v", row)
+		}
+	}
+}
+
 func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 	t.Helper()
 	st, err := store.Open(ctx, dbPath)

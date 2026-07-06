@@ -41,6 +41,7 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 	if !s.hasTable(ctx, "repositories") {
 		return ArchiveCoverage{Rows: []ArchiveCoverageRow{}}, nil
 	}
+	lastSyncExpression := s.archiveCoverageLastSyncExpression(ctx)
 	query := `
 		select
 		  r.id,
@@ -91,11 +92,7 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 		    from github_workflow_runs gwr
 		    where gwr.repo_id = r.id
 		  ) as workflow_runs,
-		  (
-		    select coalesce(max(finished_at), '')
-		    from sync_runs sr
-		    where sr.repo_id = r.id and sr.status in ('success', 'completed')
-		  ) as last_sync_at
+		  ` + lastSyncExpression + ` as last_sync_at
 		from repositories r
 		left join threads t on t.repo_id = r.id
 		left join pull_request_details prd on prd.thread_id = t.id
@@ -153,6 +150,39 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 	coverage.Totals.Repository = "total"
 	coverage.Totals.HydrationFailuresSupported = false
 	return coverage, nil
+}
+
+func (s *Store) archiveCoverageLastSyncExpression(ctx context.Context) string {
+	candidates := make([]string, 0, 4)
+	if s.hasTable(ctx, "sync_runs") {
+		candidates = append(candidates, `(
+			select max(sr.finished_at)
+			from sync_runs sr
+			where sr.repo_id = r.id and sr.status in ('success', 'completed')
+		)`)
+	}
+	if s.hasTable(ctx, "repo_sync_state") {
+		candidates = append(candidates, `(
+			select coalesce(
+				max(rss.last_open_close_reconciled_at),
+				max(rss.last_overlapping_open_scan_completed_at),
+				max(rss.last_non_overlapping_scan_completed_at),
+				max(rss.last_full_open_scan_started_at),
+				max(rss.updated_at)
+			)
+			from repo_sync_state rss
+			where rss.repo_id = r.id
+		)`)
+	}
+	if s.hasTable(ctx, "portable_metadata") {
+		candidates = append(candidates, `(
+			select pm.value
+			from portable_metadata pm
+			where pm.key = 'exported_at'
+		)`)
+	}
+	candidates = append(candidates, `''`)
+	return "coalesce(" + strings.Join(candidates, ",\n") + ")"
 }
 
 func addArchiveCoverageTotals(total *ArchiveCoverageRow, row ArchiveCoverageRow) {
