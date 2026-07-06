@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openclaw/gitcrawl/internal/store"
+	crawlstore "github.com/openclaw/crawlkit/store"
 )
 
 type lockDiagnostic struct {
@@ -112,7 +112,7 @@ func sqliteLockDiagnostic(ctx context.Context, dbPath string) lockDiagnostic {
 	default:
 		out.WriterActivity = "none_detected"
 	}
-	st, err := store.OpenReadOnly(ctx, dbPath)
+	st, err := crawlstore.OpenReadOnly(ctx, dbPath)
 	if err != nil {
 		out.ReadOnlyOpen = "error"
 		out.QuickCheck = "skipped"
@@ -136,7 +136,7 @@ func sqliteLockDiagnostic(ctx context.Context, dbPath string) lockDiagnostic {
 	return out
 }
 
-func sqliteQuickCheck(ctx context.Context, st *store.Store) error {
+func sqliteQuickCheck(ctx context.Context, st *crawlstore.Store) error {
 	rows, err := st.DB().QueryContext(ctx, `pragma quick_check`)
 	if err != nil {
 		return err

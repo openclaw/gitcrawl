@@ -151,6 +151,9 @@ func TestSQLiteLockDiagnosticRequiresHealthAndProcessProofForIdle(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
+	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 999`); err != nil {
+		t.Fatalf("set newer schema version: %v", err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
@@ -161,7 +164,7 @@ func TestSQLiteLockDiagnosticRequiresHealthAndProcessProofForIdle(t *testing.T) 
 		return processDetectionReport{Method: "test", Platform: "test", WriterProcesses: []lockProcess{}, Error: "unavailable"}
 	}
 	unknown := sqliteLockDiagnostic(ctx, dbPath)
-	if unknown.ArchiveHealth != "ok" || !unknown.SafeReadOnlyInspection || unknown.WriterActivity != "unknown" || unknown.AppearsIdle {
+	if unknown.ArchiveHealth != "ok" || unknown.ReadOnlyOpen != "ok" || unknown.QuickCheck != "ok" || !unknown.SafeReadOnlyInspection || unknown.WriterActivity != "unknown" || unknown.AppearsIdle {
 		t.Fatalf("unknown process state = %+v", unknown)
 	}
 
