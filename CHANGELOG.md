@@ -2,6 +2,7 @@
 
 ## 0.6.5 - Unreleased
 
+- Add `gitcrawl doctor --locks --json` for read-only SQLite health, sidecar state, and best-effort writer-process diagnostics, keeping archive health distinct from detected activity. Thanks @TurboTheTurtle.
 - Add read-only per-repository archive coverage reporting with JSON/table output, repository and missing-PR-detail filters, hydration counts, and explicit failure-ledger availability. Thanks @TurboTheTurtle.
 - Report the active executable/build identity and read-only database schema compatibility in `gitcrawl doctor --json`, including actionable drift diagnostics without applying migrations. Thanks @TurboTheTurtle.
 - Document the first-run local maintainer archive workflow, including targeted PR hydration, bounded-staleness search, run inspection, and the Octopool boundary. Thanks @TurboTheTurtle.

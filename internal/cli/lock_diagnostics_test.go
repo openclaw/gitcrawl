@@ -29,10 +29,10 @@ func TestDoctorLocksJSONReportsSQLiteHealth(t *testing.T) {
 	oldDetect := detectDBProcesses
 	detectDBProcesses = func(context.Context, string) processDetectionReport {
 		return processDetectionReport{
-			Method:    "test",
-			Platform:  "test",
-			Available: true,
-			Processes: []lockProcess{{PID: 123, Command: "gitcrawl"}},
+			Method:          "test",
+			Platform:        "test",
+			Available:       true,
+			WriterProcesses: []lockProcess{{PID: 123, Command: "gitcrawl", Access: "read_write"}},
 		}
 	}
 	defer func() { detectDBProcesses = oldDetect }()
@@ -55,7 +55,7 @@ func TestDoctorLocksJSONReportsSQLiteHealth(t *testing.T) {
 	if payload.Locks.ReadOnlyOpen != "ok" || payload.Locks.QuickCheck != "ok" || !payload.Locks.SafeReadOnlyInspection {
 		t.Fatalf("locks health = %+v", payload.Locks)
 	}
-	if !payload.Locks.ProcessDetection.Available || len(payload.Locks.ProcessDetection.Processes) != 1 {
+	if !payload.Locks.ProcessDetection.Available || len(payload.Locks.ProcessDetection.WriterProcesses) != 1 || payload.Locks.WriterActivity != "detected" || payload.Locks.AppearsIdle {
 		t.Fatalf("process detection = %+v", payload.Locks.ProcessDetection)
 	}
 }
@@ -99,7 +99,7 @@ func TestDoctorLocksUsesPortableRuntimeDB(t *testing.T) {
 	detectedPath := ""
 	detectDBProcesses = func(_ context.Context, dbPath string) processDetectionReport {
 		detectedPath = dbPath
-		return processDetectionReport{Method: "test", Platform: "test", Available: true}
+		return processDetectionReport{Method: "test", Platform: "test", Available: true, WriterProcesses: []lockProcess{}}
 	}
 	defer func() { detectDBProcesses = oldDetect }()
 
@@ -128,14 +128,57 @@ func TestDoctorLocksUsesPortableRuntimeDB(t *testing.T) {
 	if payload.Locks.DBPath == sourceDB {
 		t.Fatalf("locks should not inspect portable source db %q", sourceDB)
 	}
+	if payload.Locks.WriterActivity != "none_detected" || !payload.Locks.AppearsIdle {
+		t.Fatalf("portable writer state = %+v", payload.Locks)
+	}
 }
 
-func TestParseLsofProcessOutput(t *testing.T) {
-	got := parseLsofProcessOutput("p123\ncgitcrawl\np456\ncsqlite3\n")
-	if len(got) != 2 {
+func TestParseLsofWriterOutput(t *testing.T) {
+	got := parseLsofWriterOutput("p123\ncgitcrawl\nf3\nau\np456\ncsqlite3\nf3\nar\np789\ncgitcrawl\nf4\naw\n", 123)
+	if len(got) != 1 {
 		t.Fatalf("processes = %+v", got)
 	}
-	if got[0].PID != 123 || got[0].Command != "gitcrawl" || got[1].PID != 456 || got[1].Command != "sqlite3" {
+	if got[0].PID != 789 || got[0].Command != "gitcrawl" || got[0].Access != "read_write" {
 		t.Fatalf("processes = %+v", got)
+	}
+}
+
+func TestSQLiteLockDiagnosticRequiresHealthAndProcessProofForIdle(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	oldDetect := detectDBProcesses
+	defer func() { detectDBProcesses = oldDetect }()
+	detectDBProcesses = func(context.Context, string) processDetectionReport {
+		return processDetectionReport{Method: "test", Platform: "test", WriterProcesses: []lockProcess{}, Error: "unavailable"}
+	}
+	unknown := sqliteLockDiagnostic(ctx, dbPath)
+	if unknown.ArchiveHealth != "ok" || !unknown.SafeReadOnlyInspection || unknown.WriterActivity != "unknown" || unknown.AppearsIdle {
+		t.Fatalf("unknown process state = %+v", unknown)
+	}
+
+	corruptPath := filepath.Join(dir, "corrupt.db")
+	if err := os.WriteFile(corruptPath, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatalf("write corrupt database: %v", err)
+	}
+	detectDBProcesses = func(context.Context, string) processDetectionReport {
+		return processDetectionReport{Method: "test", Platform: "test", Available: true, WriterProcesses: []lockProcess{}}
+	}
+	corrupt := sqliteLockDiagnostic(ctx, corruptPath)
+	if corrupt.ArchiveHealth != "error" || corrupt.WriterActivity != "none_detected" || corrupt.AppearsIdle {
+		t.Fatalf("corrupt archive state = %+v", corrupt)
+	}
+
+	missing := sqliteLockDiagnostic(ctx, filepath.Join(dir, "missing.db"))
+	if missing.ArchiveHealth != "missing" || missing.ProcessDetection.Available || missing.WriterActivity != "unknown" || missing.AppearsIdle {
+		t.Fatalf("missing archive state = %+v", missing)
 	}
 }
