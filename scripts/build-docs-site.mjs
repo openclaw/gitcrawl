@@ -16,7 +16,7 @@ const sections = [
   ["Start", ["index.md", "installation.md", "quickstart.md", "concepts.md"]],
   ["Configure", ["configuration.md", "sync.md", "refresh-and-embed.md"]],
   ["Use", ["search.md", "clustering.md", "governance.md", "tui.md", "gh-shim.md"]],
-  ["Operate", ["portable-stores.md", "automation.md"]],
+  ["Operate", ["portable-stores.md", "maintainer-archive.md", "automation.md"]],
   ["Reference", ["commands.md", "reference.md"]],
 ];
 

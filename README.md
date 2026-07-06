@@ -6,6 +6,8 @@
 
 Full documentation: [gitcrawl.sh](https://gitcrawl.sh)
 
+Maintainer first-run workflow: [docs/maintainer-archive.md](docs/maintainer-archive.md)
+
 ## Status
 
 Early bootstrap. The implementation is being built in small commits.
@@ -15,6 +17,7 @@ Early bootstrap. The implementation is being built in small commits.
 ```bash
 gitcrawl init
 gitcrawl doctor
+gitcrawl doctor --locks --json
 gitcrawl metadata --json
 gitcrawl status --json
 gitcrawl init --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw
@@ -27,6 +30,7 @@ gitcrawl sync owner/repo
 gitcrawl sync owner/repo --state open
 gitcrawl sync owner/repo --numbers 123,456 --include-comments
 gitcrawl sync owner/repo --numbers https://github.com/owner/repo/issues/123 --with pr-details
+gitcrawl coverage --repos owner/repo,owner/other --min-missing-pr-details 1 --json
 gitcrawl refresh owner/repo
 gitcrawl cluster owner/repo --threshold 0.80
 gitcrawl clusters owner/repo

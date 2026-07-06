@@ -31,7 +31,7 @@ These work on every command.
 | Command | Purpose | Detailed docs |
 | --- | --- | --- |
 | `gitcrawl init [--db --runtime-dir --portable-store --portable-db --store-dir --json]` | Create config and runtime directories; isolate all local paths under one root or clone a portable store | [Configuration](/configuration/#path-selection-edge-cases), [Portable stores](/portable-stores/) |
-| `gitcrawl doctor [--json]` | Health check for config, database, credentials, model selection, repo/thread counts | [Configuration](/configuration/#gitcrawl-doctor) |
+| `gitcrawl doctor [--json] [--locks]` | Health check for config, database, credentials, model selection, repo/thread counts, and optional SQLite lock diagnostics | [Configuration](/configuration/#gitcrawl-doctor) |
 | `gitcrawl metadata [--json]` | Print the crawlkit command/control manifest for launchers and automation | — |
 | `gitcrawl status [--json]` | Print read-only archive status, database inventory, and control state | — |
 | `gitcrawl configure [--summary-model --embed-model --embedding-basis --json]` | Update model fields in `config.toml` | [Configuration](/configuration/#gitcrawl-configure) |
@@ -42,10 +42,13 @@ These work on every command.
 | Command | Purpose | Docs |
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
+| `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report per-repository archive and PR-detail completeness | — |
 | `gitcrawl refresh owner/repo [--no-sync --no-embed --no-cluster ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
 | `gitcrawl embed owner/repo [--number <ref> --limit --force --include-closed --json]` | Generate OpenAI embeddings for thread documents | [Refresh and embed](/refresh-and-embed/#embed) |
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
 | `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
+
+For an end-to-end first-run sequence that combines `status --json`, `doctor --json`, `sync --numbers`, bounded `--sync-if-stale` search, `gitcrawl runs`, and Octopool live reads, see the [maintainer archive workflow](/maintainer-archive/).
 
 ## Inspect
 

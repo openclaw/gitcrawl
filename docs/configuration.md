@@ -54,7 +54,10 @@ to any command.
 - `gitcrawl init --runtime-dir <path>` creates a fully isolated local runtime
   under that directory: `gitcrawl.db`, `cache/`, `vectors/`, and `logs/`.
   This is useful for temporary archives and reproducible tests. Existing
-  `init --db` behavior remains database-only.
+  `init --db` behavior remains database-only. Relative `--db`, `--runtime-dir`,
+  and `--store-dir` filesystem paths are anchored to the current working
+  directory before they are saved, so later commands keep using the same files.
+  `--db` accepts durable filesystem paths, not SQLite `file:` URIs or `:memory:`.
 - Absolute XDG environment variables are honored even on macOS. Relative XDG
   values are ignored and gitcrawl falls back to the platform default for that
   path.
@@ -186,6 +189,10 @@ A health check for everything covered above:
 ```bash
 gitcrawl doctor          # human-readable
 gitcrawl doctor --json   # for scripts
+gitcrawl doctor --locks --json
 ```
 
 Reports config path and existence, database path, source/runtime SQLite health, portable-store Git status, last repair action, whether `GITHUB_TOKEN` and `OPENAI_API_KEY` are present (and whether they came from env vs. config), the active summary/embed models, the embedding basis, and counts of repositories, threads, open threads, clusters, plus the last sync timestamp. If the API call surface is unsupported (older Go, missing crypto), `api_supported: false` is reported so you can investigate.
+JSON output also reports the active executable and available Go/build metadata under `runtime`, plus read-only schema compatibility under `db_schema` and `source_db_schema`. Portable stores additionally expose `runtime_db_schema` for the runtime mirror. Inspect `state`, `pending_migrations`, `pr_details`, and `next_steps` to distinguish a current store from a pending migration, a newer unsupported schema, or a damaged database. Schema inspection never applies migrations; run a write-path command with the intended binary only after reviewing the reported drift. When the runtime database cannot be opened or its status cannot be read, doctor still writes the JSON diagnostics and includes `runtime_open_error` or `runtime_status_error`, then exits nonzero.
+
+Add `--locks` for read-only SQLite lock diagnostics. The JSON payload includes the database, WAL, SHM, and rollback-journal paths and sizes, read-only open status, `pragma quick_check` status, and best-effort writer-process detection. `safe_read_only_inspection` reflects archive health even when another SQLite connection is open; `writer_activity` separately reports whether `lsof` found another process with writable access to the database. `appears_idle` becomes true only when the archive is healthy, process detection is available, and no writer candidate is found. On platforms without supported process inspection, `process_detection.available` is `false`, `writer_activity` is `unknown`, and `appears_idle` remains false instead of treating missing process data as proof that no writer exists.
