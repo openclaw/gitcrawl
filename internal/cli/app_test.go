@@ -56,6 +56,152 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 }
 
+func TestInitRelativeDBPathIsAbsoluteAndWritable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+	t.Chdir(workDir)
+	configPath := filepath.Join(dir, "config.toml")
+
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", "archive.db"}); err != nil {
+		t.Fatalf("init relative db: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	wantDBPath := filepath.Join(workDir, "archive.db")
+	if cfg.DBPath != wantDBPath {
+		t.Fatalf("db path = %q, want %q", cfg.DBPath, wantDBPath)
+	}
+	if cfg.VectorDir != filepath.Join(workDir, "vectors") {
+		t.Fatalf("vector dir = %q, want sibling of resolved db", cfg.VectorDir)
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open resolved db: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close resolved db: %v", err)
+	}
+	if info, err := os.Stat(wantDBPath); err != nil || info.Size() == 0 {
+		t.Fatalf("resolved db was not initialized: info=%v err=%v", info, err)
+	}
+}
+
+func TestInitRelativeRuntimeDirIsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	configPath := filepath.Join(dir, "config.toml")
+
+	if err := New().Run(context.Background(), []string{"--config", configPath, "init", "--runtime-dir", "runtime"}); err != nil {
+		t.Fatalf("init relative runtime: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	wantRoot := filepath.Join(dir, "runtime")
+	if cfg.DBPath != filepath.Join(wantRoot, "gitcrawl.db") || cfg.CacheDir != filepath.Join(wantRoot, "cache") || cfg.VectorDir != filepath.Join(wantRoot, "vectors") || cfg.LogDir != filepath.Join(wantRoot, "logs") {
+		t.Fatalf("relative runtime paths not anchored under %q: %+v", wantRoot, cfg)
+	}
+}
+
+func TestInitHomeRelativePathsExpandBeforeAnchoring(t *testing.T) {
+	homeDir := t.TempDir()
+	workDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Chdir(workDir)
+
+	dbConfigPath := filepath.Join(workDir, "db.toml")
+	if err := New().Run(context.Background(), []string{"--config", dbConfigPath, "init", "--db", "~/archive.db"}); err != nil {
+		t.Fatalf("init home-relative db: %v", err)
+	}
+	dbConfig, err := config.Load(dbConfigPath)
+	if err != nil {
+		t.Fatalf("load db config: %v", err)
+	}
+	if want := filepath.Join(homeDir, "archive.db"); dbConfig.DBPath != want {
+		t.Fatalf("home-relative db path = %q, want %q", dbConfig.DBPath, want)
+	}
+
+	runtimeConfigPath := filepath.Join(workDir, "runtime.toml")
+	if err := New().Run(context.Background(), []string{"--config", runtimeConfigPath, "init", "--runtime-dir", "~/runtime"}); err != nil {
+		t.Fatalf("init home-relative runtime: %v", err)
+	}
+	runtimeConfig, err := config.Load(runtimeConfigPath)
+	if err != nil {
+		t.Fatalf("load runtime config: %v", err)
+	}
+	wantRuntimeRoot := filepath.Join(homeDir, "runtime")
+	if runtimeConfig.DBPath != filepath.Join(wantRuntimeRoot, "gitcrawl.db") || runtimeConfig.CacheDir != filepath.Join(wantRuntimeRoot, "cache") || runtimeConfig.VectorDir != filepath.Join(wantRuntimeRoot, "vectors") || runtimeConfig.LogDir != filepath.Join(wantRuntimeRoot, "logs") {
+		t.Fatalf("home-relative runtime paths not anchored under %q: %+v", wantRuntimeRoot, runtimeConfig)
+	}
+}
+
+func TestInitResolvesWorkingDirectoryOnlyForRelativePaths(t *testing.T) {
+	app := New()
+	app.getWorkingDirectory = func() (string, error) {
+		return "", errors.New("working directory unavailable")
+	}
+
+	relativeCases := []struct {
+		name string
+		args []string
+		flag string
+	}{
+		{name: "database", args: []string{"init", "--db", "archive.db"}, flag: "--db"},
+		{name: "runtime", args: []string{"init", "--runtime-dir", "runtime"}, flag: "--runtime-dir"},
+		{name: "portable store", args: []string{"init", "--portable-store", "https://example.com/store.git", "--store-dir", "store"}, flag: "--store-dir"},
+	}
+	for _, tc := range relativeCases {
+		err := app.Run(context.Background(), tc.args)
+		if err == nil || !strings.Contains(err.Error(), "resolve "+tc.flag+" path") {
+			t.Errorf("%s error = %v, want %s resolution failure", tc.name, err, tc.flag)
+		}
+	}
+
+	dir := t.TempDir()
+	absoluteConfig := filepath.Join(dir, "absolute.toml")
+	if err := app.Run(context.Background(), []string{"--config", absoluteConfig, "init", "--db", filepath.Join(dir, "archive.db")}); err != nil {
+		t.Fatalf("absolute db init consulted working directory: %v", err)
+	}
+	remoteConfig := filepath.Join(dir, "remote.toml")
+	if err := app.Run(context.Background(), []string{"--config", remoteConfig, "init", "--remote", "https://archive.example.com", "--archive", "example"}); err != nil {
+		t.Fatalf("remote init consulted working directory: %v", err)
+	}
+}
+
+func TestInitRejectsNonFilesystemDBValues(t *testing.T) {
+	for _, dbPath := range []string{":memory:", "file:archive.db", "file:/tmp/archive.db?mode=rwc"} {
+		err := New().Run(context.Background(), []string{"init", "--db", dbPath})
+		if err == nil || !strings.Contains(err.Error(), "--db requires a filesystem path") {
+			t.Errorf("init --db %q error = %v", dbPath, err)
+		}
+	}
+}
+
+func TestInitRejectsHomeRelativePathsWithoutHomeDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "database", args: []string{"init", "--db", "~/archive.db"}},
+		{name: "runtime", args: []string{"init", "--runtime-dir", "~/runtime"}},
+		{name: "portable store", args: []string{"init", "--portable-store", "https://example.com/store.git", "--store-dir", "~/store"}},
+	}
+	for _, tc := range tests {
+		err := New().Run(context.Background(), tc.args)
+		if err == nil || !strings.Contains(err.Error(), "home directory unavailable") {
+			t.Errorf("%s error = %v, want unavailable-home failure", tc.name, err)
+		}
+	}
+}
+
 func TestInitRuntimeDirIsolatesRuntimePaths(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -1361,8 +1507,10 @@ func TestGitRemoteForMessageRedactsURLCredentials(t *testing.T) {
 func TestInitWithPortableStoreCloneAndPull(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	t.Chdir(dir)
 	remoteDir := filepath.Join(dir, "remote")
-	checkoutDir := filepath.Join(dir, "checkout")
+	checkoutDir := "checkout"
+	wantCheckoutDir := filepath.Join(dir, checkoutDir)
 	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
 	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
 		t.Fatalf("mkdir remote data: %v", err)
@@ -1387,6 +1535,13 @@ func TestInitWithPortableStoreCloneAndPull(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Portable store") || !strings.Contains(stdout.String(), "cloned") {
 		t.Fatalf("portable init output = %q", stdout.String())
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load portable config: %v", err)
+	}
+	if loaded.DBPath != filepath.Join(wantCheckoutDir, dbRel) {
+		t.Fatalf("portable db path = %q, want %q", loaded.DBPath, filepath.Join(wantCheckoutDir, dbRel))
 	}
 	action, err := syncPortableStore(ctx, remoteDir, checkoutDir)
 	if err != nil {
@@ -1984,6 +2139,311 @@ func TestDoctorRefreshesPortableStore(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONReportsCurrentSchemaDiagnosticsWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	payload := runDoctorJSON(t, ctx, configPath)
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "current" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+	if got := schema["current_version"]; got != float64(4) {
+		t.Fatalf("db_schema.current_version = %#v, payload=%#v", got, schema)
+	}
+	if got := schema["supported_version"]; got != float64(4) {
+		t.Fatalf("db_schema.supported_version = %#v, payload=%#v", got, schema)
+	}
+	prDetails := doctorMap(t, schema, "pr_details")
+	if got := prDetails["duplicate_path_files_supported"]; got != true {
+		t.Fatalf("pr_details.duplicate_path_files_supported = %#v, payload=%#v", got, prDetails)
+	}
+	runtime := doctorMap(t, payload, "runtime")
+	if runtime["version"] != version || strings.TrimSpace(fmt.Sprint(runtime["executable_path"])) == "" {
+		t.Fatalf("runtime identity = %#v", runtime)
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["executable_path"])) == "" {
+		t.Fatalf("top-level executable_path missing: %#v", payload)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("doctor schema diagnostics mutated current database bytes")
+	}
+}
+
+func TestDoctorJSONReportsMissingSchemaWithoutCreatingDB(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing", "gitcrawl.db")
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+
+	payload := runDoctorJSON(t, ctx, configPath)
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "missing" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+	if got := schema["exists"]; got != false {
+		t.Fatalf("db_schema.exists = %#v, payload=%#v", got, schema)
+	}
+	if len(doctorStringList(t, schema, "next_steps")) == 0 {
+		t.Fatalf("db_schema.next_steps empty: %#v", schema)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("doctor created missing db: %v", err)
+	}
+}
+
+func TestDoctorJSONReportsNewerSchemaWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 99`); err != nil {
+		_ = st.Close()
+		t.Fatalf("set newer schema: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	err = doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"})
+	if err == nil {
+		t.Fatalf("newer schema doctor unexpectedly succeeded: %s", stdout.String())
+	}
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &payload); jsonErr != nil {
+		t.Fatalf("parse doctor json: %v\n%s", jsonErr, stdout.String())
+	}
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "newer" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+	if got := schema["newer"]; got != true {
+		t.Fatalf("db_schema.newer = %#v, payload=%#v", got, schema)
+	}
+	if got := schema["current_version"]; got != float64(99) {
+		t.Fatalf("db_schema.current_version = %#v, payload=%#v", got, schema)
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["runtime_open_error"])) == "" {
+		t.Fatalf("runtime_open_error missing: %#v", payload)
+	}
+	if len(doctorStringList(t, schema, "next_steps")) == 0 {
+		t.Fatalf("db_schema.next_steps empty: %#v", schema)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("doctor schema diagnostics mutated newer database bytes")
+	}
+	if got := doctorUserVersion(t, ctx, dbPath); got != 99 {
+		t.Fatalf("user_version = %d, want 99", got)
+	}
+}
+
+func TestDoctorJSONReportsRuntimeEnvSchemaFailureWithoutConfig(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 99`); err != nil {
+		_ = st.Close()
+		t.Fatalf("set newer schema: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	t.Setenv("GITCRAWL_DB_PATH", dbPath)
+
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	err = doctor.Run(ctx, []string{"--config", filepath.Join(dir, "missing.toml"), "doctor", "--json"})
+	if err == nil {
+		t.Fatalf("newer runtime-env schema unexpectedly succeeded: %s", stdout.String())
+	}
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &payload); jsonErr != nil {
+		t.Fatalf("parse doctor json: %v\n%s", jsonErr, stdout.String())
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["runtime_open_error"])) == "" {
+		t.Fatalf("runtime_open_error missing: %#v", payload)
+	}
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "newer" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+}
+
+func TestDoctorJSONReportsStatusFailureWithSchemaDrift(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		create table repositories (id integer primary key);
+		create table threads (id integer primary key, state text);
+		pragma user_version = 4;
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed schema drift: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	err = doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"})
+	if err == nil {
+		t.Fatalf("schema-drift status unexpectedly succeeded: %s", stdout.String())
+	}
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &payload); jsonErr != nil {
+		t.Fatalf("parse doctor json: %v\n%s", jsonErr, stdout.String())
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["runtime_status_error"])) == "" {
+		t.Fatalf("runtime_status_error missing: %#v", payload)
+	}
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "pending_migration" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("doctor mutated schema-drift database")
+	}
+}
+
+func TestDoctorJSONRuntimeOpenErrorReturnsFailureWithPayload(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644); err != nil {
+		t.Fatalf("write corrupt db: %v", err)
+	}
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	err := doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"})
+	if err == nil {
+		t.Fatalf("doctor unexpectedly succeeded: %s", stdout.String())
+	}
+
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &payload); jsonErr != nil {
+		t.Fatalf("parse doctor json: %v\n%s", jsonErr, stdout.String())
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["runtime_open_error"])) == "" {
+		t.Fatalf("runtime_open_error missing: %#v", payload)
+	}
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "error" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+}
+
+func TestDoctorJSONReportsLegacyPendingSchemaWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	seedDoctorLegacyPullRequestFilesSchema(t, ctx, dbPath)
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	payload := runDoctorJSON(t, ctx, configPath)
+	schema := doctorMap(t, payload, "db_schema")
+	if got := schema["state"]; got != "pending_migration" {
+		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
+	}
+	if got := schema["pending_migration"]; got != true {
+		t.Fatalf("db_schema.pending_migration = %#v, payload=%#v", got, schema)
+	}
+	prDetails := doctorMap(t, schema, "pr_details")
+	if got := prDetails["files_position_key"]; got != false {
+		t.Fatalf("pr_details.files_position_key = %#v, payload=%#v", got, prDetails)
+	}
+	if got := prDetails["duplicate_path_files_supported"]; got != false {
+		t.Fatalf("pr_details.duplicate_path_files_supported = %#v, payload=%#v", got, prDetails)
+	}
+	pending := doctorStringList(t, schema, "pending_migrations")
+	if !doctorListContains(pending, "schema_version_3_to_4") || !doctorListContains(pending, "pull_request_files_position_key") {
+		t.Fatalf("pending_migrations = %#v", pending)
+	}
+	if len(doctorStringList(t, schema, "next_steps")) == 0 {
+		t.Fatalf("db_schema.next_steps empty: %#v", schema)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("doctor schema diagnostics mutated legacy database bytes")
+	}
+	if got := doctorUserVersion(t, ctx, dbPath); got != 3 {
+		t.Fatalf("user_version = %d, want 3", got)
+	}
+	if doctorPullRequestFilesPositionKey(t, ctx, dbPath) {
+		t.Fatal("doctor migrated pull_request_files primary key")
+	}
+}
+
 func seedPortableThread(t *testing.T, dbPath string, number int, title string) {
 	t.Helper()
 	ctx := context.Background()
@@ -2025,6 +2485,147 @@ func seedPortableThread(t *testing.T, dbPath string, number int, title string) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close portable db: %v", err)
 	}
+}
+
+func writeDoctorTestConfig(t *testing.T, dir, dbPath string) string {
+	t.Helper()
+	configPath := filepath.Join(dir, "config.toml")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	cfg.CacheDir = filepath.Join(dir, "cache")
+	cfg.VectorDir = filepath.Join(dir, "vectors")
+	cfg.LogDir = filepath.Join(dir, "logs")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	return configPath
+}
+
+func runDoctorJSON(t *testing.T, ctx context.Context, configPath string) map[string]any {
+	t.Helper()
+	doctor := New()
+	var stdout bytes.Buffer
+	doctor.Stdout = &stdout
+	if err := doctor.Run(ctx, []string{"--config", configPath, "doctor", "--json"}); err != nil {
+		t.Fatalf("doctor: %v\n%s", err, stdout.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("parse doctor json: %v\n%s", err, stdout.String())
+	}
+	return payload
+}
+
+func doctorMap(t *testing.T, payload map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := payload[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", key, payload[key])
+	}
+	return value
+}
+
+func doctorStringList(t *testing.T, payload map[string]any, key string) []string {
+	t.Helper()
+	raw, ok := payload[key].([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want array", key, payload[key])
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, fmt.Sprint(value))
+	}
+	return out
+}
+
+func doctorListContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func seedDoctorLegacyPullRequestFilesSchema(t *testing.T, ctx context.Context, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `
+		drop index if exists idx_pull_request_files_path;
+		drop index if exists idx_pull_request_files_thread_path;
+		alter table pull_request_files rename to pull_request_files_current;
+		create table pull_request_files (
+			thread_id integer not null references threads(id) on delete cascade,
+			path text not null,
+			status text,
+			additions integer not null default 0,
+			deletions integer not null default 0,
+			changes integer not null default 0,
+			previous_path text,
+			patch text,
+			raw_json text not null,
+			fetched_at text not null,
+			primary key(thread_id, path)
+		);
+		insert into pull_request_files(thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
+			select thread_id, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at
+			from pull_request_files_current;
+		drop table pull_request_files_current;
+		create index if not exists idx_pull_request_files_path on pull_request_files(path);
+		pragma user_version = 3;
+	`)
+	if err != nil {
+		t.Fatalf("seed legacy pull_request_files table: %v", err)
+	}
+}
+
+func doctorUserVersion(t *testing.T, ctx context.Context, dbPath string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	return version
+}
+
+func doctorPullRequestFilesPositionKey(t *testing.T, ctx context.Context, dbPath string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `pragma table_info(pull_request_files)`)
+	if err != nil {
+		t.Fatalf("read pull_request_files schema: %v", err)
+	}
+	defer rows.Close()
+	pk := map[string]int{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan pull_request_files schema: %v", err)
+		}
+		if primaryKey > 0 {
+			pk[name] = primaryKey
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate pull_request_files schema: %v", err)
+	}
+	return pk["thread_id"] == 1 && pk["position"] == 2
 }
 
 func TestPortablePruneCommand(t *testing.T) {

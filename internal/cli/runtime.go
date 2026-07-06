@@ -64,6 +64,10 @@ func (a *App) openLocalRuntimeReadOnly(ctx context.Context) (localRuntime, error
 	if err != nil {
 		return localRuntime{}, err
 	}
+	return a.openLocalRuntimeReadOnlyWithConfig(ctx, cfg)
+}
+
+func (a *App) openLocalRuntimeReadOnlyWithConfig(ctx context.Context, cfg config.Config) (localRuntime, error) {
 	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
 		return localRuntime{}, fmt.Errorf("command requires a local gitcrawl database; config is remote cloud mode")
 	}

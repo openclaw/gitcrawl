@@ -40,7 +40,7 @@ A local-first GitHub triage tool for maintainers and agents. Sync issues and PRs
 Use [`gitcrawl search`](/search/) for local discovery and [Octopool migration](/gh-shim/) for pooled `gh` reads.
 
 ### I want to triage a busy repo
-Read [Sync](/sync/) to bring data local, then [Clustering](/clustering/) and the [TUI](/tui/) for the maintainer workflow.
+Read the [maintainer archive workflow](/maintainer-archive/) for the first-run checklist, then [Sync](/sync/) to bring data local, [Clustering](/clustering/), and the [TUI](/tui/) for the triage loop.
 
 ### I want the full reference
 [Commands](/commands/) lists every flag and JSON field. [Configuration](/configuration/) covers env vars and paths.
