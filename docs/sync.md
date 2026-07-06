@@ -73,6 +73,8 @@ issue or pull request URLs.
 
 PR details land in `pr_files`, `pr_commits`, `pr_checks`, and `pr_runs` tables for local review, search, clustering, and TUI workflows.
 
+Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness after a sync. It reports issue, PR, comment, and review counts alongside hydrated PR detail rows, missing PR details, and detail-table row counts per repository. Use `--repos owner/a,owner/b` to compare selected repositories and `--min-missing-pr-details N` to focus backfill work on repositories with gaps. Known failed or skipped hydration attempts are reported as unavailable until the separate failure ledger is present.
+
 `--include-code` is accepted for compatibility but is currently a no-op.
 
 ## Limit and pagination
