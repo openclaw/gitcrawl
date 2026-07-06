@@ -54,7 +54,10 @@ to any command.
 - `gitcrawl init --runtime-dir <path>` creates a fully isolated local runtime
   under that directory: `gitcrawl.db`, `cache/`, `vectors/`, and `logs/`.
   This is useful for temporary archives and reproducible tests. Existing
-  `init --db` behavior remains database-only.
+  `init --db` behavior remains database-only. Relative `--db`, `--runtime-dir`,
+  and `--store-dir` filesystem paths are anchored to the current working
+  directory before they are saved, so later commands keep using the same files.
+  `--db` accepts durable filesystem paths, not SQLite `file:` URIs or `:memory:`.
 - Absolute XDG environment variables are honored even on macOS. Relative XDG
   values are ignored and gitcrawl falls back to the platform default for that
   path.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	crawlconfig "github.com/openclaw/crawlkit/config"
 	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/crawlkit/mirror"
 	crawlremote "github.com/openclaw/crawlkit/remote"
@@ -64,8 +65,9 @@ type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	configPath string
-	format     OutputFormat
+	configPath          string
+	format              OutputFormat
+	getWorkingDirectory func() (string, error)
 }
 
 type initResult struct {
@@ -95,9 +97,10 @@ var version = "dev"
 
 func New() *App {
 	return &App{
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		format: FormatText,
+		Stdout:              os.Stdout,
+		Stderr:              os.Stderr,
+		format:              FormatText,
+		getWorkingDirectory: os.Getwd,
 	}
 }
 
@@ -2895,6 +2898,21 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	if nonEmptyCount(localDBPath, isolatedRuntimeDir, portableStoreURL, remoteEndpointValue) > 1 {
 		return usageErr(fmt.Errorf("use only one of --db, --runtime-dir, --portable-store, or --remote"))
 	}
+	if localDBPath == ":memory:" || strings.HasPrefix(localDBPath, "file:") {
+		return usageErr(fmt.Errorf("--db requires a filesystem path; SQLite URIs and :memory: are unsupported"))
+	}
+	if localDBPath != "" {
+		var err error
+		localDBPath, err = a.absoluteInitPath(localDBPath)
+		if err != nil {
+			return fmt.Errorf("resolve --db path: %w", err)
+		}
+	}
+	var err error
+	isolatedRuntimeDir, err = a.absoluteInitPath(isolatedRuntimeDir)
+	if err != nil {
+		return fmt.Errorf("resolve --runtime-dir path: %w", err)
+	}
 
 	cfg := config.Default()
 	portableStoreDir := ""
@@ -2914,6 +2932,10 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		portableStoreDir = strings.TrimSpace(*storeDir)
 		if portableStoreDir == "" {
 			portableStoreDir = defaultPortableStoreDir(config.ResolvePath(a.configPath), portableStoreURL)
+		}
+		portableStoreDir, err = a.absoluteInitPath(portableStoreDir)
+		if err != nil {
+			return fmt.Errorf("resolve --store-dir path: %w", err)
 		}
 		action, err := syncPortableStore(ctx, portableStoreURL, portableStoreDir)
 		if err != nil {
@@ -2966,6 +2988,22 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		result.RemoteArchive = cfg.Remote.Archive
 	}
 	return a.writeInitOutput(result)
+}
+
+func (a *App) absoluteInitPath(path string) (string, error) {
+	originalPath := strings.TrimSpace(path)
+	path = crawlconfig.ExpandHome(path)
+	if (originalPath == "~" || strings.HasPrefix(originalPath, "~/")) && path == originalPath {
+		return "", fmt.Errorf("expand home-relative path %q: home directory unavailable", originalPath)
+	}
+	if path == "" || filepath.IsAbs(path) {
+		return path, nil
+	}
+	workingDir, err := a.getWorkingDirectory()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workingDir, path), nil
 }
 
 func (a *App) runPortable(ctx context.Context, args []string) error {

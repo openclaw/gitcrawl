@@ -56,6 +56,152 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 }
 
+func TestInitRelativeDBPathIsAbsoluteAndWritable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+	t.Chdir(workDir)
+	configPath := filepath.Join(dir, "config.toml")
+
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", "archive.db"}); err != nil {
+		t.Fatalf("init relative db: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	wantDBPath := filepath.Join(workDir, "archive.db")
+	if cfg.DBPath != wantDBPath {
+		t.Fatalf("db path = %q, want %q", cfg.DBPath, wantDBPath)
+	}
+	if cfg.VectorDir != filepath.Join(workDir, "vectors") {
+		t.Fatalf("vector dir = %q, want sibling of resolved db", cfg.VectorDir)
+	}
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open resolved db: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close resolved db: %v", err)
+	}
+	if info, err := os.Stat(wantDBPath); err != nil || info.Size() == 0 {
+		t.Fatalf("resolved db was not initialized: info=%v err=%v", info, err)
+	}
+}
+
+func TestInitRelativeRuntimeDirIsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	configPath := filepath.Join(dir, "config.toml")
+
+	if err := New().Run(context.Background(), []string{"--config", configPath, "init", "--runtime-dir", "runtime"}); err != nil {
+		t.Fatalf("init relative runtime: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	wantRoot := filepath.Join(dir, "runtime")
+	if cfg.DBPath != filepath.Join(wantRoot, "gitcrawl.db") || cfg.CacheDir != filepath.Join(wantRoot, "cache") || cfg.VectorDir != filepath.Join(wantRoot, "vectors") || cfg.LogDir != filepath.Join(wantRoot, "logs") {
+		t.Fatalf("relative runtime paths not anchored under %q: %+v", wantRoot, cfg)
+	}
+}
+
+func TestInitHomeRelativePathsExpandBeforeAnchoring(t *testing.T) {
+	homeDir := t.TempDir()
+	workDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Chdir(workDir)
+
+	dbConfigPath := filepath.Join(workDir, "db.toml")
+	if err := New().Run(context.Background(), []string{"--config", dbConfigPath, "init", "--db", "~/archive.db"}); err != nil {
+		t.Fatalf("init home-relative db: %v", err)
+	}
+	dbConfig, err := config.Load(dbConfigPath)
+	if err != nil {
+		t.Fatalf("load db config: %v", err)
+	}
+	if want := filepath.Join(homeDir, "archive.db"); dbConfig.DBPath != want {
+		t.Fatalf("home-relative db path = %q, want %q", dbConfig.DBPath, want)
+	}
+
+	runtimeConfigPath := filepath.Join(workDir, "runtime.toml")
+	if err := New().Run(context.Background(), []string{"--config", runtimeConfigPath, "init", "--runtime-dir", "~/runtime"}); err != nil {
+		t.Fatalf("init home-relative runtime: %v", err)
+	}
+	runtimeConfig, err := config.Load(runtimeConfigPath)
+	if err != nil {
+		t.Fatalf("load runtime config: %v", err)
+	}
+	wantRuntimeRoot := filepath.Join(homeDir, "runtime")
+	if runtimeConfig.DBPath != filepath.Join(wantRuntimeRoot, "gitcrawl.db") || runtimeConfig.CacheDir != filepath.Join(wantRuntimeRoot, "cache") || runtimeConfig.VectorDir != filepath.Join(wantRuntimeRoot, "vectors") || runtimeConfig.LogDir != filepath.Join(wantRuntimeRoot, "logs") {
+		t.Fatalf("home-relative runtime paths not anchored under %q: %+v", wantRuntimeRoot, runtimeConfig)
+	}
+}
+
+func TestInitResolvesWorkingDirectoryOnlyForRelativePaths(t *testing.T) {
+	app := New()
+	app.getWorkingDirectory = func() (string, error) {
+		return "", errors.New("working directory unavailable")
+	}
+
+	relativeCases := []struct {
+		name string
+		args []string
+		flag string
+	}{
+		{name: "database", args: []string{"init", "--db", "archive.db"}, flag: "--db"},
+		{name: "runtime", args: []string{"init", "--runtime-dir", "runtime"}, flag: "--runtime-dir"},
+		{name: "portable store", args: []string{"init", "--portable-store", "https://example.com/store.git", "--store-dir", "store"}, flag: "--store-dir"},
+	}
+	for _, tc := range relativeCases {
+		err := app.Run(context.Background(), tc.args)
+		if err == nil || !strings.Contains(err.Error(), "resolve "+tc.flag+" path") {
+			t.Errorf("%s error = %v, want %s resolution failure", tc.name, err, tc.flag)
+		}
+	}
+
+	dir := t.TempDir()
+	absoluteConfig := filepath.Join(dir, "absolute.toml")
+	if err := app.Run(context.Background(), []string{"--config", absoluteConfig, "init", "--db", filepath.Join(dir, "archive.db")}); err != nil {
+		t.Fatalf("absolute db init consulted working directory: %v", err)
+	}
+	remoteConfig := filepath.Join(dir, "remote.toml")
+	if err := app.Run(context.Background(), []string{"--config", remoteConfig, "init", "--remote", "https://archive.example.com", "--archive", "example"}); err != nil {
+		t.Fatalf("remote init consulted working directory: %v", err)
+	}
+}
+
+func TestInitRejectsNonFilesystemDBValues(t *testing.T) {
+	for _, dbPath := range []string{":memory:", "file:archive.db", "file:/tmp/archive.db?mode=rwc"} {
+		err := New().Run(context.Background(), []string{"init", "--db", dbPath})
+		if err == nil || !strings.Contains(err.Error(), "--db requires a filesystem path") {
+			t.Errorf("init --db %q error = %v", dbPath, err)
+		}
+	}
+}
+
+func TestInitRejectsHomeRelativePathsWithoutHomeDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "database", args: []string{"init", "--db", "~/archive.db"}},
+		{name: "runtime", args: []string{"init", "--runtime-dir", "~/runtime"}},
+		{name: "portable store", args: []string{"init", "--portable-store", "https://example.com/store.git", "--store-dir", "~/store"}},
+	}
+	for _, tc := range tests {
+		err := New().Run(context.Background(), tc.args)
+		if err == nil || !strings.Contains(err.Error(), "home directory unavailable") {
+			t.Errorf("%s error = %v, want unavailable-home failure", tc.name, err)
+		}
+	}
+}
+
 func TestInitRuntimeDirIsolatesRuntimePaths(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -1361,8 +1507,10 @@ func TestGitRemoteForMessageRedactsURLCredentials(t *testing.T) {
 func TestInitWithPortableStoreCloneAndPull(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	t.Chdir(dir)
 	remoteDir := filepath.Join(dir, "remote")
-	checkoutDir := filepath.Join(dir, "checkout")
+	checkoutDir := "checkout"
+	wantCheckoutDir := filepath.Join(dir, checkoutDir)
 	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
 	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
 		t.Fatalf("mkdir remote data: %v", err)
@@ -1387,6 +1535,13 @@ func TestInitWithPortableStoreCloneAndPull(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Portable store") || !strings.Contains(stdout.String(), "cloned") {
 		t.Fatalf("portable init output = %q", stdout.String())
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load portable config: %v", err)
+	}
+	if loaded.DBPath != filepath.Join(wantCheckoutDir, dbRel) {
+		t.Fatalf("portable db path = %q, want %q", loaded.DBPath, filepath.Join(wantCheckoutDir, dbRel))
 	}
 	action, err := syncPortableStore(ctx, remoteDir, checkoutDir)
 	if err != nil {
