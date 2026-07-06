@@ -23,7 +23,7 @@ gitcrawl status --json
 gitcrawl doctor --json
 ```
 
-`status --json` is the quick inventory check: it reports the configured archive database, repository count, thread count, open-thread count, cluster count, and last successful sync time. Use it to confirm that your local archive is present and to decide whether a refresh is needed.
+`status --json` is the quick inventory check: it reports the configured archive database, its repository/thread/open-thread/cluster inventory under `databases[].counts`, and the last successful sync time. Use it to confirm that your local archive is present and to decide whether a refresh is needed.
 
 `doctor --json` is the setup check: it reports config path, database health, credential discovery, model settings, portable-store status, and the same core counts. Use it when a run fails, when a machine has multiple config paths, or when an agent needs a machine-readable readiness gate.
 
@@ -33,7 +33,7 @@ Run an initial metadata sync, then decide whether comments and PR details are wo
 
 ```bash
 gitcrawl sync openclaw/gitcrawl --state open --json
-gitcrawl sync openclaw/gitcrawl --numbers 82,86,87 --include-comments --with pr-details --json
+gitcrawl sync openclaw/gitcrawl --numbers 94,95,96 --include-comments --with pr-details --json
 ```
 
 The first command mirrors open issues and pull requests into SQLite. The targeted `sync --numbers` command refreshes exact issues or pull requests after local discovery, so you can hydrate only the rows you intend to inspect.
@@ -77,7 +77,9 @@ NUMS=$(gitcrawl search prs "needs proof" -R openclaw/gitcrawl \
   --json number \
   | jq -r '[.[].number] | join(",")')
 
-gitcrawl sync openclaw/gitcrawl --numbers "$NUMS" --include-comments --with pr-details --json
+if [ -n "$NUMS" ]; then
+  gitcrawl sync openclaw/gitcrawl --numbers "$NUMS" --include-comments --with pr-details --json
+fi
 ```
 
 For broad backlog sweeps, keep the first pass metadata-only. Hydrate comments and PR details after you have narrowed the candidate list. This keeps local triage responsive and avoids consuming review-thread, check-run, and workflow-run quota for rows you will not inspect.
