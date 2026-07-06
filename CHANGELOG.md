@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.5 - Unreleased
+
+- Report the active executable/build identity and read-only database schema compatibility in `gitcrawl doctor --json`, including actionable drift diagnostics without applying migrations. Thanks @TurboTheTurtle.
+
 ## 0.6.4 - 2026-06-23
 
 - Drain large Cloudflare D1 table resets before sending row batches so `gitcrawl cloud publish` can tolerate bounded Worker resets.

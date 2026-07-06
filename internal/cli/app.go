@@ -3285,7 +3285,11 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	repairAction := ""
 	runtimeOpenError := ""
 	var runtimeOpenFailure error
-	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	runtimeStatusError := ""
+	var runtimeStatusFailure error
+	// Doctor accepts a missing config file and applies runtime environment overrides above.
+	// Reuse that resolved config so the runtime check inspects the same database we report.
+	rt, err := a.openLocalRuntimeReadOnlyWithConfig(ctx, cfg)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			runtimeOpenError = err.Error()
@@ -3311,7 +3315,8 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		}
 		storeStatus, err = rt.Store.Status(ctx)
 		if err != nil {
-			return err
+			runtimeStatusError = err.Error()
+			runtimeStatusFailure = err
 		}
 	}
 
@@ -3354,11 +3359,17 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	if runtimeOpenError != "" {
 		payload["runtime_open_error"] = runtimeOpenError
 	}
+	if runtimeStatusError != "" {
+		payload["runtime_status_error"] = runtimeStatusError
+	}
 	if err := a.writeOutput("doctor", payload, true); err != nil {
 		return err
 	}
 	if runtimeOpenFailure != nil {
 		return runtimeOpenFailure
+	}
+	if runtimeStatusFailure != nil {
+		return runtimeStatusFailure
 	}
 	return nil
 }

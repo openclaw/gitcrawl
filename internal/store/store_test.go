@@ -139,6 +139,103 @@ func TestInspectSchemaReportsMissingStore(t *testing.T) {
 	}
 }
 
+func TestInspectSchemaReportsEmptyPath(t *testing.T) {
+	diag := InspectSchema(context.Background(), "")
+	if diag.State != "missing" || diag.Exists || len(diag.NextSteps) == 0 {
+		t.Fatalf("schema diag = %#v, want missing path guidance", diag)
+	}
+}
+
+func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "empty.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open empty db: %v", err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		t.Fatalf("ping empty db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close empty db: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_4") {
+		t.Fatalf("schema diag = %#v, want empty database migration", diag)
+	}
+}
+
+func TestInspectSchemaReportsInvalidDatabasePath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "database-directory")
+	if err := os.Mkdir(dbPath, 0o755); err != nil {
+		t.Fatalf("create database directory: %v", err)
+	}
+
+	diag := InspectSchema(context.Background(), dbPath)
+	if diag.State != "error" || !diag.Exists || diag.Error == "" || len(diag.NextSteps) == 0 {
+		t.Fatalf("schema diag = %#v, want invalid database path error", diag)
+	}
+}
+
+func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		create table repositories (id integer primary key);
+		create table threads (id integer primary key);
+		create table thread_vectors (
+			thread_id integer primary key,
+			basis text,
+			model text
+		);
+		create table pull_request_details (thread_id integer primary key);
+		pragma user_version = 4;
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed compatibility drift: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if diag.State != "pending_migration" || !diag.PendingMigration || !diag.Legacy || diag.Current || diag.Newer {
+		t.Fatalf("schema diag = %#v, want current-version compatibility drift", diag)
+	}
+	if diag.CurrentVersion != schemaVersion || diag.PRDetails.State != "partial" {
+		t.Fatalf("schema version/details = %d/%#v, want %d/partial", diag.CurrentVersion, diag.PRDetails, schemaVersion)
+	}
+	for _, want := range []string{
+		"repositories_raw_json_column",
+		"threads_body_column",
+		"threads_raw_json_column",
+		"thread_vectors_composite_key",
+		"pull_request_files_table",
+	} {
+		if !containsString(diag.PendingMigrations, want) {
+			t.Fatalf("pending migrations = %#v, missing %q", diag.PendingMigrations, want)
+		}
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("schema diagnostics mutated compatibility-drift database bytes")
+	}
+}
+
 func TestInspectSchemaReportsNewerStoreWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
