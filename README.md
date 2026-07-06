@@ -29,7 +29,7 @@ gitcrawl sync owner/repo
 gitcrawl sync owner/repo --state open
 gitcrawl sync owner/repo --numbers 123,456 --include-comments
 gitcrawl sync owner/repo --numbers https://github.com/owner/repo/issues/123 --with pr-details
-gitcrawl coverage owner/repo --min-missing-pr-details 1 --json
+gitcrawl coverage --repos owner/repo,owner/other --min-missing-pr-details 1 --json
 gitcrawl refresh owner/repo
 gitcrawl cluster owner/repo --threshold 0.80
 gitcrawl clusters owner/repo

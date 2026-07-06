@@ -29,8 +29,9 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 		t.Fatalf("coverage json: %v", err)
 	}
 	var payload struct {
-		Repositories []store.ArchiveCoverageRow `json:"repositories"`
-		Totals       store.ArchiveCoverageRow   `json:"totals"`
+		RepositoryFilters []string                   `json:"repository_filters"`
+		Repositories      []store.ArchiveCoverageRow `json:"repositories"`
+		Totals            store.ArchiveCoverageRow   `json:"totals"`
 	}
 	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
 		t.Fatalf("decode coverage json: %v\n%s", err, jsonOut.String())
@@ -41,6 +42,9 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 	row := payload.Repositories[0]
 	if row.Repository != "openclaw/gitcrawl" || row.PullRequests != 3 || row.PullRequestsWithDetails != 1 || row.MissingPRDetails != 2 {
 		t.Fatalf("coverage row = %+v", row)
+	}
+	if row.Comments != 2 || row.PRReviews != 1 {
+		t.Fatalf("comment coverage = %+v", row)
 	}
 	if row.HydrationFailuresSupported || row.KnownFailedHydrations != nil {
 		t.Fatalf("failure ledger fields = %+v", row)
@@ -54,6 +58,45 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 	}
 	if !strings.Contains(tableOut.String(), "MISSING_PR_DETAILS") || !strings.Contains(tableOut.String(), "openclaw/gitcrawl") || !strings.Contains(tableOut.String(), "openclaw/other") {
 		t.Fatalf("coverage table output = %q", tableOut.String())
+	}
+
+	multiRun := New()
+	var multiOut bytes.Buffer
+	multiRun.Stdout = &multiOut
+	if err := multiRun.Run(ctx, []string{"--config", configPath, "coverage", "--repos", "openclaw/gitcrawl,openclaw/other,openclaw/gitcrawl", "--json"}); err != nil {
+		t.Fatalf("coverage multi-repo json: %v", err)
+	}
+	if err := json.Unmarshal(multiOut.Bytes(), &payload); err != nil {
+		t.Fatalf("decode multi-repo coverage json: %v\n%s", err, multiOut.String())
+	}
+	if got := payload.RepositoryFilters; len(got) != 2 || got[0] != "openclaw/gitcrawl" || got[1] != "openclaw/other" {
+		t.Fatalf("repository filters = %v", got)
+	}
+	if len(payload.Repositories) != 2 {
+		t.Fatalf("filtered repositories = %+v", payload.Repositories)
+	}
+
+	filteredRun := New()
+	var filteredOut bytes.Buffer
+	filteredRun.Stdout = &filteredOut
+	if err := filteredRun.Run(ctx, []string{"--config", configPath, "coverage", "--repos", "openclaw/gitcrawl,openclaw/other", "--min-missing-pr-details", "4", "--json"}); err != nil {
+		t.Fatalf("coverage filtered json: %v", err)
+	}
+	payload.Repositories = nil
+	if err := json.Unmarshal(filteredOut.Bytes(), &payload); err != nil {
+		t.Fatalf("decode filtered coverage json: %v\n%s", err, filteredOut.String())
+	}
+	if payload.Repositories == nil || len(payload.Repositories) != 0 {
+		t.Fatalf("empty repositories should encode as an array: %+v", payload.Repositories)
+	}
+
+	for _, args := range [][]string{
+		{"--config", configPath, "coverage", "openclaw/gitcrawl", "--repos", "openclaw/other", "--json"},
+		{"--config", configPath, "coverage", "--repos", "openclaw/gitcrawl,,openclaw/other", "--json"},
+	} {
+		if err := New().Run(ctx, args); err == nil {
+			t.Fatalf("coverage args should fail: %v", args)
+		}
 	}
 }
 
@@ -72,7 +115,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 	if err != nil {
 		t.Fatalf("other repo: %v", err)
 	}
-	_, err = st.UpsertThread(ctx, coverageThread(gitcrawlID, 1, "issue"))
+	issueID, err := st.UpsertThread(ctx, coverageThread(gitcrawlID, 1, "issue"))
 	if err != nil {
 		t.Fatalf("issue thread: %v", err)
 	}
@@ -127,6 +170,14 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 		FetchedAt:      "2026-07-03T00:00:00Z",
 	}}); err != nil {
 		t.Fatalf("review thread: %v", err)
+	}
+	for _, comment := range []store.Comment{
+		{ThreadID: issueID, GitHubID: "issue-comment", CommentType: "issue_comment", Body: "comment", RawJSON: "{}"},
+		{ThreadID: detailedPRID, GitHubID: "review", CommentType: "pull_review", Body: "review", RawJSON: "{}"},
+	} {
+		if _, err := st.UpsertComment(ctx, comment); err != nil {
+			t.Fatalf("comment: %v", err)
+		}
 	}
 }
 

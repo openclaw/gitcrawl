@@ -2262,14 +2262,18 @@ func (a *App) runRuns(ctx context.Context, args []string) error {
 func (a *App) runCoverage(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("coverage", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	reposRaw := fs.String("repos", "", "comma-separated owner/repo filters")
 	minMissingRaw := fs.String("min-missing-pr-details", "", "only show repositories with at least this many PRs missing detail rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"min-missing-pr-details": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"repos": true, "min-missing-pr-details": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() > 1 {
 		return usageErr(fmt.Errorf("coverage accepts at most one owner/repo filter"))
+	}
+	if fs.NArg() == 1 && strings.TrimSpace(*reposRaw) != "" {
+		return usageErr(fmt.Errorf("coverage accepts either a positional owner/repo or --repos, not both"))
 	}
 	minMissing, err := parseOptionalNonNegativeInt(*minMissingRaw)
 	if err != nil {
@@ -2282,10 +2286,23 @@ func (a *App) runCoverage(ctx context.Context, args []string) error {
 	}
 	defer rt.Store.Close()
 
-	opts := store.ArchiveCoverageOptions{MinMissingPRDetails: minMissing}
-	repository := ""
+	repositoryFilters := make([]string, 0)
 	if fs.NArg() == 1 {
-		owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+		repositoryFilters = append(repositoryFilters, fs.Arg(0))
+	} else if strings.TrimSpace(*reposRaw) != "" {
+		for _, value := range strings.Split(*reposRaw, ",") {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return usageErr(fmt.Errorf("repos: expected comma-separated owner/repo values"))
+			}
+			repositoryFilters = append(repositoryFilters, value)
+		}
+	}
+	opts := store.ArchiveCoverageOptions{MinMissingPRDetails: minMissing}
+	resolvedFilters := make([]string, 0, len(repositoryFilters))
+	seenRepoIDs := make(map[int64]struct{}, len(repositoryFilters))
+	for _, value := range repositoryFilters {
+		owner, repoName, err := parseOwnerRepo(value)
 		if err != nil {
 			return usageErr(err)
 		}
@@ -2293,15 +2310,19 @@ func (a *App) runCoverage(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		opts.RepoID = repo.ID
-		repository = repo.FullName
+		if _, seen := seenRepoIDs[repo.ID]; seen {
+			continue
+		}
+		seenRepoIDs[repo.ID] = struct{}{}
+		opts.RepoIDs = append(opts.RepoIDs, repo.ID)
+		resolvedFilters = append(resolvedFilters, repo.FullName)
 	}
 	coverage, err := rt.Store.ArchiveCoverage(ctx, opts)
 	if err != nil {
 		return err
 	}
 	payload := map[string]any{
-		"repository":                   repository,
+		"repository_filters":           resolvedFilters,
 		"min_missing_pr_details":       minMissing,
 		"hydration_failures_available": false,
 		"repositories":                 coverage.Rows,
@@ -2315,14 +2336,16 @@ func (a *App) runCoverage(ctx context.Context, args []string) error {
 
 func (a *App) writeCoverageTable(coverage store.ArchiveCoverage) error {
 	tw := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "REPOSITORY\tISSUES\tPRS\tPRS_WITH_DETAILS\tMISSING_PR_DETAILS\tFILES\tCOMMITS\tCHECKS\tREVIEW_THREADS\tWORKFLOW_RUNS\tLAST_SYNC"); err != nil {
+	if _, err := fmt.Fprintln(tw, "REPOSITORY\tISSUES\tPRS\tCOMMENTS\tPR_REVIEWS\tPRS_WITH_DETAILS\tMISSING_PR_DETAILS\tFILES\tCOMMITS\tCHECKS\tREVIEW_THREADS\tWORKFLOW_RUNS\tLAST_SYNC"); err != nil {
 		return err
 	}
 	for _, row := range coverage.Rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
 			row.Repository,
 			row.Issues,
 			row.PullRequests,
+			row.Comments,
+			row.PRReviews,
 			row.PullRequestsWithDetails,
 			row.MissingPRDetails,
 			row.PRFiles,
@@ -2337,10 +2360,12 @@ func (a *App) writeCoverageTable(coverage store.ArchiveCoverage) error {
 	}
 	if len(coverage.Rows) > 1 {
 		row := coverage.Totals
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
 			row.Repository,
 			row.Issues,
 			row.PullRequests,
+			row.Comments,
+			row.PRReviews,
 			row.PullRequestsWithDetails,
 			row.MissingPRDetails,
 			row.PRFiles,
@@ -4569,10 +4594,10 @@ Usage:
 Usage:
   gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-details] [--include-pr-details] [--json]
 `,
-	"coverage": `gitcrawl coverage reports local archive PR-detail completeness.
+	"coverage": `gitcrawl coverage reports local archive completeness by repository.
 
 Usage:
-  gitcrawl coverage [owner/repo] [--min-missing-pr-details N] [--json]
+  gitcrawl coverage [owner/repo | --repos owner/a,owner/b] [--min-missing-pr-details N] [--json]
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 

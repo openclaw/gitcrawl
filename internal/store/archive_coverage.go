@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 type ArchiveCoverageOptions struct {
-	RepoID              int64
+	RepoIDs             []int64
 	MinMissingPRDetails int
 }
 
@@ -17,6 +18,8 @@ type ArchiveCoverageRow struct {
 	Issues                     int    `json:"issues"`
 	PullRequests               int    `json:"pull_requests"`
 	OpenPullRequests           int    `json:"open_pull_requests"`
+	Comments                   int    `json:"comments"`
+	PRReviews                  int    `json:"pr_reviews"`
 	PullRequestsWithDetails    int    `json:"pull_requests_with_details"`
 	MissingPRDetails           int    `json:"missing_pr_details"`
 	PRFiles                    int    `json:"pr_files"`
@@ -36,15 +39,27 @@ type ArchiveCoverage struct {
 
 func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions) (ArchiveCoverage, error) {
 	if !s.hasTable(ctx, "repositories") {
-		return ArchiveCoverage{}, nil
+		return ArchiveCoverage{Rows: []ArchiveCoverageRow{}}, nil
 	}
-	rows, err := s.q().QueryContext(ctx, `
+	query := `
 		select
 		  r.id,
 		  r.full_name,
 		  coalesce(sum(case when t.kind = 'issue' then 1 else 0 end), 0) as issues,
 		  coalesce(sum(case when t.kind = 'pull_request' then 1 else 0 end), 0) as pull_requests,
 		  coalesce(sum(case when t.kind = 'pull_request' and t.state = 'open' then 1 else 0 end), 0) as open_pull_requests,
+		  (
+		    select count(*)
+		    from comments c
+		    join threads ct on ct.id = c.thread_id
+		    where ct.repo_id = r.id
+		  ) as comments,
+		  (
+		    select count(*)
+		    from comments c
+		    join threads ct on ct.id = c.thread_id
+		    where ct.repo_id = r.id and c.comment_type = 'pull_review'
+		  ) as pr_reviews,
 		  count(distinct prd.thread_id) as pull_requests_with_details,
 		  coalesce(sum(case when t.kind = 'pull_request' then 1 else 0 end), 0) - count(distinct prd.thread_id) as missing_pr_details,
 		  (
@@ -84,17 +99,27 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 		from repositories r
 		left join threads t on t.repo_id = r.id
 		left join pull_request_details prd on prd.thread_id = t.id
-		where (? = 0 or r.id = ?)
+	`
+	args := make([]any, 0, len(opts.RepoIDs)+1)
+	if len(opts.RepoIDs) > 0 {
+		query += "where r.id in (" + strings.TrimSuffix(strings.Repeat("?,", len(opts.RepoIDs)), ",") + ")\n"
+		for _, repoID := range opts.RepoIDs {
+			args = append(args, repoID)
+		}
+	}
+	query += `
 		group by r.id, r.full_name
 		having missing_pr_details >= ?
 		order by r.full_name
-	`, opts.RepoID, opts.RepoID, opts.MinMissingPRDetails)
+	`
+	args = append(args, opts.MinMissingPRDetails)
+	rows, err := s.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return ArchiveCoverage{}, fmt.Errorf("archive coverage: %w", err)
 	}
 	defer rows.Close()
 
-	var coverage ArchiveCoverage
+	coverage := ArchiveCoverage{Rows: []ArchiveCoverageRow{}}
 	for rows.Next() {
 		var row ArchiveCoverageRow
 		var lastSync sql.NullString
@@ -104,6 +129,8 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 			&row.Issues,
 			&row.PullRequests,
 			&row.OpenPullRequests,
+			&row.Comments,
+			&row.PRReviews,
 			&row.PullRequestsWithDetails,
 			&row.MissingPRDetails,
 			&row.PRFiles,
@@ -132,6 +159,8 @@ func addArchiveCoverageTotals(total *ArchiveCoverageRow, row ArchiveCoverageRow)
 	total.Issues += row.Issues
 	total.PullRequests += row.PullRequests
 	total.OpenPullRequests += row.OpenPullRequests
+	total.Comments += row.Comments
+	total.PRReviews += row.PRReviews
 	total.PullRequestsWithDetails += row.PullRequestsWithDetails
 	total.MissingPRDetails += row.MissingPRDetails
 	total.PRFiles += row.PRFiles
