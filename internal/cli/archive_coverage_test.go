@@ -152,6 +152,62 @@ func TestCoverageCommandSupportsCanonicalPortableArchive(t *testing.T) {
 	}
 }
 
+func TestCoverageCommandSupportsArchiveWithoutOptionalCoverageTables(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedCoverageStore(t, ctx, dbPath)
+
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	for _, table := range []string{
+		"comments",
+		"pull_request_files",
+		"pull_request_commits",
+		"pull_request_checks",
+		"pull_request_review_threads",
+		"pull_request_details",
+		"github_workflow_runs",
+		"sync_runs",
+		"repo_sync_state",
+	} {
+		if _, err := st.DB().ExecContext(ctx, `drop table `+table); err != nil {
+			st.Close()
+			t.Fatalf("drop %s: %v", table, err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close compatibility archive: %v", err)
+	}
+
+	run := New()
+	var out bytes.Buffer
+	run.Stdout = &out
+	if err := run.Run(ctx, []string{"--config", configPath, "coverage", "--json"}); err != nil {
+		t.Fatalf("coverage compatibility archive: %v", err)
+	}
+	var payload struct {
+		Repositories []store.ArchiveCoverageRow `json:"repositories"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("decode compatibility coverage json: %v\n%s", err, out.String())
+	}
+	if len(payload.Repositories) != 2 {
+		t.Fatalf("compatibility coverage rows = %+v", payload.Repositories)
+	}
+	for _, row := range payload.Repositories {
+		if row.PullRequestsWithDetails != 0 || row.MissingPRDetails != row.PullRequests || row.Comments != 0 || row.PRFiles != 0 || row.WorkflowRuns != 0 {
+			t.Fatalf("compatibility coverage row = %+v", row)
+		}
+	}
+}
+
 func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 	t.Helper()
 	st, err := store.Open(ctx, dbPath)
