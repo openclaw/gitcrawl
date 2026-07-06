@@ -18,9 +18,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/alecthomas/kong"
+	crawlconfig "github.com/openclaw/crawlkit/config"
 	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/crawlkit/mirror"
 	crawlremote "github.com/openclaw/crawlkit/remote"
@@ -63,8 +65,9 @@ type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	configPath string
-	format     OutputFormat
+	configPath          string
+	format              OutputFormat
+	getWorkingDirectory func() (string, error)
 }
 
 type initResult struct {
@@ -94,9 +97,10 @@ var version = "dev"
 
 func New() *App {
 	return &App{
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		format: FormatText,
+		Stdout:              os.Stdout,
+		Stderr:              os.Stderr,
+		format:              FormatText,
+		getWorkingDirectory: os.Getwd,
 	}
 }
 
@@ -177,6 +181,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runRuns(ctx, rest[1:])
 	case "sync-failures":
 		return a.runSyncFailures(ctx, rest[1:])
+	case "coverage":
+		return a.runCoverage(ctx, rest[1:])
 	case "search":
 		return a.runSearch(ctx, rest[1:])
 	case "code":
@@ -2305,6 +2311,128 @@ func (a *App) runSyncFailures(ctx context.Context, args []string) error {
 	}, true)
 }
 
+func (a *App) runCoverage(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("coverage", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	reposRaw := fs.String("repos", "", "comma-separated owner/repo filters")
+	minMissingRaw := fs.String("min-missing-pr-details", "", "only show repositories with at least this many PRs missing detail rows")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"repos": true, "min-missing-pr-details": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() > 1 {
+		return usageErr(fmt.Errorf("coverage accepts at most one owner/repo filter"))
+	}
+	if fs.NArg() == 1 && strings.TrimSpace(*reposRaw) != "" {
+		return usageErr(fmt.Errorf("coverage accepts either a positional owner/repo or --repos, not both"))
+	}
+	minMissing, err := parseOptionalNonNegativeInt(*minMissingRaw)
+	if err != nil {
+		return usageErr(fmt.Errorf("min-missing-pr-details: %w", err))
+	}
+
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.Store.Close()
+
+	repositoryFilters := make([]string, 0)
+	if fs.NArg() == 1 {
+		repositoryFilters = append(repositoryFilters, fs.Arg(0))
+	} else if strings.TrimSpace(*reposRaw) != "" {
+		for _, value := range strings.Split(*reposRaw, ",") {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return usageErr(fmt.Errorf("repos: expected comma-separated owner/repo values"))
+			}
+			repositoryFilters = append(repositoryFilters, value)
+		}
+	}
+	opts := store.ArchiveCoverageOptions{MinMissingPRDetails: minMissing}
+	resolvedFilters := make([]string, 0, len(repositoryFilters))
+	seenRepoIDs := make(map[int64]struct{}, len(repositoryFilters))
+	for _, value := range repositoryFilters {
+		owner, repoName, err := parseOwnerRepo(value)
+		if err != nil {
+			return usageErr(err)
+		}
+		repo, err := rt.repository(ctx, owner, repoName)
+		if err != nil {
+			return err
+		}
+		if _, seen := seenRepoIDs[repo.ID]; seen {
+			continue
+		}
+		seenRepoIDs[repo.ID] = struct{}{}
+		opts.RepoIDs = append(opts.RepoIDs, repo.ID)
+		resolvedFilters = append(resolvedFilters, repo.FullName)
+	}
+	coverage, err := rt.Store.ArchiveCoverage(ctx, opts)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"repository_filters":           resolvedFilters,
+		"min_missing_pr_details":       minMissing,
+		"hydration_failures_available": coverage.Totals.HydrationFailuresSupported,
+		"repositories":                 coverage.Rows,
+		"totals":                       coverage.Totals,
+	}
+	if a.format == FormatJSON {
+		return a.writeOutput("coverage", payload, true)
+	}
+	return a.writeCoverageTable(coverage)
+}
+
+func (a *App) writeCoverageTable(coverage store.ArchiveCoverage) error {
+	tw := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "REPOSITORY\tISSUES\tPRS\tCOMMENTS\tPR_REVIEWS\tPRS_WITH_DETAILS\tMISSING_PR_DETAILS\tFILES\tCOMMITS\tCHECKS\tREVIEW_THREADS\tWORKFLOW_RUNS\tLAST_SYNC"); err != nil {
+		return err
+	}
+	for _, row := range coverage.Rows {
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+			row.Repository,
+			row.Issues,
+			row.PullRequests,
+			row.Comments,
+			row.PRReviews,
+			row.PullRequestsWithDetails,
+			row.MissingPRDetails,
+			row.PRFiles,
+			row.PRCommits,
+			row.PRChecks,
+			row.PRReviewThreads,
+			row.WorkflowRuns,
+			row.LastSyncAt,
+		); err != nil {
+			return err
+		}
+	}
+	if len(coverage.Rows) > 1 {
+		row := coverage.Totals
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+			row.Repository,
+			row.Issues,
+			row.PullRequests,
+			row.Comments,
+			row.PRReviews,
+			row.PullRequestsWithDetails,
+			row.MissingPRDetails,
+			row.PRFiles,
+			row.PRCommits,
+			row.PRChecks,
+			row.PRReviewThreads,
+			row.WorkflowRuns,
+			row.LastSyncAt,
+		); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
 func (a *App) runThreads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -2819,6 +2947,21 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	if nonEmptyCount(localDBPath, isolatedRuntimeDir, portableStoreURL, remoteEndpointValue) > 1 {
 		return usageErr(fmt.Errorf("use only one of --db, --runtime-dir, --portable-store, or --remote"))
 	}
+	if localDBPath == ":memory:" || strings.HasPrefix(localDBPath, "file:") {
+		return usageErr(fmt.Errorf("--db requires a filesystem path; SQLite URIs and :memory: are unsupported"))
+	}
+	if localDBPath != "" {
+		var err error
+		localDBPath, err = a.absoluteInitPath(localDBPath)
+		if err != nil {
+			return fmt.Errorf("resolve --db path: %w", err)
+		}
+	}
+	var err error
+	isolatedRuntimeDir, err = a.absoluteInitPath(isolatedRuntimeDir)
+	if err != nil {
+		return fmt.Errorf("resolve --runtime-dir path: %w", err)
+	}
 
 	cfg := config.Default()
 	portableStoreDir := ""
@@ -2838,6 +2981,10 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		portableStoreDir = strings.TrimSpace(*storeDir)
 		if portableStoreDir == "" {
 			portableStoreDir = defaultPortableStoreDir(config.ResolvePath(a.configPath), portableStoreURL)
+		}
+		portableStoreDir, err = a.absoluteInitPath(portableStoreDir)
+		if err != nil {
+			return fmt.Errorf("resolve --store-dir path: %w", err)
 		}
 		action, err := syncPortableStore(ctx, portableStoreURL, portableStoreDir)
 		if err != nil {
@@ -2890,6 +3037,22 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		result.RemoteArchive = cfg.Remote.Archive
 	}
 	return a.writeInitOutput(result)
+}
+
+func (a *App) absoluteInitPath(path string) (string, error) {
+	originalPath := strings.TrimSpace(path)
+	path = crawlconfig.ExpandHome(path)
+	if (originalPath == "~" || strings.HasPrefix(originalPath, "~/")) && path == originalPath {
+		return "", fmt.Errorf("expand home-relative path %q: home directory unavailable", originalPath)
+	}
+	if path == "" || filepath.IsAbs(path) {
+		return path, nil
+	}
+	workingDir, err := a.getWorkingDirectory()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(workingDir, path), nil
 }
 
 func (a *App) runPortable(ctx context.Context, args []string) error {
@@ -3297,6 +3460,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	jsonOut := fs.Bool("json", false, "write JSON output")
+	locks := fs.Bool("locks", false, "include SQLite lock and process diagnostics")
 	if err := fs.Parse(normalizeCommandArgs(args, nil)); err != nil {
 		return usageErr(err)
 	}
@@ -3324,20 +3488,38 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	}
 	storeStatus := store.Status{DBPath: cfg.DBPath}
 	sourceHealth := sqliteDBHealth(ctx, cfg.DBPath, cfg.DBPath)
+	sourceSchema := store.InspectSchema(ctx, cfg.DBPath)
+	dbSchema := sourceSchema
 	runtimeHealth := map[string]any{}
+	var runtimeSchema store.SchemaDiagnostics
+	runtimeSchemaAvailable := false
 	portableStoreStatus := map[string]any{}
 	portableRefreshState := map[string]any{}
 	repairAction := ""
-	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	lockDBPath := cfg.DBPath
+	runtimeOpenError := ""
+	var runtimeOpenFailure error
+	runtimeStatusError := ""
+	var runtimeStatusFailure error
+	// Doctor accepts a missing config file and applies runtime environment overrides above.
+	// Reuse that resolved config so the runtime check inspects the same database we report.
+	rt, err := a.openLocalRuntimeReadOnlyWithConfig(ctx, cfg)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return err
+			runtimeOpenError = err.Error()
+			runtimeOpenFailure = err
 		}
 	} else {
 		defer rt.Store.Close()
+		lockDBPath = rt.Config.DBPath
 		sourceHealth = sqliteDBHealth(ctx, rt.SourceDBPath, rt.SourceDBPath)
+		sourceSchema = store.InspectSchema(ctx, rt.SourceDBPath)
+		dbSchema = sourceSchema
 		if rt.RemoteSource {
 			runtimeHealth = sqliteDBHealth(ctx, rt.Config.DBPath, rt.SourceDBPath)
+			runtimeSchema = store.InspectSchema(ctx, rt.Config.DBPath)
+			runtimeSchemaAvailable = true
+			dbSchema = runtimeSchema
 			portableStoreStatus = portableStoreGitStatus(ctx, rt.SourceDBPath)
 			state := readPortableStoreRefreshState(portableStoreRefreshStatePath(rt.Config.DBPath))
 			portableRefreshState = portableRefreshStatePayload(state)
@@ -3348,22 +3530,27 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		}
 		storeStatus, err = rt.Store.Status(ctx)
 		if err != nil {
-			return err
+			runtimeStatusError = err.Error()
+			runtimeStatusFailure = err
 		}
 	}
 
 	githubToken := a.resolveGitHubToken(ctx, cfg)
 	openAIKey := config.ResolveOpenAIKey(cfg)
-	return a.writeOutput("doctor", map[string]any{
+	runtimeIdentity := runtimeIdentityPayload()
+	payload := map[string]any{
 		"version":               version,
 		"config_path":           config.ResolvePath(a.configPath),
 		"config_exists":         configExists,
 		"db_path":               cfg.DBPath,
 		"source_db_health":      sourceHealth,
 		"runtime_db_health":     runtimeHealth,
+		"db_schema":             dbSchema,
+		"source_db_schema":      sourceSchema,
 		"portable_store_status": portableStoreStatus,
 		"portable_refresh":      portableRefreshState,
 		"repair_action":         repairAction,
+		"runtime":               runtimeIdentity,
 		"github_token_present":  githubToken.Value != "",
 		"github_token_source":   githubToken.Source,
 		"openai_key_present":    openAIKey.Value != "",
@@ -3377,7 +3564,32 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"embed_model":           cfg.OpenAI.EmbedModel,
 		"embedding_basis":       cfg.EmbeddingBasis,
 		"api_supported":         false,
-	}, true)
+	}
+	if executablePath, ok := runtimeIdentity["executable_path"]; ok {
+		payload["executable_path"] = executablePath
+	}
+	if runtimeSchemaAvailable {
+		payload["runtime_db_schema"] = runtimeSchema
+	}
+	if runtimeOpenError != "" {
+		payload["runtime_open_error"] = runtimeOpenError
+	}
+	if runtimeStatusError != "" {
+		payload["runtime_status_error"] = runtimeStatusError
+	}
+	if *locks {
+		payload["locks"] = sqliteLockDiagnostic(ctx, lockDBPath)
+	}
+	if err := a.writeOutput("doctor", payload, true); err != nil {
+		return err
+	}
+	if runtimeOpenFailure != nil {
+		return runtimeOpenFailure
+	}
+	if runtimeStatusFailure != nil {
+		return runtimeStatusFailure
+	}
+	return nil
 }
 
 func portableRefreshStatePayload(state portableStoreRefreshState) map[string]any {
@@ -3439,11 +3651,13 @@ func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExis
 		}
 	}
 	openAIKey := config.ResolveOpenAIKey(cfg)
-	return a.writeOutput("doctor", map[string]any{
+	runtimeIdentity := runtimeIdentityPayload()
+	payload := map[string]any{
 		"version":              version,
 		"config_path":          config.ResolvePath(a.configPath),
 		"config_exists":        configExists,
 		"remote":               remoteStatus,
+		"runtime":              runtimeIdentity,
 		"remote_token_present": remoteToken.Value != "",
 		"remote_token_source":  remoteToken.Source,
 		"openai_key_present":   openAIKey.Value != "",
@@ -3452,7 +3666,11 @@ func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExis
 		"embed_model":          cfg.OpenAI.EmbedModel,
 		"embedding_basis":      cfg.EmbeddingBasis,
 		"api_supported":        false,
-	}, true)
+	}
+	if executablePath, ok := runtimeIdentity["executable_path"]; ok {
+		payload["executable_path"] = executablePath
+	}
+	return a.writeOutput("doctor", payload, true)
 }
 
 func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[string]any {
@@ -3551,7 +3769,7 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
@@ -3562,6 +3780,7 @@ func (a *App) runMetadata(args []string) error {
 		"whoami":          {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
 		"check-update":    {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
 		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
+		"coverage":        {Title: "Archive coverage", Argv: []string{"gitcrawl", "coverage", "--json"}, JSON: true},
 		"sync":            {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
 		"search":          {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
 		"code-index":      {Title: "Code index", Argv: []string{"gitcrawl", "code", "index", "--json"}, JSON: true, Mutates: true},
@@ -3790,6 +4009,17 @@ func parseOptionalPositiveInt(value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("expected positive integer, got %q", value)
+	}
+	return parsed, nil
+}
+
+func parseOptionalNonNegativeInt(value string) (int, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("expected non-negative integer, got %q", value)
 	}
 	return parsed, nil
 }
@@ -4373,6 +4603,7 @@ Core commands:
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
   sync-failures        list failed sync hydration attempts
+  coverage             report local archive PR-detail completeness
   refresh              run sync, enrichment, embedding, and clustering pipeline
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
@@ -4450,7 +4681,7 @@ Usage:
 	"doctor": `gitcrawl doctor checks config, token, and database readiness.
 
 Usage:
-  gitcrawl doctor [--json]
+  gitcrawl doctor [--json] [--locks]
 `,
 	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
 
@@ -4461,6 +4692,11 @@ Usage:
 
 Usage:
   gitcrawl sync-failures owner/repo [--include-resolved] [--limit N] [--json]
+`,
+	"coverage": `gitcrawl coverage reports local archive completeness by repository.
+
+Usage:
+  gitcrawl coverage [owner/repo | --repos owner/a,owner/b] [--min-missing-pr-details N] [--json]
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 
