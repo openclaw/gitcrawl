@@ -2,10 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 func TestGHAPIRouteNormalization(t *testing.T) {
@@ -74,5 +78,67 @@ func TestWriteJSONValueWithoutJQ(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"ok": true`) {
 		t.Fatalf("json output = %s", out.String())
+	}
+}
+
+func TestWriteJSONValueErrors(t *testing.T) {
+	app := New()
+	if err := app.writeJSONValue(map[string]any{"bad": func() {}}, ""); err == nil {
+		t.Fatalf("expected marshal error")
+	}
+	t.Setenv("PATH", "")
+	if err := app.writeJSONValue(map[string]any{"ok": true}, ".ok"); !errors.Is(err, errLocalGHUnsupported) {
+		t.Fatalf("jq error = %v, want local gh unsupported", err)
+	}
+}
+
+func TestLocalGHUnsupportedAndShim(t *testing.T) {
+	if err := localGHUnsupported(nil); !errors.Is(err, errLocalGHUnsupported) {
+		t.Fatalf("nil wrapped error = %v", err)
+	}
+	if err := localGHUnsupported(errors.New("missing")); !errors.Is(err, errLocalGHUnsupported) || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("wrapped error = %v", err)
+	}
+
+	app := New()
+	var stderr bytes.Buffer
+	app.Stderr = &stderr
+	err := app.runGHShim(nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "gitcrawl gh moved to octopool") {
+		t.Fatalf("runGHShim error = %v", err)
+	}
+	if !strings.Contains(stderr.String(), "octopool login") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestClusterAndRuntimeHelperBranches(t *testing.T) {
+	clusterCases := []struct {
+		source string
+		want   string
+		ok     bool
+	}{
+		{source: "", want: "", ok: true},
+		{source: " AUTO ", want: "", ok: true},
+		{source: "raw", want: store.ClusterSourceRun, ok: true},
+		{source: "durable", want: store.ClusterSourceDurable, ok: true},
+		{source: "unknown", ok: false},
+	}
+	for _, tc := range clusterCases {
+		got, err := parseClusterDetailSource(tc.source)
+		if tc.ok && (err != nil || got != tc.want) {
+			t.Fatalf("parseClusterDetailSource(%q) = %q, %v; want %q", tc.source, got, err, tc.want)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("parseClusterDetailSource(%q) unexpectedly succeeded", tc.source)
+		}
+	}
+
+	err := neighborEmbeddingRecoveryError("openclaw", "gitcrawl", 42, true, fmt.Errorf("missing vector"))
+	if !strings.Contains(err.Error(), "gitcrawl embed openclaw/gitcrawl --number 42 --limit 1 --include-closed") {
+		t.Fatalf("neighbor recovery error = %v", err)
+	}
+	if isGitIndexLockError(nil) || isGitIndexLockError(errors.New("index.lock")) || !isGitIndexLockError(errors.New("fatal: Unable to create '.git/index.lock': File exists.")) {
+		t.Fatalf("index lock classifier failed")
 	}
 }

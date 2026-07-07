@@ -718,6 +718,38 @@ func TestSyncPullRequestDetailsFailsOnReviewThreadFetchError(t *testing.T) {
 	}
 }
 
+func TestSyncAttemptErrorClass(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "context canceled",
+			err:  context.Canceled,
+			want: "context_canceled",
+		},
+		{
+			name: "deadline exceeded",
+			err:  context.DeadlineExceeded,
+			want: "deadline_exceeded",
+		},
+		{
+			name: "generic error",
+			err:  errors.New("graphql unavailable"),
+			want: "error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := syncAttemptErrorClass(tt.err); got != tt.want {
+				t.Fatalf("syncAttemptErrorClass() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSyncPullRequestDetailsSkipsCheckAndWorkflowFetchWithoutHeadSHA(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
