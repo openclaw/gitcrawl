@@ -2840,6 +2840,20 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	if got := openAIBaseURL(); got != "https://gitcrawl-openai.example/v1" {
 		t.Fatalf("openAIBaseURL override = %q", got)
 	}
+	if got := summaryBaseURL(config.Config{}); got != "https://gitcrawl-openai.example/v1" {
+		t.Fatalf("summaryBaseURL fallback = %q", got)
+	}
+	if got := embedBaseURL(config.Config{}); got != "https://gitcrawl-openai.example/v1" {
+		t.Fatalf("embedBaseURL fallback = %q", got)
+	}
+	summaryCfg := config.Config{OpenAI: config.OpenAIConfig{SummaryBaseURL: "https://summary.example/v1"}}
+	if got := summaryBaseURL(summaryCfg); got != "https://summary.example/v1" {
+		t.Fatalf("summaryBaseURL override = %q", got)
+	}
+	embedCfg := config.Config{OpenAI: config.OpenAIConfig{EmbedBaseURL: "https://embed.example/v1"}}
+	if got := embedBaseURL(embedCfg); got != "https://embed.example/v1" {
+		t.Fatalf("embedBaseURL override = %q", got)
+	}
 	t.Setenv("GITHUB_BASE_URL", "https://github.example")
 	if got := githubBaseURL(); got != "https://github.example" {
 		t.Fatalf("githubBaseURL fallback = %q", got)

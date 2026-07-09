@@ -277,10 +277,12 @@ func (a *App) runConfigure(args []string) error {
 	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	summaryModel := fs.String("summary-model", "", "summary model")
+	summaryBaseURLFlag := fs.String("summary-base-url", "", "custom endpoint for the summary model")
 	embedModel := fs.String("embed-model", "", "embedding model")
+	embedBaseURLFlag := fs.String("embed-base-url", "", "custom endpoint for the embedding model")
 	embeddingBasis := fs.String("embedding-basis", "", "embedding basis")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"summary-model": true, "embed-model": true, "embedding-basis": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"summary-model": true, "summary-base-url": true, "embed-model": true, "embed-base-url": true, "embedding-basis": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -299,8 +301,16 @@ func (a *App) runConfigure(args []string) error {
 		cfg.OpenAI.SummaryModel = strings.TrimSpace(*summaryModel)
 		updated = true
 	}
+	if fsFlagSet(fs, "summary-base-url") {
+		cfg.OpenAI.SummaryBaseURL = strings.TrimSpace(*summaryBaseURLFlag)
+		updated = true
+	}
 	if strings.TrimSpace(*embedModel) != "" {
 		cfg.OpenAI.EmbedModel = strings.TrimSpace(*embedModel)
+		updated = true
+	}
+	if fsFlagSet(fs, "embed-base-url") {
+		cfg.OpenAI.EmbedBaseURL = strings.TrimSpace(*embedBaseURLFlag)
 		updated = true
 	}
 	if strings.TrimSpace(*embeddingBasis) != "" {
@@ -313,11 +323,13 @@ func (a *App) runConfigure(args []string) error {
 		}
 	}
 	return a.writeOutput("configure", map[string]any{
-		"config_path":     config.ResolvePath(a.configPath),
-		"updated":         updated || !configExists,
-		"summary_model":   cfg.OpenAI.SummaryModel,
-		"embed_model":     cfg.OpenAI.EmbedModel,
-		"embedding_basis": cfg.EmbeddingBasis,
+		"config_path":      config.ResolvePath(a.configPath),
+		"updated":          updated || !configExists,
+		"summary_model":    cfg.OpenAI.SummaryModel,
+		"summary_base_url": summaryBaseURL(cfg),
+		"embed_model":      cfg.OpenAI.EmbedModel,
+		"embed_base_url":   embedBaseURL(cfg),
+		"embedding_basis":  cfg.EmbeddingBasis,
 	}, true)
 }
 
@@ -649,7 +661,7 @@ func (a *App) semanticSearchDocuments(ctx context.Context, rt localRuntime, repo
 	if token.Value == "" {
 		return nil, fmt.Errorf("semantic search requires OpenAI API key: set %s", rt.Config.OpenAI.APIKeyEnv)
 	}
-	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL(), Dimensions: rt.Config.OpenAI.EmbedDimensions, Retry: embedRetryOverride()})
+	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: embedBaseURL(rt.Config), Dimensions: rt.Config.OpenAI.EmbedDimensions, Retry: embedRetryOverride()})
 	queryVectors, err := client.Embed(ctx, rt.Config.OpenAI.EmbedModel, []string{query})
 	if err != nil {
 		return nil, err
@@ -1259,7 +1271,7 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 	if batchSize <= 0 {
 		batchSize = 64
 	}
-	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: openAIBaseURL(), Dimensions: rt.Config.OpenAI.EmbedDimensions, Retry: embedRetryOverride()})
+	client := openai.New(openai.Options{APIKey: token.Value, BaseURL: embedBaseURL(rt.Config), Dimensions: rt.Config.OpenAI.EmbedDimensions, Retry: embedRetryOverride()})
 
 	type pendingBatch struct {
 		start, end int
@@ -1449,11 +1461,46 @@ func truncatedEmbeddingTaskCount(tasks []store.EmbeddingTask) int {
 	return count
 }
 
+// fsFlagSet reports whether the named flag was explicitly provided on the
+// command line, allowing callers to distinguish an empty value from an omitted
+// flag (e.g. clearing summary_base_url back to the shared endpoint).
+func fsFlagSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func openAIBaseURL() string {
 	if value := strings.TrimSpace(os.Getenv("GITCRAWL_OPENAI_BASE_URL")); value != "" {
 		return value
 	}
 	return strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+}
+
+// summaryBaseURL resolves the endpoint for the summary model. A configured
+// summary_base_url (or its GITCRAWL_SUMMARY_BASE_URL override, applied at
+// runtime) takes precedence, so summaries can target a different endpoint than
+// embeddings; otherwise it falls back to the shared OpenAI base URL.
+func summaryBaseURL(cfg config.Config) string {
+	if value := strings.TrimSpace(cfg.OpenAI.SummaryBaseURL); value != "" {
+		return value
+	}
+	return openAIBaseURL()
+}
+
+// embedBaseURL resolves the endpoint for the embedding model. A configured
+// embed_base_url (or its GITCRAWL_EMBED_BASE_URL override, applied at runtime)
+// takes precedence, so embeddings can target a different endpoint than
+// summaries; otherwise it falls back to the shared OpenAI base URL.
+func embedBaseURL(cfg config.Config) string {
+	if value := strings.TrimSpace(cfg.OpenAI.EmbedBaseURL); value != "" {
+		return value
+	}
+	return openAIBaseURL()
 }
 
 func githubBaseURL() string {
@@ -3512,7 +3559,9 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"cluster_count":         storeStatus.ClusterCount,
 		"last_sync_at":          formatOptionalTime(storeStatus.LastSyncAt),
 		"summary_model":         cfg.OpenAI.SummaryModel,
+		"summary_base_url":      summaryBaseURL(cfg),
 		"embed_model":           cfg.OpenAI.EmbedModel,
+		"embed_base_url":        embedBaseURL(cfg),
 		"embedding_basis":       cfg.EmbeddingBasis,
 		"api_supported":         false,
 	}
@@ -3614,7 +3663,9 @@ func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExis
 		"openai_key_present":   openAIKey.Value != "",
 		"openai_key_source":    openAIKey.Source,
 		"summary_model":        cfg.OpenAI.SummaryModel,
+		"summary_base_url":     summaryBaseURL(cfg),
 		"embed_model":          cfg.OpenAI.EmbedModel,
+		"embed_base_url":       embedBaseURL(cfg),
 		"embedding_basis":      cfg.EmbeddingBasis,
 		"api_supported":        false,
 	}
@@ -4626,7 +4677,7 @@ Usage:
 	"configure": `gitcrawl configure updates model fields in the config.
 
 Usage:
-  gitcrawl configure [--summary-model name] [--embed-model name] [--embedding-basis title_original] [--json]
+  gitcrawl configure [--summary-model name] [--summary-base-url url] [--embed-model name] [--embed-base-url url] [--embedding-basis title_original] [--json]
 `,
 	"doctor": `gitcrawl doctor checks config, token, and database readiness.
 

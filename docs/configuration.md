@@ -81,7 +81,9 @@ to any command.
 
 ```toml
 summary_model = "gpt-5.4"
+summary_base_url = "https://custom.example.com/v1"
 embed_model = "text-embedding-3-small"
+embed_base_url = "https://custom.example.com/v1"
 embed_dimensions = 1024
 embedding_basis = "title_original"
 vector_backend = "exact"
@@ -107,7 +109,9 @@ token_env = "CRAWL_REMOTE_TOKEN"
 | Field | Default | Notes |
 | --- | --- | --- |
 | `summary_model` | `gpt-5.4` | Reserved for future summary commands |
+| `summary_base_url` | _(empty)_ | Custom endpoint for the summary model; falls back to `GITCRAWL_OPENAI_BASE_URL`/`OPENAI_BASE_URL`. Override at runtime with `GITCRAWL_SUMMARY_BASE_URL` |
 | `embed_model` | `text-embedding-3-small` | OpenAI embedding model |
+| `embed_base_url` | _(empty)_ | Custom endpoint for the embedding model; falls back to `GITCRAWL_OPENAI_BASE_URL`/`OPENAI_BASE_URL`. Override at runtime with `GITCRAWL_EMBED_BASE_URL` |
 | `embed_dimensions` | `1024` | Must match the model |
 | `embedding_basis` | `title_original` | Only `title_original` is implemented |
 | `vector_backend` | `exact` | Semantic search backend: `exact` or optional `turbovec` via Python `turbovec`; turbovec requires dimensions divisible by 8 |
@@ -143,6 +147,39 @@ before updating gitcrawl.
 | `GITCRAWL_VECTOR_BACKEND` | Override semantic vector backend (`exact` or `turbovec`) |
 | `GITCRAWL_OPENAI_RETRY_DISABLED` | Set to `1` to disable OpenAI retry/backoff |
 | `GITCRAWL_OPENAI_BASE_URL` / `OPENAI_BASE_URL` | Custom OpenAI endpoint (e.g., for a proxy) |
+| `GITCRAWL_SUMMARY_BASE_URL` | Custom endpoint for the summary model (falls back to the shared OpenAI endpoint) |
+| `GITCRAWL_EMBED_BASE_URL` | Custom endpoint for the embedding model (falls back to the shared OpenAI endpoint) |
+
+#### How the base-URL variables relate
+
+There are three base-URL variables, and they form a fallback chain rather than
+competing with each other:
+
+- **`GITCRAWL_OPENAI_BASE_URL`** (or `OPENAI_BASE_URL`) is the **shared** endpoint
+  used for *every* OpenAI call — both summaries and embeddings. Set only this and
+  both workloads hit the same endpoint. This is the common case (e.g. one proxy
+  for everything).
+- **`GITCRAWL_SUMMARY_BASE_URL`** is a **per-purpose override** that applies only
+  to the summary model.
+- **`GITCRAWL_EMBED_BASE_URL`** is a **per-purpose override** that applies only to
+  the embedding model.
+
+The per-purpose variables do not replace the shared one — they layer on top of
+it. When a per-purpose value is empty, that workload falls back to the shared
+endpoint. Resolution order for each purpose:
+
+- **Embeddings:** `GITCRAWL_EMBED_BASE_URL` → `embed_base_url` (config) → `GITCRAWL_OPENAI_BASE_URL` → `OPENAI_BASE_URL`
+- **Summaries:** `GITCRAWL_SUMMARY_BASE_URL` → `summary_base_url` (config) → `GITCRAWL_OPENAI_BASE_URL` → `OPENAI_BASE_URL`
+
+Use the per-purpose overrides only when the two workloads must diverge — for
+example, running chat/summaries against one provider while embeddings go to a
+different host or a local embedding server:
+
+```bash
+# Summaries use the shared endpoint; embeddings go to a dedicated one.
+export GITCRAWL_OPENAI_BASE_URL="https://openrouter.ai/api/v1"
+export GITCRAWL_EMBED_BASE_URL="http://localhost:8080/v1"
+```
 
 ### GitHub overrides
 
@@ -150,6 +187,57 @@ before updating gitcrawl.
 | --- | --- |
 | `GITCRAWL_GITHUB_BASE_URL` / `GITHUB_BASE_URL` | Custom GitHub API endpoint used by `sync` |
 | `GH_REPO` | Default repository for compatible local search shapes |
+
+## Non-OpenAI / OpenAI-compatible embedding endpoints
+
+`OPENAI_API_KEY` is only used to generate embeddings (`embed`, `refresh`). The
+embedding client is a generic OpenAI-compatible client: it sends
+`Authorization: Bearer <key>` and POSTs to `<base-url>/embeddings`. Any
+compatible endpoint — OpenRouter, a proxy, a local server, or a self-hosted
+gateway — works if you override three things:
+
+1. **Base URL** — `GITCRAWL_OPENAI_BASE_URL` (or `OPENAI_BASE_URL`), including
+   the version suffix your provider expects (e.g. `/v1`). To point *only*
+   embeddings at this endpoint while leaving summaries on the shared one, use
+   `GITCRAWL_EMBED_BASE_URL` (or `embed_base_url`) instead — see
+   [How the base-URL variables relate](#how-the-base-url-variables-relate).
+2. **Model** — `GITCRAWL_EMBED_MODEL` (or `embed_model`). The default
+   `text-embedding-3-small` is an OpenAI model name; set a model the provider
+   actually serves for embeddings.
+3. **Dimensions** — set `embed_dimensions` to match the model's output if it
+   differs from `1024`, or if the endpoint does not honor the `dimensions`
+   request parameter the way OpenAI does.
+
+By default the key is read from `OPENAI_API_KEY`. To read it from a different
+variable instead, set `openai.api_key_env` in `config.toml`:
+
+```toml
+embed_model = "text-embedding-3-small"
+embed_dimensions = 1024
+
+[openai]
+api_key_env = "OPENROUTER_API_KEY"
+```
+
+OpenRouter example:
+
+```bash
+export GITCRAWL_OPENAI_BASE_URL="https://openrouter.ai/api/v1"
+export GITCRAWL_EMBED_MODEL="<an-embedding-model-openrouter-serves>"
+export OPENAI_API_KEY="<openrouter-key>"   # or set openai.api_key_env
+```
+
+Notes:
+
+- OpenRouter's embeddings coverage is narrower than its chat coverage; confirm
+  it serves the embedding model you pick before running `embed`.
+- Changing the model changes the vector space. `embed` auto-forces a rebuild
+  when `embed_model` changes, so existing rows are re-embedded consistently. If
+  you only change `embed_dimensions` (or switch to an endpoint that produces
+  different vectors under the same model name), re-run `embed --force` yourself
+  so `neighbors` and clustering do not mix incompatible vectors.
+- `gitcrawl doctor` reports where the key came from (env vs. config) and the
+  active embed model, which is useful for confirming the override took effect.
 
 ### gh shim
 
