@@ -83,13 +83,13 @@ gitcrawl portable prune --json
 
 Portable v2 keeps the data agents most often need for offline GitHub reads:
 
-- Repositories, issues, pull requests, labels, authors, and timestamps
+- Repositories, issues, pull requests, labels, author login/type/association, and timestamps
 - Compact issue/PR body excerpts plus original body lengths
 - Compact comments, reviews, and review-comment excerpts plus original body lengths
 - PR details, files, commits, status checks, and workflow runs
-- Thread fingerprints used by duplicate and cluster-oriented workflows
+- Thread revisions, deterministic fingerprints, and key summaries used by duplicate and cluster-oriented workflows
 
-It strips the data that is large, easy to regenerate, or mainly useful for exact API replay: raw GitHub JSON, generated documents and FTS indexes, embeddings and vectors, code snapshots and diff blobs, cluster run history, similarity edges, and blob storage. The database records this contract in `portable_metadata` with `schema=gitcrawl-portable-sync-v2`, `includes`, `excluded`, and `capabilities` keys.
+It strips the data that is large, easy to regenerate, or mainly useful for exact API replay: raw GitHub JSON, generated documents and FTS indexes, embeddings and vectors, code snapshots and diff blobs, cluster run history, similarity edges, and blob storage. The database records this contract in `portable_metadata` with `schema=gitcrawl-portable-sync-v2`, `includes`, `excluded`, `capabilities`, and `thread_author_profile` keys. The added revision, fingerprint, summary, and author-association fields are additive; the portable schema identifier remains v2 so older readers can continue using the columns and tables they understand.
 
 | Flag | Default | Description |
 | --- | --- | --- |

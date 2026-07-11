@@ -44,12 +44,14 @@ The defaults match ghcrawl's tuning so the output is comparable across tools:
 | `--min-size <n>` | `1` | Minimum members per emitted cluster |
 | `--max-cluster-size <n>` | `40` | Hard cap on cluster size |
 | `--k <n>` | `16` | Nearest-neighbor fanout per thread |
-| `--limit <n>` | _(no limit)_ | Maximum vector rows to consider |
+| `--limit <n>` | _(no limit)_ | Maximum fresh vector rows to consider; explicitly permits a partial run |
 | `--model <name>` | _(config)_ | Embedding model override |
 | `--basis <name>` | _(config)_ | Embedding basis override |
 | `--include-closed` | _(off)_ | Include closed threads |
 
 Every active vector-backed thread is represented in the result: singleton clusters use `kind = singleton_orphan`, multi-member clusters use `kind = duplicate_candidate`.
+
+Without `--limit`, clustering is fail-closed: it verifies the exact configured model/basis coverage and refuses to mutate durable clusters when vectors are missing or stale. It never falls back to vectors from another model or basis. `--limit` preserves the existing intentional partial-run convention, reports incomplete `vector_coverage` in JSON, excludes stale vectors, and does not retire clusters outside the processed subset.
 
 ## List clusters
 

@@ -2,6 +2,10 @@
 
 ## 0.7.2 - Unreleased
 
+- Materialize immutable thread revisions and deterministic `thread-fingerprint-v2` fingerprints transactionally whenever synced canonical thread or review evidence changes, and retain GitHub `author_association` through sync and portable stores.
+- Add machine-readable revision, fingerprint, summary, cluster, and PR-detail coverage/freshness to `gitcrawl coverage --json`, and forward `refresh --with pr-details` to the sync stage.
+- Fail full cluster and refresh clustering before mutation when exact model/basis vectors are missing or stale; keep `cluster --limit` as the explicit non-retiring partial-run path.
+
 ## 0.7.1 - 2026-07-09
 
 - Add local, fail-closed packaging and independent verification for official macOS archives signed as `org.openclaw.gitcrawl` by `Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)`, while keeping CI and cross-platform snapshots credential-free and non-publishing.
