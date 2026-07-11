@@ -89,6 +89,47 @@ type PullRequestCache struct {
 	Checks  []PullRequestCheck  `json:"checks"`
 }
 
+func (s *Store) PullRequestDetailByThread(ctx context.Context, threadID int64) (PullRequestDetail, bool, error) {
+	if !s.tableExists(ctx, "pull_request_details") {
+		return PullRequestDetail{}, false, nil
+	}
+	var detail PullRequestDetail
+	var baseSHA, headSHA, headRef, headRepoFullName, mergeableState sql.NullString
+	err := s.q().QueryRowContext(ctx, `
+		select thread_id, repo_id, number, base_sha, head_sha, head_ref, head_repo_full_name,
+			mergeable_state, additions, deletions, changed_files, raw_json, fetched_at, updated_at
+		from pull_request_details
+		where thread_id = ?
+	`, threadID).Scan(
+		&detail.ThreadID,
+		&detail.RepoID,
+		&detail.Number,
+		&baseSHA,
+		&headSHA,
+		&headRef,
+		&headRepoFullName,
+		&mergeableState,
+		&detail.Additions,
+		&detail.Deletions,
+		&detail.ChangedFiles,
+		&detail.RawJSON,
+		&detail.FetchedAt,
+		&detail.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return PullRequestDetail{}, false, nil
+	}
+	if err != nil {
+		return PullRequestDetail{}, false, fmt.Errorf("pull request detail by thread: %w", err)
+	}
+	detail.BaseSHA = baseSHA.String
+	detail.HeadSHA = headSHA.String
+	detail.HeadRef = headRef.String
+	detail.HeadRepoFullName = headRepoFullName.String
+	detail.MergeableState = mergeableState.String
+	return detail, true, nil
+}
+
 func (s *Store) UpsertPullRequestCache(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun) error {
 	if s.queries != nil {
 		return s.upsertPullRequestCache(ctx, detail, files, commits, checks, runs)

@@ -26,6 +26,7 @@ create table if not exists threads (
   body text,
   author_login text,
   author_type text,
+  author_association text,
   html_url text not null,
   labels_json text not null,
   assignees_json text not null,

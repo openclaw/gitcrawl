@@ -89,6 +89,70 @@ func TestOpenMigratesSchema(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesAuthorAssociationFromVersionFour(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
+		values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{}', '2026-07-12T00:00:00Z');
+		insert into threads(
+			id, repo_id, github_id, number, kind, state, title, html_url,
+			labels_json, assignees_json, raw_json, content_hash, updated_at
+		) values(
+			1, 1, '101', 101, 'issue', 'open', 'migration fixture',
+			'https://github.com/openclaw/gitcrawl/issues/101',
+			'[]', '[]', '{}', 'hash', '2026-07-12T00:00:00Z'
+		);
+	`); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		alter table threads drop column author_association;
+		pragma user_version = 4;
+	`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("downgrade schema fixture: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	if !st.hasColumn(ctx, "threads", "author_association") {
+		t.Fatal("author_association column was not restored")
+	}
+	var version int
+	var title string
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version: got %d want %d", version, schemaVersion)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select title from threads where id = 1`).Scan(&title); err != nil {
+		t.Fatalf("read preserved thread: %v", err)
+	}
+	if title != "migration fixture" {
+		t.Fatalf("thread title = %q, want migration fixture", title)
+	}
+}
+
 func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
@@ -162,7 +226,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_4") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_5") {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -195,7 +259,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 4;
+		pragma user_version = 5;
 	`)
 	if err != nil {
 		_ = db.Close()
@@ -220,6 +284,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 		"repositories_raw_json_column",
 		"threads_body_column",
 		"threads_raw_json_column",
+		"threads_author_association_column",
 		"thread_vectors_composite_key",
 		"pull_request_files_table",
 	} {
@@ -300,7 +365,7 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_4") || !containsString(diag.PendingMigrations, "pull_request_files_position_key") {
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_5") || !containsString(diag.PendingMigrations, "pull_request_files_position_key") {
 		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
 	}
 	if len(diag.NextSteps) == 0 {
@@ -801,8 +866,8 @@ func TestPrunePortablePayloads(t *testing.T) {
 	_, err = st.DB().ExecContext(ctx, `
 		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
 		values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{"id":1}', '2026-04-26T00:00:00Z');
-		insert into threads(id, repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
-		values(1, 1, '1', 1, 'pull_request', 'open', 'download stalls', 'abcdefghijklmnopqrstuvwxyz', 'https://github.com/openclaw/gitcrawl/pull/1', '[{"name":"bug","color":"d73a4a","url":"https://api.github.com/labels/bug"}]', '[{"login":"alice","avatar_url":"https://avatars.githubusercontent.com/u/1"}]', '{"body":"abcdefghijklmnopqrstuvwxyz"}', 'hash', '2026-04-26T00:00:00Z');
+		insert into threads(id, repo_id, github_id, number, kind, state, title, body, author_association, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
+		values(1, 1, '1', 1, 'pull_request', 'open', 'download stalls', 'abcdefghijklmnopqrstuvwxyz', 'MEMBER', 'https://github.com/openclaw/gitcrawl/pull/1', '[{"name":"bug","color":"d73a4a","url":"https://api.github.com/labels/bug"}]', '[{"login":"alice","avatar_url":"https://avatars.githubusercontent.com/u/1"}]', '{"body":"abcdefghijklmnopqrstuvwxyz"}', 'hash', '2026-04-26T00:00:00Z');
 		insert into comments(id, thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh)
 		values(1, 1, 'c1', 'issue_comment', 'alice', 'User', 'comment abcdefghijklmnopqrstuvwxyz', 0, '{"body":"comment abcdefghijklmnopqrstuvwxyz"}', '2026-04-26T00:00:00Z', '2026-04-26T00:00:00Z');
 		insert into pull_request_details(thread_id, repo_id, number, base_sha, head_sha, additions, deletions, changed_files, raw_json, fetched_at, updated_at)
@@ -896,15 +961,27 @@ func TestPrunePortablePayloads(t *testing.T) {
 	if prDetailCount != 1 || prFileCount != 1 || prCommitCount != 1 || prCheckCount != 1 || runCount != 1 {
 		t.Fatalf("pr/run rows not retained: detail=%d files=%d commits=%d checks=%d runs=%d", prDetailCount, prFileCount, prCommitCount, prCheckCount, runCount)
 	}
-	var portableSchema, capabilities string
+	var portableSchema, capabilities, authorProfile, authorAssociation string
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'schema'`).Scan(&portableSchema); err != nil {
 		t.Fatalf("portable schema metadata: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'capabilities'`).Scan(&capabilities); err != nil {
 		t.Fatalf("portable capabilities metadata: %v", err)
 	}
-	if portableSchema != "gitcrawl-portable-sync-v2" || !strings.Contains(capabilities, "comment_excerpts") || !strings.Contains(capabilities, "workflow_runs") {
-		t.Fatalf("portable metadata schema=%q capabilities=%q", portableSchema, capabilities)
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'thread_author_profile'`).Scan(&authorProfile); err != nil {
+		t.Fatalf("portable author profile metadata: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select author_association from threads where id = 1`).Scan(&authorAssociation); err != nil {
+		t.Fatalf("portable author association: %v", err)
+	}
+	if portableSchema != "gitcrawl-portable-sync-v2" ||
+		!strings.Contains(capabilities, "comment_excerpts") ||
+		!strings.Contains(capabilities, "workflow_runs") ||
+		!strings.Contains(capabilities, "author_association") ||
+		!strings.Contains(capabilities, "thread_revisions") ||
+		authorProfile != "login,type,association" ||
+		authorAssociation != "MEMBER" {
+		t.Fatalf("portable metadata schema=%q capabilities=%q author_profile=%q association=%q", portableSchema, capabilities, authorProfile, authorAssociation)
 	}
 	if bodyExcerpt != "abcdefgh" || titleTokens != "[]" || linkedRefs != "[]" || buckets != "[]" || features != "{}" {
 		t.Fatalf("payloads not pruned: bodyExcerpt=%q titleTokens=%q linkedRefs=%q buckets=%q features=%q", bodyExcerpt, titleTokens, linkedRefs, buckets, features)

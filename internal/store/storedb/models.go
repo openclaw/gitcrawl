@@ -252,31 +252,48 @@ type SyncRun struct {
 }
 
 type Thread struct {
-	ID               int64          `json:"id"`
-	RepoID           int64          `json:"repo_id"`
-	GithubID         string         `json:"github_id"`
-	Number           int64          `json:"number"`
-	Kind             string         `json:"kind"`
-	State            string         `json:"state"`
-	Title            string         `json:"title"`
-	Body             sql.NullString `json:"body"`
-	AuthorLogin      sql.NullString `json:"author_login"`
-	AuthorType       sql.NullString `json:"author_type"`
-	HtmlUrl          string         `json:"html_url"`
-	LabelsJson       string         `json:"labels_json"`
-	AssigneesJson    string         `json:"assignees_json"`
-	RawJson          string         `json:"raw_json"`
-	ContentHash      string         `json:"content_hash"`
-	IsDraft          int64          `json:"is_draft"`
-	CreatedAtGh      sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh      sql.NullString `json:"updated_at_gh"`
-	ClosedAtGh       sql.NullString `json:"closed_at_gh"`
-	MergedAtGh       sql.NullString `json:"merged_at_gh"`
-	ClosedAtLocal    sql.NullString `json:"closed_at_local"`
-	CloseReasonLocal sql.NullString `json:"close_reason_local"`
-	FirstPulledAt    sql.NullString `json:"first_pulled_at"`
-	LastPulledAt     sql.NullString `json:"last_pulled_at"`
-	UpdatedAt        string         `json:"updated_at"`
+	ID                int64          `json:"id"`
+	RepoID            int64          `json:"repo_id"`
+	GithubID          string         `json:"github_id"`
+	Number            int64          `json:"number"`
+	Kind              string         `json:"kind"`
+	State             string         `json:"state"`
+	Title             string         `json:"title"`
+	Body              sql.NullString `json:"body"`
+	AuthorLogin       sql.NullString `json:"author_login"`
+	AuthorType        sql.NullString `json:"author_type"`
+	AuthorAssociation sql.NullString `json:"author_association"`
+	HtmlUrl           string         `json:"html_url"`
+	LabelsJson        string         `json:"labels_json"`
+	AssigneesJson     string         `json:"assignees_json"`
+	RawJson           string         `json:"raw_json"`
+	ContentHash       string         `json:"content_hash"`
+	IsDraft           int64          `json:"is_draft"`
+	CreatedAtGh       sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh       sql.NullString `json:"updated_at_gh"`
+	ClosedAtGh        sql.NullString `json:"closed_at_gh"`
+	MergedAtGh        sql.NullString `json:"merged_at_gh"`
+	ClosedAtLocal     sql.NullString `json:"closed_at_local"`
+	CloseReasonLocal  sql.NullString `json:"close_reason_local"`
+	FirstPulledAt     sql.NullString `json:"first_pulled_at"`
+	LastPulledAt      sql.NullString `json:"last_pulled_at"`
+	UpdatedAt         string         `json:"updated_at"`
+}
+
+type ThreadFingerprint struct {
+	ID                int64  `json:"id"`
+	ThreadRevisionID  int64  `json:"thread_revision_id"`
+	AlgorithmVersion  string `json:"algorithm_version"`
+	FingerprintHash   string `json:"fingerprint_hash"`
+	FingerprintSlug   string `json:"fingerprint_slug"`
+	TitleTokensJson   string `json:"title_tokens_json"`
+	BodyTokenHash     string `json:"body_token_hash"`
+	LinkedRefsJson    string `json:"linked_refs_json"`
+	FileSetHash       string `json:"file_set_hash"`
+	ModuleBucketsJson string `json:"module_buckets_json"`
+	Simhash64         string `json:"simhash64"`
+	FeatureJson       string `json:"feature_json"`
+	CreatedAt         string `json:"created_at"`
 }
 
 type ThreadKeySummary struct {

@@ -733,14 +733,17 @@ func TestOpenBackfillsLegacyPortableColumns(t *testing.T) {
 		t.Fatalf("open migrated legacy db: %v", err)
 	}
 	defer st.Close()
-	if !st.hasColumn(ctx, "repositories", "raw_json") || !st.hasColumn(ctx, "threads", "body") || !st.hasColumn(ctx, "threads", "raw_json") {
+	if !st.hasColumn(ctx, "repositories", "raw_json") ||
+		!st.hasColumn(ctx, "threads", "body") ||
+		!st.hasColumn(ctx, "threads", "raw_json") ||
+		!st.hasColumn(ctx, "threads", "author_association") {
 		t.Fatal("legacy columns were not added")
 	}
 	threads, err := st.ListThreads(ctx, 1, true)
 	if err != nil {
 		t.Fatalf("list migrated threads: %v", err)
 	}
-	if len(threads) != 1 || threads[0].Body != "legacy excerpt" {
+	if len(threads) != 1 || threads[0].Body != "legacy excerpt" || threads[0].AuthorAssociation != "" {
 		t.Fatalf("migrated thread = %+v", threads)
 	}
 }

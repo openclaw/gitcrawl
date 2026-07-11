@@ -205,13 +205,14 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 		return fmt.Errorf("ensure portable metadata: %w", err)
 	}
 	metadata := map[string]string{
-		"schema":       "gitcrawl-portable-sync-v2",
-		"body_chars":   fmt.Sprintf("%d", bodyChars),
-		"capabilities": "body_excerpts,comment_excerpts,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped",
-		"includes":     "repositories,threads,comments,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs,thread_fingerprints",
-		"excluded":     "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs",
-		"exported_at":  time.Now().UTC().Format(timeLayout),
-		"source_path":  s.path,
+		"schema":                "gitcrawl-portable-sync-v2",
+		"body_chars":            fmt.Sprintf("%d", bodyChars),
+		"capabilities":          "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped",
+		"includes":              "repositories,threads,comments,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs",
+		"excluded":              "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs",
+		"exported_at":           time.Now().UTC().Format(timeLayout),
+		"source_path":           s.path,
+		"thread_author_profile": "login,type,association",
 	}
 	for key, value := range metadata {
 		if _, err := s.db.ExecContext(ctx, `

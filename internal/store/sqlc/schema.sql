@@ -19,6 +19,7 @@ create table threads (
   body text,
   author_login text,
   author_type text,
+  author_association text,
   html_url text not null,
   labels_json text not null,
   assignees_json text not null,
@@ -235,6 +236,23 @@ create table thread_vectors (
   created_at text not null,
   updated_at text not null,
   primary key(thread_id, basis, model)
+);
+
+create table thread_fingerprints (
+  id integer primary key,
+  thread_revision_id integer not null references thread_revisions(id) on delete cascade,
+  algorithm_version text not null,
+  fingerprint_hash text not null,
+  fingerprint_slug text not null,
+  title_tokens_json text not null,
+  body_token_hash text not null,
+  linked_refs_json text not null,
+  file_set_hash text not null,
+  module_buckets_json text not null,
+  simhash64 text not null,
+  feature_json text not null,
+  created_at text not null,
+  unique(thread_revision_id, algorithm_version)
 );
 
 create table thread_key_summaries (

@@ -24,32 +24,34 @@ func (fakeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.R
 func (fakeGitHub) GetIssue(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) (map[string]any, error) {
 	if number == 8 {
 		return map[string]any{
-			"id":           2,
-			"number":       8,
-			"state":        "open",
-			"title":        "fix sync",
-			"body":         "",
-			"html_url":     "https://github.com/openclaw/gitcrawl/pull/8",
-			"created_at":   "2026-04-26T00:00:00Z",
-			"updated_at":   "2026-04-26T00:00:00Z",
-			"labels":       []map[string]any{},
-			"assignees":    []map[string]any{},
-			"user":         map[string]any{"login": "vincentkoc", "type": "User"},
-			"pull_request": map[string]any{"url": "https://api.github.com/repos/openclaw/gitcrawl/pulls/8"},
+			"id":                 2,
+			"number":             8,
+			"state":              "open",
+			"title":              "fix sync",
+			"body":               "",
+			"html_url":           "https://github.com/openclaw/gitcrawl/pull/8",
+			"created_at":         "2026-04-26T00:00:00Z",
+			"updated_at":         "2026-04-26T00:00:00Z",
+			"labels":             []map[string]any{},
+			"assignees":          []map[string]any{},
+			"user":               map[string]any{"login": "vincentkoc", "type": "User"},
+			"author_association": "MEMBER",
+			"pull_request":       map[string]any{"url": "https://api.github.com/repos/openclaw/gitcrawl/pulls/8"},
 		}, nil
 	}
 	return map[string]any{
-		"id":         1,
-		"number":     7,
-		"state":      "open",
-		"title":      "download stalls",
-		"body":       "large file download stalls",
-		"html_url":   "https://github.com/openclaw/gitcrawl/issues/7",
-		"created_at": "2026-04-26T00:00:00Z",
-		"updated_at": "2026-04-26T00:00:00Z",
-		"labels":     []map[string]any{{"name": "bug"}},
-		"assignees":  []map[string]any{},
-		"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+		"id":                 1,
+		"number":             7,
+		"state":              "open",
+		"title":              "download stalls",
+		"body":               "large file download stalls",
+		"html_url":           "https://github.com/openclaw/gitcrawl/issues/7",
+		"created_at":         "2026-04-26T00:00:00Z",
+		"updated_at":         "2026-04-26T00:00:00Z",
+		"labels":             []map[string]any{{"name": "bug"}},
+		"assignees":          []map[string]any{},
+		"user":               map[string]any{"login": "vincentkoc", "type": "User"},
+		"author_association": "CONTRIBUTOR",
 	}, nil
 }
 
@@ -71,31 +73,33 @@ func (fakeGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, 
 	}
 	return []map[string]any{
 		{
-			"id":         1,
-			"number":     7,
-			"state":      "open",
-			"title":      "download stalls",
-			"body":       "large file download stalls",
-			"html_url":   "https://github.com/openclaw/gitcrawl/issues/7",
-			"created_at": "2026-04-26T00:00:00Z",
-			"updated_at": "2026-04-26T00:00:00Z",
-			"labels":     []map[string]any{{"name": "bug"}},
-			"assignees":  []map[string]any{},
-			"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+			"id":                 1,
+			"number":             7,
+			"state":              "open",
+			"title":              "download stalls",
+			"body":               "large file download stalls",
+			"html_url":           "https://github.com/openclaw/gitcrawl/issues/7",
+			"created_at":         "2026-04-26T00:00:00Z",
+			"updated_at":         "2026-04-26T00:00:00Z",
+			"labels":             []map[string]any{{"name": "bug"}},
+			"assignees":          []map[string]any{},
+			"user":               map[string]any{"login": "vincentkoc", "type": "User"},
+			"author_association": "CONTRIBUTOR",
 		},
 		{
-			"id":           2,
-			"number":       8,
-			"state":        "open",
-			"title":        "fix sync",
-			"body":         "",
-			"html_url":     "https://github.com/openclaw/gitcrawl/pull/8",
-			"created_at":   "2026-04-26T00:00:00Z",
-			"updated_at":   "2026-04-26T00:00:00Z",
-			"labels":       []map[string]any{},
-			"assignees":    []map[string]any{},
-			"user":         map[string]any{"login": "vincentkoc", "type": "User"},
-			"pull_request": map[string]any{"url": "https://api.github.com/repos/openclaw/gitcrawl/pulls/8"},
+			"id":                 2,
+			"number":             8,
+			"state":              "open",
+			"title":              "fix sync",
+			"body":               "",
+			"html_url":           "https://github.com/openclaw/gitcrawl/pull/8",
+			"created_at":         "2026-04-26T00:00:00Z",
+			"updated_at":         "2026-04-26T00:00:00Z",
+			"labels":             []map[string]any{},
+			"assignees":          []map[string]any{},
+			"user":               map[string]any{"login": "vincentkoc", "type": "User"},
+			"author_association": "MEMBER",
+			"pull_request":       map[string]any{"url": "https://api.github.com/repos/openclaw/gitcrawl/pulls/8"},
 		},
 	}, nil
 }
@@ -411,6 +415,9 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	if stats.ThreadsSynced != 2 || stats.IssuesSynced != 1 || stats.PullRequestsSynced != 1 {
 		t.Fatalf("unexpected stats: %#v", stats)
 	}
+	if stats.RevisionsCreated != 2 || stats.FingerprintsUpserted != 2 {
+		t.Fatalf("enrichment stats: %#v", stats)
+	}
 	if stats.CommentsSynced != 1 {
 		t.Fatalf("comments synced: got %d want 1", stats.CommentsSynced)
 	}
@@ -432,6 +439,26 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	if threads[1].Kind != "pull_request" {
 		t.Fatalf("second thread kind: %s", threads[1].Kind)
 	}
+	if threads[0].AuthorAssociation != "CONTRIBUTOR" || threads[1].AuthorAssociation != "MEMBER" {
+		t.Fatalf("author associations: %+v", threads)
+	}
+	var revisions, fingerprints int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_revisions`).Scan(&revisions); err != nil {
+		t.Fatalf("revision count: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_fingerprints where algorithm_version = ?`, store.ThreadFingerprintAlgorithmVersion).Scan(&fingerprints); err != nil {
+		t.Fatalf("fingerprint count: %v", err)
+	}
+	if revisions != 2 || fingerprints != 2 {
+		t.Fatalf("revision/fingerprint counts = %d/%d", revisions, fingerprints)
+	}
+	secondStats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true})
+	if err != nil {
+		t.Fatalf("repeat sync: %v", err)
+	}
+	if secondStats.RevisionsCreated != 0 || secondStats.FingerprintsUpserted != 0 {
+		t.Fatalf("repeat enrichment stats: %#v", secondStats)
+	}
 	var documentCount int
 	if err := st.DB().QueryRowContext(ctx, `select count(*) from documents_fts where documents_fts match 'failure OR bug'`).Scan(&documentCount); err != nil {
 		t.Fatalf("query document index: %v", err)
@@ -449,6 +476,39 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	} {
 		if !strings.Contains(progressLogs.String(), want) {
 			t.Fatalf("missing %q in progress logs:\n%s", want, progressLogs.String())
+		}
+	}
+}
+
+func TestSyncRollsBackThreadRevisionWhenFingerprintFails(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.DB().ExecContext(ctx, `
+		create trigger reject_synced_fingerprint
+		before insert on thread_fingerprints
+		begin
+			select raise(abort, 'fingerprint rejected');
+		end
+	`); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+
+	s := New(fakeGitHub{}, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err == nil || !strings.Contains(err.Error(), "fingerprint rejected") {
+		t.Fatalf("sync error = %v", err)
+	}
+	for _, table := range []string{"repositories", "threads", "thread_revisions", "thread_fingerprints"} {
+		var count int
+		if err := st.DB().QueryRowContext(ctx, `select count(*) from `+table).Scan(&count); err != nil {
+			t.Fatalf("%s count: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count = %d, want rollback", table, count)
 		}
 	}
 }

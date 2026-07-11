@@ -96,6 +96,19 @@ func (s *Store) ListThreadVectorsFiltered(ctx context.Context, query ThreadVecto
 	return out, nil
 }
 
+func (s *Store) CountThreadVectorScope(ctx context.Context, query ThreadVectorQuery) (int, error) {
+	where := `repo_id = ?`
+	args := []any{query.RepoID}
+	if !query.IncludeClosed {
+		where += ` and state = 'open' and closed_at_local is null`
+	}
+	var count int
+	if err := s.q().QueryRowContext(ctx, `select count(*) from threads where `+where, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count thread vector scope: %w", err)
+	}
+	return count, nil
+}
+
 func (s *Store) ThreadVectorByNumber(ctx context.Context, query ThreadVectorQuery, number int) (Thread, ThreadVector, error) {
 	if !s.hasTable(ctx, "thread_vectors") {
 		return Thread{}, ThreadVector{}, fmt.Errorf("thread #%d was not found with an embedding", number)
@@ -181,11 +194,11 @@ func scanThreadVector(row interface {
 }) (Thread, ThreadVector, error) {
 	var thread Thread
 	var vector ThreadVector
-	var body, authorLogin, authorType, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
+	var body, authorLogin, authorType, authorAssociation, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
 	var isDraft int
 	var raw []byte
 	if err := row.Scan(&thread.ID, &thread.RepoID, &thread.GitHubID, &thread.Number, &thread.Kind, &thread.State, &thread.Title,
-		&body, &authorLogin, &authorType, &thread.HTMLURL, &thread.LabelsJSON, &thread.AssigneesJSON, &rawJSON,
+		&body, &authorLogin, &authorType, &authorAssociation, &thread.HTMLURL, &thread.LabelsJSON, &thread.AssigneesJSON, &rawJSON,
 		&thread.ContentHash, &isDraft, &createdAt, &updatedAtGH, &closedAt, &mergedAt, &firstPulled, &lastPulled, &thread.UpdatedAt,
 		&closedLocal, &closeReason,
 		&vector.ThreadID, &vector.Basis, &vector.Model, &vector.Dimensions, &vector.ContentHash, &raw, &vector.Backend, &vector.CreatedAt, &vector.UpdatedAt); err != nil {
@@ -194,6 +207,7 @@ func scanThreadVector(row interface {
 	thread.Body = body.String
 	thread.AuthorLogin = authorLogin.String
 	thread.AuthorType = authorType.String
+	thread.AuthorAssociation = authorAssociation.String
 	thread.CreatedAtGitHub = createdAt.String
 	thread.UpdatedAtGitHub = updatedAtGH.String
 	thread.ClosedAtGitHub = closedAt.String

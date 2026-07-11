@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 4
+	schemaVersion = 5
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -268,6 +268,9 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "threads", "raw_json", "text"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "threads", "author_association", "text"); err != nil {
+		return err
+	}
 	if !hadThreadBody && s.hasColumn(ctx, "threads", "body_excerpt") {
 		if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt where body is null and body_excerpt is not null`); err != nil {
 			return fmt.Errorf("backfill thread body from portable excerpt: %w", err)
@@ -422,7 +425,7 @@ func (s *Store) threadVectorsHaveCompositeKey(ctx context.Context) bool {
 
 func (s *Store) hasTable(ctx context.Context, table string) bool {
 	var name string
-	err := s.db.QueryRowContext(ctx, `select name from sqlite_schema where type in ('table', 'virtual table') and name = ?`, table).Scan(&name)
+	err := s.q().QueryRowContext(ctx, `select name from sqlite_schema where type in ('table', 'virtual table') and name = ?`, table).Scan(&name)
 	return err == nil
 }
 
@@ -437,7 +440,7 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, definition stri
 }
 
 func (s *Store) hasColumn(ctx context.Context, table, column string) bool {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`pragma table_info(%s)`, table))
+	rows, err := s.q().QueryContext(ctx, fmt.Sprintf(`pragma table_info(%s)`, table))
 	if err != nil {
 		return false
 	}

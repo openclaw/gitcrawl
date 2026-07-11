@@ -1384,11 +1384,11 @@ func scanClusterMemberDetail(row interface {
 }, bodyChars int) (ClusterMemberDetail, error) {
 	var member ClusterMemberDetail
 	var score sql.NullFloat64
-	var body, authorLogin, authorType, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
+	var body, authorLogin, authorType, authorAssociation, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
 	var isDraft int
 	if err := row.Scan(&member.Role, &member.State, &score,
 		&member.Thread.ID, &member.Thread.RepoID, &member.Thread.GitHubID, &member.Thread.Number, &member.Thread.Kind, &member.Thread.State, &member.Thread.Title,
-		&body, &authorLogin, &authorType, &member.Thread.HTMLURL, &member.Thread.LabelsJSON, &member.Thread.AssigneesJSON, &rawJSON,
+		&body, &authorLogin, &authorType, &authorAssociation, &member.Thread.HTMLURL, &member.Thread.LabelsJSON, &member.Thread.AssigneesJSON, &rawJSON,
 		&member.Thread.ContentHash, &isDraft, &createdAt, &updatedAtGH, &closedAt, &mergedAt, &firstPulled, &lastPulled, &member.Thread.UpdatedAt,
 		&closedLocal, &closeReason); err != nil {
 		return ClusterMemberDetail{}, fmt.Errorf("scan cluster member: %w", err)
@@ -1400,6 +1400,7 @@ func scanClusterMemberDetail(row interface {
 	member.Thread.Body = ""
 	member.Thread.AuthorLogin = authorLogin.String
 	member.Thread.AuthorType = authorType.String
+	member.Thread.AuthorAssociation = authorAssociation.String
 	member.Thread.CreatedAtGitHub = createdAt.String
 	member.Thread.UpdatedAtGitHub = updatedAtGH.String
 	member.Thread.ClosedAtGitHub = closedAt.String

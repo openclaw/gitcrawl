@@ -11,57 +11,59 @@ import (
 )
 
 type Thread struct {
-	ID               int64  `json:"id"`
-	RepoID           int64  `json:"repo_id"`
-	GitHubID         string `json:"github_id"`
-	Number           int    `json:"number"`
-	Kind             string `json:"kind"`
-	State            string `json:"state"`
-	Title            string `json:"title"`
-	Body             string `json:"body,omitempty"`
-	AuthorLogin      string `json:"author_login,omitempty"`
-	AuthorType       string `json:"author_type,omitempty"`
-	HTMLURL          string `json:"html_url"`
-	LabelsJSON       string `json:"labels_json"`
-	AssigneesJSON    string `json:"assignees_json"`
-	RawJSON          string `json:"-"`
-	ContentHash      string `json:"content_hash"`
-	IsDraft          bool   `json:"is_draft"`
-	CreatedAtGitHub  string `json:"created_at_gh,omitempty"`
-	UpdatedAtGitHub  string `json:"updated_at_gh,omitempty"`
-	ClosedAtGitHub   string `json:"closed_at_gh,omitempty"`
-	MergedAtGitHub   string `json:"merged_at_gh,omitempty"`
-	FirstPulledAt    string `json:"first_pulled_at,omitempty"`
-	LastPulledAt     string `json:"last_pulled_at,omitempty"`
-	UpdatedAt        string `json:"updated_at"`
-	ClosedAtLocal    string `json:"closed_at_local,omitempty"`
-	CloseReasonLocal string `json:"close_reason_local,omitempty"`
+	ID                int64  `json:"id"`
+	RepoID            int64  `json:"repo_id"`
+	GitHubID          string `json:"github_id"`
+	Number            int    `json:"number"`
+	Kind              string `json:"kind"`
+	State             string `json:"state"`
+	Title             string `json:"title"`
+	Body              string `json:"body,omitempty"`
+	AuthorLogin       string `json:"author_login,omitempty"`
+	AuthorType        string `json:"author_type,omitempty"`
+	AuthorAssociation string `json:"author_association,omitempty"`
+	HTMLURL           string `json:"html_url"`
+	LabelsJSON        string `json:"labels_json"`
+	AssigneesJSON     string `json:"assignees_json"`
+	RawJSON           string `json:"-"`
+	ContentHash       string `json:"content_hash"`
+	IsDraft           bool   `json:"is_draft"`
+	CreatedAtGitHub   string `json:"created_at_gh,omitempty"`
+	UpdatedAtGitHub   string `json:"updated_at_gh,omitempty"`
+	ClosedAtGitHub    string `json:"closed_at_gh,omitempty"`
+	MergedAtGitHub    string `json:"merged_at_gh,omitempty"`
+	FirstPulledAt     string `json:"first_pulled_at,omitempty"`
+	LastPulledAt      string `json:"last_pulled_at,omitempty"`
+	UpdatedAt         string `json:"updated_at"`
+	ClosedAtLocal     string `json:"closed_at_local,omitempty"`
+	CloseReasonLocal  string `json:"close_reason_local,omitempty"`
 }
 
 func (s *Store) UpsertThread(ctx context.Context, thread Thread) (int64, error) {
 	id, err := s.qsql().UpsertThread(ctx, storedb.UpsertThreadParams{
-		RepoID:        thread.RepoID,
-		GithubID:      thread.GitHubID,
-		Number:        int64(thread.Number),
-		Kind:          thread.Kind,
-		State:         thread.State,
-		Title:         thread.Title,
-		Body:          nullString(thread.Body),
-		AuthorLogin:   nullString(thread.AuthorLogin),
-		AuthorType:    nullString(thread.AuthorType),
-		HtmlUrl:       thread.HTMLURL,
-		LabelsJson:    thread.LabelsJSON,
-		AssigneesJson: thread.AssigneesJSON,
-		RawJson:       thread.RawJSON,
-		ContentHash:   thread.ContentHash,
-		IsDraft:       int64(boolInt(thread.IsDraft)),
-		CreatedAtGh:   nullString(thread.CreatedAtGitHub),
-		UpdatedAtGh:   nullString(thread.UpdatedAtGitHub),
-		ClosedAtGh:    nullString(thread.ClosedAtGitHub),
-		MergedAtGh:    nullString(thread.MergedAtGitHub),
-		FirstPulledAt: nullString(thread.FirstPulledAt),
-		LastPulledAt:  nullString(thread.LastPulledAt),
-		UpdatedAt:     thread.UpdatedAt,
+		RepoID:            thread.RepoID,
+		GithubID:          thread.GitHubID,
+		Number:            int64(thread.Number),
+		Kind:              thread.Kind,
+		State:             thread.State,
+		Title:             thread.Title,
+		Body:              nullString(thread.Body),
+		AuthorLogin:       nullString(thread.AuthorLogin),
+		AuthorType:        nullString(thread.AuthorType),
+		AuthorAssociation: nullString(thread.AuthorAssociation),
+		HtmlUrl:           thread.HTMLURL,
+		LabelsJson:        thread.LabelsJSON,
+		AssigneesJson:     thread.AssigneesJSON,
+		RawJson:           thread.RawJSON,
+		ContentHash:       thread.ContentHash,
+		IsDraft:           int64(boolInt(thread.IsDraft)),
+		CreatedAtGh:       nullString(thread.CreatedAtGitHub),
+		UpdatedAtGh:       nullString(thread.UpdatedAtGitHub),
+		ClosedAtGh:        nullString(thread.ClosedAtGitHub),
+		MergedAtGh:        nullString(thread.MergedAtGitHub),
+		FirstPulledAt:     nullString(thread.FirstPulledAt),
+		LastPulledAt:      nullString(thread.LastPulledAt),
+		UpdatedAt:         thread.UpdatedAt,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("upsert thread: %w", err)
@@ -83,27 +85,28 @@ func (s *Store) MarkOpenThreadClosedFromGitHub(ctx context.Context, thread Threa
 		thread.State = "closed"
 	}
 	affected, err := s.qsql().MarkOpenThreadClosedFromGitHub(ctx, storedb.MarkOpenThreadClosedFromGitHubParams{
-		GithubID:      thread.GitHubID,
-		State:         thread.State,
-		Title:         thread.Title,
-		Body:          nullString(thread.Body),
-		AuthorLogin:   nullString(thread.AuthorLogin),
-		AuthorType:    nullString(thread.AuthorType),
-		HtmlUrl:       thread.HTMLURL,
-		LabelsJson:    thread.LabelsJSON,
-		AssigneesJson: thread.AssigneesJSON,
-		RawJson:       thread.RawJSON,
-		ContentHash:   thread.ContentHash,
-		IsDraft:       int64(boolInt(thread.IsDraft)),
-		CreatedAtGh:   nullString(thread.CreatedAtGitHub),
-		UpdatedAtGh:   nullString(thread.UpdatedAtGitHub),
-		ClosedAtGh:    nullString(thread.ClosedAtGitHub),
-		MergedAtGh:    nullString(thread.MergedAtGitHub),
-		LastPulledAt:  nullString(thread.LastPulledAt),
-		UpdatedAt:     thread.UpdatedAt,
-		RepoID:        thread.RepoID,
-		Kind:          thread.Kind,
-		Number:        int64(thread.Number),
+		GithubID:          thread.GitHubID,
+		State:             thread.State,
+		Title:             thread.Title,
+		Body:              nullString(thread.Body),
+		AuthorLogin:       nullString(thread.AuthorLogin),
+		AuthorType:        nullString(thread.AuthorType),
+		AuthorAssociation: nullString(thread.AuthorAssociation),
+		HtmlUrl:           thread.HTMLURL,
+		LabelsJson:        thread.LabelsJSON,
+		AssigneesJson:     thread.AssigneesJSON,
+		RawJson:           thread.RawJSON,
+		ContentHash:       thread.ContentHash,
+		IsDraft:           int64(boolInt(thread.IsDraft)),
+		CreatedAtGh:       nullString(thread.CreatedAtGitHub),
+		UpdatedAtGh:       nullString(thread.UpdatedAtGitHub),
+		ClosedAtGh:        nullString(thread.ClosedAtGitHub),
+		MergedAtGh:        nullString(thread.MergedAtGitHub),
+		LastPulledAt:      nullString(thread.LastPulledAt),
+		UpdatedAt:         thread.UpdatedAt,
+		RepoID:            thread.RepoID,
+		Kind:              thread.Kind,
+		Number:            int64(thread.Number),
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark open thread closed from github: %w", err)
@@ -123,7 +126,10 @@ type ThreadListOptions struct {
 }
 
 func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptions) ([]Thread, error) {
-	if len(options.Numbers) == 0 && s.hasColumn(ctx, "threads", "body") && s.hasColumn(ctx, "threads", "raw_json") {
+	if len(options.Numbers) == 0 &&
+		s.hasColumn(ctx, "threads", "body") &&
+		s.hasColumn(ctx, "threads", "raw_json") &&
+		s.hasColumn(ctx, "threads", "author_association") {
 		rows, err := s.qsql().ListThreadsCurrentSchema(ctx, storedb.ListThreadsCurrentSchemaParams{
 			RepoID:        options.RepoID,
 			IncludeClosed: boolInt(options.IncludeClosed),
@@ -233,10 +239,10 @@ func scanThread(rows interface {
 	Scan(dest ...any) error
 }) (Thread, error) {
 	var thread Thread
-	var body, authorLogin, authorType, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
+	var body, authorLogin, authorType, authorAssociation, rawJSON, createdAt, updatedAtGH, closedAt, mergedAt, firstPulled, lastPulled, closedLocal, closeReason sql.NullString
 	var isDraft int
 	if err := rows.Scan(&thread.ID, &thread.RepoID, &thread.GitHubID, &thread.Number, &thread.Kind, &thread.State, &thread.Title,
-		&body, &authorLogin, &authorType, &thread.HTMLURL, &thread.LabelsJSON, &thread.AssigneesJSON, &rawJSON,
+		&body, &authorLogin, &authorType, &authorAssociation, &thread.HTMLURL, &thread.LabelsJSON, &thread.AssigneesJSON, &rawJSON,
 		&thread.ContentHash, &isDraft, &createdAt, &updatedAtGH, &closedAt, &mergedAt, &firstPulled, &lastPulled, &thread.UpdatedAt,
 		&closedLocal, &closeReason); err != nil {
 		return Thread{}, fmt.Errorf("scan thread: %w", err)
@@ -244,6 +250,7 @@ func scanThread(rows interface {
 	thread.Body = body.String
 	thread.AuthorLogin = authorLogin.String
 	thread.AuthorType = authorType.String
+	thread.AuthorAssociation = authorAssociation.String
 	thread.CreatedAtGitHub = createdAt.String
 	thread.UpdatedAtGitHub = updatedAtGH.String
 	thread.ClosedAtGitHub = closedAt.String
@@ -275,6 +282,7 @@ func (s *Store) threadSelectColumns(ctx context.Context, alias string) string {
 		s.threadBodyExpr(ctx, alias),
 		column("author_login"),
 		column("author_type"),
+		s.threadOptionalColumnExpr(ctx, alias, "author_association"),
 		column("html_url"),
 		column("labels_json"),
 		column("assignees_json"),
@@ -291,6 +299,13 @@ func (s *Store) threadSelectColumns(ctx context.Context, alias string) string {
 		column("closed_at_local"),
 		column("close_reason_local"),
 	}, ", ")
+}
+
+func (s *Store) threadOptionalColumnExpr(ctx context.Context, alias, name string) string {
+	if s.hasColumn(ctx, "threads", name) {
+		return qualifiedColumn(alias, name)
+	}
+	return "''"
 }
 
 func (s *Store) threadBodyExpr(ctx context.Context, alias string) string {
