@@ -12,24 +12,46 @@ type ArchiveCoverageOptions struct {
 	MinMissingPRDetails int
 }
 
+type EnrichmentCoverageMetric struct {
+	Supported      bool    `json:"supported"`
+	Eligible       int     `json:"eligible"`
+	Covered        int     `json:"covered"`
+	Fresh          int     `json:"fresh"`
+	Missing        int     `json:"missing"`
+	Stale          int     `json:"stale"`
+	CoverageRatio  float64 `json:"coverage_ratio"`
+	FreshnessRatio float64 `json:"freshness_ratio"`
+	Complete       bool    `json:"complete"`
+	LatestAt       string  `json:"latest_at,omitempty"`
+}
+
+type EnrichmentCoverage struct {
+	Revisions    EnrichmentCoverageMetric `json:"revisions"`
+	Fingerprints EnrichmentCoverageMetric `json:"fingerprints"`
+	Summaries    EnrichmentCoverageMetric `json:"summaries"`
+	Clusters     EnrichmentCoverageMetric `json:"clusters"`
+	PRDetails    EnrichmentCoverageMetric `json:"pr_details"`
+}
+
 type ArchiveCoverageRow struct {
-	RepoID                     int64  `json:"repo_id"`
-	Repository                 string `json:"repository"`
-	Issues                     int    `json:"issues"`
-	PullRequests               int    `json:"pull_requests"`
-	OpenPullRequests           int    `json:"open_pull_requests"`
-	Comments                   int    `json:"comments"`
-	PRReviews                  int    `json:"pr_reviews"`
-	PullRequestsWithDetails    int    `json:"pull_requests_with_details"`
-	MissingPRDetails           int    `json:"missing_pr_details"`
-	PRFiles                    int    `json:"pr_files"`
-	PRCommits                  int    `json:"pr_commits"`
-	PRChecks                   int    `json:"pr_checks"`
-	PRReviewThreads            int    `json:"pr_review_threads"`
-	WorkflowRuns               int    `json:"workflow_runs"`
-	LastSyncAt                 string `json:"last_sync_at,omitempty"`
-	HydrationFailuresSupported bool   `json:"hydration_failures_supported"`
-	KnownFailedHydrations      *int   `json:"known_failed_hydrations"`
+	RepoID                     int64              `json:"repo_id"`
+	Repository                 string             `json:"repository"`
+	Issues                     int                `json:"issues"`
+	PullRequests               int                `json:"pull_requests"`
+	OpenPullRequests           int                `json:"open_pull_requests"`
+	Comments                   int                `json:"comments"`
+	PRReviews                  int                `json:"pr_reviews"`
+	PullRequestsWithDetails    int                `json:"pull_requests_with_details"`
+	MissingPRDetails           int                `json:"missing_pr_details"`
+	PRFiles                    int                `json:"pr_files"`
+	PRCommits                  int                `json:"pr_commits"`
+	PRChecks                   int                `json:"pr_checks"`
+	PRReviewThreads            int                `json:"pr_review_threads"`
+	WorkflowRuns               int                `json:"workflow_runs"`
+	LastSyncAt                 string             `json:"last_sync_at,omitempty"`
+	HydrationFailuresSupported bool               `json:"hydration_failures_supported"`
+	KnownFailedHydrations      *int               `json:"known_failed_hydrations"`
+	Enrichment                 EnrichmentCoverage `json:"enrichment"`
 }
 
 type ArchiveCoverage struct {
@@ -147,13 +169,23 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 		row.LastSyncAt = lastSync.String
 		row.HydrationFailuresSupported = false
 		coverage.Rows = append(coverage.Rows, row)
-		addArchiveCoverageTotals(&coverage.Totals, row)
 	}
 	if err := rows.Err(); err != nil {
 		return ArchiveCoverage{}, fmt.Errorf("iterate archive coverage: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return ArchiveCoverage{}, fmt.Errorf("close archive coverage rows: %w", err)
+	}
+	for index := range coverage.Rows {
+		coverage.Rows[index].Enrichment, err = s.archiveEnrichmentCoverage(ctx, coverage.Rows[index].RepoID)
+		if err != nil {
+			return ArchiveCoverage{}, err
+		}
+		addArchiveCoverageTotals(&coverage.Totals, coverage.Rows[index])
+	}
 	coverage.Totals.Repository = "total"
 	coverage.Totals.HydrationFailuresSupported = false
+	finalizeEnrichmentCoverage(&coverage.Totals.Enrichment)
 	return coverage, nil
 }
 
@@ -230,4 +262,206 @@ func addArchiveCoverageTotals(total *ArchiveCoverageRow, row ArchiveCoverageRow)
 	total.PRChecks += row.PRChecks
 	total.PRReviewThreads += row.PRReviewThreads
 	total.WorkflowRuns += row.WorkflowRuns
+	addEnrichmentCoverage(&total.Enrichment, row.Enrichment)
+}
+
+func (s *Store) archiveEnrichmentCoverage(ctx context.Context, repoID int64) (EnrichmentCoverage, error) {
+	var coverage EnrichmentCoverage
+	var err error
+	coverage.Revisions, err = s.archiveRevisionCoverage(ctx, repoID)
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	coverage.Fingerprints, err = s.archiveRevisionChildCoverage(ctx, repoID, "thread_fingerprints", "thread_revision_id", "algorithm_version = ?", ThreadFingerprintAlgorithmVersion)
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	coverage.Summaries, err = s.archiveRevisionChildCoverage(ctx, repoID, "thread_key_summaries", "thread_revision_id", "1 = 1")
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	coverage.Clusters, err = s.archiveClusterCoverage(ctx, repoID)
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	coverage.PRDetails, err = s.archivePRDetailCoverage(ctx, repoID)
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	return coverage, nil
+}
+
+func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (EnrichmentCoverageMetric, error) {
+	if !s.archiveCoverageHasColumns(ctx, "thread_revisions", "id", "thread_id", "source_updated_at", "created_at") {
+		return EnrichmentCoverageMetric{}, nil
+	}
+	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
+	return s.scanEnrichmentCoverageMetric(ctx, `
+		select count(*),
+			coalesce(sum(case when tr.id is not null then 1 else 0 end), 0),
+			coalesce(sum(case
+				when tr.id is not null and (`+threadUpdatedAt+` = '' or coalesce(nullif(tr.source_updated_at, ''), tr.created_at, '') >= `+threadUpdatedAt+`) then 1
+				else 0
+			end), 0),
+			coalesce(max(tr.created_at), '')
+		from threads t
+		left join thread_revisions tr on tr.id = (
+			select latest.id
+			from thread_revisions latest
+			where latest.thread_id = t.id
+			order by latest.created_at desc, latest.id desc
+			limit 1
+		)
+		where t.repo_id = ?
+	`, repoID)
+}
+
+func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, table, revisionColumn, condition string, conditionArgs ...any) (EnrichmentCoverageMetric, error) {
+	if !s.archiveCoverageHasColumns(ctx, "thread_revisions", "id", "thread_id", "created_at") ||
+		!s.archiveCoverageHasColumns(ctx, table, revisionColumn, "created_at") {
+		return EnrichmentCoverageMetric{}, nil
+	}
+	args := append([]any{}, conditionArgs...)
+	args = append(args, repoID)
+	tableName := sqliteIdentifier(table)
+	revisionColumnName := sqliteIdentifier(revisionColumn)
+	return s.scanEnrichmentCoverageMetric(ctx, `
+		select count(distinct t.id),
+			count(distinct case when child.rowid is not null then t.id end),
+			count(distinct case when child.rowid is not null then t.id end),
+			coalesce(max(child.created_at), '')
+		from threads t
+		left join thread_revisions tr on tr.id = (
+			select latest.id
+			from thread_revisions latest
+			where latest.thread_id = t.id
+			order by latest.created_at desc, latest.id desc
+			limit 1
+		)
+		left join `+tableName+` child on child.`+revisionColumnName+` = tr.id and `+condition+`
+		where t.repo_id = ?
+	`, args...)
+}
+
+func (s *Store) archiveClusterCoverage(ctx context.Context, repoID int64) (EnrichmentCoverageMetric, error) {
+	if !s.archiveCoverageHasColumns(ctx, "cluster_runs", "id", "repo_id", "status", "finished_at") ||
+		!s.archiveCoverageHasColumns(ctx, "cluster_groups", "id", "repo_id", "status") ||
+		!s.archiveCoverageHasColumns(ctx, "cluster_memberships", "cluster_id", "thread_id", "state", "last_seen_run_id") {
+		return EnrichmentCoverageMetric{}, nil
+	}
+	openThread := "t.state = 'open'"
+	if s.hasColumn(ctx, "threads", "closed_at_local") {
+		openThread += " and t.closed_at_local is null"
+	}
+	return s.scanEnrichmentCoverageMetric(ctx, `
+		with latest_run as (
+			select id, finished_at
+			from cluster_runs
+			where repo_id = ? and status in ('success', 'completed') and finished_at is not null
+			order by id desc
+			limit 1
+		)
+		select count(*),
+			coalesce(sum(case when exists(
+				select 1
+				from cluster_memberships cm
+				join cluster_groups cg on cg.id = cm.cluster_id
+				where cm.thread_id = t.id and cm.state = 'active' and cg.repo_id = t.repo_id and cg.status = 'active'
+			) then 1 else 0 end), 0),
+			coalesce(sum(case when exists(
+				select 1
+				from cluster_memberships cm
+				join cluster_groups cg on cg.id = cm.cluster_id
+				where cm.thread_id = t.id and cm.state = 'active' and cg.repo_id = t.repo_id and cg.status = 'active'
+				  and cm.last_seen_run_id = (select id from latest_run)
+			) then 1 else 0 end), 0),
+			coalesce((select finished_at from latest_run), '')
+		from threads t
+		where t.repo_id = ? and `+openThread+`
+	`, repoID, repoID)
+}
+
+func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (EnrichmentCoverageMetric, error) {
+	if !s.archiveCoverageHasColumns(ctx, "pull_request_details", "thread_id", "fetched_at") {
+		return EnrichmentCoverageMetric{}, nil
+	}
+	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
+	return s.scanEnrichmentCoverageMetric(ctx, `
+		select count(*),
+			coalesce(sum(case when prd.thread_id is not null then 1 else 0 end), 0),
+			coalesce(sum(case
+				when prd.thread_id is not null and (`+threadUpdatedAt+` = '' or prd.fetched_at >= `+threadUpdatedAt+`) then 1
+				else 0
+			end), 0),
+			coalesce(max(prd.fetched_at), '')
+		from threads t
+		left join pull_request_details prd on prd.thread_id = t.id
+		where t.repo_id = ? and t.kind = 'pull_request'
+	`, repoID)
+}
+
+func archiveThreadUpdatedAtExpression(s *Store, ctx context.Context, alias string) string {
+	candidates := make([]string, 0, 2)
+	for _, column := range []string{"updated_at_gh", "updated_at"} {
+		if s.hasColumn(ctx, "threads", column) {
+			candidates = append(candidates, "nullif("+qualifiedColumn(alias, column)+", '')")
+		}
+	}
+	if len(candidates) == 0 {
+		return "''"
+	}
+	return "coalesce(" + strings.Join(candidates, ", ") + ", '')"
+}
+
+func (s *Store) scanEnrichmentCoverageMetric(ctx context.Context, query string, args ...any) (EnrichmentCoverageMetric, error) {
+	metric := EnrichmentCoverageMetric{Supported: true}
+	if err := s.q().QueryRowContext(ctx, query, args...).Scan(&metric.Eligible, &metric.Covered, &metric.Fresh, &metric.LatestAt); err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("archive enrichment coverage: %w", err)
+	}
+	finalizeEnrichmentCoverageMetric(&metric)
+	return metric, nil
+}
+
+func finalizeEnrichmentCoverageMetric(metric *EnrichmentCoverageMetric) {
+	if !metric.Supported {
+		return
+	}
+	metric.Missing = max(0, metric.Eligible-metric.Covered)
+	metric.Stale = max(0, metric.Covered-metric.Fresh)
+	metric.CoverageRatio = enrichmentRatio(metric.Covered, metric.Eligible)
+	metric.FreshnessRatio = enrichmentRatio(metric.Fresh, metric.Eligible)
+	metric.Complete = metric.Missing == 0 && metric.Stale == 0
+}
+
+func enrichmentRatio(value, eligible int) float64 {
+	if eligible == 0 {
+		return 1
+	}
+	return float64(value) / float64(eligible)
+}
+
+func addEnrichmentCoverage(total *EnrichmentCoverage, row EnrichmentCoverage) {
+	addEnrichmentCoverageMetric(&total.Revisions, row.Revisions)
+	addEnrichmentCoverageMetric(&total.Fingerprints, row.Fingerprints)
+	addEnrichmentCoverageMetric(&total.Summaries, row.Summaries)
+	addEnrichmentCoverageMetric(&total.Clusters, row.Clusters)
+	addEnrichmentCoverageMetric(&total.PRDetails, row.PRDetails)
+}
+
+func addEnrichmentCoverageMetric(total *EnrichmentCoverageMetric, row EnrichmentCoverageMetric) {
+	total.Supported = row.Supported
+	total.Eligible += row.Eligible
+	total.Covered += row.Covered
+	total.Fresh += row.Fresh
+	if row.LatestAt > total.LatestAt {
+		total.LatestAt = row.LatestAt
+	}
+}
+
+func finalizeEnrichmentCoverage(coverage *EnrichmentCoverage) {
+	finalizeEnrichmentCoverageMetric(&coverage.Revisions)
+	finalizeEnrichmentCoverageMetric(&coverage.Fingerprints)
+	finalizeEnrichmentCoverageMetric(&coverage.Summaries)
+	finalizeEnrichmentCoverageMetric(&coverage.Clusters)
+	finalizeEnrichmentCoverageMetric(&coverage.PRDetails)
 }

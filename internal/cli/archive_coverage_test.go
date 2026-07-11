@@ -49,6 +49,14 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 	if row.HydrationFailuresSupported || row.KnownFailedHydrations != nil {
 		t.Fatalf("failure ledger fields = %+v", row)
 	}
+	if !row.Enrichment.Revisions.Supported ||
+		row.Enrichment.Revisions.Eligible != 4 ||
+		row.Enrichment.Revisions.Covered != 0 ||
+		row.Enrichment.Revisions.CoverageRatio != 0 ||
+		row.Enrichment.PRDetails.Eligible != 3 ||
+		row.Enrichment.PRDetails.Covered != 1 {
+		t.Fatalf("enrichment coverage = %+v", row.Enrichment)
+	}
 
 	tableRun := New()
 	var tableOut bytes.Buffer

@@ -178,8 +178,6 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"--config", configPath, "--json", "neighbors", "openclaw/openclaw", "--number", "101", "--limit", "1", "--threshold", "0.99"},
-		{"--config", configPath, "--json", "cluster", "openclaw/openclaw", "--threshold", "0.5", "--min-size", "2", "--limit", "2"},
-		{"--config", configPath, "--json", "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--threshold", "0.5", "--min-size", "2"},
 		{"--config", configPath, "--json", "search", "openclaw/openclaw", "--query", "gateway", "--mode", ""},
 	} {
 		run := New()
@@ -187,6 +185,15 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 		run.Stdout = &stdout
 		if err := run.Run(ctx, args); err != nil {
 			t.Fatalf("%v failed: %v\n%s", args, err, stdout.String())
+		}
+	}
+	for _, args := range [][]string{
+		{"--config", configPath, "--json", "cluster", "openclaw/openclaw", "--threshold", "0.5", "--min-size", "2", "--limit", "2"},
+		{"--config", configPath, "--json", "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--threshold", "0.5", "--min-size", "2"},
+	} {
+		err := New().Run(ctx, args)
+		if err == nil || !strings.Contains(err.Error(), "no fresh vectors are available") {
+			t.Fatalf("%v error = %v", args, err)
 		}
 	}
 	if repoID == 0 {

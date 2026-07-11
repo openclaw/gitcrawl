@@ -28,6 +28,17 @@ func TestArchiveCoverageReportsAndFiltersCurrentStore(t *testing.T) {
 	if primary.Repository != "openclaw/gitcrawl" || primary.Comments != 2 || primary.PRReviews != 1 || primary.PullRequestsWithDetails != 1 || primary.PRFiles != 1 || primary.PRCommits != 1 || primary.PRChecks != 1 || primary.PRReviewThreads != 1 || primary.WorkflowRuns != 1 || primary.LastSyncAt == "" {
 		t.Fatalf("primary coverage = %+v", primary)
 	}
+	if !primary.Enrichment.Revisions.Supported ||
+		primary.Enrichment.Revisions.Eligible != 4 ||
+		primary.Enrichment.Revisions.Fresh != 1 ||
+		primary.Enrichment.Fingerprints.Fresh != 1 ||
+		primary.Enrichment.Summaries.Fresh != 1 ||
+		primary.Enrichment.Clusters.Fresh != 1 ||
+		primary.Enrichment.PRDetails.Eligible != 3 ||
+		primary.Enrichment.PRDetails.Fresh != 1 ||
+		primary.Enrichment.PRDetails.Complete {
+		t.Fatalf("primary enrichment coverage = %+v", primary.Enrichment)
+	}
 
 	filtered, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{RepoIDs: []int64{primaryID, secondaryID}, MinMissingPRDetails: 2})
 	if err != nil {
@@ -77,6 +88,12 @@ func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 			"github_workflow_runs",
 			"sync_runs",
 			"repo_sync_state",
+			"thread_fingerprints",
+			"thread_key_summaries",
+			"thread_revisions",
+			"cluster_memberships",
+			"cluster_groups",
+			"cluster_runs",
 		} {
 			if _, err := st.DB().ExecContext(ctx, `drop table `+table); err != nil {
 				t.Fatalf("drop %s: %v", table, err)
@@ -86,7 +103,13 @@ func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 		if err != nil {
 			t.Fatalf("compatibility archive coverage: %v", err)
 		}
-		if len(coverage.Rows) != 2 || coverage.Rows[0].PullRequestsWithDetails != 0 || coverage.Rows[0].MissingPRDetails != coverage.Rows[0].PullRequests || coverage.Rows[0].Comments != 0 || coverage.Rows[0].LastSyncAt != "" {
+		if len(coverage.Rows) != 2 ||
+			coverage.Rows[0].PullRequestsWithDetails != 0 ||
+			coverage.Rows[0].MissingPRDetails != coverage.Rows[0].PullRequests ||
+			coverage.Rows[0].Comments != 0 ||
+			coverage.Rows[0].LastSyncAt != "" ||
+			coverage.Rows[0].Enrichment.Revisions.Supported ||
+			coverage.Rows[0].Enrichment.Clusters.Supported {
 			t.Fatalf("compatibility coverage = %+v", coverage)
 		}
 	})
@@ -152,6 +175,49 @@ func seedArchiveCoverageRows(t *testing.T, ctx context.Context, st *Store) (int6
 	}
 	if err := st.UpsertPullRequestReviewThreads(ctx, detailedPRID, "2026-07-06T00:01:00Z", []PullRequestReviewThread{{ThreadID: detailedPRID, ReviewThreadID: "thread", CommentsJSON: "[]", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}}); err != nil {
 		t.Fatalf("review threads: %v", err)
+	}
+	detailedThread := archiveCoverageThread(primaryID, 2, "pull_request")
+	detailedThread.ID = detailedPRID
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: detailedThread}, "2026-07-06T00:01:00Z")
+	if err != nil {
+		t.Fatalf("thread enrichment: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(?, 'llm_key_summary', 'v1', 'test', 'test', 'input', 'output', 'summary', '2026-07-06T00:01:00Z')
+	`, enrichment.RevisionID); err != nil {
+		t.Fatalf("key summary: %v", err)
+	}
+	clusterRun, err := st.DB().ExecContext(ctx, `
+		insert into cluster_runs(repo_id, scope, status, started_at, finished_at)
+		values(?, 'durable', 'success', '2026-07-06T00:01:00Z', '2026-07-06T00:01:00Z')
+	`, primaryID)
+	if err != nil {
+		t.Fatalf("cluster run: %v", err)
+	}
+	clusterRunID, err := clusterRun.LastInsertId()
+	if err != nil {
+		t.Fatalf("cluster run id: %v", err)
+	}
+	clusterGroup, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(repo_id, stable_key, stable_slug, status, cluster_type, representative_thread_id, title, created_at, updated_at)
+		values(?, 'coverage', 'coverage', 'active', 'duplicate_candidate', ?, 'coverage', '2026-07-06T00:01:00Z', '2026-07-06T00:01:00Z')
+	`, primaryID, detailedPRID)
+	if err != nil {
+		t.Fatalf("cluster group: %v", err)
+	}
+	clusterGroupID, err := clusterGroup.LastInsertId()
+	if err != nil {
+		t.Fatalf("cluster group id: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(
+			cluster_id, thread_id, role, state, first_seen_run_id, last_seen_run_id,
+			added_by, added_reason_json, created_at, updated_at
+		)
+		values(?, ?, 'canonical', 'active', ?, ?, 'test', '{}', '2026-07-06T00:01:00Z', '2026-07-06T00:01:00Z')
+	`, clusterGroupID, detailedPRID, clusterRunID, clusterRunID); err != nil {
+		t.Fatalf("cluster membership: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `insert into sync_runs(repo_id, scope, status, started_at, finished_at) values(?, 'open', 'success', '2026-07-06T00:00:00Z', '2026-07-06T00:02:00Z')`, primaryID); err != nil {
 		t.Fatalf("sync run: %v", err)

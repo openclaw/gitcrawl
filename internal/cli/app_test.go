@@ -3811,12 +3811,38 @@ func TestRefreshRunsSyncEmbedAndClusterWithLocalServers(t *testing.T) {
 		case "/repos/openclaw/openclaw/issues":
 			_ = json.NewEncoder(w).Encode([]map[string]any{
 				githubIssueJSON(201, "issue", "Gateway reconnect loop"),
-				githubIssueJSON(202, "issue", "Gateway reconnect timeout"),
+				githubIssueJSON(202, "pull_request", "Gateway reconnect timeout"),
 			})
 		case "/repos/openclaw/openclaw/issues/201/comments":
 			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(2001, "same reconnect loop")})
 		case "/repos/openclaw/openclaw/issues/202/comments":
 			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(2002, "same reconnect timeout")})
+		case "/repos/openclaw/openclaw/pulls/202/reviews",
+			"/repos/openclaw/openclaw/pulls/202/comments":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/openclaw/openclaw/pulls/202":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number":          202,
+				"head":            map[string]any{"sha": "head-202", "ref": "feature", "repo": map[string]any{"full_name": "openclaw/openclaw"}},
+				"base":            map[string]any{"sha": "base-202"},
+				"mergeable_state": "clean",
+				"changed_files":   1,
+			})
+		case "/repos/openclaw/openclaw/pulls/202/files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"filename": "internal/gateway.go", "status": "modified", "patch": "@@ gateway"}})
+		case "/repos/openclaw/openclaw/pulls/202/commits":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"sha":    "commit-202",
+				"commit": map[string]any{"message": "fix: reconnect timeout"},
+			}})
+		case "/repos/openclaw/openclaw/commits/head-202/check-runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{}})
+		case "/repos/openclaw/openclaw/actions/runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{}})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"reviewThreads": map[string]any{"nodes": []map[string]any{}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}},
+			}}}})
 		default:
 			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
 		}
@@ -3849,14 +3875,19 @@ func TestRefreshRunsSyncEmbedAndClusterWithLocalServers(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	run.Stdout = &stdout
 	run.Stderr = &stderr
-	if err := run.Run(ctx, []string{"--config", configPath, "refresh", "openclaw/openclaw", "--include-comments", "--limit", "2", "--threshold", "0.5", "--min-size", "1", "--json"}); err != nil {
+	if err := run.Run(ctx, []string{"--config", configPath, "refresh", "openclaw/openclaw", "--include-comments", "--with", "pr-details", "--limit", "2", "--threshold", "0.5", "--min-size", "1", "--json"}); err != nil {
 		t.Fatalf("refresh: %v\nstderr=%s", err, stderr.String())
 	}
 	var payload refreshResult
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatalf("decode refresh: %v\n%s", err, stdout.String())
 	}
-	if payload.Sync == nil || payload.Sync.ThreadsSynced != 2 || payload.Sync.CommentsSynced != 2 {
+	if payload.Sync == nil ||
+		payload.Sync.ThreadsSynced != 2 ||
+		payload.Sync.CommentsSynced != 2 ||
+		payload.Sync.PRDetailsSynced != 1 ||
+		payload.Sync.PRFilesSynced != 1 ||
+		payload.Sync.PRCommitsSynced != 1 {
 		t.Fatalf("sync payload = %+v", payload.Sync)
 	}
 	if payload.Embed == nil || payload.Embed.Embedded != 2 {
@@ -4080,7 +4111,7 @@ func TestTruncatedEmbeddingTaskCount(t *testing.T) {
 }
 
 func githubIssueJSON(number int, kind string, title string) map[string]any {
-	return map[string]any{
+	row := map[string]any{
 		"id":         number + 10000,
 		"number":     number,
 		"state":      "open",
@@ -4093,6 +4124,11 @@ func githubIssueJSON(number int, kind string, title string) map[string]any {
 		"created_at": "2026-04-30T01:00:00Z",
 		"updated_at": "2026-04-30T02:00:00Z",
 	}
+	if kind == "pull_request" {
+		row["html_url"] = fmt.Sprintf("https://github.com/openclaw/openclaw/pull/%d", number)
+		row["pull_request"] = map[string]any{"url": fmt.Sprintf("https://api.github.com/repos/openclaw/openclaw/pulls/%d", number)}
+	}
+	return row
 }
 
 func githubCommentJSON(id int, body string) map[string]any {
@@ -4775,10 +4811,20 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 		t.Fatalf("seed third thread: %v", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tasks, err := st.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
+		RepoID: repoID, Basis: "title_original", Model: "text-embedding-3-small", Force: true,
+	})
+	if err != nil {
+		t.Fatalf("list embedding tasks: %v", err)
+	}
+	hashByThread := map[int64]string{}
+	for _, task := range tasks {
+		hashByThread[task.ThreadID] = task.ContentHash
+	}
 	for _, vector := range []store.ThreadVector{
-		{ThreadID: firstID, Basis: "title_original", Model: "text-embedding-3-small", Dimensions: 2, ContentHash: "hash-91", Vector: []float64{1, 0}, CreatedAt: now, UpdatedAt: now},
-		{ThreadID: secondID, Basis: "title_original", Model: "text-embedding-3-small", Dimensions: 2, ContentHash: "hash-92", Vector: []float64{0.95, 0.05}, CreatedAt: now, UpdatedAt: now},
-		{ThreadID: thirdID, Basis: "title_original", Model: "text-embedding-3-small", Dimensions: 2, ContentHash: "hash-93", Vector: []float64{0, 1}, CreatedAt: now, UpdatedAt: now},
+		{ThreadID: firstID, Basis: "title_original", Model: "text-embedding-3-small", Dimensions: 2, ContentHash: hashByThread[firstID], Vector: []float64{1, 0}, CreatedAt: now, UpdatedAt: now},
+		{ThreadID: secondID, Basis: "title_original", Model: "text-embedding-3-small", Dimensions: 2, ContentHash: hashByThread[secondID], Vector: []float64{0.95, 0.05}, CreatedAt: now, UpdatedAt: now},
+		{ThreadID: thirdID, Basis: "title_original", Model: "text-embedding-3-small", Dimensions: 2, ContentHash: hashByThread[thirdID], Vector: []float64{0, 1}, CreatedAt: now, UpdatedAt: now},
 	} {
 		if err := st.UpsertThreadVector(ctx, vector); err != nil {
 			t.Fatalf("upsert vector: %v", err)
@@ -4843,9 +4889,19 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store before model migration cluster: %v", err)
 	}
+	tasks, err = st.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
+		RepoID: repoID, Basis: "title_original", Model: "text-embedding-3-large", Force: true,
+	})
+	if err != nil {
+		t.Fatalf("list migrated embedding tasks: %v", err)
+	}
+	hashByThread = map[int64]string{}
+	for _, task := range tasks {
+		hashByThread[task.ThreadID] = task.ContentHash
+	}
 	for _, vector := range []store.ThreadVector{
-		{ThreadID: firstID, Basis: "title_original", Model: "text-embedding-3-large", Dimensions: 2, ContentHash: "hash-91-large", Vector: []float64{1, 0}, CreatedAt: now, UpdatedAt: now},
-		{ThreadID: secondID, Basis: "title_original", Model: "text-embedding-3-large", Dimensions: 2, ContentHash: "hash-92-large", Vector: []float64{0.95, 0.05}, CreatedAt: now, UpdatedAt: now},
+		{ThreadID: firstID, Basis: "title_original", Model: "text-embedding-3-large", Dimensions: 2, ContentHash: hashByThread[firstID], Vector: []float64{1, 0}, CreatedAt: now, UpdatedAt: now},
+		{ThreadID: secondID, Basis: "title_original", Model: "text-embedding-3-large", Dimensions: 2, ContentHash: hashByThread[secondID], Vector: []float64{0.95, 0.05}, CreatedAt: now, UpdatedAt: now},
 	} {
 		if err := st.UpsertThreadVector(ctx, vector); err != nil {
 			t.Fatalf("upsert migrated vector: %v", err)
@@ -4856,8 +4912,8 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--json"}); err != nil {
-		t.Fatalf("model migration cluster: %v", err)
+	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--json"}); err == nil || !strings.Contains(err.Error(), "vector coverage is incomplete") {
+		t.Fatalf("model migration cluster error = %v", err)
 	}
 	st, err = store.Open(ctx, dbPath)
 	if err != nil {
@@ -4868,10 +4924,18 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 		t.Fatalf("list clusters after model migration run: %v", err)
 	}
 	if len(clusters) != 2 {
-		t.Fatalf("partial model migration run should not retire clusters without new vectors, got %#v", clusters)
+		t.Fatalf("failed model migration run should preserve clusters, got %#v", clusters)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store after model migration cluster: %v", err)
+	}
+
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--limit", "2", "--json"}); err != nil {
+		t.Fatalf("explicit partial model migration cluster: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"complete": false`) || !strings.Contains(stdout.String(), `"missing": 1`) {
+		t.Fatalf("partial cluster coverage output = %q", stdout.String())
 	}
 
 	st, err = store.Open(ctx, dbPath)
@@ -4902,6 +4966,59 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store after close-all cluster: %v", err)
+	}
+}
+
+func TestClusterAndRefreshRejectMissingVectorsBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
+		Title: "missing vector", Body: "body",
+		HTMLURL:    "https://github.com/openclaw/openclaw/issues/1",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread", UpdatedAt: "2026-07-12T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"--config", configPath, "cluster", "openclaw/openclaw", "--json"},
+		{"--config", configPath, "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--json"},
+	} {
+		err := New().Run(ctx, args)
+		if err == nil || !strings.Contains(err.Error(), "no fresh vectors are available") {
+			t.Fatalf("%v error = %v", args, err)
+		}
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	var runs int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from cluster_runs`).Scan(&runs); err != nil {
+		t.Fatalf("cluster runs: %v", err)
+	}
+	if runs != 0 {
+		t.Fatalf("cluster runs = %d, want no mutation", runs)
 	}
 }
 
@@ -4966,12 +5083,12 @@ func TestCompleteClusterVectorCoverageRequiresFreshVectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list vectors: %v", err)
 	}
-	complete, err := completeClusterVectorCoverage(ctx, st, query, vectors)
+	coverage, fresh, err := evaluateClusterVectorCoverage(ctx, st, query, vectors)
 	if err != nil {
 		t.Fatalf("stale older coverage: %v", err)
 	}
-	if complete {
-		t.Fatal("stale older vector should not complete cluster coverage")
+	if coverage.Complete || coverage.Stale != 1 || len(fresh) != 1 {
+		t.Fatalf("stale older coverage = %+v fresh=%d", coverage, len(fresh))
 	}
 
 	if err := st.UpsertThreadVector(ctx, store.ThreadVector{
@@ -4984,12 +5101,12 @@ func TestCompleteClusterVectorCoverageRequiresFreshVectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list fresh vectors: %v", err)
 	}
-	complete, err = completeClusterVectorCoverage(ctx, st, query, vectors)
+	coverage, fresh, err = evaluateClusterVectorCoverage(ctx, st, query, vectors)
 	if err != nil {
 		t.Fatalf("fresh complete coverage: %v", err)
 	}
-	if !complete {
-		t.Fatal("fresh vectors should complete cluster coverage")
+	if !coverage.Complete || coverage.Fresh != 2 || len(fresh) != 2 {
+		t.Fatalf("fresh complete coverage = %+v fresh=%d", coverage, len(fresh))
 	}
 
 	firstThread.Body = "changed body"
@@ -4998,16 +5115,16 @@ func TestCompleteClusterVectorCoverageRequiresFreshVectors(t *testing.T) {
 	if _, err := st.UpsertThread(ctx, firstThread); err != nil {
 		t.Fatalf("update thread: %v", err)
 	}
-	complete, err = completeClusterVectorCoverage(ctx, st, query, vectors)
+	coverage, fresh, err = evaluateClusterVectorCoverage(ctx, st, query, vectors)
 	if err != nil {
 		t.Fatalf("stale complete coverage: %v", err)
 	}
-	if complete {
-		t.Fatal("stale vector should not complete cluster coverage")
+	if coverage.Complete || coverage.Stale != 1 || len(fresh) != 1 {
+		t.Fatalf("stale updated coverage = %+v fresh=%d", coverage, len(fresh))
 	}
 }
 
-func TestCompleteClusterVectorCoverageAllowsUnembeddableSummaryThreads(t *testing.T) {
+func TestClusterVectorCoverageRejectsMissingSummaryInputs(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -5072,12 +5189,12 @@ func TestCompleteClusterVectorCoverageAllowsUnembeddableSummaryThreads(t *testin
 	if err != nil {
 		t.Fatalf("list vectors: %v", err)
 	}
-	complete, err := completeClusterVectorCoverage(ctx, st, query, vectors)
+	coverage, fresh, err := evaluateClusterVectorCoverage(ctx, st, query, vectors)
 	if err != nil {
 		t.Fatalf("summary coverage: %v", err)
 	}
-	if !complete {
-		t.Fatal("unembeddable summary thread should not block complete cluster coverage")
+	if coverage.Complete || coverage.Eligible != 2 || coverage.Fresh != 1 || coverage.Missing != 1 || len(fresh) != 1 {
+		t.Fatalf("summary coverage = %+v fresh=%d", coverage, len(fresh))
 	}
 }
 
