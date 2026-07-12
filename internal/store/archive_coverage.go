@@ -437,6 +437,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 	rows, err := s.q().QueryContext(ctx, `
 		select case when child.id is null then 0 else 1 end,
 			coalesce(nullif(tr.source_updated_at, ''), tr.created_at, ''),
+			coalesce(child.created_at, ''),
 			`+threadUpdatedAt+`
 		from threads t
 		left join thread_revisions tr on tr.id = (
@@ -464,8 +465,8 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 	var latestObservationAt time.Time
 	for rows.Next() {
 		var hasChild int
-		var revisionUpdatedAt, sourceUpdatedAt string
-		if err := rows.Scan(&hasChild, &revisionUpdatedAt, &sourceUpdatedAt); err != nil {
+		var revisionUpdatedAt, childCreatedAt, sourceUpdatedAt string
+		if err := rows.Scan(&hasChild, &revisionUpdatedAt, &childCreatedAt, &sourceUpdatedAt); err != nil {
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive revision child coverage: %w", err)
 		}
 		metric.Eligible++
@@ -473,7 +474,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 			continue
 		}
 		metric.Covered++
-		if parsed, ok := parseArchiveCoverageTimestamp(revisionUpdatedAt); ok && (latestObservationAt.IsZero() || parsed.After(latestObservationAt)) {
+		if parsed, ok := parseArchiveCoverageTimestamp(childCreatedAt); ok && (latestObservationAt.IsZero() || parsed.After(latestObservationAt)) {
 			latestObservationAt = parsed
 		}
 		if archiveCoverageTimestampAtOrAfter(revisionUpdatedAt, sourceUpdatedAt) {

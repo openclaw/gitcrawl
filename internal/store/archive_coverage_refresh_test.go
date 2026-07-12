@@ -213,3 +213,53 @@ func TestArchiveCoverageSummariesRequireKeySummaryKind(t *testing.T) {
 		t.Fatalf("summary coverage = %+v", metric)
 	}
 }
+
+func TestArchiveCoverageUsesSummaryCreationTimeWithoutRunHistory(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "3", Number: 3, Kind: "issue", State: "open",
+		Title: "Portable summary time", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/3",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z", UpdatedAt: "2026-07-12T00:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T00:01:00Z")
+	if err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: enrichment.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "openai",
+		Model:            "summary-test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "Summary created after the revision.",
+		CreatedAt:        "2026-07-12T00:05:00Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	metric, err := st.archiveRevisionChildCoverage(ctx, repoID, "thread_key_summaries", "thread_revision_id", "summary_kind", SummaryKindLLMKey)
+	if err != nil {
+		t.Fatalf("summary coverage: %v", err)
+	}
+	if metric.LatestAt != "2026-07-12T00:05:00.000000000Z" {
+		t.Fatalf("summary latest observation = %+v", metric)
+	}
+}
