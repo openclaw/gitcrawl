@@ -120,9 +120,11 @@ type sameHeadWorkflowGitHub struct {
 
 type sameSyncSharedHeadGitHub struct {
 	fakeGitHub
-	mu          sync.Mutex
-	runCalls    int
-	subsetFirst bool
+	mu               sync.Mutex
+	runCalls         int
+	lookupCalls      int
+	subsetFirst      bool
+	verifiedDeletion bool
 }
 
 type workflowLookupResultGitHub struct {
@@ -602,6 +604,39 @@ func (f *sameSyncSharedHeadGitHub) ListWorkflowRuns(
 	f.runCalls++
 	call := f.runCalls
 	f.mu.Unlock()
+	if f.verifiedDeletion {
+		rows := []map[string]any{{
+			"id":          900,
+			"run_number":  1,
+			"head_branch": "same-sync-branch",
+			"head_sha":    options.HeadSHA,
+			"status":      "completed",
+			"conclusion":  "success",
+			"name":        "latest",
+			"event":       "pull_request",
+			"created_at":  "2026-07-12T00:00:00Z",
+			"updated_at":  "2026-07-12T00:02:00Z",
+		}}
+		includeDeleted := call == 1
+		if f.subsetFirst {
+			includeDeleted = call == 2
+		}
+		if includeDeleted {
+			rows = append(rows, map[string]any{
+				"id":          901,
+				"run_number":  2,
+				"head_branch": "same-sync-branch",
+				"head_sha":    options.HeadSHA,
+				"status":      "completed",
+				"conclusion":  "success",
+				"name":        "earlier",
+				"event":       "pull_request",
+				"created_at":  "2026-07-12T00:00:00Z",
+				"updated_at":  "2026-07-12T00:01:00Z",
+			})
+		}
+		return rows, nil
+	}
 	rows := []map[string]any{{
 		"id":          901,
 		"run_number":  2,
@@ -633,6 +668,29 @@ func (f *sameSyncSharedHeadGitHub) ListWorkflowRuns(
 		}}, rows...)
 	}
 	return rows, nil
+}
+
+func (f *sameSyncSharedHeadGitHub) GetWorkflowRun(
+	_ context.Context,
+	_, _ string,
+	runID string,
+	_ gh.Reporter,
+) (map[string]any, error) {
+	f.mu.Lock()
+	f.lookupCalls++
+	f.mu.Unlock()
+	if f.verifiedDeletion && runID == "901" {
+		return nil, &gh.RequestError{
+			Method: "GET",
+			URL:    "/repos/openclaw/gitcrawl/actions/runs/" + runID,
+			Status: 404,
+		}
+	}
+	return map[string]any{
+		"id":         runID,
+		"created_at": "2026-07-12T00:00:00Z",
+		"updated_at": "2026-07-12T00:02:00Z",
+	}, nil
 }
 
 func interleavedSignals(
@@ -2284,6 +2342,67 @@ func TestSyncWorkflowRunsEqualReservationDoesNotReplaceSameSyncSnapshot(t *testi
 			if len(runs) != 2 || !runIDs["900"] || !runIDs["901"] {
 				t.Fatalf("equal reservation lost a live run: %+v", runs)
 			}
+		})
+	}
+}
+
+func TestSyncWorkflowRunsSameGenerationVerifiedDeletionWinsSiblingSnapshot(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		subsetFirst bool
+	}{
+		{name: "verified deletion then live sibling", subsetFirst: true},
+		{name: "live sibling then verified deletion"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+
+			initial := New(&sameSyncSharedHeadGitHub{verifiedDeletion: true}, st)
+			if _, err := initial.Sync(ctx, Options{
+				Owner: "openclaw", Repo: "gitcrawl", State: "open",
+				Numbers: []int{8}, IncludePRDetails: true,
+			}); err != nil {
+				t.Fatalf("initial workflow sync: %v", err)
+			}
+
+			client := &sameSyncSharedHeadGitHub{
+				subsetFirst:      test.subsetFirst,
+				verifiedDeletion: true,
+			}
+			stats, err := New(client, st).Sync(ctx, Options{
+				Owner: "openclaw", Repo: "gitcrawl", State: "open",
+				Numbers: []int{8, 9}, IncludePRDetails: true,
+			})
+			if err != nil {
+				t.Fatalf("same-generation deletion sync: %v", err)
+			}
+			if stats.PRDetailsSynced != 2 || stats.WorkflowRunsSynced != 1 {
+				t.Fatalf("same-generation deletion stats = %#v", stats)
+			}
+			if client.lookupCalls != 1 {
+				t.Fatalf("exact workflow lookups = %d, want 1", client.lookupCalls)
+			}
+
+			repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+			if err != nil {
+				t.Fatalf("repository: %v", err)
+			}
+			runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+				HeadSHA: "same-sync-head",
+				Limit:   -1,
+			})
+			if err != nil {
+				t.Fatalf("workflow runs: %v", err)
+			}
+			if len(runs) != 1 || runs[0].RunID != "900" {
+				t.Fatalf("verified deletion was resurrected: %+v", runs)
+			}
+			assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 2)
 		})
 	}
 }
