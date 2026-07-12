@@ -137,6 +137,73 @@ func TestArchiveCoveragePRDetailFreshnessParsesTimestamps(t *testing.T) {
 	}
 }
 
+func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := archiveCoverageThread(repoID, 1, "pull_request")
+	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
+	thread.RawJSON = `{"version":1}`
+	thread.ContentHash = "version-1"
+	initial, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil {
+		t.Fatalf("initial thread: %v", err)
+	}
+	thread.ID = initial.ID
+	if applied, err := st.ReserveThreadChildObservation(
+		ctx,
+		thread.ID,
+		ThreadChildPullRequestDetails,
+		thread.UpdatedAtGitHub,
+		1,
+	); err != nil || !applied {
+		t.Fatalf("reserve PR detail observation = %t, %v", applied, err)
+	}
+	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{
+		ThreadID:  thread.ID,
+		RepoID:    repoID,
+		Number:    thread.Number,
+		RawJSON:   "{}",
+		FetchedAt: "2026-07-12T12:05:00Z",
+		UpdatedAt: "2026-07-12T12:05:00Z",
+	}, nil, nil, nil, nil); err != nil {
+		t.Fatalf("PR detail: %v", err)
+	}
+
+	thread.UpdatedAtGitHub = "2026-07-12T12:03:00Z"
+	thread.RawJSON = `{"version":2}`
+	thread.ContentHash = "version-2"
+	if current, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 2,
+	}); err != nil || !current.Applied {
+		t.Fatalf("newer metadata observation = %+v, %v", current, err)
+	}
+
+	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("archive coverage: %v", err)
+	}
+	metric := coverage.Rows[0].Enrichment.PRDetails
+	if metric.Covered != 1 || metric.Fresh != 0 || metric.Stale != 1 ||
+		metric.LatestAt != "2026-07-12T12:05:00.000000000Z" {
+		t.Fatalf("PR detail coverage = %+v", metric)
+	}
+}
+
 func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {

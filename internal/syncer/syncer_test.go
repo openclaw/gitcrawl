@@ -110,10 +110,11 @@ type versionedPRDetailsGitHub struct {
 
 type sameHeadWorkflowGitHub struct {
 	fakeGitHub
-	number  int
-	version int
-	fetched chan struct{}
-	release chan struct{}
+	number      int
+	version     int
+	prUpdatedAt string
+	fetched     chan struct{}
+	release     chan struct{}
 }
 
 type delayedVersionedPRGitHub struct {
@@ -382,6 +383,10 @@ func (f sameHeadWorkflowGitHub) GetIssue(
 	number int,
 	reporter gh.Reporter,
 ) (map[string]any, error) {
+	updatedAt := f.prUpdatedAt
+	if updatedAt == "" {
+		updatedAt = "2026-07-12T00:00:00Z"
+	}
 	return map[string]any{
 		"id":                 1000 + f.number,
 		"number":             f.number,
@@ -390,7 +395,7 @@ func (f sameHeadWorkflowGitHub) GetIssue(
 		"body":               "",
 		"html_url":           fmt.Sprintf("https://github.com/openclaw/gitcrawl/pull/%d", f.number),
 		"created_at":         "2026-07-12T00:00:00Z",
-		"updated_at":         "2026-07-12T00:00:00Z",
+		"updated_at":         updatedAt,
 		"labels":             []map[string]any{},
 		"assignees":          []map[string]any{},
 		"user":               map[string]any{"login": "alice", "type": "User"},
@@ -432,11 +437,14 @@ func (f sameHeadWorkflowGitHub) ListWorkflowRuns(
 		"status":      "queued",
 		"name":        "old CI",
 		"event":       "pull_request",
+		"created_at":  "2026-07-12T00:00:00Z",
+		"updated_at":  "2026-07-12T00:00:00Z",
 	}}
 	if f.version == 2 {
 		rows[0]["status"] = "completed"
 		rows[0]["conclusion"] = "success"
 		rows[0]["name"] = "new CI"
+		rows[0]["updated_at"] = "2026-07-12T00:01:00Z"
 		rows = append(rows, map[string]any{
 			"id":          901,
 			"run_number":  2,
@@ -446,6 +454,8 @@ func (f sameHeadWorkflowGitHub) ListWorkflowRuns(
 			"conclusion":  "success",
 			"name":        "new lint",
 			"event":       "pull_request",
+			"created_at":  "2026-07-12T00:01:00Z",
+			"updated_at":  "2026-07-12T00:01:00Z",
 		})
 	}
 	if f.fetched != nil {
@@ -1681,10 +1691,11 @@ func TestSyncWorkflowRunsSharedHeadRejectsOlderPRSnapshot(t *testing.T) {
 	oldFetched := make(chan struct{})
 	releaseOld := make(chan struct{})
 	oldSyncer := New(sameHeadWorkflowGitHub{
-		number:  8,
-		version: 1,
-		fetched: oldFetched,
-		release: releaseOld,
+		number:      8,
+		version:     1,
+		prUpdatedAt: "2026-07-12T00:10:00Z",
+		fetched:     oldFetched,
+		release:     releaseOld,
 	}, st)
 	oldSyncer.now = func() time.Time { return time.Date(2026, 7, 12, 1, 0, 0, 0, time.UTC) }
 	type result struct {
@@ -1703,7 +1714,11 @@ func TestSyncWorkflowRunsSharedHeadRejectsOlderPRSnapshot(t *testing.T) {
 	}()
 	awaitSyncSignal(t, oldFetched, "older PR workflow snapshot")
 
-	newSyncer := New(sameHeadWorkflowGitHub{number: 9, version: 2}, st)
+	newSyncer := New(sameHeadWorkflowGitHub{
+		number:      9,
+		version:     2,
+		prUpdatedAt: "2026-07-12T00:00:00Z",
+	}, st)
 	newSyncer.now = func() time.Time { return time.Date(2026, 7, 12, 1, 1, 0, 0, time.UTC) }
 	newStats, err := newSyncer.Sync(ctx, Options{
 		Owner:            "openclaw",

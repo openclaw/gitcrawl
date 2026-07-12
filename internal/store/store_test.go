@@ -690,22 +690,26 @@ func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 	}
 	defer st.Close()
 	var version int
+	var evidenceSource string
 	var parentSequence, evidenceSequence, childSequence int64
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence, evidence_observation_sequence
+		select observation_sequence, evidence_source_updated_at,
+			evidence_observation_sequence
 		from threads
 		where id = ?
-	`, thread.ID).Scan(&parentSequence, &evidenceSequence); err != nil {
+	`, thread.ID).Scan(&parentSequence, &evidenceSource, &evidenceSequence); err != nil {
 		t.Fatalf("read migrated evidence sequence: %v", err)
 	}
-	if version != schemaVersion || parentSequence != -9 || evidenceSequence != 7 {
+	if version != schemaVersion || parentSequence != -9 ||
+		evidenceSource != "2026-07-12T00:00:00Z" || evidenceSequence != 7 {
 		t.Fatalf(
-			"migrated evidence state = version %d, parent %d, evidence %d",
+			"migrated evidence state = version %d, parent %d, evidence %s/%d",
 			version,
 			parentSequence,
+			evidenceSource,
 			evidenceSequence,
 		)
 	}
@@ -877,10 +881,12 @@ func TestMigrationBackfillsLegacyV10WorkflowRunReservation(t *testing.T) {
 		insert into thread_child_observation_reservations(
 			thread_id, family, observation_sequence
 		)
-		values(?, 'workflow_runs', 10);
+		values
+			(?, 'workflow_runs', 10),
+			(?, 'pull_request_files', 10);
 		drop table workflow_run_observation_reservations;
 		pragma user_version = 10;
-	`, upsert.ID); err != nil {
+	`, upsert.ID, upsert.ID); err != nil {
 		_ = raw.Close()
 		t.Fatalf("prepare legacy v10 migration: %v", err)
 	}
@@ -903,6 +909,40 @@ func TestMigrationBackfillsLegacyV10WorkflowRunReservation(t *testing.T) {
 	}
 	if workflowSequence != 10 {
 		t.Fatalf("migrated workflow reservation = %d, want legacy high-water mark 10", workflowSequence)
+	}
+	var childSource string
+	var childSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = 'pull_request_files'
+	`, upsert.ID).Scan(&childSource, &childSequence); err != nil {
+		t.Fatalf("read migrated child reservation: %v", err)
+	}
+	if childSource != "" || childSequence != 10 {
+		t.Fatalf(
+			"migrated child reservation = %q/%d, want unknown source at 10",
+			childSource,
+			childSequence,
+		)
+	}
+	if applied, err := st.ReserveThreadChildObservation(
+		ctx,
+		upsert.ID,
+		ThreadChildPullRequestFiles,
+		"2026-07-12T00:01:00Z",
+		9,
+	); err != nil || applied {
+		t.Fatalf("lower migrated child observation = %t, %v", applied, err)
+	}
+	if applied, err := st.ReserveThreadChildObservation(
+		ctx,
+		upsert.ID,
+		ThreadChildPullRequestFiles,
+		"2026-07-12T00:01:00Z",
+		11,
+	); err != nil || !applied {
+		t.Fatalf("newer migrated child observation = %t, %v", applied, err)
 	}
 	var legacyReservations int64
 	if err := st.DB().QueryRowContext(ctx, `

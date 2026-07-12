@@ -534,12 +534,42 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 		return EnrichmentCoverageMetric{}, nil
 	}
 	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
+	threadObservationSequence := "0"
+	if s.hasColumn(ctx, "threads", "observation_sequence") {
+		threadObservationSequence = "t.observation_sequence"
+	}
+	reservationJoin := ""
+	reservationPresent := "0"
+	reservationSourceUpdatedAt := "''"
+	reservationObservationSequence := "0"
+	if s.archiveCoverageHasColumns(
+		ctx,
+		"thread_child_observation_reservations",
+		"thread_id",
+		"family",
+		"source_updated_at",
+		"observation_sequence",
+	) {
+		reservationJoin = `
+		left join thread_child_observation_reservations prd_reservation
+			on prd_reservation.thread_id = t.id
+				and prd_reservation.family = 'pull_request_details'
+		`
+		reservationPresent = "case when prd_reservation.thread_id is null then 0 else 1 end"
+		reservationSourceUpdatedAt = "coalesce(prd_reservation.source_updated_at, '')"
+		reservationObservationSequence = "coalesce(prd_reservation.observation_sequence, 0)"
+	}
 	rows, err := s.q().QueryContext(ctx, `
 		select case when prd.thread_id is null then 0 else 1 end,
 			coalesce(prd.fetched_at, ''),
-			`+threadUpdatedAt+`
+			`+threadUpdatedAt+`,
+			`+threadObservationSequence+`,
+			`+reservationPresent+`,
+			`+reservationSourceUpdatedAt+`,
+			`+reservationObservationSequence+`
 		from threads t
 		left join pull_request_details prd on prd.thread_id = t.id
+		`+reservationJoin+`
 		where t.repo_id = ? and t.kind = 'pull_request'
 	`, repoID)
 	if err != nil {
@@ -550,9 +580,18 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	metric := EnrichmentCoverageMetric{Supported: true}
 	var latestFetchedAt time.Time
 	for rows.Next() {
-		var hasDetail int
-		var fetchedAt, sourceUpdatedAt string
-		if err := rows.Scan(&hasDetail, &fetchedAt, &sourceUpdatedAt); err != nil {
+		var hasDetail, hasReservation int
+		var parentSequence, reservationSequence int64
+		var fetchedAt, sourceUpdatedAt, reservationSourceUpdatedAt string
+		if err := rows.Scan(
+			&hasDetail,
+			&fetchedAt,
+			&sourceUpdatedAt,
+			&parentSequence,
+			&hasReservation,
+			&reservationSourceUpdatedAt,
+			&reservationSequence,
+		); err != nil {
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive PR detail coverage: %w", err)
 		}
 		metric.Eligible++
@@ -565,7 +604,18 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 		if fetchedOK && (latestFetchedAt.IsZero() || fetched.After(latestFetchedAt)) {
 			latestFetchedAt = fetched
 		}
-		if fetchedOK && archiveCoverageTimestampAtOrAfter(fetchedAt, sourceUpdatedAt) {
+		fresh := false
+		if hasReservation != 0 {
+			fresh = archiveObservationAtOrAfter(
+				reservationSourceUpdatedAt,
+				reservationSequence,
+				sourceUpdatedAt,
+				observationSequenceOrderValue(parentSequence),
+			)
+		} else {
+			fresh = fetchedOK && archiveCoverageTimestampAtOrAfter(fetchedAt, sourceUpdatedAt)
+		}
+		if fresh {
 			metric.Fresh++
 		}
 	}
@@ -577,6 +627,30 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	}
 	finalizeEnrichmentCoverageMetric(&metric)
 	return metric, nil
+}
+
+func archiveObservationAtOrAfter(
+	observedSourceUpdatedAt string,
+	observedSequence int64,
+	currentSourceUpdatedAt string,
+	currentSequence int64,
+) bool {
+	observedSourceUpdatedAt = strings.TrimSpace(observedSourceUpdatedAt)
+	currentSourceUpdatedAt = strings.TrimSpace(currentSourceUpdatedAt)
+	observedKey, observedValid := timestampOrderKey(observedSourceUpdatedAt)
+	currentKey, currentValid := timestampOrderKey(currentSourceUpdatedAt)
+	switch {
+	case observedValid && currentValid:
+		return observedKey >= currentKey
+	case observedValid:
+		return true
+	case currentValid:
+		return false
+	case observedSourceUpdatedAt != currentSourceUpdatedAt:
+		return false
+	default:
+		return observedSequence >= currentSequence
+	}
 }
 
 func parseArchiveCoverageTimestamp(value string) (time.Time, bool) {

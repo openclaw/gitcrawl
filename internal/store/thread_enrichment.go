@@ -261,6 +261,25 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 			return ThreadEnrichmentResult{}, fmt.Errorf("compare thread revision observation order: %w", err)
 		}
 	}
+	sameContentOrder := order
+	if latestExists && latestHash == revision.ContentHash {
+		sameContentOrder, err = compareObservationOrder(
+			observationOrder{
+				SourceUpdatedAt:     revision.SourceUpdatedAt,
+				ObservationSequence: revision.ObservationSequence,
+			},
+			observationOrder{
+				SourceUpdatedAt:     latestSourceUpdatedAt,
+				ObservationSequence: latestObservationSequence,
+			},
+		)
+		if err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf(
+				"compare equal-content thread revision order: %w",
+				err,
+			)
+		}
+	}
 	created := false
 	switch {
 	case latestExists && order < 0 && observedErr == nil:
@@ -276,7 +295,7 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		revision.ID = latestID
 		refreshedSourceUpdatedAt := latestSourceUpdatedAt
 		refreshedObservationSequence := latestObservationSequence
-		if order > 0 {
+		if sameContentOrder > 0 {
 			refreshedSourceUpdatedAt = revision.SourceUpdatedAt
 			refreshedObservationSequence = revision.ObservationSequence
 		}

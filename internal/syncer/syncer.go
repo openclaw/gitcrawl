@@ -298,7 +298,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 							ctx,
 							thread.RepoID,
 							headSHA,
-							thread.UpdatedAtGitHub,
+							workflowSnapshotSourceUpdatedAt(payload.pullDetails.runsRaw),
 							observationSequence,
 						)
 						if err != nil {

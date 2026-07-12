@@ -295,6 +295,80 @@ func TestUpsertThreadRevisionRefreshesSourceTimestampWithoutNewRevision(t *testi
 	}
 }
 
+func TestUpsertThreadRevisionRefreshesEqualContentFromNewerSourceAtLowerSequence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "8", Number: 8, Kind: "issue", State: "open",
+		Title: "stable evidence", Body: "same canonical content",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/8",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         `{"content":"stable"}`,
+		ContentHash:     "stable",
+		UpdatedAtGitHub: "2026-07-12T12:00:00Z",
+		UpdatedAt:       "2026-07-12T12:00:00Z",
+	}
+	old, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	})
+	if err != nil || !old.Applied || !old.EvidenceApplied {
+		t.Fatalf("old thread observation = %+v, %v", old, err)
+	}
+	thread.ID = old.ID
+	oldRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 2,
+	}, "2026-07-12T12:00:01Z")
+	if err != nil {
+		t.Fatalf("old revision: %v", err)
+	}
+
+	thread.UpdatedAtGitHub = "2026-07-12T12:01:00Z"
+	thread.UpdatedAt = "2026-07-12T12:01:00Z"
+	current, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil || !current.Applied || !current.EvidenceApplied {
+		t.Fatalf("newer-source thread observation = %+v, %v", current, err)
+	}
+	refreshed, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 1,
+	}, "2026-07-12T12:01:01Z")
+	if err != nil {
+		t.Fatalf("newer-source revision: %v", err)
+	}
+	if refreshed.RevisionID != oldRevision.RevisionID || refreshed.RevisionCreated {
+		t.Fatalf("refreshed revision = %+v, old = %+v", refreshed, oldRevision)
+	}
+
+	var sourceUpdatedAt string
+	var sequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from thread_revisions
+		where id = ?
+	`, refreshed.RevisionID).Scan(&sourceUpdatedAt, &sequence); err != nil {
+		t.Fatalf("read refreshed revision: %v", err)
+	}
+	if sourceUpdatedAt != "2026-07-12T12:01:00Z" || sequence != 1 {
+		t.Fatalf("refreshed revision order = %s/%d", sourceUpdatedAt, sequence)
+	}
+}
+
 func TestUpsertThreadRevisionPreservesTransitionsAndDeduplicatesObservations(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

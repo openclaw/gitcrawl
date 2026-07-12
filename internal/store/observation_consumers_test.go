@@ -574,3 +574,93 @@ func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T
 		}
 	}
 }
+
+func TestRevisionConsumersRemainFreshAfterReopenWithNewerSourceLowerSequence(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "fresh-reopen", Number: 91, Kind: "issue", State: "open",
+		Title: "stable content", Body: "stable body",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/91",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         `{"content":"stable"}`,
+		ContentHash:     "stable",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	old, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	})
+	if err != nil {
+		t.Fatalf("old observation: %v", err)
+	}
+	thread.ID = old.ID
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 2,
+	}, "2026-07-12T00:00:01Z"); err != nil {
+		t.Fatalf("old revision: %v", err)
+	}
+
+	thread.UpdatedAtGitHub = "2026-07-12T00:01:00Z"
+	thread.UpdatedAt = "2026-07-12T00:01:00Z"
+	current, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil || !current.EvidenceApplied {
+		t.Fatalf("newer-source observation = %+v, %v", current, err)
+	}
+	revision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 1,
+	}, "2026-07-12T00:01:01Z")
+	if err != nil {
+		t.Fatalf("newer-source revision: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: revision.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "test",
+		Model:            "test",
+		InputHash:        "fresh-reopen-input",
+		OutputHash:       "fresh-reopen-output",
+		KeyText:          "fresh after reopen",
+		CreatedAt:        "2026-07-12T00:01:02Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	tasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: repoID, Provider: "test", Model: "test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1,
+		Number: thread.Number, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("summary tasks after reopen: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].RevisionID != revision.RevisionID {
+		t.Fatalf("summary tasks after reopen = %+v, want revision %d", tasks, revision.RevisionID)
+	}
+}

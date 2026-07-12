@@ -383,33 +383,22 @@ func (s *Store) ensureThreadObservationSequenceValues(ctx context.Context) error
 func (s *Store) ensureThreadEvidenceObservationSequence(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `
 		update threads
-		set evidence_observation_sequence = max(
-			evidence_observation_sequence,
-			coalesce((
+		set evidence_source_updated_at = coalesce(updated_at_gh, ''),
+			evidence_observation_sequence = coalesce((
 				select max(observation_sequence)
 				from thread_revisions
 				where thread_id = threads.id
 					and observation_sequence > 0
 			), 0)
-		)
+		where evidence_observation_sequence = 0
+			and coalesce((
+				select max(observation_sequence)
+				from thread_revisions
+				where thread_id = threads.id
+					and observation_sequence > 0
+			), 0) > 0
 	`); err != nil {
-		return fmt.Errorf("backfill thread evidence observation sequence: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		update threads
-		set evidence_source_updated_at = coalesce((
-			select source_updated_at
-			from thread_revisions
-			where thread_id = threads.id
-				and observation_sequence = threads.evidence_observation_sequence
-				and trim(coalesce(source_updated_at, '')) <> ''
-			order by id desc
-			limit 1
-		), '')
-		where evidence_observation_sequence > 0
-			and trim(evidence_source_updated_at) = ''
-	`); err != nil {
-		return fmt.Errorf("backfill thread evidence source timestamp: %w", err)
+		return fmt.Errorf("backfill thread evidence observation order: %w", err)
 	}
 	return nil
 }
@@ -425,7 +414,8 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 		where evidence_observation_sequence > 0
 		on conflict(thread_id, family) do update set
 			source_updated_at = case
-				when trim(thread_child_observation_reservations.source_updated_at) = ''
+				when excluded.observation_sequence >
+					thread_child_observation_reservations.observation_sequence
 					then excluded.source_updated_at
 				else thread_child_observation_reservations.source_updated_at
 			end,
@@ -455,7 +445,8 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 			and threads.evidence_observation_sequence > 0
 		on conflict(thread_id, family) do update set
 			source_updated_at = case
-				when trim(thread_child_observation_reservations.source_updated_at) = ''
+				when excluded.observation_sequence >
+					thread_child_observation_reservations.observation_sequence
 					then excluded.source_updated_at
 				else thread_child_observation_reservations.source_updated_at
 			end,

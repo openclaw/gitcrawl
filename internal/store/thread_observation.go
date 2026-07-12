@@ -94,7 +94,7 @@ func (s *Store) ReserveThreadChildObservation(
 		return false, fmt.Errorf("read thread child observation %q: %w", family, err)
 	}
 	if err == nil {
-		order, err := compareObservationOrder(
+		order, err := compareReservationObservationOrder(
 			observationOrder{
 				SourceUpdatedAt:     sourceUpdatedAt,
 				ObservationSequence: sequence,
@@ -177,7 +177,7 @@ func (s *Store) ReserveWorkflowRunObservation(
 		return false, fmt.Errorf("read workflow run observation for %s: %w", headSHA, err)
 	}
 	if err == nil {
-		order, err := compareObservationOrder(
+		order, err := compareWorkflowObservationOrder(
 			observationOrder{
 				SourceUpdatedAt:     sourceUpdatedAt,
 				ObservationSequence: sequence,
@@ -209,4 +209,30 @@ func (s *Store) ReserveWorkflowRunObservation(
 		return false, fmt.Errorf("reserve workflow run observation for %s: %w", headSHA, err)
 	}
 	return true, nil
+}
+
+func compareReservationObservationOrder(incoming, current observationOrder) (int, error) {
+	if strings.TrimSpace(current.SourceUpdatedAt) == "" && current.ObservationSequence > 0 {
+		return compareObservationSequence(incoming.ObservationSequence, current.ObservationSequence), nil
+	}
+	return compareObservationOrder(incoming, current)
+}
+
+func compareWorkflowObservationOrder(incoming, current observationOrder) (int, error) {
+	if strings.TrimSpace(incoming.SourceUpdatedAt) == "" ||
+		strings.TrimSpace(current.SourceUpdatedAt) == "" {
+		return compareObservationSequence(incoming.ObservationSequence, current.ObservationSequence), nil
+	}
+	return compareObservationOrder(incoming, current)
+}
+
+func compareObservationSequence(incoming, current int64) int {
+	switch {
+	case incoming < current:
+		return -1
+	case incoming > current:
+		return 1
+	default:
+		return 0
+	}
 }

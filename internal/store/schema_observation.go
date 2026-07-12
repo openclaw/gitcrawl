@@ -358,16 +358,24 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 				insert into workflow_run_observation_reservations_migration_backup(
 					repo_id, head_sha, source_updated_at, observation_sequence
 				)
-				select repo_id, trim(head_sha), max(`+sourceExpression+`),
-					max(observation_sequence)
-				from workflow_run_observation_reservations
-				where typeof(repo_id) = 'integer'
-					and repo_id in (select id from repositories)
-					and typeof(head_sha) = 'text'
-					and trim(coalesce(head_sha, '')) <> ''
-					and typeof(observation_sequence) = 'integer'
-					and observation_sequence > 0
-				group by repo_id, trim(head_sha)
+				select repo_id, head_sha, source_updated_at, observation_sequence
+				from (
+					select repo_id, trim(head_sha) as head_sha,
+						`+sourceExpression+` as source_updated_at,
+						observation_sequence,
+						row_number() over (
+							partition by repo_id, trim(head_sha)
+							order by observation_sequence desc
+						) as observation_rank
+					from workflow_run_observation_reservations
+					where typeof(repo_id) = 'integer'
+						and repo_id in (select id from repositories)
+						and typeof(head_sha) = 'text'
+						and trim(coalesce(head_sha, '')) <> ''
+						and typeof(observation_sequence) = 'integer'
+						and observation_sequence > 0
+				)
+				where observation_rank = 1
 			`); err != nil {
 				return err
 			}
@@ -428,23 +436,31 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 				insert into thread_child_observation_reservations_migration_backup(
 					thread_id, family, source_updated_at, observation_sequence
 				)
-				select thread_id, family, max(`+sourceExpression+`),
-					max(observation_sequence)
-				from thread_child_observation_reservations
-				where typeof(thread_id) = 'integer'
-					and thread_id in (select id from threads)
-					and typeof(family) = 'text'
-					and family in (
-						'comments',
-						'pull_request_details',
-						'pull_request_files',
-						'pull_request_commits',
-						'pull_request_checks',
-						'pull_request_review_threads'
-					)
-					and typeof(observation_sequence) = 'integer'
-					and observation_sequence > 0
-				group by thread_id, family
+				select thread_id, family, source_updated_at, observation_sequence
+				from (
+					select thread_id, family,
+						`+sourceExpression+` as source_updated_at,
+						observation_sequence,
+						row_number() over (
+							partition by thread_id, family
+							order by observation_sequence desc
+						) as observation_rank
+					from thread_child_observation_reservations
+					where typeof(thread_id) = 'integer'
+						and thread_id in (select id from threads)
+						and typeof(family) = 'text'
+						and family in (
+							'comments',
+							'pull_request_details',
+							'pull_request_files',
+							'pull_request_commits',
+							'pull_request_checks',
+							'pull_request_review_threads'
+						)
+						and typeof(observation_sequence) = 'integer'
+						and observation_sequence > 0
+				)
+				where observation_rank = 1
 			`); err != nil {
 				return err
 			}

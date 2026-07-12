@@ -227,6 +227,18 @@ func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 			family: ThreadChildPullRequestDetails, sourceUpdatedAt: "2026-07-12T00:00:00Z",
 			sequence: 4, want: true,
 		},
+		{
+			family: ThreadChildPullRequestFiles, sourceUpdatedAt: "",
+			sequence: 10, want: true,
+		},
+		{
+			family: ThreadChildPullRequestFiles, sourceUpdatedAt: "2026-07-12T00:02:00Z",
+			sequence: 9, want: false,
+		},
+		{
+			family: ThreadChildPullRequestFiles, sourceUpdatedAt: "2026-07-12T00:02:00Z",
+			sequence: 11, want: true,
+		},
 	} {
 		applied, err := st.ReserveThreadChildObservation(
 			ctx,
@@ -326,6 +338,18 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 		{
 			headSHA: "other-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
 			sequence: 1, want: true,
+		},
+		{
+			headSHA: "legacy-head", sourceUpdatedAt: "",
+			sequence: 10, want: true,
+		},
+		{
+			headSHA: "legacy-head", sourceUpdatedAt: "2026-07-12T00:02:00Z",
+			sequence: 9, want: false,
+		},
+		{
+			headSHA: "legacy-head", sourceUpdatedAt: "2026-07-12T00:02:00Z",
+			sequence: 11, want: true,
 		},
 	} {
 		applied, err := st.ReserveWorkflowRunObservation(

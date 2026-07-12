@@ -220,13 +220,16 @@ func TestInspectSchemaReportsSemanticObservationDriftWithoutMutation(t *testing.
 	raw := openRawMigrationDB(t, dbPath)
 	for _, statement := range []string{
 		`update thread_revisions set observation_sequence = 23 where thread_id = ?`,
+		`update threads
+		 set evidence_source_updated_at = '', evidence_observation_sequence = 0
+		 where id = ?`,
 		`delete from thread_child_observation_reservations where thread_id = ?`,
 		`delete from workflow_run_observation_reservations`,
 		`update thread_observation_sequence set value = 0 where id = 1`,
 		`pragma user_version = 10`,
 	} {
 		args := []any{}
-		if strings.Contains(statement, "thread_id = ?") {
+		if strings.Contains(statement, "?") {
 			args = append(args, threadID)
 		}
 		if _, err := raw.ExecContext(ctx, statement, args...); err != nil {
@@ -299,29 +302,31 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 				'pull_request_checks',
 				'pull_request_review_threads'
 			)),
+			source_updated_at text,
 			observation_sequence integer
 		);
 		insert into thread_child_observation_reservations(
-			thread_id, family, observation_sequence
+			thread_id, family, source_updated_at, observation_sequence
 		)
 			values
-				(?, 'comments', 7),
-				(?, 'comments', 17),
-				(?, 'comments', 'poison');
+				(?, 'comments', '2026-07-12T00:02:00Z', 7),
+				(?, 'comments', '2026-07-12T00:01:00Z', 17),
+				(?, 'comments', '2026-07-12T00:03:00Z', 'poison');
 
 		drop table workflow_run_observation_reservations;
 		create table workflow_run_observation_reservations (
 			repo_id integer,
 			head_sha text not null check (trim(head_sha) <> ''),
+			source_updated_at text,
 			observation_sequence integer
 		);
 		insert into workflow_run_observation_reservations(
-			repo_id, head_sha, observation_sequence
+			repo_id, head_sha, source_updated_at, observation_sequence
 		)
 			values
-				(?, 'malformed-shared-head', 13),
-				(?, 'malformed-shared-head', 19),
-				(?, 'malformed-shared-head', 'poison');
+				(?, 'malformed-shared-head', '2026-07-12T00:02:00Z', 13),
+				(?, 'malformed-shared-head', '2026-07-12T00:01:00Z', 19),
+				(?, 'malformed-shared-head', '2026-07-12T00:03:00Z', 'poison');
 			pragma user_version = 10;
 		`, threadID, threadID, threadID, repoID, repoID, repoID); err != nil {
 		_ = raw.Close()
@@ -352,26 +357,36 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 	if !st.workflowRunObservationReservationsHaveCurrentShape(ctx) {
 		t.Fatal("workflow reservation table was not rebuilt to canonical shape")
 	}
+	var childSource, workflowSource string
 	var childSequence, childRows, workflowSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
-		select max(observation_sequence), count(*)
+		select source_updated_at, observation_sequence, count(*)
 		from thread_child_observation_reservations
 		where thread_id = ? and family = 'comments'
-	`, threadID).Scan(&childSequence, &childRows); err != nil {
+	`, threadID).Scan(&childSource, &childSequence, &childRows); err != nil {
 		t.Fatalf("read rebuilt child reservation: %v", err)
 	}
-	if childRows != 1 || childSequence != 17 {
-		t.Fatalf("rebuilt child reservation = rows %d sequence %d, want one row at 17", childRows, childSequence)
+	if childRows != 1 || childSource != "2026-07-12T00:01:00Z" || childSequence != 17 {
+		t.Fatalf(
+			"rebuilt child reservation = rows %d order %s/%d",
+			childRows,
+			childSource,
+			childSequence,
+		)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select source_updated_at, observation_sequence
 		from workflow_run_observation_reservations
 		where repo_id = ? and head_sha = 'malformed-shared-head'
-	`, repoID).Scan(&workflowSequence); err != nil {
+	`, repoID).Scan(&workflowSource, &workflowSequence); err != nil {
 		t.Fatalf("read rebuilt workflow reservation: %v", err)
 	}
-	if workflowSequence != 19 {
-		t.Fatalf("rebuilt workflow reservation = %d, want 19", workflowSequence)
+	if workflowSource != "2026-07-12T00:01:00Z" || workflowSequence != 19 {
+		t.Fatalf(
+			"rebuilt workflow reservation = %s/%d",
+			workflowSource,
+			workflowSequence,
+		)
 	}
 	for _, statement := range []string{
 		`update thread_child_observation_reservations
@@ -792,7 +807,7 @@ func TestObservationMigrationHelpersPropagateSchemaErrors(t *testing.T) {
 			name:      "evidence sequence",
 			dropTable: "threads",
 			run:       func(st *Store) error { return st.ensureThreadEvidenceObservationSequence(ctx) },
-			want:      "backfill thread evidence observation sequence",
+			want:      "backfill thread evidence observation order",
 		},
 		{
 			name:      "child reservations",
@@ -1125,16 +1140,39 @@ func TestMigrationNormalizesLegacyV10ChildReservationShape(t *testing.T) {
 		t.Fatalf("legacy workflow family insert error = %v, want CHECK constraint failure", err)
 	}
 
+	var workflowSource string
 	var workflowSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select source_updated_at, observation_sequence
 		from workflow_run_observation_reservations
 		where repo_id = ? and head_sha = 'legacy-shared-head'
-	`, repoID).Scan(&workflowSequence); err != nil {
+	`, repoID).Scan(&workflowSource, &workflowSequence); err != nil {
 		t.Fatalf("read migrated workflow reservation: %v", err)
 	}
-	if workflowSequence != 37 {
-		t.Fatalf("migrated workflow reservation = %d, want 37", workflowSequence)
+	if workflowSource != "" || workflowSequence != 37 {
+		t.Fatalf(
+			"migrated workflow reservation = %q/%d, want unknown source at 37",
+			workflowSource,
+			workflowSequence,
+		)
+	}
+	if applied, err := st.ReserveWorkflowRunObservation(
+		ctx,
+		repoID,
+		"legacy-shared-head",
+		"2026-07-12T00:01:00Z",
+		36,
+	); err != nil || applied {
+		t.Fatalf("lower legacy workflow observation = %t, %v", applied, err)
+	}
+	if applied, err := st.ReserveWorkflowRunObservation(
+		ctx,
+		repoID,
+		"legacy-shared-head",
+		"2026-07-12T00:01:00Z",
+		38,
+	); err != nil || !applied {
+		t.Fatalf("newer legacy workflow observation = %t, %v", applied, err)
 	}
 
 	currentDiag := InspectSchema(ctx, dbPath)

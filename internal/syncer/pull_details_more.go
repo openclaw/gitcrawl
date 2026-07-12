@@ -1,6 +1,10 @@
 package syncer
 
-import "github.com/openclaw/gitcrawl/internal/store"
+import (
+	"time"
+
+	"github.com/openclaw/gitcrawl/internal/store"
+)
 
 func mapPullChecks(threadID int64, rows []map[string]any, fetchedAt string) []store.PullRequestCheck {
 	out := make([]store.PullRequestCheck, 0, len(rows))
@@ -50,6 +54,34 @@ func mapWorkflowRuns(repoID int64, rows []map[string]any, fetchedAt string) []st
 		})
 	}
 	return out
+}
+
+func workflowSnapshotSourceUpdatedAt(rows []map[string]any) string {
+	sourceUpdatedAt := ""
+	for _, row := range rows {
+		sourceUpdatedAt = latestWorkflowTimestamp(
+			sourceUpdatedAt,
+			stringValue(row["updated_at"]),
+			stringValue(row["created_at"]),
+		)
+	}
+	return sourceUpdatedAt
+}
+
+func latestWorkflowTimestamp(values ...string) string {
+	latestValue := ""
+	var latestTime time.Time
+	for _, value := range values {
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			continue
+		}
+		if latestValue == "" || parsed.After(latestTime) {
+			latestValue = value
+			latestTime = parsed
+		}
+	}
+	return latestValue
 }
 
 func nestedString(row map[string]any, path ...string) string {
