@@ -1551,7 +1551,7 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 		}
 	}
 	if s.hasTable(ctx, "thread_key_summaries") && s.hasTable(ctx, "thread_revisions") {
-		revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+		revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 		revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 		rows, err := s.db.QueryContext(ctx, `
 			select tr.thread_id, tks.summary_kind, tks.key_text

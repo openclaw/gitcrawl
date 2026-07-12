@@ -98,6 +98,16 @@ func (s *Store) latestThreadRevisionOrder(ctx context.Context, alias string) str
 	return strings.Join(parts, ", ")
 }
 
+func (s *Store) latestThreadRevisionConsumerOrder(
+	ctx context.Context,
+	revisionAlias string,
+	threadAlias string,
+) string {
+	freshness := s.threadRevisionFreshnessPredicate(ctx, revisionAlias, threadAlias)
+	return "case when (" + freshness + ") then 1 else 0 end desc, " +
+		s.latestThreadRevisionOrder(ctx, revisionAlias)
+}
+
 func (s *Store) threadRevisionFreshnessPredicate(
 	ctx context.Context,
 	revisionAlias string,

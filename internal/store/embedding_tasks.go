@@ -46,7 +46,7 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 	if options.Number > 0 {
 		number = options.Number
 	}
-	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+	revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 	summaryFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 	eligibleSummaryFresh := s.threadRevisionFreshnessPredicate(ctx, "eligible_revision", "t")
 	rows, err := s.q().QueryContext(ctx, `

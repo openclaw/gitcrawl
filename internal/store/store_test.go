@@ -508,6 +508,100 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 	}
 }
 
+func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "sequence-floor", Number: 102, Kind: "issue", State: "open",
+		Title: "sequence floor", Body: "reconcile once during migration",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/102",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "sequence-floor",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	upsert, err := st.UpsertThreadObservation(
+		ctx,
+		thread,
+		UpsertThreadOptions{ObservationSequence: 13},
+	)
+	if err != nil {
+		t.Fatalf("thread observation: %v", err)
+	}
+	thread.ID = upsert.ID
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 17,
+	}, "2026-07-12T00:01:00Z"); err != nil {
+		t.Fatalf("thread revision: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(
+		ctx,
+		`update threads set observation_sequence = -13 where id = ?`,
+		thread.ID,
+	); err != nil {
+		_ = raw.Close()
+		t.Fatalf("prepare negative thread sequence: %v", err)
+	}
+	for _, statement := range []string{
+		`update thread_observation_sequence set value = 1 where id = 1`,
+		`pragma user_version = 7`,
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			_ = raw.Close()
+			t.Fatalf("prepare sequence migration with %q: %v", statement, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var floor int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select value
+		from thread_observation_sequence
+		where id = 1
+	`).Scan(&floor); err != nil {
+		t.Fatalf("read reconciled sequence floor: %v", err)
+	}
+	if floor != 17 {
+		t.Fatalf("sequence floor = %d, want 17", floor)
+	}
+	next, err := st.NextThreadObservationSequence(ctx, "2026-07-12T00:02:00Z")
+	if err != nil {
+		t.Fatalf("next observation sequence: %v", err)
+	}
+	if next != 18 {
+		t.Fatalf("next observation sequence = %d, want 18", next)
+	}
+}
+
 func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")

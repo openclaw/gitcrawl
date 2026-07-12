@@ -20,15 +20,11 @@ func (s *Store) NextThreadObservationSequence(ctx context.Context, startedAt str
 	}
 	var sequence int64
 	if err := s.q().QueryRowContext(ctx, `
-		update thread_observation_sequence
-		set value = max(
-			value,
-			coalesce((select max(observation_sequence) from thread_revisions), 0),
-			coalesce((select max(observation_sequence) from threads), 0)
-		) + 1,
-			last_started_at = ?
-		where id = 1
-		returning value
+			update thread_observation_sequence
+			set value = value + 1,
+				last_started_at = ?
+			where id = 1
+			returning value
 	`, startedAt).Scan(&sequence); err != nil {
 		return 0, fmt.Errorf("advance thread observation sequence at %s: %w", startedAt, err)
 	}

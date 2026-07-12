@@ -245,6 +245,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
 		return err
 	}
+	if current < 8 {
+		if err := s.ensureThreadObservationSequenceFloor(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.ensureThreadVectorsCompositeKey(ctx); err != nil {
 		return err
 	}
@@ -293,6 +298,27 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt where body is null and body_excerpt is not null`); err != nil {
 			return fmt.Errorf("backfill thread body from portable excerpt: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) ensureThreadObservationSequenceFloor(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		update thread_observation_sequence
+		set value = max(
+			value,
+			coalesce((
+				select max(case
+					when observation_sequence < 0 then -observation_sequence
+					else observation_sequence
+				end)
+				from threads
+			), 0),
+			coalesce((select max(observation_sequence) from thread_revisions), 0)
+		)
+		where id = 1
+	`); err != nil {
+		return fmt.Errorf("reconcile thread observation sequence: %w", err)
 	}
 	return nil
 }

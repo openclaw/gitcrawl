@@ -65,24 +65,12 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 	if options.Number > 0 {
 		number = options.Number
 	}
-	revisionOrder := s.latestThreadRevisionOrder(ctx, "tr")
+	revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 	revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "lr", "t")
 	rows, err := s.q().QueryContext(ctx, `
-		with latest_revisions as (
-			select *
-			from (
-				select tr.*,
-					row_number() over (
-							partition by tr.thread_id
-							order by `+revisionOrder+`
-					) as observation_rank
-				from thread_revisions tr
-			)
-			where observation_rank = 1
-		)
-		select t.id, lr.id, t.number, t.kind,
-			b.inline_text,
-			lr.content_hash,
+			select t.id, lr.id, t.number, t.kind,
+				b.inline_text,
+				lr.content_hash,
 			coalesce(s.input_hash, ''),
 			t.state,
 			t.title,
@@ -91,13 +79,19 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			t.assignees_json,
 			coalesce(t.author_login, ''),
 			coalesce(t.author_type, ''),
-			coalesce(t.author_association, ''),
-			t.is_draft
-		from threads t
-		join latest_revisions lr on lr.thread_id = t.id
-		join blobs b on b.id = lr.raw_json_blob_id
-		left join thread_key_summaries s
-			on s.thread_revision_id = lr.id
+				coalesce(t.author_association, ''),
+				t.is_draft
+			from threads t
+			join thread_revisions lr on lr.id = (
+				select latest.id
+				from thread_revisions latest
+				where latest.thread_id = t.id
+				order by `+revisionOrder+`
+				limit 1
+			)
+			join blobs b on b.id = lr.raw_json_blob_id
+			left join thread_key_summaries s
+				on s.thread_revision_id = lr.id
 			and s.summary_kind = ?
 			and s.prompt_version = ?
 			and s.provider = ?

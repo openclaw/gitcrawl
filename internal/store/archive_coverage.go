@@ -365,7 +365,7 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 	if !s.archiveCoverageHasColumns(ctx, "thread_revisions", "id", "thread_id", "source_updated_at", "created_at") {
 		return EnrichmentCoverageMetric{}, nil
 	}
-	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+	revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 	revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 	rows, err := s.q().QueryContext(ctx, `
 			select case when tr.id is null then 0 else 1 end,
@@ -432,7 +432,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 		condition = " and latest_child." + sqliteIdentifier(conditionColumn) + " = ?"
 		args = append(args, conditionValue)
 	}
-	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+	revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 	revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 	args = append(args, repoID)
 	rows, err := s.q().QueryContext(ctx, `
