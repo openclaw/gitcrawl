@@ -76,7 +76,8 @@ Publishing moves unpinned reads to the complete snapshot by default, preserving
 the existing reader-refresh behavior. `--stage-only` keeps the immutable
 snapshot staged without changing serving state. A later publish verifies the
 candidate through the publisher-only status projection, skips repeated ingest
-when its digest, schema, capabilities, and coverage match, then cuts it over.
+when its digest, source sync, schema, resolved publication profile, persisted
+generation timestamp, and coverage match, then cuts it over.
 Incomplete local enrichment fails before any remote mutation;
 `--allow-incomplete` is an explicit escape hatch, and `--observation-order`
 publishes durable fetch ordering after the remote operator fence is enabled.

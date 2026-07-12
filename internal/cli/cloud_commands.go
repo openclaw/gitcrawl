@@ -45,6 +45,14 @@ func gitcrawlCloudReaderQuerySpecs() []crawlremote.QuerySpec {
 	}
 }
 
+func gitcrawlCloudPublicationCapabilities(requested []string) []string {
+	capabilities := make([]string, 0, len(gitcrawlCloudReaderQuerySpecs())+len(requested))
+	for _, query := range gitcrawlCloudReaderQuerySpecs() {
+		capabilities = append(capabilities, query.Name)
+	}
+	return append(capabilities, requested...)
+}
+
 func (a *App) runCloud(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageErr(fmt.Errorf("cloud requires a subcommand"))
@@ -129,6 +137,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		return err
 	}
 	manifest := gitcrawlCloudManifest(archiveID, snapshot)
+	publicationCapabilities := gitcrawlCloudPublicationCapabilities(snapshot.Capabilities)
 	counts := gitcrawlCloudDatasetCounts(snapshot)
 	if err := requireGitcrawlSnapshotPublishContract(
 		ctx,
@@ -153,7 +162,14 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	alreadyStaged := false
 	status, statusErr := client.PublishStatus(ctx, "gitcrawl", archiveID)
 	if statusErr == nil {
-		alreadyStaged = gitcrawlPublisherStatusMatches(status, manifest)
+		alreadyStaged = gitcrawlPublisherStatusMatches(
+			status,
+			manifest,
+			publicationCapabilities,
+		)
+		if alreadyStaged {
+			snapshot.DatasetGeneratedAt = status.Snapshot.DatasetGeneratedAt
+		}
 	} else if !remoteNotFound(statusErr) {
 		return statusErr
 	}
@@ -646,22 +662,26 @@ func equalUniqueStringSet(left, right []string) bool {
 func gitcrawlPublisherStatusMatches(
 	status crawlremote.PublisherStatus,
 	manifest crawlremote.IngestManifest,
+	publicationCapabilities []string,
 ) bool {
 	snapshot := status.Snapshot
 	if status.App != manifest.App ||
 		status.Archive != manifest.Archive ||
+		status.ActiveSnapshotID != manifest.SnapshotID ||
 		snapshot == nil ||
 		snapshot.ID != manifest.SnapshotID ||
 		snapshot.SourceSHA256 != manifest.SourceSHA256 ||
+		snapshot.SourceSyncAt != manifest.SourceSyncAt ||
 		snapshot.SchemaName != manifest.SchemaName ||
 		snapshot.SchemaVersion != manifest.SchemaVersion ||
-		snapshot.SchemaHash != manifest.SchemaHash {
+		snapshot.SchemaHash != manifest.SchemaHash ||
+		strings.TrimSpace(snapshot.DatasetGeneratedAt) == "" {
 		return false
 	}
 	if !status.CoverageComplete {
 		return false
 	}
-	if !equalUniqueStringSet(snapshot.Capabilities, manifest.Capabilities) {
+	if !equalUniqueStringSet(snapshot.Capabilities, publicationCapabilities) {
 		return false
 	}
 	return true
