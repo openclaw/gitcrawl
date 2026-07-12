@@ -834,13 +834,14 @@ func (s *Store) reconcilePartialDurableClusterInput(ctx context.Context, repoID 
 		return input, nil
 	}
 	rows, err := s.q().QueryContext(ctx, `
-		select distinct cg.id, cg.stable_key, cg.stable_slug, cg.cluster_type,
+		select distinct cg.id, cg.stable_key, cg.stable_slug, coalesce(cg.cluster_type, ''),
 			coalesce(cg.representative_thread_id, 0), coalesce(cg.title, '')
 		from cluster_groups cg
 		join cluster_memberships cm on cm.cluster_id = cg.id
 		where cg.repo_id = ?
 			and cg.status = 'active'
 			and cg.closed_at is null
+			and coalesce(cg.cluster_type, '') <> 'similarity'
 			and cm.state = 'active'
 			and cm.thread_id in (`+strings.Join(placeholders, ",")+`)
 		order by cg.id

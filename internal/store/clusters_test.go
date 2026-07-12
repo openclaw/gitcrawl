@@ -916,6 +916,81 @@ func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
 	}
 }
 
+func TestSavePartialDurableClustersIgnoresDeletedLegacySimilarityIdentity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	result, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(
+			repo_id, stable_key, stable_slug, status, cluster_type,
+			representative_thread_id, title, created_at, updated_at
+		)
+		values(?, 'legacy:301', 'legacy-301', 'active', 'similarity', ?, 'legacy similarity', ?, ?)
+	`, repoID, threadIDs[0], "2026-07-12T03:00:00Z", "2026-07-12T03:00:00Z")
+	if err != nil {
+		t.Fatalf("seed legacy similarity cluster: %v", err)
+	}
+	legacyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("legacy similarity cluster id: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(
+			cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at
+		)
+		values(?, ?, 'canonical', 'active', 'system', '{}', ?, ?)
+	`, legacyID, threadIDs[0], "2026-07-12T03:00:00Z", "2026-07-12T03:00:00Z"); err != nil {
+		t.Fatalf("seed legacy similarity membership: %v", err)
+	}
+
+	input := DurableClusterInput{
+		StableKey:              "durable:301,302",
+		StableSlug:             "durable-301-302",
+		ClusterType:            "duplicate_candidate",
+		RepresentativeThreadID: threadIDs[0],
+		Title:                  "durable cluster",
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "canonical"},
+			{ThreadID: threadIDs[1], Role: "related"},
+		},
+	}
+	if _, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("partial durable cluster: %v", err)
+	}
+
+	var legacyCount int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from cluster_groups
+		where repo_id = ? and cluster_type = 'similarity'
+	`, repoID).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy similarity clusters: %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("legacy similarity clusters = %d, want 0", legacyCount)
+	}
+	var processedMemberships int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from cluster_memberships cm
+		join cluster_groups cg on cg.id = cm.cluster_id
+		where cg.repo_id = ?
+			and cg.stable_key = ?
+			and cg.cluster_type = 'duplicate_candidate'
+			and cm.state = 'active'
+	`, repoID, input.StableKey).Scan(&processedMemberships); err != nil {
+		t.Fatalf("count processed memberships: %v", err)
+	}
+	if processedMemberships != len(input.Members) {
+		t.Fatalf("processed memberships = %d, want %d", processedMemberships, len(input.Members))
+	}
+}
+
 func TestSavePartialDurableClustersReusesIdentityWhenRepresentativeIsOmitted(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
