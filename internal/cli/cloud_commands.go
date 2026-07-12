@@ -595,9 +595,9 @@ func requireGitcrawlSnapshotPublishContract(
 			)
 		}
 		remoteArgs := appSpec.Queries[queryIndex].Args
-		if !equalUniqueStringSet(remoteArgs, required.Args) {
+		if !uniqueStringSuperset(remoteArgs, required.Args) {
 			return fmt.Errorf(
-				"remote contract reader query %s has arguments %v, want %v",
+				"remote contract reader query %s has arguments %v, missing required arguments from %v",
 				required.Name,
 				remoteArgs,
 				required.Args,
@@ -657,6 +657,22 @@ func equalUniqueStringSet(left, right []string) bool {
 		delete(seen, value)
 	}
 	return len(seen) == 0
+}
+
+func uniqueStringSuperset(values, required []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	for _, value := range required {
+		if _, ok := seen[value]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func gitcrawlPublisherStatusMatches(

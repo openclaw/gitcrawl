@@ -1476,32 +1476,18 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 		},
 	}
 	for _, required := range gitcrawlCloudReaderQuerySpecs() {
-		tests = append(tests,
-			remoteSurfaceTest{
-				name: "missing reader query " + required.Name,
-				want: "required reader query " + required.Name,
-				mutate: func(contract *crawlremote.Contract) {
-					contract.Apps[0].Queries = slices.DeleteFunc(
-						contract.Apps[0].Queries,
-						func(query crawlremote.QuerySpec) bool {
-							return query.Name == required.Name
-						},
-					)
-				},
+		tests = append(tests, remoteSurfaceTest{
+			name: "missing reader query " + required.Name,
+			want: "required reader query " + required.Name,
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Apps[0].Queries = slices.DeleteFunc(
+					contract.Apps[0].Queries,
+					func(query crawlremote.QuerySpec) bool {
+						return query.Name == required.Name
+					},
+				)
 			},
-			remoteSurfaceTest{
-				name: "drifted reader query " + required.Name,
-				want: "reader query " + required.Name + " has arguments",
-				mutate: func(contract *crawlremote.Contract) {
-					for queryIndex := range contract.Apps[0].Queries {
-						query := &contract.Apps[0].Queries[queryIndex]
-						if query.Name == required.Name {
-							query.Args = append(slices.Clone(query.Args), "unexpected")
-						}
-					}
-				},
-			},
-		)
+		})
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
