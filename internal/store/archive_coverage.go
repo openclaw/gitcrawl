@@ -279,7 +279,7 @@ func (s *Store) archiveEnrichmentCoverage(ctx context.Context, repoID int64) (En
 	if err != nil {
 		return EnrichmentCoverage{}, err
 	}
-	coverage.Summaries, err = s.archiveRevisionChildCoverage(ctx, repoID, "thread_key_summaries", "thread_revision_id", "", "")
+	coverage.Summaries, err = s.archiveRevisionChildCoverage(ctx, repoID, "thread_key_summaries", "thread_revision_id", "summary_kind", SummaryKindLLMKey)
 	if err != nil {
 		return EnrichmentCoverage{}, err
 	}

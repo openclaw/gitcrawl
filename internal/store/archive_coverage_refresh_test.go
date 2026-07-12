@@ -92,3 +92,70 @@ func TestArchiveCoverageChildFreshnessUsesRevisionObservation(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveCoverageSummariesRequireKeySummaryKind(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID:          repoID,
+		GitHubID:        "2",
+		Number:          2,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "Generic summary",
+		Body:            "Only key summaries satisfy the producer contract.",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/2",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "thread",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	threadID, err := st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	thread.ID = threadID
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z")
+	if err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: enrichment.RevisionID,
+		SummaryKind:      "generic",
+		PromptVersion:    "v1",
+		Provider:         "test",
+		Model:            "test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "Generic summary.",
+		CreatedAt:        "2026-07-12T00:01:00Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("coverage: %v", err)
+	}
+	metric := coverage.Rows[0].Enrichment.Summaries
+	if metric.Eligible != 1 || metric.Covered != 0 || metric.Fresh != 0 {
+		t.Fatalf("summary coverage = %+v", metric)
+	}
+}
