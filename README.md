@@ -71,10 +71,11 @@ Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser boot
 SHA-256 as the snapshot identity, exports repositories, threads, revisions,
 fingerprints, summaries, durable clusters, and PR detail/file rows from that
 same image, negotiates the remote snapshot-provenance contract before touching
-R2, uploads its digest-scoped bundle, and activates complete D1 coverage.
+R2, uploads its digest-scoped bundle, and completes staged D1 coverage.
 Publishing moves unpinned reads to the complete snapshot by default, preserving
-the existing reader-refresh behavior. `--stage-only` keeps the immutable
-snapshot staged without changing serving state. A later publish verifies the
+the existing reader-refresh behavior. The remote must advertise
+`gitcrawl.snapshot.staging.v1`; `--stage-only` keeps the immutable snapshot
+staged without changing serving state. A later publish verifies the
 candidate through the publisher-only status projection, skips repeated ingest
 when its digest, source sync, schema, resolved publication profile, persisted
 generation timestamp, and coverage match, then cuts it over. Cutover requires

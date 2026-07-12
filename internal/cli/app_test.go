@@ -893,6 +893,7 @@ func testSnapshotPublishContract() crawlremote.Contract {
 			gitcrawlSnapshotAtomicCapability,
 			gitcrawlSnapshotCutoverCapability,
 			gitcrawlSnapshotProvenanceCapability,
+			gitcrawlSnapshotStagingCapability,
 			sqliteBundleGzipUploadCapability,
 		},
 	}}
@@ -1002,7 +1003,7 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	activeMismatch := status
 	activeMismatch.ActiveSnapshotID = strings.Repeat("f", 64)
 	if gitcrawlPublisherStatusMatches(activeMismatch, manifest, publicationCapabilities) {
-		t.Fatal("non-active staged snapshot was reused")
+		t.Fatal("publisher status candidate mismatch was reused")
 	}
 
 	sourceMismatch := status
@@ -1445,6 +1446,11 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 			name:              "observation order",
 			args:              []string{"--observation-order", "--stage-only"},
 			missingCapability: gitcrawlObservationOrderCapability,
+		},
+		{
+			name:              "stage isolation",
+			args:              []string{"--stage-only"},
+			missingCapability: gitcrawlSnapshotStagingCapability,
 		},
 		{
 			name:              "cutover",

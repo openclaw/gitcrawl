@@ -30,6 +30,7 @@ const (
 	gitcrawlSnapshotAtomicCapability     = "gitcrawl.snapshot.atomic"
 	gitcrawlSnapshotCutoverCapability    = "gitcrawl.snapshot.cutover"
 	gitcrawlSnapshotProvenanceCapability = "gitcrawl.snapshot.provenance.v1"
+	gitcrawlSnapshotStagingCapability    = "gitcrawl.snapshot.staging.v1"
 	sqliteBundleGzipUploadCapability     = "sqlite.bundle.gzip.upload"
 )
 
@@ -645,6 +646,7 @@ func requireGitcrawlSnapshotPublishContract(
 	requiredCapabilities := []string{
 		gitcrawlSnapshotAtomicCapability,
 		gitcrawlSnapshotProvenanceCapability,
+		gitcrawlSnapshotStagingCapability,
 		sqliteBundleGzipUploadCapability,
 	}
 	requiredCapabilities = append(requiredCapabilities, snapshot.Capabilities...)
