@@ -1688,8 +1688,8 @@ func TestOpenMigratesPortableStoreColumns(t *testing.T) {
 		);
 		insert into repositories(id, owner, name, full_name, updated_at)
 		values(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '2026-04-26T00:00:00Z');
-		insert into threads(id, repo_id, github_id, number, kind, state, title, body_excerpt, html_url, labels_json, assignees_json, content_hash, updated_at)
-		values(1, 1, '1', 42, 'issue', 'open', 'portable issue', 'portable body', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', 'hash', '2026-04-26T00:00:00Z');
+		insert into threads(id, repo_id, github_id, number, kind, state, title, body_excerpt, body_length, html_url, labels_json, assignees_json, content_hash, updated_at)
+		values(1, 1, '1', 42, 'issue', 'open', 'portable issue', 'portable body', 26, 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', 'hash', '2026-04-26T00:00:00Z');
 	`)
 	if err != nil {
 		t.Fatalf("seed portable db: %v", err)
@@ -1702,19 +1702,50 @@ func TestOpenMigratesPortableStoreColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
-
 	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
 	if err != nil {
+		_ = st.Close()
 		t.Fatalf("repository: %v", err)
 	}
 	threads, err := st.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repo.ID, Numbers: []int{42}})
 	if err != nil {
+		_ = st.Close()
 		t.Fatalf("threads: %v", err)
 	}
 	if len(threads) != 1 || threads[0].Body != "portable body" {
+		_ = st.Close()
 		t.Fatalf("unexpected portable thread: %#v", threads)
 	}
+	assertPortableBodyMetadata := func(st *Store) {
+		t.Helper()
+		var body, excerpt string
+		var bodyLength int
+		if err := st.DB().QueryRowContext(ctx, `
+			select body, body_excerpt, body_length
+			from threads
+			where id = 1
+		`).Scan(&body, &excerpt, &bodyLength); err != nil {
+			t.Fatalf("read portable truncation metadata: %v", err)
+		}
+		if body != "portable body" || excerpt != "portable body" || bodyLength != 26 {
+			t.Fatalf(
+				"portable truncation metadata = body %q excerpt %q length %d",
+				body,
+				excerpt,
+				bodyLength,
+			)
+		}
+	}
+	assertPortableBodyMetadata(st)
+	if err := st.Close(); err != nil {
+		t.Fatalf("close migrated portable store: %v", err)
+	}
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated portable store: %v", err)
+	}
+	defer st.Close()
+	assertPortableBodyMetadata(st)
 }
 
 func TestDocumentsFTSWorks(t *testing.T) {

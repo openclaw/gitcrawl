@@ -46,6 +46,13 @@ const canonicalThreadsCreateSQL = `create table threads (
   unique(repo_id, kind, number)
 )`
 
+var canonicalPortableThreadsCreateSQL = strings.Replace(
+	canonicalThreadsCreateSQL,
+	"  body text,\n",
+	"  body text,\n  body_excerpt text,\n  body_length integer not null default 0,\n",
+	1,
+)
+
 const canonicalThreadRevisionsCreateSQL = `create table thread_revisions (
   id integer primary key,
   thread_id integer not null references threads(id) on delete cascade,
@@ -135,7 +142,9 @@ var observationConvergenceTriggers = []observationConvergenceTrigger{
 }
 
 func (s *Store) threadsHaveCanonicalShape(ctx context.Context) bool {
-	return s.tableHasCanonicalSQL(ctx, "threads", canonicalThreadsCreateSQL) &&
+	canonicalTable := s.tableHasCanonicalSQL(ctx, "threads", canonicalThreadsCreateSQL) ||
+		s.tableHasCanonicalSQL(ctx, "threads", canonicalPortableThreadsCreateSQL)
+	return canonicalTable &&
 		s.indexHasCanonicalSQL(ctx, "idx_threads_repo_number", createThreadsRepoNumberIndexSQL) &&
 		s.indexHasCanonicalSQL(ctx, "idx_threads_repo_state_closed", createThreadsRepoStateIndexSQL) &&
 		s.indexHasCanonicalSQL(ctx, "idx_threads_repo_updated", createThreadsRepoUpdatedSQL)
@@ -245,6 +254,32 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 	if s.threadsHaveCanonicalShape(ctx) && s.threadRevisionsHaveCanonicalShape(ctx) {
 		return nil
 	}
+	hasBodyExcerpt := s.hasColumn(ctx, "threads", "body_excerpt")
+	hasBodyLength := s.hasColumn(ctx, "threads", "body_length")
+	threadsCreateSQL := canonicalThreadsCreateSQL
+	portableColumns := ""
+	portableValues := ""
+	if hasBodyExcerpt || hasBodyLength {
+		threadsCreateSQL = canonicalPortableThreadsCreateSQL
+		bodyExcerpt := "body"
+		if hasBodyExcerpt {
+			bodyExcerpt = `case
+				when typeof(body_excerpt) = 'text' then body_excerpt
+				else body
+			end`
+		}
+		bodyLength := "length(coalesce(" + bodyExcerpt + ", body, ''))"
+		if hasBodyLength {
+			bodyLength = `case
+				when typeof(body_length) = 'integer'
+					and body_length >= length(coalesce(` + bodyExcerpt + `, body, ''))
+					then body_length
+				else length(coalesce(` + bodyExcerpt + `, body, ''))
+			end`
+		}
+		portableColumns = "body_excerpt, body_length,"
+		portableValues = bodyExcerpt + ", " + bodyLength + ","
+	}
 	return s.withForeignKeysDisabled(ctx, "canonical observation tables", func(tx *sql.Tx) error {
 		statements := []string{
 			`drop table if exists threads_migration_backup`,
@@ -253,9 +288,9 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 			`create table thread_revisions_migration_backup as select * from thread_revisions`,
 			`drop table thread_revisions`,
 			`drop table threads`,
-			canonicalThreadsCreateSQL,
+			threadsCreateSQL,
 			`insert into threads(
-				id, repo_id, github_id, number, kind, state, title, body,
+				id, repo_id, github_id, number, kind, state, title, body, ` + portableColumns + `
 				author_login, author_type, author_association, html_url,
 				labels_json, assignees_json, raw_json, content_hash, is_draft,
 				created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
@@ -265,7 +300,7 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 				updated_at
 			)
 			select
-				id, repo_id, github_id, number, kind, state, title, body,
+				id, repo_id, github_id, number, kind, state, title, body, ` + portableValues + `
 				author_login, author_type, author_association, html_url,
 				labels_json, assignees_json, coalesce(raw_json, '{}'),
 				content_hash, is_draft,
