@@ -385,7 +385,7 @@ func (s *Store) ensureThreadEvidenceObservationSequence(ctx context.Context) err
 	if _, err := s.db.ExecContext(ctx, `
 		update threads
 		set (evidence_source_updated_at, evidence_observation_sequence) = (
-			select coalesce(thread_revisions.source_updated_at, ''),
+			select coalesce(threads.updated_at_gh, ''),
 				thread_revisions.observation_sequence
 			from thread_revisions
 			where thread_revisions.thread_id = threads.id

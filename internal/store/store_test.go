@@ -725,6 +725,117 @@ func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 	}
 }
 
+func TestMigrationPreservesParentEvidenceClockForImmediateChildRefresh(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "evidence-clock-migration", Number: 105,
+		Kind: "issue", State: "open", Title: "stable parent",
+		Body:            "refresh child evidence without changing the parent",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/105",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "stable-parent",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	upsert, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 7,
+	})
+	if err != nil || !upsert.EvidenceApplied {
+		t.Fatalf("thread observation = %+v, %v", upsert, err)
+	}
+	thread.ID = upsert.ID
+	comment := Comment{
+		ThreadID: thread.ID, GitHubID: "child-1", CommentType: "issue_comment",
+		Body: "later child", RawJSON: `{"body":"later child"}`,
+		CreatedAtGitHub: "2026-07-12T00:05:00Z",
+		UpdatedAtGitHub: "2026-07-12T00:05:00Z",
+	}
+	if _, err := st.UpsertComment(ctx, comment); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 7,
+		Comments:            []Comment{comment},
+	}, "2026-07-12T00:05:01Z"); err != nil {
+		t.Fatalf("thread revision: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	for _, statement := range []string{
+		`alter table threads drop column evidence_observation_sequence`,
+		`pragma user_version = 8`,
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			_ = raw.Close()
+			t.Fatalf("prepare evidence clock migration with %q: %v", statement, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var source string
+	var sequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select evidence_source_updated_at, evidence_observation_sequence
+		from threads
+		where id = ?
+	`, thread.ID).Scan(&source, &sequence); err != nil {
+		t.Fatalf("read migrated evidence fence: %v", err)
+	}
+	if source != thread.UpdatedAtGitHub || sequence != 7 {
+		t.Fatalf(
+			"migrated evidence fence = %s/%d, want parent source %s/7",
+			source,
+			sequence,
+			thread.UpdatedAtGitHub,
+		)
+	}
+
+	refreshed, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 8,
+	})
+	if err != nil || !refreshed.EvidenceApplied {
+		t.Fatalf("unchanged-parent refresh after migration = %+v, %v", refreshed, err)
+	}
+	reserved, err := st.ReserveThreadChildObservation(
+		ctx,
+		thread.ID,
+		ThreadChildComments,
+		thread.UpdatedAtGitHub,
+		8,
+	)
+	if err != nil || !reserved {
+		t.Fatalf("reserve refreshed child evidence = %t, %v", reserved, err)
+	}
+}
+
 func TestMigrationBackfillsActualThreadEvidenceTuple(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")

@@ -138,15 +138,11 @@ func threadEvidenceTupleExistsSQL(revisionAlias, threadAlias string) string {
 	revision := sqliteIdentifier(revisionAlias) + "."
 	thread := sqliteIdentifier(threadAlias) + "."
 	return `exists(
-		select 1
-		from thread_revisions ` + sqliteIdentifier(revisionAlias) + `
-		where ` + revision + `thread_id = ` + thread + `id
-			and ` + revision + `observation_sequence = ` + thread + `evidence_observation_sequence
-			and ` + observationSourceEquivalentSQL(
-		revision+"source_updated_at",
-		thread+"evidence_source_updated_at",
-	) + `
-	)`
+			select 1
+			from thread_revisions ` + sqliteIdentifier(revisionAlias) + `
+			where ` + revision + `thread_id = ` + thread + `id
+				and ` + revision + `observation_sequence = ` + thread + `evidence_observation_sequence
+		)`
 }
 
 func (s *Store) latestThreadRevisionOrder(ctx context.Context, alias string) string {
