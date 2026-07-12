@@ -48,11 +48,14 @@ type UpsertThreadOptions struct {
 }
 
 type UpsertThreadResult struct {
-	ID            int64
-	Applied       bool
-	PreviousState string
-	// ObservationSequence is the effective absolute generation for dependent writes.
+	ID              int64
+	Applied         bool
+	EvidenceApplied bool
+	PreviousState   string
+	// ObservationSequence is the effective absolute parent snapshot generation.
 	ObservationSequence int64
+	// EvidenceObservationSequence is the accepted complete child-evidence generation.
+	EvidenceObservationSequence int64
 }
 
 func (s *Store) UpsertThread(ctx context.Context, thread Thread, options ...UpsertThreadOptions) (int64, error) {
@@ -160,11 +163,21 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 			order = 1
 		}
 		if order < 0 {
+			evidenceApplied := false
+			if sourceOrder == 0 && samePayload && !options.IncompleteEvidence {
+				latestEvidenceSequence, err := s.latestCompleteThreadEvidenceSequence(ctx, existing.id)
+				if err != nil {
+					return UpsertThreadResult{}, err
+				}
+				evidenceApplied = options.ObservationSequence > latestEvidenceSequence
+			}
 			return UpsertThreadResult{
-				ID:                  existing.id,
-				Applied:             false,
-				PreviousState:       existing.state,
-				ObservationSequence: observationSequenceOrderValue(existing.observationSequence),
+				ID:                          existing.id,
+				Applied:                     false,
+				EvidenceApplied:             evidenceApplied,
+				PreviousState:               existing.state,
+				ObservationSequence:         observationSequenceOrderValue(existing.observationSequence),
+				EvidenceObservationSequence: evidenceObservationSequence(evidenceApplied, options.ObservationSequence),
 			}, nil
 		}
 		if order == 0 {
@@ -221,11 +234,32 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		return UpsertThreadResult{}, fmt.Errorf("upsert thread: %w", err)
 	}
 	return UpsertThreadResult{
-		ID:                  id,
-		Applied:             true,
-		PreviousState:       existing.state,
-		ObservationSequence: observationSequenceOrderValue(storedObservationSequence),
+		ID:                          id,
+		Applied:                     true,
+		EvidenceApplied:             !options.IncompleteEvidence,
+		PreviousState:               existing.state,
+		ObservationSequence:         observationSequenceOrderValue(storedObservationSequence),
+		EvidenceObservationSequence: evidenceObservationSequence(!options.IncompleteEvidence, options.ObservationSequence),
 	}, nil
+}
+
+func (s *Store) latestCompleteThreadEvidenceSequence(ctx context.Context, threadID int64) (int64, error) {
+	var sequence int64
+	if err := s.q().QueryRowContext(ctx, `
+		select coalesce(max(observation_sequence), 0)
+		from thread_revisions
+		where thread_id = ? and observation_sequence > 0
+	`, threadID).Scan(&sequence); err != nil {
+		return 0, fmt.Errorf("read complete thread evidence sequence: %w", err)
+	}
+	return sequence, nil
+}
+
+func evidenceObservationSequence(applied bool, sequence int64) int64 {
+	if !applied {
+		return 0
+	}
+	return sequence
 }
 
 func (s *Store) MarkOpenThreadClosedFromGitHub(ctx context.Context, thread Thread) (bool, error) {
