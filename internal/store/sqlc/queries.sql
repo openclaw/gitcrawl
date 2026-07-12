@@ -127,6 +127,17 @@ set evidence_observation_sequence = sqlc.arg(evidence_observation_sequence)
 where id = sqlc.arg(id)
   and evidence_observation_sequence < sqlc.arg(evidence_observation_sequence);
 
+-- name: ReserveThreadChildObservation :execrows
+insert into thread_child_observation_reservations(
+  thread_id, family, observation_sequence
+)
+values(
+  sqlc.arg(thread_id), sqlc.arg(family), sqlc.arg(observation_sequence)
+)
+on conflict(thread_id, family) do update set
+  observation_sequence=excluded.observation_sequence
+where thread_child_observation_reservations.observation_sequence < excluded.observation_sequence;
+
 -- name: MarkOpenThreadClosedFromGitHub :execrows
 update threads
 set github_id = sqlc.arg(github_id),

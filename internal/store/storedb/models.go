@@ -282,6 +282,12 @@ type Thread struct {
 	UpdatedAt                   string         `json:"updated_at"`
 }
 
+type ThreadChildObservationReservation struct {
+	ThreadID            int64  `json:"thread_id"`
+	Family              string `json:"family"`
+	ObservationSequence int64  `json:"observation_sequence"`
+}
+
 type ThreadFingerprint struct {
 	ID                int64  `json:"id"`
 	ThreadRevisionID  int64  `json:"thread_revision_id"`

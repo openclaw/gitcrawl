@@ -74,6 +74,21 @@ create table thread_observation_sequence (
   last_started_at text not null
 );
 
+create table thread_child_observation_reservations (
+  thread_id integer not null references threads(id) on delete cascade,
+  family text not null check (family in (
+    'comments',
+    'pull_request_details',
+    'pull_request_files',
+    'pull_request_commits',
+    'pull_request_checks',
+    'workflow_runs',
+    'pull_request_review_threads'
+  )),
+  observation_sequence integer not null check (observation_sequence > 0),
+  primary key(thread_id, family)
+);
+
 create table thread_revisions (
   id integer primary key,
   thread_id integer not null references threads(id) on delete cascade,

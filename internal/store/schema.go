@@ -85,6 +85,21 @@ insert into thread_observation_sequence(id, value, last_started_at)
 values(1, 0, '')
 on conflict(id) do nothing;
 
+create table if not exists thread_child_observation_reservations (
+  thread_id integer not null references threads(id) on delete cascade,
+  family text not null check (family in (
+    'comments',
+    'pull_request_details',
+    'pull_request_files',
+    'pull_request_commits',
+    'pull_request_checks',
+    'workflow_runs',
+    'pull_request_review_threads'
+  )),
+  observation_sequence integer not null check (observation_sequence > 0),
+  primary key(thread_id, family)
+);
+
 create table if not exists thread_revisions (
   id integer primary key,
   thread_id integer not null references threads(id) on delete cascade,

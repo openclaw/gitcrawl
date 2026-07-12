@@ -70,6 +70,7 @@ func TestLegacyReadOnlyArchiveUsesAvailableRevisionOrderColumns(t *testing.T) {
 		`alter table threads drop column evidence_observation_sequence`,
 		`alter table threads drop column observation_sequence`,
 		`drop table thread_observation_sequence`,
+		`drop table thread_child_observation_reservations`,
 		`pragma user_version = 6`,
 	} {
 		if _, err := raw.ExecContext(ctx, statement); err != nil {

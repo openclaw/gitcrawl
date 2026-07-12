@@ -153,7 +153,7 @@ func TestOpenMigratesAuthorAssociationFromVersionFour(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
+func TestOpenMigratesV071PortableVersionFourThreadRevisionHistory(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
 	st, err := Open(ctx, dbPath)
@@ -263,6 +263,7 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 		`alter table threads drop column evidence_observation_sequence`,
 		`alter table threads drop column observation_sequence`,
 		`drop table thread_observation_sequence`,
+		`drop table thread_child_observation_reservations`,
 		`pragma user_version = 4`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -302,8 +303,11 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	if !st.hasTable(ctx, "thread_observation_sequence") {
 		t.Fatal("thread observation sequence table was not restored")
 	}
+	if !st.hasTable(ctx, "thread_child_observation_reservations") {
+		t.Fatal("thread child observation reservation table was not restored")
+	}
 	var version, fingerprints int
-	var observationSequence, threadObservationSequence, evidenceObservationSequence int64
+	var observationSequence, threadObservationSequence, evidenceObservationSequence, childReservations int64
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
@@ -339,6 +343,16 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 			threadObservationSequence,
 			evidenceObservationSequence,
 		)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_child_observation_reservations
+		where thread_id = ?
+	`, migratedThreadID).Scan(&childReservations); err != nil {
+		t.Fatalf("read migrated child reservations: %v", err)
+	}
+	if childReservations != 0 {
+		t.Fatalf("v0.7.1 child reservations = %d, want legacy marker absence", childReservations)
 	}
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
 	if err != nil {
@@ -465,6 +479,7 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 		`alter table threads drop column evidence_observation_sequence`,
 		`alter table threads drop column observation_sequence`,
 		`drop table thread_observation_sequence`,
+		`drop table thread_child_observation_reservations`,
 		`pragma user_version = 4`,
 	} {
 		if _, err := raw.ExecContext(ctx, stmt); err != nil {
@@ -675,7 +690,7 @@ func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 	}
 	defer st.Close()
 	var version int
-	var parentSequence, evidenceSequence int64
+	var parentSequence, evidenceSequence, childSequence int64
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
@@ -692,6 +707,82 @@ func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 			version,
 			parentSequence,
 			evidenceSequence,
+		)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = 'comments'
+	`, thread.ID).Scan(&childSequence); err != nil {
+		t.Fatalf("read migrated comment reservation: %v", err)
+	}
+	if childSequence != 7 {
+		t.Fatalf("migrated comment reservation = %d, want 7", childSequence)
+	}
+}
+
+func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	upsert, err := st.UpsertThreadObservation(ctx, Thread{
+		RepoID: repoID, GitHubID: "104", Number: 104, Kind: "pull_request", State: "open",
+		Title: "v9 evidence", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/104",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "v9-evidence",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}, UpsertThreadOptions{ObservationSequence: 7})
+	if err != nil || !upsert.EvidenceApplied {
+		t.Fatalf("thread observation = %+v, %v", upsert, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		drop table thread_child_observation_reservations;
+		pragma user_version = 9;
+	`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("prepare v9 migration: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var count, minimum, maximum int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*), min(observation_sequence), max(observation_sequence)
+		from thread_child_observation_reservations
+		where thread_id = ?
+	`, upsert.ID).Scan(&count, &minimum, &maximum); err != nil {
+		t.Fatalf("read migrated reservations: %v", err)
+	}
+	if count != 7 || minimum != 7 || maximum != 7 {
+		t.Fatalf(
+			"migrated reservations = count %d, min %d, max %d; want seven families at 7",
+			count,
+			minimum,
+			maximum,
 		)
 	}
 }
@@ -720,6 +811,9 @@ func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	}
 	if diag.PRDetails.State != "supported" || !diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want supported", diag.PRDetails)
+	}
+	if !diag.ChildReservations {
+		t.Fatalf("child reservation diagnostics = %#v, want supported", diag)
 	}
 	after, err := os.ReadFile(dbPath)
 	if err != nil {
@@ -769,7 +863,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_9") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_10") {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -802,7 +896,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 9;
+		pragma user_version = 10;
 	`)
 	if err != nil {
 		_ = db.Close()
@@ -830,6 +924,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 		"threads_author_association_column",
 		"threads_observation_sequence",
 		"threads_evidence_observation_sequence",
+		"thread_child_observation_reservations_table",
 		"thread_vectors_composite_key",
 		"pull_request_files_table",
 	} {
@@ -910,8 +1005,9 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_9") ||
-		!containsString(diag.PendingMigrations, "pull_request_files_position_key") {
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_10") ||
+		!containsString(diag.PendingMigrations, "pull_request_files_position_key") ||
+		!containsString(diag.PendingMigrations, "thread_child_observation_reservations_table") {
 		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
 	}
 	if len(diag.NextSteps) == 0 {
@@ -1032,6 +1128,7 @@ func seedLegacyPullRequestFilesSchema(t *testing.T, ctx context.Context, dbPath 
 			from pull_request_files_current;
 		drop table pull_request_files_current;
 		create index if not exists idx_pull_request_files_path on pull_request_files(path);
+		drop table thread_child_observation_reservations;
 		pragma user_version = 3;
 	`)
 	if err != nil {

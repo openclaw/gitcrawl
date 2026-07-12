@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 9
+	schemaVersion = 10
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -240,6 +240,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("database schema version %d is newer than supported version %d", current, schemaVersion)
 	}
 	hadEvidenceObservationSequence := s.hasColumn(ctx, "threads", "evidence_observation_sequence")
+	hadChildObservationReservations := s.hasTable(ctx, "thread_child_observation_reservations")
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
@@ -253,6 +254,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if current < 9 || !hadEvidenceObservationSequence {
 		if err := s.ensureThreadEvidenceObservationSequence(ctx); err != nil {
+			return err
+		}
+	}
+	if current < 10 || !hadChildObservationReservations {
+		if err := s.ensureThreadChildObservationReservations(ctx); err != nil {
 			return err
 		}
 	}
@@ -325,6 +331,49 @@ func (s *Store) ensureThreadEvidenceObservationSequence(ctx context.Context) err
 		)
 	`); err != nil {
 		return fmt.Errorf("backfill thread evidence observation sequence: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		insert into thread_child_observation_reservations(
+			thread_id, family, observation_sequence
+		)
+		select id, 'comments', evidence_observation_sequence
+		from threads
+		where evidence_observation_sequence > 0
+		on conflict(thread_id, family) do update set
+			observation_sequence = max(
+				thread_child_observation_reservations.observation_sequence,
+				excluded.observation_sequence
+			)
+	`); err != nil {
+		return fmt.Errorf("backfill comment observation reservations: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		insert into thread_child_observation_reservations(
+			thread_id, family, observation_sequence
+		)
+		select threads.id, families.family, threads.evidence_observation_sequence
+		from threads
+		cross join (
+			select 'pull_request_details' as family
+			union all select 'pull_request_files'
+			union all select 'pull_request_commits'
+			union all select 'pull_request_checks'
+			union all select 'workflow_runs'
+			union all select 'pull_request_review_threads'
+		) as families
+		where threads.kind = 'pull_request'
+			and threads.evidence_observation_sequence > 0
+		on conflict(thread_id, family) do update set
+			observation_sequence = max(
+				thread_child_observation_reservations.observation_sequence,
+				excluded.observation_sequence
+			)
+	`); err != nil {
+		return fmt.Errorf("backfill pull request observation reservations: %w", err)
 	}
 	return nil
 }

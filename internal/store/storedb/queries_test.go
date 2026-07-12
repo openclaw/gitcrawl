@@ -66,6 +66,20 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	}); err != nil || updated != 0 {
 		t.Fatalf("reserve stale thread evidence observation = %d, %v", updated, err)
 	}
+	if updated, err := q.ReserveThreadChildObservation(ctx, storedb.ReserveThreadChildObservationParams{
+		ThreadID:            threadID,
+		Family:              "comments",
+		ObservationSequence: 3,
+	}); err != nil || updated != 1 {
+		t.Fatalf("reserve thread child observation = %d, %v", updated, err)
+	}
+	if updated, err := q.ReserveThreadChildObservation(ctx, storedb.ReserveThreadChildObservationParams{
+		ThreadID:            threadID,
+		Family:              "comments",
+		ObservationSequence: 2,
+	}); err != nil || updated != 0 {
+		t.Fatalf("reserve stale thread child observation = %d, %v", updated, err)
+	}
 
 	if got, err := q.CountRepositories(ctx); err != nil || got != 1 {
 		t.Fatalf("count repositories = %d, %v", got, err)

@@ -1191,6 +1191,32 @@ func (q *Queries) RepositoryByFullName(ctx context.Context, fullName string) (Re
 	return i, err
 }
 
+const reserveThreadChildObservation = `-- name: ReserveThreadChildObservation :execrows
+insert into thread_child_observation_reservations(
+  thread_id, family, observation_sequence
+)
+values(
+  ?1, ?2, ?3
+)
+on conflict(thread_id, family) do update set
+  observation_sequence=excluded.observation_sequence
+where thread_child_observation_reservations.observation_sequence < excluded.observation_sequence
+`
+
+type ReserveThreadChildObservationParams struct {
+	ThreadID            int64  `json:"thread_id"`
+	Family              string `json:"family"`
+	ObservationSequence int64  `json:"observation_sequence"`
+}
+
+func (q *Queries) ReserveThreadChildObservation(ctx context.Context, arg ReserveThreadChildObservationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reserveThreadChildObservation, arg.ThreadID, arg.Family, arg.ObservationSequence)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const reserveThreadEvidenceObservation = `-- name: ReserveThreadEvidenceObservation :execrows
 update threads
 set evidence_observation_sequence = ?1

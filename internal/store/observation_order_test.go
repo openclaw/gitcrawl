@@ -165,6 +165,86 @@ func TestCompareRevisionObservationOrder(t *testing.T) {
 	}
 }
 
+func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "pull_request", State: "open",
+		Title: "family reservations", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/1",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	}, UpsertThreadOptions{IncompleteEvidence: true, ObservationSequence: 1})
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+
+	for _, reservation := range []struct {
+		family   ThreadChildObservationFamily
+		sequence int64
+		want     bool
+	}{
+		{family: ThreadChildComments, sequence: 3, want: true},
+		{family: ThreadChildPullRequestDetails, sequence: 2, want: true},
+		{family: ThreadChildComments, sequence: 2, want: false},
+		{family: ThreadChildPullRequestDetails, sequence: 4, want: true},
+	} {
+		applied, err := st.ReserveThreadChildObservation(
+			ctx,
+			threadID,
+			reservation.family,
+			reservation.sequence,
+		)
+		if err != nil || applied != reservation.want {
+			t.Fatalf(
+				"reserve %s at %d = %t, %v; want %t",
+				reservation.family,
+				reservation.sequence,
+				applied,
+				err,
+				reservation.want,
+			)
+		}
+	}
+	var commentsSequence, detailsSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = 'comments'
+	`, threadID).Scan(&commentsSequence); err != nil {
+		t.Fatalf("comments reservation: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = 'pull_request_details'
+	`, threadID).Scan(&detailsSequence); err != nil {
+		t.Fatalf("details reservation: %v", err)
+	}
+	if commentsSequence != 3 || detailsSequence != 4 {
+		t.Fatalf("reservations = comments %d, details %d", commentsSequence, detailsSequence)
+	}
+	if _, err := st.ReserveThreadChildObservation(
+		ctx,
+		threadID,
+		ThreadChildObservationFamily("unbounded"),
+		5,
+	); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("invalid family error = %v", err)
+	}
+}
+
 func TestUpsertThreadObservationRejectsDelayedCanonicalOverwrite(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
