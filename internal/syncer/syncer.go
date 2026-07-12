@@ -243,6 +243,15 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if payload.hasPullDetails {
 				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
 			}
+			workflowHeadSHA := ""
+			workflowRunsEligible := false
+			if options.IncludePRDetails &&
+				thread.Kind == "pull_request" &&
+				payload.hasPullDetails &&
+				payload.pullDetails.workflowSnapshotFresh {
+				workflowHeadSHA = nestedString(payload.pullDetails.pull, "head", "sha")
+				workflowRunsEligible = workflowHeadSHA != ""
+			}
 			upsert, err := st.UpsertThreadObservation(ctx, thread, store.UpsertThreadOptions{
 				PreserveDraft:       thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
 				IncompleteEvidence:  !hasFreshThreadEvidence(options, thread),
@@ -252,6 +261,19 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				return err
 			}
 			if !upsert.Applied && !upsert.EvidenceApplied {
+				if workflowRunsEligible {
+					count, err := s.persistWorkflowRunSnapshot(
+						ctx,
+						st,
+						thread.RepoID,
+						workflowHeadSHA,
+						payload.pullDetails,
+					)
+					if err != nil {
+						return err
+					}
+					attempt.WorkflowRunsSynced += count
+				}
 				attempt.ThreadsSkippedStale++
 				tracker.Add(1,
 					"number", thread.Number,
@@ -266,7 +288,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			evidenceApplied := completeEvidence && upsert.EvidenceApplied
 			childWritesAllowed := !completeEvidence || evidenceApplied
 			childReservations := make(map[store.ThreadChildObservationFamily]bool)
-			workflowRunsEligible := false
 			reserveChild := func(family store.ThreadChildObservationFamily) error {
 				if !childWritesAllowed {
 					return nil
@@ -299,14 +320,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				} {
 					if err := reserveChild(family); err != nil {
 						return err
-					}
-				}
-				if childWritesAllowed &&
-					payload.hasPullDetails &&
-					payload.pullDetails.workflowSnapshotFresh {
-					headSHA := nestedString(payload.pullDetails.pull, "head", "sha")
-					if headSHA != "" {
-						workflowRunsEligible = true
 					}
 				}
 			}

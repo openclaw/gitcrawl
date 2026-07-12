@@ -2130,7 +2130,11 @@ func TestSyncWorkflowRunsLaterDeletionWinsAcrossStoresAndReopen(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = firstStore.Close() })
 
-	if _, err := New(sameHeadWorkflowGitHub{number: 9, version: 2}, firstStore).Sync(
+	if _, err := New(sameHeadWorkflowGitHub{
+		number:      9,
+		version:     2,
+		prUpdatedAt: "2026-07-12T00:01:00Z",
+	}, firstStore).Sync(
 		ctx,
 		Options{
 			Owner: "openclaw", Repo: "gitcrawl", State: "open",
@@ -2150,7 +2154,10 @@ func TestSyncWorkflowRunsLaterDeletionWinsAcrossStoresAndReopen(t *testing.T) {
 	release := make(chan struct{})
 	deletionClient := &blockedWorkflowDeletionGitHub{
 		sameHeadWorkflowGitHub: sameHeadWorkflowGitHub{
-			number: 9, version: 3, deletedRun: "901",
+			number:      9,
+			version:     3,
+			prUpdatedAt: "2026-07-12T00:00:00Z",
+			deletedRun:  "901",
 		},
 		entered: entered,
 		release: release,
@@ -2169,7 +2176,11 @@ func TestSyncWorkflowRunsLaterDeletionWinsAcrossStoresAndReopen(t *testing.T) {
 	}()
 	awaitSyncSignal(t, entered, "blocked workflow deletion fetch")
 
-	if _, err := New(sameHeadWorkflowGitHub{number: 9, version: 2}, secondStore).Sync(
+	if _, err := New(sameHeadWorkflowGitHub{
+		number:      9,
+		version:     2,
+		prUpdatedAt: "2026-07-12T00:02:00Z",
+	}, secondStore).Sync(
 		ctx,
 		Options{
 			Owner: "openclaw", Repo: "gitcrawl", State: "open",
@@ -2184,7 +2195,7 @@ func TestSyncWorkflowRunsLaterDeletionWinsAcrossStoresAndReopen(t *testing.T) {
 	if deletion.err != nil {
 		t.Fatalf("persist later deletion observation: %v", deletion.err)
 	}
-	if deletion.stats.WorkflowRunsSynced != 1 {
+	if deletion.stats.ThreadsSkippedStale != 1 || deletion.stats.WorkflowRunsSynced != 1 {
 		t.Fatalf("later deletion stats = %#v", deletion.stats)
 	}
 

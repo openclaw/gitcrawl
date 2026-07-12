@@ -510,6 +510,47 @@ func workflowSnapshotBaselinesEqual(
 	return true
 }
 
+func (s *Syncer) persistWorkflowRunSnapshot(
+	ctx context.Context,
+	st *store.Store,
+	repoID int64,
+	headSHA string,
+	rows pullRequestDetailRows,
+) (int, error) {
+	fetchedAt := rows.fetchedAt
+	if fetchedAt == "" {
+		fetchedAt = s.now().Format(time.RFC3339Nano)
+	}
+	runs := mapWorkflowRuns(repoID, rows.runsRaw, fetchedAt)
+	return applyWorkflowRunSnapshot(ctx, st, repoID, headSHA, rows, runs)
+}
+
+func applyWorkflowRunSnapshot(
+	ctx context.Context,
+	st *store.Store,
+	repoID int64,
+	headSHA string,
+	rows pullRequestDetailRows,
+	runs []store.WorkflowRun,
+) (int, error) {
+	if rows.workflowObservationSequence <= 0 {
+		return 0, fmt.Errorf("workflow observation sequence must be positive")
+	}
+	result, err := st.ApplyWorkflowRunSnapshot(
+		ctx,
+		repoID,
+		headSHA,
+		rows.workflowSourceUpdatedAt,
+		rows.workflowObservationSequence,
+		rows.workflowBaseline,
+		runs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsSynced, nil
+}
+
 func (s *Syncer) persistPullRequestDetails(
 	ctx context.Context,
 	st *store.Store,
@@ -528,24 +569,18 @@ func (s *Syncer) persistPullRequestDetails(
 	runs := mapWorkflowRuns(thread.RepoID, rows.runsRaw, fetchedAt)
 	workflowRowsSynced := 0
 	if families.WorkflowRuns {
-		if rows.workflowObservationSequence <= 0 {
-			return pullDetailStats{}, fmt.Errorf(
-				"workflow observation sequence must be positive",
-			)
-		}
-		result, err := st.ApplyWorkflowRunSnapshot(
+		var err error
+		workflowRowsSynced, err = applyWorkflowRunSnapshot(
 			ctx,
+			st,
 			thread.RepoID,
 			detail.HeadSHA,
-			rows.workflowSourceUpdatedAt,
-			rows.workflowObservationSequence,
-			rows.workflowBaseline,
+			rows,
 			runs,
 		)
 		if err != nil {
 			return pullDetailStats{}, err
 		}
-		workflowRowsSynced = result.RowsSynced
 		families.WorkflowRuns = false
 	}
 	if err := st.UpsertPullRequestCacheFamilies(
