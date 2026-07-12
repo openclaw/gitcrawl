@@ -2,10 +2,6 @@
 
 ## 0.7.2 - Unreleased
 
-- Add fail-closed, immutable thread revisions, deterministic fingerprints, and revision-bound key summaries from fully hydrated GitHub evidence.
-- Preserve incomplete cluster memberships during partial runs, and include pull request draft, review decision, check, and workflow state in canonical revision evidence.
-- Reject incomplete model summaries, cancel outstanding summary work after persistence failures, and keep embedding and cluster projections bound to eligible current revisions.
-
 ## 0.7.1 - 2026-07-09
 
 - Add local, fail-closed packaging and independent verification for official macOS archives signed as `org.openclaw.gitcrawl` by `Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)`, while keeping CI and cross-platform snapshots credential-free and non-publishing.
