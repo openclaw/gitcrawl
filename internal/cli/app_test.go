@@ -922,14 +922,14 @@ func TestGitcrawlSnapshotStatusMatchesExactMetadata(t *testing.T) {
 
 	manifest.Capabilities = []string{gitcrawlObservationOrderCapability}
 	if gitcrawlSnapshotStatusMatches(status, manifest) {
-		t.Fatal("staged snapshot reused without observable capability proof")
+		t.Fatal("staged snapshot reused without snapshot capability proof")
 	}
-	status.SnapshotCutoverAt = "2026-07-12T12:00:00Z"
-	status.Capabilities = []string{gitcrawlObservationOrderCapability}
+	status.Capabilities = []string{"gitcrawl.threads.search"}
+	status.Snapshot.Capabilities = []string{gitcrawlObservationOrderCapability}
 	if !gitcrawlSnapshotStatusMatches(status, manifest) {
-		t.Fatal("cut-over snapshot with requested capability did not match")
+		t.Fatal("staged snapshot with requested capability did not match")
 	}
-	status.Capabilities = nil
+	status.Snapshot.Capabilities = nil
 	if gitcrawlSnapshotStatusMatches(status, manifest) {
 		t.Fatal("snapshot reused without requested capability")
 	}
@@ -1407,8 +1407,19 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	cutovers := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
+			contract := testSnapshotPublishContract()
+			contract.Apps[0].Capabilities = append(
+				contract.Apps[0].Capabilities,
+				gitcrawlObservationOrderCapability,
+			)
+			for index := range contract.Apps[0].IngestTables {
+				table := &contract.Apps[0].IngestTables[index]
+				if table.Name == "threads" || table.Name == "thread_revisions" {
+					table.Columns = append(table.Columns, "observation_sequence")
+				}
+			}
 			w.Header().Set("content-type", "application/json")
-			_ = json.NewEncoder(w).Encode(testSnapshotPublishContract())
+			_ = json.NewEncoder(w).Encode(contract)
 			return
 		}
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
@@ -1476,6 +1487,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					SchemaName:       gitcrawlCloudSchemaName,
 					SchemaVersion:    gitcrawlCloudSchemaVersion,
 					SchemaHash:       gitcrawlCloudSchemaHash,
+					Capabilities:     []string{gitcrawlObservationOrderCapability},
 					CoverageComplete: true,
 				},
 			})
@@ -1515,6 +1527,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		"--archive", "gitcrawl/openclaw__openclaw",
 		"--token-env", tokenEnv,
 		"--allow-incomplete",
+		"--observation-order",
 		"--json",
 	}
 	for index, extra := range [][]string{{"--stage-only"}, nil} {

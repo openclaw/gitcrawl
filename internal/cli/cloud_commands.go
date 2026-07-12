@@ -569,11 +569,8 @@ func gitcrawlSnapshotStatusMatches(
 	if len(manifest.Capabilities) == 0 {
 		return true
 	}
-	if strings.TrimSpace(status.SnapshotCutoverAt) == "" {
-		return false
-	}
 	for _, capability := range manifest.Capabilities {
-		if !slices.Contains(status.Capabilities, capability) {
+		if !slices.Contains(snapshot.Capabilities, capability) {
 			return false
 		}
 	}
