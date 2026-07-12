@@ -126,6 +126,24 @@ func TestGitcrawlCloudSourceSyncAtUsesPortableMetadataWithoutSyncRuns(t *testing
 	if got != exportedAt {
 		t.Fatalf("source sync at = %q, want portable exported_at %q", got, exportedAt)
 	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close portable store: %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("reopen portable sqlite: %v", err)
+	}
+	defer db.Close()
+	snapshot, err := buildGitcrawlCloudSnapshot(ctx, db, path, true, false)
+	if err != nil {
+		t.Fatalf("build portable cloud snapshot: %v", err)
+	}
+	if snapshot.SourceSyncAt != exportedAt {
+		t.Fatalf("snapshot source sync at = %q, want %q", snapshot.SourceSyncAt, exportedAt)
+	}
+	if counts := gitcrawlCloudDatasetCounts(snapshot); counts["repositories"] != 1 || counts["threads"] != 1 {
+		t.Fatalf("portable snapshot counts = %#v", counts)
+	}
 }
 
 func TestObservationOrderRevisionCoverageCountsFreshSelectedThreads(t *testing.T) {
