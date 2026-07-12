@@ -157,16 +157,13 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	if err := requireGitcrawlCloudPublishRoles(ctx, client); err != nil {
 		return err
 	}
-	sqliteBundle, sqliteSourceSize, err := uploadSQLiteSnapshotArchive(
-		ctx,
-		client,
-		"gitcrawl",
-		archiveID,
-		snapshotPath,
-		counts,
-	)
+	snapshotInfo, err := os.Stat(snapshotPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("stat frozen cloud snapshot: %w", err)
+	}
+	sqliteSourceSize := snapshotInfo.Size()
+	if sqliteSourceSize <= 0 {
+		return fmt.Errorf("frozen cloud snapshot has invalid size %d", sqliteSourceSize)
 	}
 
 	alreadyStaged := false
@@ -183,20 +180,38 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	} else if !remoteNotFound(statusErr) {
 		return statusErr
 	}
+	var sqliteBundle *crawlremote.SQLiteBundle
 	var mutationToken string
 	if !alreadyStaged {
+		uploadedBundle, uploadedSourceSize, err := uploadSQLiteSnapshotArchive(
+			ctx,
+			client,
+			"gitcrawl",
+			archiveID,
+			snapshotPath,
+			counts,
+		)
+		if err != nil {
+			return err
+		}
+		if uploadedSourceSize != sqliteSourceSize {
+			return fmt.Errorf(
+				"SQLite bundle source size changed from %d to %d",
+				sqliteSourceSize,
+				uploadedSourceSize,
+			)
+		}
+		sqliteBundle = uploadedBundle
 		for _, dataset := range snapshot.Datasets {
-			progress, err := sendSnapshotIngestRows(
+			progress, err := sendSnapshotIngestDataset(
 				ctx,
+				snapshotDB,
 				client,
 				"gitcrawl",
 				archiveID,
 				manifest,
-				dataset.Name,
-				dataset.Columns,
-				dataset.Rows,
+				dataset,
 				mutationToken,
-				false,
 			)
 			if err != nil {
 				return fmt.Errorf("publish cloud dataset %s: %w", dataset.Name, err)
@@ -218,17 +233,32 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			true,
 		)
 		if err != nil {
-			return fmt.Errorf("activate cloud snapshot: %w", err)
+			return fmt.Errorf("complete cloud snapshot staging: %w", err)
 		}
 		mutationToken = progress.MutationToken
 	}
 	var cutoverResult *crawlremote.CutoverResult
+	alreadyCutOver := false
 	if cutover {
-		result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
+		readerStatus, err := client.Status(ctx, "gitcrawl", archiveID)
 		if err != nil {
-			return fmt.Errorf("cut over cloud snapshot: %w", err)
+			return fmt.Errorf("read serving cloud snapshot status: %w", err)
 		}
-		cutoverResult = &result
+		if readerStatus.App != "gitcrawl" || readerStatus.Archive != archiveID {
+			return fmt.Errorf(
+				"serving cloud snapshot status returned app=%q archive=%q",
+				readerStatus.App,
+				readerStatus.Archive,
+			)
+		}
+		alreadyCutOver = readerStatus.ActiveSnapshotID == snapshot.ID
+		if !alreadyCutOver {
+			result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
+			if err != nil {
+				return fmt.Errorf("cut over cloud snapshot: %w", err)
+			}
+			cutoverResult = &result
+		}
 		if err := verifyGitcrawlSnapshotPublication(
 			ctx,
 			client,
@@ -256,6 +286,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		"datasets":              counts,
 		"hydration":             snapshot.Hydration,
 		"already_staged":        alreadyStaged,
+		"already_cut_over":      alreadyCutOver,
 		"mutation_token":        mutationToken,
 		"cutover":               cutoverResult,
 		"sqlite_bundle":         sqliteBundle,
@@ -263,39 +294,108 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	}, true)
 }
 
-func publishRows(ctx context.Context, db *sql.DB, query string, mapRow func([]any) []any) ([][]any, error) {
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	out := make([][]any, 0)
-	for rows.Next() {
-		values := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		for i, value := range values {
-			if bytes, ok := value.([]byte); ok {
-				values[i] = string(bytes)
-			}
-		}
-		out = append(out, mapRow(values))
-	}
-	return out, rows.Err()
-}
-
 type ingestProgress struct {
 	RowsAccepted  int64
 	MutationToken string
+}
+
+func sendSnapshotIngestDataset(
+	ctx context.Context,
+	db *sql.DB,
+	client *crawlremote.Client,
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	dataset gitcrawlCloudDataset,
+	mutationToken string,
+) (ingestProgress, error) {
+	rows, err := db.QueryContext(ctx, dataset.Query)
+	if err != nil {
+		return ingestProgress{}, err
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return ingestProgress{}, err
+	}
+	if len(columns) != len(dataset.Columns) {
+		return ingestProgress{}, fmt.Errorf(
+			"dataset query returned %d columns, want %d",
+			len(columns),
+			len(dataset.Columns),
+		)
+	}
+
+	batch := make([][]any, 0, gitcrawlCloudBatchSize)
+	var scanned int64
+	var accepted int64
+	flush := func() error {
+		result, err := sendIngestBatch(
+			ctx,
+			client,
+			app,
+			archive,
+			manifest,
+			dataset.Name,
+			dataset.Columns,
+			batch,
+			scanned-int64(len(batch)),
+			mutationToken,
+			false,
+		)
+		if err != nil {
+			return err
+		}
+		if result.RowsAccepted != int64(len(batch)) {
+			return fmt.Errorf(
+				"remote accepted %d rows from a %d-row batch",
+				result.RowsAccepted,
+				len(batch),
+			)
+		}
+		accepted += result.RowsAccepted
+		mutationToken = result.MutationToken
+		batch = batch[:0]
+		return nil
+	}
+
+	for rows.Next() {
+		values := make([]any, len(columns))
+		pointers := make([]any, len(columns))
+		for index := range values {
+			pointers[index] = &values[index]
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+		}
+		for index, value := range values {
+			if bytes, ok := value.([]byte); ok {
+				values[index] = string(bytes)
+			}
+		}
+		batch = append(batch, values)
+		scanned++
+		if len(batch) == gitcrawlCloudBatchSize {
+			if err := flush(); err != nil {
+				return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+	}
+	if len(batch) > 0 || scanned == 0 {
+		if err := flush(); err != nil {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+		}
+	}
+	if scanned != dataset.RowCount {
+		return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, fmt.Errorf(
+			"dataset row count changed from preflight %d to stream %d",
+			dataset.RowCount,
+			scanned,
+		)
+	}
+	return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, nil
 }
 
 func sendIngestRows(
@@ -365,7 +465,7 @@ func sendSnapshotIngestRows(
 			table,
 			columns,
 			rows[start:end],
-			start,
+			int64(start),
 			mutationToken,
 			final && end == len(rows),
 		)
@@ -386,7 +486,7 @@ func sendIngestBatch(
 	table string,
 	columns []string,
 	rows [][]any,
-	cursor int,
+	cursor int64,
 	mutationToken string,
 	final bool,
 ) (crawlremote.IngestResult, error) {
@@ -467,7 +567,7 @@ func isResetIncomplete(err error) bool {
 	return errors.As(err, &remoteErr) && remoteErr.Code == "reset_incomplete"
 }
 
-func cursorFor(start int) string {
+func cursorFor(start int64) string {
 	if start == 0 {
 		return ""
 	}
@@ -592,6 +692,11 @@ func requireGitcrawlSnapshotPublishContract(
 	if cutover {
 		requiredRoutes = append(
 			requiredRoutes,
+			crawlremote.RouteSpec{
+				Method: http.MethodGet,
+				Path:   "/v1/apps/:app/archives/:archive/status",
+				Auth:   crawlremote.AuthReader,
+			},
 			crawlremote.RouteSpec{
 				Method: http.MethodPost,
 				Path:   "/v1/apps/:app/archives/:archive/cutover",

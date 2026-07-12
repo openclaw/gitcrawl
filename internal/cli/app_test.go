@@ -1228,6 +1228,19 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			})
 			return
 		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
+			activeSnapshotID := ""
+			if sawCutover {
+				activeSnapshotID = snapshotID
+			}
+			_ = json.NewEncoder(w).Encode(crawlremote.Status{
+				App:              "gitcrawl",
+				Archive:          "gitcrawl/openclaw__openclaw",
+				ActiveSnapshotID: activeSnapshotID,
+				CoverageComplete: sawCutover,
+			})
+			return
+		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/cutover") {
 			var request struct {
 				SnapshotID string `json:"snapshot_id"`
@@ -1726,11 +1739,13 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	var stagedSnapshot *crawlremote.ArchiveSnapshot
 	servingSnapshotID := strings.Repeat("f", 64)
 	var sqliteImage []byte
+	uploadRequests := 0
 	ingestRequests := 0
 	publisherStatusRequests := 0
 	readerStatusRequests := 0
 	sqliteReadRequests := 0
 	cutovers := 0
+	hydrationFailuresRemaining := 1
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
 			contract := testSnapshotPublishContract()
@@ -1750,8 +1765,8 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
 			readerStatusRequests++
-			if r.Header.Get("authorization") != "Bearer reader-token" {
-				http.Error(w, "publisher token has no reader role", http.StatusForbidden)
+			if r.Header.Get("authorization") != "Bearer publish-token" {
+				http.Error(w, "missing dual-role bearer", http.StatusForbidden)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(crawlremote.Status{
@@ -1781,6 +1796,11 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				http.Error(w, "bound snapshot unavailable", http.StatusConflict)
 				return
 			}
+			if hydrationFailuresRemaining > 0 {
+				hydrationFailuresRemaining--
+				http.Error(w, "temporary hydration failure", http.StatusConflict)
+				return
+			}
 			w.Header().Set("content-type", "application/vnd.sqlite3")
 			w.Header().Set("content-length", strconv.Itoa(len(sqliteImage)))
 			w.Header().Set("x-crawl-content-sha256", snapshotID)
@@ -1803,6 +1823,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite") {
+			uploadRequests++
 			w.Header().Set("content-type", "application/json")
 			switch r.Header.Get("x-crawl-sqlite-upload") {
 			case "bundle-part":
@@ -1957,19 +1978,31 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		"--json",
 	}
 	stageIngestRequests := 0
+	stageUploadRequests := 0
 	originalServingSnapshotID := servingSnapshotID
 	var stagedDatasetGeneratedAt string
-	for index, extra := range [][]string{{"--stage-only"}, nil} {
+	for index, extra := range [][]string{{"--stage-only"}, nil, nil} {
 		app := New()
 		var output bytes.Buffer
 		app.Stdout = &output
 		args := append(append([]string(nil), baseArgs...), extra...)
-		if err := app.Run(ctx, args); err != nil {
+		err := app.Run(ctx, args)
+		if index == 1 {
+			if err == nil || !strings.Contains(err.Error(), "temporary hydration failure") {
+				t.Fatalf("first cutover hydration error = %v", err)
+			}
+			if servingSnapshotID != snapshotID {
+				t.Fatalf("failed hydration did not leave snapshot serving: %q", servingSnapshotID)
+			}
+			continue
+		}
+		if err != nil {
 			t.Fatalf("cloud publish run %d: %v", index+1, err)
 		}
 		var result struct {
 			DatasetGeneratedAt string                     `json:"dataset_generated_at"`
 			AlreadyStaged      bool                       `json:"already_staged"`
+			AlreadyCutOver     bool                       `json:"already_cut_over"`
 			MutationToken      string                     `json:"mutation_token"`
 			Cutover            *crawlremote.CutoverResult `json:"cutover"`
 		}
@@ -1984,6 +2017,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		}
 		if index == 0 {
 			stageIngestRequests = ingestRequests
+			stageUploadRequests = uploadRequests
 			if stageIngestRequests == 0 || stagedSnapshot == nil {
 				t.Fatal("stage-only publish did not complete the candidate snapshot")
 			}
@@ -1996,9 +2030,9 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
-		if index == 1 {
-			if !result.AlreadyStaged || result.Cutover == nil {
-				t.Fatalf("default publish did not resume the staged candidate: %s", output.String())
+		if index == 2 {
+			if !result.AlreadyStaged || !result.AlreadyCutOver || result.Cutover != nil {
+				t.Fatalf("retry did not reuse the staged serving snapshot: %s", output.String())
 			}
 			if result.DatasetGeneratedAt != stagedDatasetGeneratedAt {
 				t.Fatalf(
@@ -2019,20 +2053,27 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			stageIngestRequests,
 		)
 	}
+	if uploadRequests != stageUploadRequests {
+		t.Fatalf(
+			"upload requests = %d after staged resume, want stage-only count %d",
+			uploadRequests,
+			stageUploadRequests,
+		)
+	}
 	if cutovers != 1 {
 		t.Fatalf("cutovers = %d, want 1", cutovers)
 	}
 	if servingSnapshotID != snapshotID {
 		t.Fatalf("serving snapshot = %q, want staged snapshot %q", servingSnapshotID, snapshotID)
 	}
-	if publisherStatusRequests != 3 {
-		t.Fatalf("publisher status requests = %d, want 3", publisherStatusRequests)
+	if publisherStatusRequests != 5 {
+		t.Fatalf("publisher status requests = %d, want 5", publisherStatusRequests)
 	}
-	if readerStatusRequests != 0 {
-		t.Fatalf("reader status requests = %d, post-cutover verification should use publisher status", readerStatusRequests)
+	if readerStatusRequests != 2 {
+		t.Fatalf("reader status requests = %d, want 2 serving-state checks", readerStatusRequests)
 	}
-	if sqliteReadRequests != 1 {
-		t.Fatalf("SQLite read requests = %d, want 1 post-cutover hydration proof", sqliteReadRequests)
+	if sqliteReadRequests != 2 {
+		t.Fatalf("SQLite read requests = %d, want failed hydration plus retry", sqliteReadRequests)
 	}
 }
 

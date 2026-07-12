@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +33,90 @@ func TestUniqueStringSupersetRejectsMissingOrDuplicateArguments(t *testing.T) {
 	} {
 		if uniqueStringSuperset(values, []string{"owner", "repo", "query"}) {
 			t.Fatalf("invalid remote arguments accepted: %v", values)
+		}
+	}
+}
+
+func TestSendSnapshotIngestDatasetStreamsBoundedBatches(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		create table rows(id integer primary key, value text not null);
+		with recursive sequence(id) as (
+			select 1
+			union all
+			select id + 1 from sequence where id < 501
+		)
+		insert into rows(id, value)
+		select id, printf('row-%03d', id) from sequence;
+	`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+
+	var requests []crawlremote.IngestRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request crawlremote.IngestRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+			Table:         request.Table,
+			SnapshotID:    request.Manifest.SnapshotID,
+			MutationToken: fmt.Sprintf("mutation-%d", len(requests)),
+			RowsAccepted:  int64(len(request.Rows)),
+		})
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("publisher-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	dataset := gitcrawlCloudDataset{
+		Name:     "bounded",
+		Columns:  []string{"id", "value"},
+		Query:    `select id, value from rows order by id`,
+		RowCount: 501,
+	}
+	progress, err := sendSnapshotIngestDataset(
+		context.Background(),
+		db,
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw__gitcrawl",
+		crawlremote.IngestManifest{
+			App:        "gitcrawl",
+			Archive:    "gitcrawl/openclaw__gitcrawl",
+			SnapshotID: strings.Repeat("a", 64),
+		},
+		dataset,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("stream dataset: %v", err)
+	}
+	if progress.RowsAccepted != 501 || progress.MutationToken != "mutation-3" {
+		t.Fatalf("progress = %#v", progress)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(requests))
+	}
+	for index, wantRows := range []int{250, 250, 1} {
+		if got := len(requests[index].Rows); got != wantRows {
+			t.Fatalf("request %d rows = %d, want %d", index, got, wantRows)
+		}
+	}
+	for index, wantCursor := range []string{"", "250", "500"} {
+		if requests[index].Cursor != wantCursor {
+			t.Fatalf("request %d cursor = %q, want %q", index, requests[index].Cursor, wantCursor)
 		}
 	}
 }
