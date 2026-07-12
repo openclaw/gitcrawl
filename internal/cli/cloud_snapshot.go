@@ -258,6 +258,13 @@ order by thread_id, position`,
 
 	datasets := make([]gitcrawlCloudDataset, 0, len(specs))
 	for _, spec := range specs {
+		statement, err := db.PrepareContext(ctx, spec.query)
+		if err != nil {
+			return nil, fmt.Errorf("prepare cloud dataset %s export: %w", spec.name, err)
+		}
+		if err := statement.Close(); err != nil {
+			return nil, fmt.Errorf("close cloud dataset %s export: %w", spec.name, err)
+		}
 		var rowCount int64
 		if err := db.QueryRowContext(
 			ctx,

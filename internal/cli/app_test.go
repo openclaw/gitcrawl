@@ -2181,6 +2181,47 @@ func TestCloudPublishRejectsIncompleteHydrationBeforeRemoteMutation(t *testing.T
 	}
 }
 
+func TestCloudPublishRejectsLegacyExportSchemaBeforeRemoteMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+	seedDoctorLegacyPullRequestFilesSchema(t, ctx, dbPath)
+
+	const tokenEnv = "GITCRAWL_TEST_LEGACY_EXPORT_TOKEN"
+	t.Setenv(tokenEnv, "publish-token")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "unexpected remote request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	err := New().Run(ctx, []string{
+		"--config", configPath,
+		"cloud", "publish",
+		"--remote", server.URL,
+		"--archive", "gitcrawl/openclaw__openclaw",
+		"--token-env", tokenEnv,
+		"--allow-incomplete",
+		"--json",
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "prepare cloud dataset pull_request_files export") ||
+		!strings.Contains(err.Error(), "no such column: position") {
+		t.Fatalf("cloud publish error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("remote requests = %d, want 0", requests)
+	}
+}
+
 func TestRemoteLoginStoresKeyringToken(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
