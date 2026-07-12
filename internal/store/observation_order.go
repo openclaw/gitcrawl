@@ -79,12 +79,17 @@ func (s *Store) threadRevisionFreshnessPredicate(
 		}
 		revisionTimestamp := "gitcrawl_timestamp_key(nullif(" + revision + "source_updated_at, ''))"
 		threadTimestamp := "gitcrawl_timestamp_key(nullif(" + thread + "updated_at_gh, ''))"
+		revisionClockUsable := revisionTimestamp + " is not null or trim(coalesce(" +
+			revision + "source_updated_at, '')) = ''"
+		threadClockUsable := threadTimestamp + " is not null or trim(coalesce(" +
+			thread + "updated_at_gh, '')) = ''"
 		return "((" + revisionTimestamp + " is not null and " + threadTimestamp + " is not null and (" +
 			revisionTimestamp + " > " + threadTimestamp + " or (" +
 			revisionTimestamp + " = " + threadTimestamp + " and (" +
 			revision + "observation_sequence <= 0 or " + thread + "observation_sequence <= 0 or " +
 			sequenceFresh + ")))) or ((" +
 			revisionTimestamp + " is null or " + threadTimestamp + " is null) and " +
+			"(" + revisionClockUsable + ") and (" + threadClockUsable + ") and " +
 			sequenceFresh + "))"
 	}
 
