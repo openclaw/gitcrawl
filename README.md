@@ -67,7 +67,15 @@ gitcrawl tui owner/repo
 The remote service is deployed separately from gitcrawl in `openclaw/crawl-remote` with Wrangler. gitcrawl only stores the Worker endpoint/archive in config and calls that service.
 `gitcrawl remote login` starts the Worker GitHub OAuth flow, verifies org/team membership server-side, and stores the signed bearer token in the OS keyring.
 Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser bootstrap; the Worker verifies that GitHub token against the same org/team policy and stores only the returned remote session token locally.
-`gitcrawl cloud publish` sends the local SQLite repositories and thread rows to a Worker archive through the role-gated ingest endpoint.
+`gitcrawl cloud publish` freezes and sanitizes one local SQLite image, uses its
+SHA-256 as the snapshot identity, exports repositories, threads, revisions,
+fingerprints, summaries, durable clusters, and PR detail/file rows from that
+same image, uploads its digest-scoped R2 bundle, activates complete D1 coverage,
+and cuts unpinned reads over to the exact snapshot. Incomplete local enrichment
+fails before any remote mutation; `--allow-incomplete` is an explicit escape
+hatch, `--observation-order` publishes durable fetch ordering after the remote
+operator fence is enabled, and `--cutover=false` stages and activates without
+changing unpinned reads.
 `gitcrawl clusters-report` writes a Markdown report for the top clusters using the same display view, with an at-a-glance table, per-cluster metadata, member tables, and key snippets. Use `--json` for the hydrated report payload.
 `gitcrawl cluster` and `gitcrawl refresh` build ghcrawl-shaped durable clusters by default (`--threshold 0.80`, `--min-size 1`, `--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`): every active vector-backed thread is represented, singleton rows use `singleton_orphan`, multi-member rows use `duplicate_candidate`, and stable IDs are derived from the representative thread. They also add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.

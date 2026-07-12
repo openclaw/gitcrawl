@@ -2,6 +2,14 @@
 
 ## 0.7.2 - Unreleased
 
+- Publish Cloudflare archives from one content-addressed SQLite image: export all
+  cloud-v2 review, revision, fingerprint, summary, cluster, and PR datasets from
+  that frozen image, enforce enrichment freshness before remote mutation,
+  activate through mutation-token coverage, upload digest-scoped R2 bundles,
+  and cut over the exact snapshot.
+- Strip raw GitHub JSON, file patches, blobs, and local source-code indexes from
+  cloud SQLite bundles before hashing and upload.
+
 ## 0.7.1 - 2026-07-09
 
 - Add local, fail-closed packaging and independent verification for official macOS archives signed as `org.openclaw.gitcrawl` by `Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)`, while keeping CI and cross-platform snapshots credential-free and non-publishing.
