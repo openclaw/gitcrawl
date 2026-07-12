@@ -22,17 +22,18 @@ type pullDetailStats struct {
 }
 
 type pullRequestDetailRows struct {
-	fetchedAt                string
-	workflowSourceUpdatedAt  string
-	workflowSnapshotFresh    bool
-	workflowBaseline         store.WorkflowRunSnapshotState
-	workflowDeletedRunIDs    []string
-	workflowObservationOrder int
-	pull                     map[string]any
-	filesRaw                 []map[string]any
-	commitsRaw               []map[string]any
-	checksRaw                []map[string]any
-	runsRaw                  []map[string]any
+	fetchedAt                   string
+	workflowSourceUpdatedAt     string
+	workflowSnapshotFresh       bool
+	workflowBaseline            store.WorkflowRunSnapshotState
+	workflowDeletedRunIDs       []string
+	workflowObservationOrder    int
+	workflowObservationSequence int64
+	pull                        map[string]any
+	filesRaw                    []map[string]any
+	commitsRaw                  []map[string]any
+	checksRaw                   []map[string]any
+	runsRaw                     []map[string]any
 }
 
 type workflowRunLookupClient interface {
@@ -83,17 +84,28 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 	if err != nil {
 		return pullRequestDetailRows{}, err
 	}
+	workflowObservationSequence := int64(0)
+	if headSHA != "" && workflowSnapshotFresh {
+		workflowObservationSequence, err = s.store.NextThreadObservationSequence(
+			ctx,
+			s.now().Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			return pullRequestDetailRows{}, err
+		}
+	}
 	return pullRequestDetailRows{
-		fetchedAt:               fetchedAt,
-		workflowSourceUpdatedAt: workflowSourceUpdatedAt,
-		workflowSnapshotFresh:   workflowSnapshotFresh,
-		workflowBaseline:        workflowBaseline,
-		workflowDeletedRunIDs:   workflowDeletedRunIDs,
-		pull:                    pull,
-		filesRaw:                filesRaw,
-		commitsRaw:              commitsRaw,
-		checksRaw:               checksRaw,
-		runsRaw:                 runsRaw,
+		fetchedAt:                   fetchedAt,
+		workflowSourceUpdatedAt:     workflowSourceUpdatedAt,
+		workflowSnapshotFresh:       workflowSnapshotFresh,
+		workflowBaseline:            workflowBaseline,
+		workflowDeletedRunIDs:       workflowDeletedRunIDs,
+		workflowObservationSequence: workflowObservationSequence,
+		pull:                        pull,
+		filesRaw:                    filesRaw,
+		commitsRaw:                  commitsRaw,
+		checksRaw:                   checksRaw,
+		runsRaw:                     runsRaw,
 	}, nil
 }
 
@@ -504,7 +516,6 @@ func (s *Syncer) persistPullRequestDetails(
 	thread store.Thread,
 	rows pullRequestDetailRows,
 	families store.PullRequestHydrationFamilies,
-	observationSequence int64,
 ) (pullDetailStats, error) {
 	fetchedAt := rows.fetchedAt
 	if fetchedAt == "" {
@@ -517,12 +528,17 @@ func (s *Syncer) persistPullRequestDetails(
 	runs := mapWorkflowRuns(thread.RepoID, rows.runsRaw, fetchedAt)
 	workflowRowsSynced := 0
 	if families.WorkflowRuns {
+		if rows.workflowObservationSequence <= 0 {
+			return pullDetailStats{}, fmt.Errorf(
+				"workflow observation sequence must be positive",
+			)
+		}
 		result, err := st.ApplyWorkflowRunSnapshot(
 			ctx,
 			thread.RepoID,
 			detail.HeadSHA,
 			rows.workflowSourceUpdatedAt,
-			observationSequence,
+			rows.workflowObservationSequence,
 			rows.workflowBaseline,
 			runs,
 		)

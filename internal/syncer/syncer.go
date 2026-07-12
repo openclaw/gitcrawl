@@ -352,7 +352,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 							Checks:       childReservations[store.ThreadChildPullRequestChecks],
 							WorkflowRuns: workflowRunsEligible,
 						},
-						observationSequence,
 					)
 					if err != nil {
 						return err
