@@ -41,6 +41,9 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	remoteEndpoint := fs.String("remote", "", "remote archive endpoint")
 	archive := fs.String("archive", "", "remote archive id")
 	tokenEnv := fs.String("token-env", "", "remote token environment variable")
+	allowIncomplete := fs.Bool("allow-incomplete", false, "publish even when local enrichment coverage is incomplete")
+	observationOrder := fs.Bool("observation-order", false, "publish durable observation ordering when the remote fence is enabled")
+	cutover := fs.Bool("cutover", true, "cut over unpinned reads after activating the snapshot")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"remote": true, "archive": true, "token-env": true})); err != nil {
 		return usageErr(err)
@@ -82,48 +85,111 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	manifest := crawlremote.IngestManifest{
-		App:           "gitcrawl",
-		Archive:       archiveID,
-		SchemaName:    "gitcrawl-cloud-v1",
-		SchemaVersion: 1,
-		SchemaHash:    "gitcrawl-cloud-v1",
-		Mode:          crawlremote.ModePublisher,
-		Source:        "sqlite",
-	}
-	repoRows, err := publishRows(ctx, rt.Store.DB(), gitcrawlRepositoryExportSQL, func(values []any) []any { return values })
+	snapshotPath, cleanupSnapshot, err := cloudSQLiteSnapshotPath(ctx, rt.Store.DB(), rt.Store.Path())
 	if err != nil {
 		return err
 	}
-	threadSQL, err := gitcrawlThreadExportSQL(ctx, rt.Store.DB())
+	defer cleanupSnapshot()
+	snapshotDB, err := sql.Open("sqlite", snapshotPath)
+	if err != nil {
+		return fmt.Errorf("open frozen cloud snapshot: %w", err)
+	}
+	defer snapshotDB.Close()
+	snapshot, err := buildGitcrawlCloudSnapshot(
+		ctx,
+		snapshotDB,
+		snapshotPath,
+		*allowIncomplete,
+		*observationOrder,
+	)
 	if err != nil {
 		return err
 	}
-	threadRows, err := publishRows(ctx, rt.Store.DB(), threadSQL, func(values []any) []any { return values })
+	manifest := gitcrawlCloudManifest(archiveID, snapshot)
+	counts := gitcrawlCloudDatasetCounts(snapshot)
+	sqliteBundle, err := uploadSQLiteSnapshotArchive(
+		ctx,
+		client,
+		"gitcrawl",
+		archiveID,
+		snapshotPath,
+		counts,
+	)
 	if err != nil {
 		return err
 	}
-	repoAccepted, err := sendIngestRows(ctx, client, "gitcrawl", archiveID, manifest, "repositories", gitcrawlRepositoryColumns, repoRows, false)
-	if err != nil {
-		return err
+
+	alreadyActive := false
+	status, statusErr := client.Status(ctx, "gitcrawl", archiveID)
+	if statusErr == nil {
+		alreadyActive = status.ActiveSnapshotID == snapshot.ID && status.CoverageComplete
+	} else if !remoteNotFound(statusErr) {
+		return statusErr
 	}
-	threadAccepted, err := sendIngestRows(ctx, client, "gitcrawl", archiveID, manifest, "threads", gitcrawlThreadColumns, threadRows, true)
-	if err != nil {
-		return err
+	var mutationToken string
+	if !alreadyActive {
+		for _, dataset := range snapshot.Datasets {
+			progress, err := sendSnapshotIngestRows(
+				ctx,
+				client,
+				"gitcrawl",
+				archiveID,
+				manifest,
+				dataset.Name,
+				dataset.Columns,
+				dataset.Rows,
+				mutationToken,
+				false,
+			)
+			if err != nil {
+				return fmt.Errorf("publish cloud dataset %s: %w", dataset.Name, err)
+			}
+			counts[dataset.Name] = progress.RowsAccepted
+			mutationToken = progress.MutationToken
+		}
+		coverageRows := gitcrawlCloudCoverageRows(snapshot, mutationToken)
+		progress, err := sendSnapshotIngestRows(
+			ctx,
+			client,
+			"gitcrawl",
+			archiveID,
+			manifest,
+			"dataset_coverage",
+			[]string{
+				"dataset", "row_count", "eligible_count", "covered_count",
+				"max_source_at", "dataset_generated_at", "complete", "mutation_token",
+			},
+			coverageRows,
+			mutationToken,
+			true,
+		)
+		if err != nil {
+			return fmt.Errorf("activate cloud snapshot: %w", err)
+		}
+		mutationToken = progress.MutationToken
 	}
-	sqliteBundle, err := uploadSQLiteArchive(ctx, client, "gitcrawl", archiveID, rt.Store.DB(), rt.Store.Path(), manifest, map[string]int64{
-		"repositories": repoAccepted,
-		"threads":      threadAccepted,
-	})
-	if err != nil {
-		return err
+	var cutoverResult *crawlremote.CutoverResult
+	if *cutover {
+		result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
+		if err != nil {
+			return fmt.Errorf("cut over cloud snapshot: %w", err)
+		}
+		cutoverResult = &result
 	}
 	sqliteBundlePrivacy := gitcrawlCloudSQLiteBundlePrivacy()
 	return a.writeOutput("cloud publish", map[string]any{
 		"remote":                strings.TrimRight(endpoint, "/"),
 		"archive":               archiveID,
-		"repositories":          repoAccepted,
-		"threads":               threadAccepted,
+		"snapshot_id":           snapshot.ID,
+		"source_sha256":         snapshot.ID,
+		"source_sync_at":        snapshot.SourceSyncAt,
+		"dataset_generated_at":  snapshot.DatasetGeneratedAt,
+		"capabilities":          snapshot.Capabilities,
+		"datasets":              counts,
+		"hydration":             snapshot.Hydration,
+		"already_active":        alreadyActive,
+		"mutation_token":        mutationToken,
+		"cutover":               cutoverResult,
 		"sqlite_bundle":         sqliteBundle,
 		"sqlite_bundle_privacy": sqliteBundlePrivacy,
 	}, true)
@@ -159,35 +225,112 @@ func publishRows(ctx context.Context, db *sql.DB, query string, mapRow func([]an
 	return out, rows.Err()
 }
 
-func sendIngestRows(ctx context.Context, client *crawlremote.Client, app, archive string, manifest crawlremote.IngestManifest, table string, columns []string, rows [][]any, final bool) (int64, error) {
+type ingestProgress struct {
+	RowsAccepted  int64
+	MutationToken string
+}
+
+func sendIngestRows(
+	ctx context.Context,
+	client *crawlremote.Client,
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	table string,
+	columns []string,
+	rows [][]any,
+	final bool,
+) (int64, error) {
+	progress, err := sendSnapshotIngestRows(
+		ctx,
+		client,
+		app,
+		archive,
+		manifest,
+		table,
+		columns,
+		rows,
+		"",
+		final,
+	)
+	return progress.RowsAccepted, err
+}
+
+func sendSnapshotIngestRows(
+	ctx context.Context,
+	client *crawlremote.Client,
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	table string,
+	columns []string,
+	rows [][]any,
+	mutationToken string,
+	final bool,
+) (ingestProgress, error) {
 	var total int64
 	if len(rows) == 0 {
-		result, err := sendIngestBatch(ctx, client, app, archive, manifest, table, columns, [][]any{}, 0, final)
-		return result.RowsAccepted, err
+		result, err := sendIngestBatch(
+			ctx,
+			client,
+			app,
+			archive,
+			manifest,
+			table,
+			columns,
+			[][]any{},
+			0,
+			mutationToken,
+			final,
+		)
+		return ingestProgress{RowsAccepted: result.RowsAccepted, MutationToken: result.MutationToken}, err
 	}
 	for start := 0; start < len(rows); start += gitcrawlCloudBatchSize {
 		end := start + gitcrawlCloudBatchSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		result, err := sendIngestBatch(ctx, client, app, archive, manifest, table, columns, rows[start:end], start, final && end == len(rows))
+		result, err := sendIngestBatch(
+			ctx,
+			client,
+			app,
+			archive,
+			manifest,
+			table,
+			columns,
+			rows[start:end],
+			start,
+			mutationToken,
+			final && end == len(rows),
+		)
 		if err != nil {
-			return total, err
+			return ingestProgress{RowsAccepted: total, MutationToken: mutationToken}, err
 		}
 		total += result.RowsAccepted
+		mutationToken = result.MutationToken
 	}
-	return total, nil
+	return ingestProgress{RowsAccepted: total, MutationToken: mutationToken}, nil
 }
 
-func sendIngestBatch(ctx context.Context, client *crawlremote.Client, app, archive string, manifest crawlremote.IngestManifest, table string, columns []string, rows [][]any, cursor int, final bool) (crawlremote.IngestResult, error) {
+func sendIngestBatch(
+	ctx context.Context,
+	client *crawlremote.Client,
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	table string,
+	columns []string,
+	rows [][]any,
+	cursor int,
+	mutationToken string,
+	final bool,
+) (crawlremote.IngestResult, error) {
 	for {
 		result, err := client.Ingest(ctx, app, archive, crawlremote.IngestRequest{
-			Manifest: manifest,
-			Table:    table,
-			Columns:  columns,
-			Rows:     rows,
-			Cursor:   cursorFor(cursor),
-			Final:    final,
+			Manifest:      manifest,
+			Table:         table,
+			Columns:       columns,
+			Rows:          rows,
+			Cursor:        cursorFor(cursor),
+			MutationToken: mutationToken,
+			Final:         final,
 		})
 		if err == nil {
 			if result.ResetIncomplete {
@@ -242,6 +385,15 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		return nil, err
 	}
 	defer cleanup()
+	return uploadSQLiteSnapshotArchive(ctx, client, app, archive, snapshotPath, counts)
+}
+
+func uploadSQLiteSnapshotArchive(
+	ctx context.Context,
+	client *crawlremote.Client,
+	app, archive, snapshotPath string,
+	counts map[string]int64,
+) (*crawlremote.SQLiteBundle, error) {
 	bundle, err := crawlremote.BuildGzipSQLiteBundle(ctx, crawlremote.SQLiteBundleBuildOptions{
 		App:        app,
 		Archive:    archive,
@@ -259,6 +411,11 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		return nil, err
 	}
 	return result.Bundle, nil
+}
+
+func remoteNotFound(err error) bool {
+	var remoteErr *crawlremote.Error
+	return errors.As(err, &remoteErr) && remoteErr.Status == http.StatusNotFound
 }
 
 func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {
@@ -298,12 +455,10 @@ func cloudSQLiteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (st
 		cleanup()
 		return "", func() {}, fmt.Errorf("open cloud SQLite snapshot: %w", err)
 	}
-	for _, table := range []string{"code_documents_fts", "code_documents", "code_snapshots"} {
-		if _, err := snapshotDB.ExecContext(ctx, `drop table if exists `+table); err != nil {
-			_ = snapshotDB.Close()
-			cleanup()
-			return "", func() {}, fmt.Errorf("drop local-only cloud snapshot table %s: %w", table, err)
-		}
+	if err := sanitizeCloudSQLiteSnapshot(ctx, snapshotDB); err != nil {
+		_ = snapshotDB.Close()
+		cleanup()
+		return "", func() {}, err
 	}
 	if _, err := snapshotDB.ExecContext(ctx, `vacuum`); err != nil {
 		_ = snapshotDB.Close()
@@ -315,6 +470,97 @@ func cloudSQLiteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (st
 		return "", func() {}, fmt.Errorf("close cloud SQLite snapshot: %w", err)
 	}
 	return snapshotPath, cleanup, nil
+}
+
+func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
+	for _, column := range []struct {
+		table string
+		name  string
+	}{
+		{table: "repositories", name: "raw_json"},
+		{table: "threads", name: "raw_json"},
+		{table: "comments", name: "raw_json"},
+		{table: "pull_request_details", name: "raw_json"},
+		{table: "pull_request_files", name: "raw_json"},
+		{table: "pull_request_commits", name: "raw_json"},
+		{table: "pull_request_checks", name: "raw_json"},
+		{table: "pull_request_review_threads", name: "raw_json"},
+		{table: "github_workflow_runs", name: "raw_json"},
+		{table: "sync_runs", name: "error_text"},
+		{table: "summary_runs", name: "error_text"},
+		{table: "embedding_runs", name: "error_text"},
+		{table: "cluster_runs", name: "error_text"},
+	} {
+		exists, err := sqliteColumnExists(ctx, db, column.table, column.name)
+		if err != nil {
+			return fmt.Errorf("inspect cloud snapshot %s.%s: %w", column.table, column.name, err)
+		}
+		if !exists {
+			continue
+		}
+		if _, err := db.ExecContext(
+			ctx,
+			`update `+column.table+` set `+column.name+` = '' where `+column.name+` is not null and `+column.name+` != ''`,
+		); err != nil {
+			return fmt.Errorf("clear cloud snapshot %s.%s: %w", column.table, column.name, err)
+		}
+	}
+	for _, column := range []struct {
+		table string
+		name  string
+	}{
+		{table: "comments", name: "raw_json_blob_id"},
+		{table: "thread_revisions", name: "raw_json_blob_id"},
+		{table: "pull_request_files", name: "patch"},
+	} {
+		exists, err := sqliteColumnExists(ctx, db, column.table, column.name)
+		if err != nil {
+			return fmt.Errorf("inspect cloud snapshot %s.%s: %w", column.table, column.name, err)
+		}
+		if !exists {
+			continue
+		}
+		value := "null"
+		if column.name == "patch" {
+			value = "''"
+		}
+		if _, err := db.ExecContext(
+			ctx,
+			`update `+column.table+` set `+column.name+` = `+value+` where `+column.name+` is not null`,
+		); err != nil {
+			return fmt.Errorf("clear cloud snapshot %s.%s: %w", column.table, column.name, err)
+		}
+	}
+	for _, table := range []string{
+		"thread_changed_files",
+		"thread_hunk_signatures",
+		"thread_code_snapshots",
+		"code_documents_fts",
+		"code_documents",
+		"code_snapshots",
+	} {
+		if _, err := db.ExecContext(ctx, `drop table if exists `+table); err != nil {
+			return fmt.Errorf("drop local-only cloud snapshot table %s: %w", table, err)
+		}
+	}
+	if exists, err := sqliteTableExists(ctx, db, "blobs"); err != nil {
+		return err
+	} else if exists {
+		if _, err := db.ExecContext(ctx, `delete from blobs`); err != nil {
+			return fmt.Errorf("clear cloud snapshot blobs: %w", err)
+		}
+	}
+	if exists, err := sqliteTableExists(ctx, db, "portable_metadata"); err != nil {
+		return err
+	} else if exists {
+		if _, err := db.ExecContext(
+			ctx,
+			`update portable_metadata set value = '' where key = 'source_path'`,
+		); err != nil {
+			return fmt.Errorf("clear cloud snapshot portable source path: %w", err)
+		}
+	}
+	return nil
 }
 
 func sqliteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (string, func(), error) {
@@ -413,4 +659,20 @@ func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (
 		}
 	}
 	return false, rows.Err()
+}
+
+func sqliteTableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRowContext(
+		ctx,
+		`select name from sqlite_schema where type in ('table', 'view') and name = ?`,
+		table,
+	).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect cloud snapshot table %s: %w", table, err)
+	}
+	return name == table, nil
 }
