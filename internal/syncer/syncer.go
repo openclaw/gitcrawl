@@ -225,11 +225,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		for _, payload := range payloads {
 			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
+			_, hasIssueDraft := payload.row["draft"]
 			if payload.hasPullDetails {
 				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
 			}
 			threadID, err := st.UpsertThread(ctx, thread, store.UpsertThreadOptions{
-				PreserveDraft: thread.Kind == "pull_request" && !payload.hasPullDetails,
+				PreserveDraft: thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
 			})
 			if err != nil {
 				return err
@@ -512,6 +513,7 @@ func mapIssueToThread(repoID int64, row map[string]any, pulledAt string) store.T
 		AssigneesJSON:     assigneesJSON,
 		RawJSON:           mustJSON(row),
 		ContentHash:       contentHash(title, body, labelsJSON),
+		IsDraft:           boolValue(row["draft"]),
 		CreatedAtGitHub:   stringValue(row["created_at"]),
 		UpdatedAtGitHub:   stringValue(row["updated_at"]),
 		ClosedAtGitHub:    stringValue(row["closed_at"]),

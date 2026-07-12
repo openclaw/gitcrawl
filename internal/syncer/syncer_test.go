@@ -174,6 +174,30 @@ func (f *mutableUpdatedGitHub) ListRepositoryIssues(ctx context.Context, owner, 
 	return rows, nil
 }
 
+type metadataDraftGitHub struct {
+	fakeGitHub
+	draftPresent bool
+	draft        bool
+}
+
+func (f *metadataDraftGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	rows, err := f.fakeGitHub.ListRepositoryIssues(ctx, owner, repo, options, reporter)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if issueKind(row) != "pull_request" {
+			continue
+		}
+		if f.draftPresent {
+			row["draft"] = f.draft
+		} else {
+			delete(row, "draft")
+		}
+	}
+	return rows, nil
+}
+
 type sinceCaptureGitHub struct {
 	fakeGitHub
 	since string
@@ -635,6 +659,72 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		coverage.Rows[0].Enrichment.Fingerprints.Stale != 2 {
 		t.Fatalf("metadata-only enrichment coverage = %+v", coverage)
 	}
+}
+
+func TestMetadataOnlySyncHonorsAuthoritativeIssueDraftState(t *testing.T) {
+	tests := []struct {
+		name         string
+		initialDraft bool
+		nextPresent  bool
+		nextDraft    bool
+		wantDraft    bool
+	}{
+		{name: "draft to ready", initialDraft: true, nextPresent: true, nextDraft: false, wantDraft: false},
+		{name: "ready to draft", initialDraft: false, nextPresent: true, nextDraft: true, wantDraft: true},
+		{name: "absent preserves draft", initialDraft: true, nextPresent: false, wantDraft: true},
+		{name: "absent preserves ready", initialDraft: false, nextPresent: false, wantDraft: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+
+			client := &metadataDraftGitHub{draftPresent: true, draft: test.initialDraft}
+			s := New(client, st)
+			s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+			if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err != nil {
+				t.Fatalf("initial metadata sync: %v", err)
+			}
+			assertStoredPullDraft(t, ctx, st, test.initialDraft)
+
+			client.draftPresent = test.nextPresent
+			client.draft = test.nextDraft
+			stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
+			if err != nil {
+				t.Fatalf("updated metadata sync: %v", err)
+			}
+			if !stats.MetadataOnly {
+				t.Fatalf("metadata only = false: %#v", stats)
+			}
+			assertStoredPullDraft(t, ctx, st, test.wantDraft)
+		})
+	}
+}
+
+func assertStoredPullDraft(t *testing.T, ctx context.Context, st *store.Store, want bool) {
+	t.Helper()
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+	for _, thread := range threads {
+		if thread.Kind != "pull_request" {
+			continue
+		}
+		if thread.IsDraft != want {
+			t.Fatalf("pull request draft = %t, want %t", thread.IsDraft, want)
+		}
+		return
+	}
+	t.Fatal("pull request was not stored")
 }
 
 func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) {
