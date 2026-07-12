@@ -183,6 +183,88 @@ func TestUpsertThreadRevisionAndFingerprintRollsBackTogether(t *testing.T) {
 	}
 }
 
+func TestUpsertThreadRevisionRefreshesSourceTimestampWithoutNewRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID:          repoID,
+		GitHubID:        "8",
+		Number:          8,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "stable evidence",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/8",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "thread",
+		UpdatedAtGitHub: "2026-07-12T12:00:00Z",
+		UpdatedAt:       "2026-07-12T12:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	first, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:01Z")
+	if err != nil {
+		t.Fatalf("first enrichment: %v", err)
+	}
+
+	thread.UpdatedAtGitHub = "2026-07-12T12:00:00.500Z"
+	second, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:02Z")
+	if err != nil {
+		t.Fatalf("refreshed enrichment: %v", err)
+	}
+	if second.RevisionID != first.RevisionID || second.RevisionCreated || second.FingerprintUpserted {
+		t.Fatalf("refreshed result = %+v, first = %+v", second, first)
+	}
+
+	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
+	third, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:03Z")
+	if err != nil {
+		t.Fatalf("older enrichment: %v", err)
+	}
+	if third.RevisionID != first.RevisionID || third.RevisionCreated || third.FingerprintUpserted {
+		t.Fatalf("older result = %+v, first = %+v", third, first)
+	}
+
+	var revisions, fingerprints int
+	var sourceUpdatedAt string
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*), max(source_updated_at)
+		from thread_revisions
+		where thread_id = ?
+	`, thread.ID).Scan(&revisions, &sourceUpdatedAt); err != nil {
+		t.Fatalf("revision state: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_fingerprints tf
+		join thread_revisions tr on tr.id = tf.thread_revision_id
+		where tr.thread_id = ?
+	`, thread.ID).Scan(&fingerprints); err != nil {
+		t.Fatalf("fingerprint count: %v", err)
+	}
+	if revisions != 1 || fingerprints != 1 || sourceUpdatedAt != "2026-07-12T12:00:00.500Z" {
+		t.Fatalf("revision/fingerprint/source state = %d/%d/%q", revisions, fingerprints, sourceUpdatedAt)
+	}
+}
+
 func TestLatestTimestampComparesRFC3339Instants(t *testing.T) {
 	tests := []struct {
 		name   string

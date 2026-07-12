@@ -140,14 +140,14 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	}
 	revision, fingerprint := buildThreadEnrichment(evidence, createdAt)
 	var latestID int64
-	var latestHash string
+	var latestHash, latestSourceUpdatedAt string
 	err := s.q().QueryRowContext(ctx, `
-		select id, content_hash
+		select id, content_hash, coalesce(source_updated_at, '')
 		from thread_revisions
 		where thread_id = ?
 		order by id desc
 		limit 1
-	`, revision.ThreadID).Scan(&latestID, &latestHash)
+	`, revision.ThreadID).Scan(&latestID, &latestHash, &latestSourceUpdatedAt)
 	if err != nil && err != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
 	}
@@ -168,6 +168,16 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		}
 	} else {
 		revision.ID = latestID
+		refreshedSourceUpdatedAt := latestTimestamp(latestSourceUpdatedAt, revision.SourceUpdatedAt)
+		if refreshedSourceUpdatedAt != latestSourceUpdatedAt {
+			if _, err := s.q().ExecContext(ctx, `
+				update thread_revisions
+				set source_updated_at = ?
+				where id = ?
+			`, nullString(refreshedSourceUpdatedAt), revision.ID); err != nil {
+				return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision source timestamp: %w", err)
+			}
+		}
 	}
 	fingerprint.ThreadRevisionID = revision.ID
 
