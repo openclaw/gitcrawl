@@ -635,15 +635,7 @@ func (s *Store) archivePRFileCoverage(
 	ctx context.Context,
 	repoID int64,
 ) (EnrichmentCoverageMetric, error) {
-	hasReservations := s.archiveCoverageHasColumns(
-		ctx,
-		"thread_child_observation_reservations",
-		"thread_id",
-		"family",
-		"source_updated_at",
-		"observation_sequence",
-	)
-	hasLegacyProof := s.archiveCoverageHasColumns(
+	hasPersistedProof := s.archiveCoverageHasColumns(
 		ctx,
 		"pull_request_details",
 		"thread_id",
@@ -655,9 +647,17 @@ func (s *Store) archivePRFileCoverage(
 		"thread_id",
 		"fetched_at",
 	)
-	if !hasReservations && !hasLegacyProof {
+	if !hasPersistedProof {
 		return EnrichmentCoverageMetric{}, nil
 	}
+	hasReservations := s.archiveCoverageHasColumns(
+		ctx,
+		"thread_child_observation_reservations",
+		"thread_id",
+		"family",
+		"source_updated_at",
+		"observation_sequence",
+	)
 	acceptedSourceUpdatedAt, acceptedObservationSequence :=
 		s.archiveAcceptedThreadObservationExpressions(ctx, "t")
 	reservationJoin := ""
@@ -674,15 +674,7 @@ func (s *Store) archivePRFileCoverage(
 		reservationSourceUpdatedAt = "coalesce(reservation.source_updated_at, '')"
 		reservationObservationSequence = "coalesce(reservation.observation_sequence, 0)"
 	}
-	legacyJoin := ""
-	detailPresent := "0"
-	detailChangedFiles := "0"
-	detailFetchedAt := "''"
-	fileCount := "0"
-	oldestFileFetchedAt := "''"
-	latestFileFetchedAt := "''"
-	if hasLegacyProof {
-		legacyJoin = `
+	persistedEvidenceJoin := `
 		left join pull_request_details prd on prd.thread_id = t.id
 		left join (
 			select thread_id,
@@ -693,28 +685,21 @@ func (s *Store) archivePRFileCoverage(
 			group by thread_id
 		) prf on prf.thread_id = t.id
 		`
-		detailPresent = "case when prd.thread_id is null then 0 else 1 end"
-		detailChangedFiles = "coalesce(prd.changed_files, 0)"
-		detailFetchedAt = "coalesce(prd.fetched_at, '')"
-		fileCount = "coalesce(prf.file_count, 0)"
-		oldestFileFetchedAt = "coalesce(prf.oldest_fetched_at, '')"
-		latestFileFetchedAt = "coalesce(prf.latest_fetched_at, '')"
-	}
 	rows, err := s.q().QueryContext(ctx, `
 		select `+reservationPresent+`,
 			`+reservationSourceUpdatedAt+`,
 			`+reservationObservationSequence+`,
-			`+detailPresent+`,
-			`+detailChangedFiles+`,
-			`+detailFetchedAt+`,
-			`+fileCount+`,
-			`+oldestFileFetchedAt+`,
-			`+latestFileFetchedAt+`,
+			case when prd.thread_id is null then 0 else 1 end,
+			coalesce(prd.changed_files, 0),
+			coalesce(prd.fetched_at, ''),
+			coalesce(prf.file_count, 0),
+			coalesce(prf.oldest_fetched_at, ''),
+			coalesce(prf.latest_fetched_at, ''),
 			`+acceptedSourceUpdatedAt+`,
 			`+acceptedObservationSequence+`
 		from threads t
 		`+reservationJoin+`
-		`+legacyJoin+`
+		`+persistedEvidenceJoin+`
 		where t.repo_id = ? and t.kind = 'pull_request'
 	`, repoID)
 	if err != nil {
@@ -745,31 +730,26 @@ func (s *Store) archivePRFileCoverage(
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive PR file coverage: %w", err)
 		}
 		metric.Eligible++
-		switch {
-		case hasReservation != 0:
-			metric.Covered++
-			latestObservedAt = laterArchiveCoverageTimestamp(
-				latestObservedAt,
-				reservationSourceUpdatedAt,
-			)
-			if archiveObservationAtOrAfter(
+		if hasDetail == 0 || changedFiles < 0 || files != changedFiles {
+			continue
+		}
+		metric.Covered++
+		latestObservedAt = laterArchiveCoverageTimestamp(latestObservedAt, detailFetchedAt)
+		latestObservedAt = laterArchiveCoverageTimestamp(latestObservedAt, latestFileFetchedAt)
+		detailFresh := archiveCoverageTimestampAtOrAfter(detailFetchedAt, acceptedSource)
+		filesFresh := files == 0 ||
+			archiveCoverageTimestampAtOrAfter(oldestFileFetchedAt, acceptedSource)
+		reservationFresh := true
+		if hasReservation != 0 {
+			reservationFresh = archiveObservationAtOrAfter(
 				reservationSourceUpdatedAt,
 				reservationSequence,
 				acceptedSource,
 				observationSequenceOrderValue(acceptedSequence),
-			) {
-				metric.Fresh++
-			}
-		case hasDetail != 0 && changedFiles >= 0 && files == changedFiles:
-			metric.Covered++
-			latestObservedAt = laterArchiveCoverageTimestamp(latestObservedAt, detailFetchedAt)
-			latestObservedAt = laterArchiveCoverageTimestamp(latestObservedAt, latestFileFetchedAt)
-			detailFresh := archiveCoverageTimestampAtOrAfter(detailFetchedAt, acceptedSource)
-			filesFresh := files == 0 ||
-				archiveCoverageTimestampAtOrAfter(oldestFileFetchedAt, acceptedSource)
-			if detailFresh && filesFresh {
-				metric.Fresh++
-			}
+			)
+		}
+		if detailFresh && filesFresh && reservationFresh {
+			metric.Fresh++
 		}
 	}
 	if err := rows.Err(); err != nil {
