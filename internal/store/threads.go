@@ -51,6 +51,8 @@ type UpsertThreadResult struct {
 	ID            int64
 	Applied       bool
 	PreviousState string
+	// ObservationSequence is the effective absolute generation for dependent writes.
+	ObservationSequence int64
 }
 
 func (s *Store) UpsertThread(ctx context.Context, thread Thread, options ...UpsertThreadOptions) (int64, error) {
@@ -127,6 +129,12 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 			storedObservationSequence = existing.observationSequence
 		}
 	}
+	if exists && samePayload && !options.IncompleteEvidence && existing.observationSequence < 0 {
+		storedObservationSequence = max(
+			storedObservationSequence,
+			observationSequenceOrderValue(existing.observationSequence),
+		)
+	}
 	if exists {
 		sourceOrder, err := compareObservationOrder(
 			observationOrder{SourceUpdatedAt: thread.UpdatedAtGitHub},
@@ -153,18 +161,20 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		}
 		if order < 0 {
 			return UpsertThreadResult{
-				ID:            existing.id,
-				Applied:       false,
-				PreviousState: existing.state,
+				ID:                  existing.id,
+				Applied:             false,
+				PreviousState:       existing.state,
+				ObservationSequence: observationSequenceOrderValue(existing.observationSequence),
 			}, nil
 		}
 		if order == 0 {
 			if samePayload {
 				if !options.IncompleteEvidence {
 					return UpsertThreadResult{
-						ID:            existing.id,
-						Applied:       false,
-						PreviousState: existing.state,
+						ID:                  existing.id,
+						Applied:             false,
+						PreviousState:       existing.state,
+						ObservationSequence: observationSequenceOrderValue(existing.observationSequence),
 					}, nil
 				}
 			} else {
@@ -211,9 +221,10 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		return UpsertThreadResult{}, fmt.Errorf("upsert thread: %w", err)
 	}
 	return UpsertThreadResult{
-		ID:            id,
-		Applied:       true,
-		PreviousState: existing.state,
+		ID:                  id,
+		Applied:             true,
+		PreviousState:       existing.state,
+		ObservationSequence: observationSequenceOrderValue(storedObservationSequence),
 	}, nil
 }
 
