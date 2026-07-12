@@ -80,8 +80,9 @@ when its digest, source sync, schema, resolved publication profile, persisted
 generation timestamp, and coverage match, then cuts it over. Cutover requires
 the remote contract to advertise reader-authenticated `GET /sqlite`; Gitcrawl
 rechecks the exact publisher metadata and hashes the downloaded bound SQLite
-image before reporting success. The publish credential therefore needs both
-publisher and reader access for cutover.
+image before reporting success. Before any upload or ingest, Gitcrawl verifies
+the configured credential through the advertised `/v1/whoami` route and
+requires both publisher and reader roles, including for stage-only publication.
 Incomplete local enrichment fails before any remote mutation;
 `--allow-incomplete` is an explicit escape hatch, and `--observation-order`
 publishes durable fetch ordering after the remote operator fence is enabled.
