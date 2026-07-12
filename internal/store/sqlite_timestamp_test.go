@@ -7,14 +7,18 @@ import (
 )
 
 func TestTimestampOrderKeyPreservesRFC3339NanoPrecision(t *testing.T) {
-	if earlier, later := timestampOrderKey("2026-07-12T00:00:00.000000001Z"), timestampOrderKey("2026-07-12T00:00:00.000000002Z"); earlier >= later {
+	earlier, earlierOK := timestampOrderKey("2026-07-12T00:00:00.000000001Z")
+	later, laterOK := timestampOrderKey("2026-07-12T00:00:00.000000002Z")
+	if !earlierOK || !laterOK || earlier >= later {
 		t.Fatalf("timestamp keys out of order: %q >= %q", earlier, later)
 	}
-	if utc, offset := timestampOrderKey("2026-07-12T00:00:00Z"), timestampOrderKey("2026-07-12T02:00:00+02:00"); utc != offset {
+	utc, utcOK := timestampOrderKey("2026-07-12T00:00:00Z")
+	offset, offsetOK := timestampOrderKey("2026-07-12T02:00:00+02:00")
+	if !utcOK || !offsetOK || utc != offset {
 		t.Fatalf("equivalent instants have different keys: %q != %q", utc, offset)
 	}
-	if invalid, valid := timestampOrderKey("invalid"), timestampOrderKey("2026-07-12T00:00:00Z"); invalid >= valid {
-		t.Fatalf("invalid timestamp sorted after valid timestamp: %q >= %q", invalid, valid)
+	if _, ok := timestampOrderKey("invalid"); ok {
+		t.Fatal("invalid timestamp produced an ordering key")
 	}
 }
 

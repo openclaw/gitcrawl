@@ -21,11 +21,19 @@ func init() {
 			}
 			switch value := args[0].(type) {
 			case nil:
-				return timestampOrderKey(""), nil
+				return nil, nil
 			case string:
-				return timestampOrderKey(value), nil
+				key, ok := timestampOrderKey(value)
+				if !ok {
+					return nil, nil
+				}
+				return key, nil
 			case []byte:
-				return timestampOrderKey(string(value)), nil
+				key, ok := timestampOrderKey(string(value))
+				if !ok {
+					return nil, nil
+				}
+				return key, nil
 			default:
 				return nil, fmt.Errorf("gitcrawl_timestamp_key expects text, got %T", value)
 			}
@@ -33,11 +41,11 @@ func init() {
 	)
 }
 
-func timestampOrderKey(value string) string {
+func timestampOrderKey(value string) (string, bool) {
 	value = strings.TrimSpace(value)
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return "0:" + value
+		return "", false
 	}
-	return "1:" + parsed.UTC().Format(timestampOrderLayout)
+	return parsed.UTC().Format(timestampOrderLayout), true
 }
