@@ -313,7 +313,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					pullFiles,
 					pullCommits,
 					s.now().Format(time.RFC3339Nano),
-					observationSequence,
+					upsert.ObservationSequence,
 				)
 				if err != nil {
 					return err
