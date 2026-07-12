@@ -378,6 +378,32 @@ func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 		t.Fatalf("malform thread clock: %v", err)
 	}
 	assertConsumersStale("malformed thread clock")
+
+	if _, err := st.DB().ExecContext(
+		ctx,
+		`update threads set updated_at_gh = ? where id = ?`,
+		thread.UpdatedAtGitHub,
+		thread.ID,
+	); err != nil {
+		t.Fatalf("restore thread clock: %v", err)
+	}
+	if _, err := st.DB().ExecContext(
+		ctx,
+		`update thread_revisions set source_updated_at = 'malformed' where id = ?`,
+		enrichment.RevisionID,
+	); err != nil {
+		t.Fatalf("malform revision clock: %v", err)
+	}
+	assertConsumersStale("malformed revision clock")
+
+	if _, err := st.DB().ExecContext(
+		ctx,
+		`update thread_revisions set source_updated_at = '2026-07-11T23:59:59Z' where id = ?`,
+		enrichment.RevisionID,
+	); err != nil {
+		t.Fatalf("age revision clock below accepted evidence: %v", err)
+	}
+	assertConsumersStale("revision clock older than accepted evidence")
 }
 
 func TestRevisionConsumersRequireAcceptedEvidenceGenerationAfterNewerFetch(t *testing.T) {

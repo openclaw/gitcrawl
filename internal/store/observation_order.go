@@ -224,9 +224,14 @@ func (s *Store) threadRevisionFreshnessPredicate(
 				evidenceSource + ", ''))"
 			evidenceSourceUsable := evidenceSourceTimestamp +
 				" is not null or trim(coalesce(" + evidenceSource + ", '')) = ''"
-			sourceClockFresh = "(" + evidenceSourceUsable + ") and (" +
+			revisionCoversEvidence := revisionSourceTimestamp + " is null or " +
+				evidenceSourceTimestamp + " is null or " +
+				revisionSourceTimestamp + " >= " + evidenceSourceTimestamp
+			sourceClockFresh = "(" + revisionSourceUsable + ") and (" +
+				evidenceSourceUsable + ") and (" +
 				threadSourceUsable + ") and " +
-				observationSourceEquivalentSQL(evidenceSource, thread+"updated_at_gh")
+				observationSourceEquivalentSQL(evidenceSource, thread+"updated_at_gh") +
+				" and (" + revisionCoversEvidence + ")"
 		}
 		sequenceFresh := sequenceFloor + " > 0 and " +
 			revision + "observation_sequence > 0 and " +

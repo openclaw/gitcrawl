@@ -639,6 +639,18 @@ func TestThreadRevisionTransitionIndexDetection(t *testing.T) {
 	if !st.threadRevisionsHaveUniqueContentHash(ctx) {
 		t.Fatal("legacy unique content-hash index was not detected")
 	}
+	if st.threadRevisionsHaveCanonicalShape(ctx) {
+		t.Fatal("legacy unique content-hash index was accepted as canonical")
+	}
+	if err := st.ensureCanonicalObservationTables(ctx); err != nil {
+		t.Fatalf("rebuild canonical revision table: %v", err)
+	}
+	if st.threadRevisionsHaveUniqueContentHash(ctx) {
+		t.Fatal("canonical rebuild retained legacy unique content-hash index")
+	}
+	if !st.threadRevisionsHaveCanonicalShape(ctx) {
+		t.Fatal("rebuilt revision table is not canonical")
+	}
 }
 
 func TestSQLiteStoredSQLNormalizesSupportedDDL(t *testing.T) {

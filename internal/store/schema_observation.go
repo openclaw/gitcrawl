@@ -153,7 +153,8 @@ func (s *Store) threadsHaveCanonicalShape(ctx context.Context) bool {
 func (s *Store) threadRevisionsHaveCanonicalShape(ctx context.Context) bool {
 	return s.tableHasCanonicalSQL(ctx, "thread_revisions", canonicalThreadRevisionsCreateSQL) &&
 		s.indexHasCanonicalSQL(ctx, "idx_thread_revisions_thread_created", createRevisionCreatedIndexSQL) &&
-		s.indexHasCanonicalSQL(ctx, "idx_thread_revisions_thread_observation", createRevisionObservationIndexSQL)
+		s.indexHasCanonicalSQL(ctx, "idx_thread_revisions_thread_observation", createRevisionObservationIndexSQL) &&
+		!s.threadRevisionsHaveUniqueContentHash(ctx)
 }
 
 func (s *Store) threadObservationSequenceHasCurrentShape(ctx context.Context) bool {
