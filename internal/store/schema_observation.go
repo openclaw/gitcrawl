@@ -339,7 +339,11 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 			else ''
 		end`
 	}
-	observationOrder := observationOrderSQL(sourceExpression, "observation_sequence")
+	observationOrder := workflowObservationOrderSQL(
+		"source_updated_at",
+		"observation_sequence",
+		"has_unknown_source",
+	)
 	return s.withForeignKeysDisabled(ctx, "workflow observation reservation schema", func(tx *sql.Tx) error {
 		for _, statement := range []string{
 			`drop table if exists workflow_run_observation_reservations_migration_backup`,
@@ -359,24 +363,35 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 				insert into workflow_run_observation_reservations_migration_backup(
 					repo_id, head_sha, source_updated_at, observation_sequence
 				)
-				select repo_id, head_sha, source_updated_at, observation_sequence
-				from (
-					select repo_id, trim(head_sha) as head_sha,
-						`+sourceExpression+` as source_updated_at,
-						observation_sequence,
-						row_number() over (
-							partition by repo_id, trim(head_sha)
-							order by `+observationOrder+`, rowid desc
-						) as observation_rank
-					from workflow_run_observation_reservations
-					where typeof(repo_id) = 'integer'
-						and repo_id in (select id from repositories)
-						and typeof(head_sha) = 'text'
-						and trim(coalesce(head_sha, '')) <> ''
-						and typeof(observation_sequence) = 'integer'
-						and observation_sequence > 0
-				)
-				where observation_rank = 1
+					select repo_id, head_sha, source_updated_at, observation_sequence
+					from (
+						select repo_id, head_sha, source_updated_at,
+							observation_sequence,
+							row_number() over (
+								partition by repo_id, head_sha
+								order by `+observationOrder+`, migration_rowid desc
+							) as observation_rank
+						from (
+							select repo_id, trim(head_sha) as head_sha,
+								`+sourceExpression+` as source_updated_at,
+								observation_sequence,
+								rowid as migration_rowid,
+								max(case
+									when trim(coalesce(`+sourceExpression+`, '')) = '' then 1
+									else 0
+								end) over (
+									partition by repo_id, trim(head_sha)
+								) as has_unknown_source
+							from workflow_run_observation_reservations
+							where typeof(repo_id) = 'integer'
+								and repo_id in (select id from repositories)
+								and typeof(head_sha) = 'text'
+								and trim(coalesce(head_sha, '')) <> ''
+								and typeof(observation_sequence) = 'integer'
+								and observation_sequence > 0
+						)
+					)
+					where observation_rank = 1
 			`); err != nil {
 				return err
 			}

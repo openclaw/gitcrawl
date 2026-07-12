@@ -97,6 +97,22 @@ func observationOrderSQL(sourceExpression, sequenceExpression string) string {
 		" else '' end desc, " + sequenceExpression + " desc"
 }
 
+func workflowObservationOrderSQL(
+	sourceExpression string,
+	sequenceExpression string,
+	hasUnknownSourceExpression string,
+) string {
+	source := "trim(coalesce(" + sourceExpression + ", ''))"
+	key := "gitcrawl_timestamp_key(nullif(" + source + ", ''))"
+	hasUnknownSource := "(" + hasUnknownSourceExpression + " <> 0)"
+	return "case when " + hasUnknownSource + " then " + sequenceExpression + " end desc, " +
+		"case when " + hasUnknownSource + " and " + source + " = '' then 1 else 0 end desc, " +
+		"case when not " + hasUnknownSource + " and " + key + " is not null then 1 else 0 end desc, " +
+		"case when not " + hasUnknownSource + " then " + key + " end desc, " +
+		"case when not " + hasUnknownSource + " and " + key + " is null then " + source +
+		" else '' end desc, " + sequenceExpression + " desc"
+}
+
 func observationSourceEquivalentSQL(leftExpression, rightExpression string) string {
 	left := "trim(coalesce(" + leftExpression + ", ''))"
 	right := "trim(coalesce(" + rightExpression + ", ''))"

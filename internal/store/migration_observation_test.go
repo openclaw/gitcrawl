@@ -325,16 +325,18 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 		insert into workflow_run_observation_reservations(
 			repo_id, head_sha, source_updated_at, observation_sequence
 		)
-			values
-				(?, 'malformed-shared-head', '2026-07-12T00:02:00Z', 13),
-				(?, 'malformed-shared-head', '2026-07-12T00:01:00Z', 19),
-				(?, 'malformed-shared-head', '2026-07-12T00:03:00Z', 'poison'),
-				(?, 'equivalent-head', '2026-07-12T00:02:00Z', 11),
-				(?, 'equivalent-head', '2026-07-12T02:02:00+02:00', 15);
-			pragma user_version = 10;
-		`,
+				values
+					(?, 'malformed-shared-head', '2026-07-12T00:02:00Z', 13),
+					(?, 'malformed-shared-head', '2026-07-12T00:01:00Z', 19),
+					(?, 'malformed-shared-head', '2026-07-12T00:03:00Z', 'poison'),
+					(?, 'equivalent-head', '2026-07-12T00:02:00Z', 11),
+					(?, 'equivalent-head', '2026-07-12T02:02:00+02:00', 15),
+					(?, 'unknown-source-head', '2026-07-12T00:00:31Z', 31),
+					(?, 'unknown-source-head', '', 37);
+				pragma user_version = 10;
+			`,
 		threadID, threadID, threadID, threadID, threadID,
-		repoID, repoID, repoID, repoID, repoID,
+		repoID, repoID, repoID, repoID, repoID, repoID, repoID,
 	); err != nil {
 		_ = raw.Close()
 		t.Fatalf("prepare malformed reservation lookalikes: %v", err)
@@ -426,6 +428,40 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 			equivalentWorkflowSource,
 			equivalentWorkflowSequence,
 		)
+	}
+	var unknownSource string
+	var unknownSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'unknown-source-head'
+	`, repoID).Scan(&unknownSource, &unknownSequence); err != nil {
+		t.Fatalf("read unknown-source workflow reservation: %v", err)
+	}
+	if unknownSource != "" || unknownSequence != 37 {
+		t.Fatalf(
+			"unknown-source workflow reservation = %q/%d, want unknown source at 37",
+			unknownSource,
+			unknownSequence,
+		)
+	}
+	if applied, err := st.ReserveWorkflowRunObservation(
+		ctx,
+		repoID,
+		"unknown-source-head",
+		"2026-07-12T00:01:00Z",
+		36,
+	); err != nil || applied {
+		t.Fatalf("lower unknown-source workflow observation = %t, %v", applied, err)
+	}
+	if applied, err := st.ReserveWorkflowRunObservation(
+		ctx,
+		repoID,
+		"unknown-source-head",
+		"2026-07-12T00:01:00Z",
+		38,
+	); err != nil || !applied {
+		t.Fatalf("newer unknown-source workflow observation = %t, %v", applied, err)
 	}
 	for _, statement := range []string{
 		`update thread_child_observation_reservations
