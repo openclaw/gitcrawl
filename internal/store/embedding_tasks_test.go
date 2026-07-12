@@ -68,6 +68,27 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	if !strings.Contains(tasks[0].Text, "title: Download stalls") || !strings.Contains(tasks[0].Text, "key_summary:") {
 		t.Fatalf("unexpected embedding text: %q", tasks[0].Text)
 	}
+
+	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set updated_at_gh = '2026-04-27T00:00:00Z',
+			updated_at = '2026-04-27T00:00:00Z'
+		where id = ?
+	`, threadID); err != nil {
+		t.Fatalf("advance thread without revision hydration: %v", err)
+	}
+	tasks, err = st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID,
+		Basis:  "llm_key_summary",
+		Model:  "text-embedding-3-large",
+		Force:  true,
+	})
+	if err != nil {
+		t.Fatalf("stale revision tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("stale revision summary was embedded: %+v", tasks)
+	}
 }
 
 func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {

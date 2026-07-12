@@ -94,6 +94,47 @@ func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 	if len(tasks) != 0 {
 		t.Fatalf("current summary was selected again: %+v", tasks)
 	}
+	olderThread := Thread{
+		RepoID:          repoID,
+		GitHubID:        "2",
+		Number:          2,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "Older unsummarized issue",
+		Body:            "This task must survive the post-filter limit.",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/2",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "older-thread",
+		UpdatedAtGitHub: "2026-07-11T00:00:00Z",
+		UpdatedAt:       "2026-07-11T00:00:00Z",
+	}
+	olderThread.ID, err = st.UpsertThread(ctx, olderThread)
+	if err != nil {
+		t.Fatalf("older thread: %v", err)
+	}
+	if _, err := st.UpsertDocument(ctx, Document{
+		ThreadID:   olderThread.ID,
+		Title:      olderThread.Title,
+		Body:       olderThread.Body,
+		RawText:    olderThread.Title + "\n\n" + olderThread.Body,
+		DedupeText: olderThread.Title + " " + olderThread.Body,
+		UpdatedAt:  olderThread.UpdatedAt,
+	}); err != nil {
+		t.Fatalf("older document: %v", err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: olderThread}, "2026-07-11T00:00:00Z"); err != nil {
+		t.Fatalf("older enrichment: %v", err)
+	}
+	options.Limit = 1
+	tasks, err = st.ListSummaryTasks(ctx, options)
+	if err != nil {
+		t.Fatalf("list limited tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Number != olderThread.Number {
+		t.Fatalf("post-filter limited tasks = %+v", tasks)
+	}
 	options.Force = true
 	tasks, err = st.ListSummaryTasks(ctx, options)
 	if err != nil {
@@ -101,6 +142,20 @@ func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 	}
 	if len(tasks) != 1 {
 		t.Fatalf("forced tasks = %+v", tasks)
+	}
+
+	thread.UpdatedAtGitHub = "2026-07-13T00:00:00Z"
+	thread.UpdatedAt = "2026-07-13T00:00:00Z"
+	if _, err := st.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("update thread without hydration: %v", err)
+	}
+	options.Number = thread.Number
+	tasks, err = st.ListSummaryTasks(ctx, options)
+	if err != nil {
+		t.Fatalf("list stale revision tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("stale revision paired with current document: %+v", tasks)
 	}
 }
 

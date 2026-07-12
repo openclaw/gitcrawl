@@ -591,7 +591,10 @@ func (s *Syncer) fetchCommentRows(ctx context.Context, options Options, threadKi
 }
 
 func persistComments(ctx context.Context, st *store.Store, thread store.Thread, rows []commentRow) ([]store.Comment, error) {
-	var comments []store.Comment
+	if err := st.DeleteCommentsForThread(ctx, thread.ID); err != nil {
+		return nil, err
+	}
+	comments := make([]store.Comment, 0, len(rows))
 	for _, row := range rows {
 		comment := mapComment(thread.ID, row.kind, row.raw)
 		if comment.Body == "" && row.kind != "pull_review" {

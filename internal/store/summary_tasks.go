@@ -63,10 +63,6 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 	if options.Number > 0 {
 		number = options.Number
 	}
-	limit := options.Limit
-	if limit <= 0 {
-		limit = -1
-	}
 	rows, err := s.q().QueryContext(ctx, `
 		with latest_revisions as (
 			select tr.*
@@ -93,9 +89,10 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 		where t.repo_id = ?
 			and (? != 0 or (t.state = 'open' and t.closed_at_local is null))
 			and (? is null or t.number = ?)
+			and julianday(coalesce(nullif(lr.source_updated_at, ''), lr.created_at)) >=
+				julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
-		limit ?
-	`, summaryKind, promptVersion, provider, model, options.RepoID, boolInt(options.IncludeClosed), number, number, limit)
+	`, summaryKind, promptVersion, provider, model, options.RepoID, boolInt(options.IncludeClosed), number, number)
 	if err != nil {
 		return nil, fmt.Errorf("list summary tasks: %w", err)
 	}
@@ -134,6 +131,9 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			continue
 		}
 		tasks = append(tasks, task)
+		if options.Limit > 0 && len(tasks) >= options.Limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate summary tasks: %w", err)

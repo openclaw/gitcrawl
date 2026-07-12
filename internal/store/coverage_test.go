@@ -114,10 +114,11 @@ func TestEmbeddingTaskBasisBranches(t *testing.T) {
 	}
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := st.DB().ExecContext(ctx, `
 		insert into thread_revisions(thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(?, '2026-04-30T00:00:00Z', 'content', 'title', 'body', 'labels', '2026-04-30T00:00:00Z')
-	`, threadIDs[0]); err != nil {
+		values(?, ?, 'content', 'title', 'body', 'labels', ?)
+	`, threadIDs[0], now, now); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
 	var revisionID int64
@@ -236,6 +237,13 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	}
 	if schema != "gitcrawl-portable-sync-v2" || !strings.Contains(includes, "comments") || strings.Contains(excluded, "comments") {
 		t.Fatalf("portable metadata schema=%q includes=%q excluded=%q", schema, includes, excluded)
+	}
+	var version int
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("portable user_version: %v", err)
+	}
+	if version != portableSchemaVersion {
+		t.Fatalf("portable user_version = %d, want compatibility version %d", version, portableSchemaVersion)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)

@@ -4335,15 +4335,16 @@ type clusterRepositoryResult struct {
 }
 
 type clusterVectorCoverage struct {
-	Supported bool `json:"supported"`
-	Eligible  int  `json:"eligible"`
-	Covered   int  `json:"covered"`
-	Fresh     int  `json:"fresh"`
-	Processed int  `json:"processed"`
-	Missing   int  `json:"missing"`
-	Stale     int  `json:"stale"`
-	Partial   bool `json:"partial"`
-	Complete  bool `json:"complete"`
+	Supported    bool `json:"supported"`
+	Eligible     int  `json:"eligible"`
+	Covered      int  `json:"covered"`
+	Fresh        int  `json:"fresh"`
+	Processed    int  `json:"processed"`
+	Missing      int  `json:"missing"`
+	MissingInput int  `json:"missing_input"`
+	Stale        int  `json:"stale"`
+	Partial      bool `json:"partial"`
+	Complete     bool `json:"complete"`
 }
 
 func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query store.ThreadVectorQuery, storedVectors []store.ThreadVector) (clusterVectorCoverage, []store.ThreadVector, error) {
@@ -4375,6 +4376,7 @@ func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query s
 	for _, task := range tasks {
 		hashByThread[task.ThreadID] = task.ContentHash
 	}
+	coverage.MissingInput = max(0, coverage.Eligible-len(hashByThread))
 	fresh := make([]store.ThreadVector, 0, len(storedVectors))
 	for _, vector := range storedVectors {
 		if hashByThread[vector.ThreadID] == vector.ContentHash && vector.ContentHash != "" {
@@ -4386,7 +4388,7 @@ func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query s
 	coverage.Fresh = len(fresh)
 	coverage.Processed = len(fresh)
 	coverage.Missing = max(0, coverage.Eligible-coverage.Covered)
-	coverage.Complete = coverage.Fresh == coverage.Eligible && coverage.Missing == 0 && coverage.Stale == 0
+	coverage.Complete = coverage.Fresh == coverage.Eligible && coverage.Missing == 0 && coverage.MissingInput == 0 && coverage.Stale == 0
 	return coverage, fresh, nil
 }
 
@@ -4411,16 +4413,17 @@ func clusterVectorCoverageError(owner, repoName string, query store.ThreadVector
 	recovery := fmt.Sprintf("run `%s` and retry", cmd)
 	if !coverage.Supported {
 		recovery = fmt.Sprintf("populate exact vectors for model %q basis %q and retry", query.Model, query.Basis)
-	} else if query.Basis == "llm_key_summary" && coverage.Missing > 0 {
+	} else if query.Basis == "llm_key_summary" && coverage.MissingInput > 0 {
 		recovery = "populate missing key summaries, then " + recovery
 	}
-	return fmt.Errorf("%s for model %q basis %q (eligible=%d fresh=%d missing=%d stale=%d); %s",
+	return fmt.Errorf("%s for model %q basis %q (eligible=%d fresh=%d missing=%d missing_input=%d stale=%d); %s",
 		reason,
 		query.Model,
 		query.Basis,
 		coverage.Eligible,
 		coverage.Fresh,
 		coverage.Missing,
+		coverage.MissingInput,
 		coverage.Stale,
 		recovery,
 	)

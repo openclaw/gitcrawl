@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const portableSchemaVersion = 4
+
 type PortablePruneOptions struct {
 	BodyChars int
 	Vacuum    bool
@@ -222,6 +224,9 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 		`, key, value); err != nil {
 			return fmt.Errorf("write portable metadata %s: %w", key, err)
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, portableSchemaVersion)); err != nil {
+		return fmt.Errorf("set portable schema compatibility version: %w", err)
 	}
 	return nil
 }

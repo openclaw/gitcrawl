@@ -177,6 +177,8 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
         from thread_revisions latest
         where latest.thread_id = t.id
       )
+      and julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+        julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
       and tks.summary_kind = 'llm_key_summary'
     order by tks.created_at desc, tks.id desc
     limit 1

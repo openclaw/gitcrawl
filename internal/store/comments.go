@@ -40,6 +40,13 @@ func (s *Store) UpsertComment(ctx context.Context, comment Comment) (int64, erro
 	return id, nil
 }
 
+func (s *Store) DeleteCommentsForThread(ctx context.Context, threadID int64) error {
+	if _, err := s.q().ExecContext(ctx, `delete from comments where thread_id = ?`, threadID); err != nil {
+		return fmt.Errorf("delete comments for thread: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListComments(ctx context.Context, threadID int64) ([]Comment, error) {
 	if !s.tableExists(ctx, "comments") {
 		return nil, nil

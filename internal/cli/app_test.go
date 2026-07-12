@@ -5153,12 +5153,13 @@ func TestClusterVectorCoverageRejectsMissingSummaryInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed first thread: %v", err)
 	}
-	if _, err := st.UpsertThread(ctx, store.Thread{
+	secondID, err := st.UpsertThread(ctx, store.Thread{
 		RepoID: repoID, GitHubID: "512", Number: 512, Kind: "issue", State: "open",
 		Title: "No key summary", Body: "body",
 		HTMLURL: "https://github.com/openclaw/openclaw/issues/512", LabelsJSON: "[]", AssigneesJSON: "[]",
 		RawJSON: "{}", ContentHash: "hash-512", UpdatedAt: now,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed second thread: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
@@ -5192,6 +5193,12 @@ func TestClusterVectorCoverageRejectsMissingSummaryInputs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("upsert summary vector: %v", err)
 	}
+	if err := st.UpsertThreadVector(ctx, store.ThreadVector{
+		ThreadID: secondID, Basis: query.Basis, Model: query.Model, Dimensions: 2,
+		ContentHash: "stale-summary-vector", Vector: []float64{0, 1}, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert stale summary vector: %v", err)
+	}
 	vectors, err := st.ListThreadVectorsFiltered(ctx, query)
 	if err != nil {
 		t.Fatalf("list vectors: %v", err)
@@ -5200,8 +5207,12 @@ func TestClusterVectorCoverageRejectsMissingSummaryInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary coverage: %v", err)
 	}
-	if coverage.Complete || coverage.Eligible != 2 || coverage.Fresh != 1 || coverage.Missing != 1 || len(fresh) != 1 {
+	if coverage.Complete || coverage.Eligible != 2 || coverage.Fresh != 1 || coverage.Missing != 0 || coverage.MissingInput != 1 || coverage.Stale != 1 || len(fresh) != 1 {
 		t.Fatalf("summary coverage = %+v fresh=%d", coverage, len(fresh))
+	}
+	err = clusterVectorCoverageError("openclaw", "openclaw", query, coverage, "vector coverage is incomplete")
+	if !strings.Contains(err.Error(), "populate missing key summaries") || !strings.Contains(err.Error(), "missing_input=1") {
+		t.Fatalf("summary recovery error = %v", err)
 	}
 }
 

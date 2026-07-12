@@ -17,6 +17,18 @@ import (
 
 type fakeGitHub struct{}
 
+type mutableCommentGitHub struct {
+	fakeGitHub
+	empty bool
+}
+
+func (f *mutableCommentGitHub) ListIssueComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	if f.empty {
+		return []map[string]any{}, nil
+	}
+	return f.fakeGitHub.ListIssueComments(ctx, owner, repo, number, reporter)
+}
+
 func (fakeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.Reporter) (map[string]any, error) {
 	return map[string]any{"id": 123}, nil
 }
@@ -587,6 +599,41 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		coverage.Rows[0].Enrichment.Fingerprints.Stale != 2 {
 		t.Fatalf("metadata-only enrichment coverage = %+v", coverage)
 	}
+}
+
+func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &mutableCommentGitHub{}
+	s := New(client, st)
+	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
+	options := Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{7}, IncludeComments: true}
+	if _, err := s.Sync(ctx, options); err != nil {
+		t.Fatalf("initial comment sync: %v", err)
+	}
+	assertDocumentFTSCount(t, st, "same", 1)
+
+	client.empty = true
+	stats, err := s.Sync(ctx, options)
+	if err != nil {
+		t.Fatalf("empty comment sync: %v", err)
+	}
+	if stats.CommentsSynced != 0 || stats.RevisionsCreated != 1 {
+		t.Fatalf("empty comment sync stats = %#v", stats)
+	}
+	assertTableRowCount(t, st, "comments", 0)
+	assertDocumentFTSCount(t, st, "same", 0)
+
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{7}}); err != nil {
+		t.Fatalf("metadata sync after empty snapshot: %v", err)
+	}
+	assertTableRowCount(t, st, "comments", 0)
+	assertDocumentFTSCount(t, st, "same", 0)
 }
 
 func TestSyncHydratesPullReviewComments(t *testing.T) {
