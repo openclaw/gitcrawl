@@ -93,6 +93,10 @@ func buildGitcrawlCloudSnapshot(
 }
 
 func gitcrawlCloudManifest(archive string, snapshot gitcrawlCloudSnapshot) crawlremote.IngestManifest {
+	capabilities := slices.Clone(snapshot.Capabilities)
+	if !slices.Contains(capabilities, gitcrawlSnapshotStagingCapability) {
+		capabilities = append(capabilities, gitcrawlSnapshotStagingCapability)
+	}
 	return crawlremote.IngestManifest{
 		App:           "gitcrawl",
 		Archive:       archive,
@@ -104,7 +108,7 @@ func gitcrawlCloudManifest(archive string, snapshot gitcrawlCloudSnapshot) crawl
 		SourceSyncAt:  snapshot.SourceSyncAt,
 		SnapshotID:    snapshot.ID,
 		SourceSHA256:  snapshot.ID,
-		Capabilities:  snapshot.Capabilities,
+		Capabilities:  capabilities,
 	}
 }
 

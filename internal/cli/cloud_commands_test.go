@@ -38,6 +38,35 @@ func TestUniqueStringSupersetRejectsMissingOrDuplicateArguments(t *testing.T) {
 	}
 }
 
+func TestGitcrawlCloudManifestAlwaysOptsIntoStaging(t *testing.T) {
+	snapshot := gitcrawlCloudSnapshot{
+		ID:           strings.Repeat("a", 64),
+		Capabilities: []string{gitcrawlObservationOrderCapability},
+	}
+
+	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__gitcrawl", snapshot)
+
+	if !slices.Equal(manifest.Capabilities, []string{
+		gitcrawlObservationOrderCapability,
+		gitcrawlSnapshotStagingCapability,
+	}) {
+		t.Fatalf("manifest capabilities = %v", manifest.Capabilities)
+	}
+	if !slices.Equal(snapshot.Capabilities, []string{gitcrawlObservationOrderCapability}) {
+		t.Fatalf("snapshot capabilities mutated = %v", snapshot.Capabilities)
+	}
+
+	manifest = gitcrawlCloudManifest("gitcrawl/openclaw__gitcrawl", gitcrawlCloudSnapshot{
+		ID: strings.Repeat("b", 64),
+		Capabilities: []string{
+			gitcrawlSnapshotStagingCapability,
+		},
+	})
+	if !slices.Equal(manifest.Capabilities, []string{gitcrawlSnapshotStagingCapability}) {
+		t.Fatalf("staging capability duplicated = %v", manifest.Capabilities)
+	}
+}
+
 func TestRequireGitcrawlCloudPublishRolesAcceptsAdmin(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v1/whoami" {
@@ -359,7 +388,7 @@ func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 		}},
 	}
 	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__gitcrawl", snapshot)
-	capabilities := gitcrawlCloudPublicationCapabilities(snapshot.Capabilities)
+	capabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
 	status := crawlremote.Status{
 		App:                manifest.App,
 		Archive:            manifest.Archive,
@@ -422,7 +451,7 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
 	}
 	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__openclaw", snapshot)
-	publicationCapabilities := gitcrawlCloudPublicationCapabilities(snapshot.Capabilities)
+	publicationCapabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
 
 	for _, test := range []struct {
 		name       string

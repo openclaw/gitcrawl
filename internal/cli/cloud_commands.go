@@ -145,7 +145,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		return err
 	}
 	manifest := gitcrawlCloudManifest(archiveID, snapshot)
-	publicationCapabilities := gitcrawlCloudPublicationCapabilities(snapshot.Capabilities)
+	publicationCapabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
 	counts := gitcrawlCloudDatasetCounts(snapshot)
 	if err := requireGitcrawlSnapshotPublishContract(
 		ctx,
@@ -284,7 +284,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		"source_sha256":         snapshot.ID,
 		"source_sync_at":        snapshot.SourceSyncAt,
 		"dataset_generated_at":  snapshot.DatasetGeneratedAt,
-		"capabilities":          snapshot.Capabilities,
+		"capabilities":          manifest.Capabilities,
 		"datasets":              counts,
 		"hydration":             snapshot.Hydration,
 		"already_staged":        alreadyStaged,
