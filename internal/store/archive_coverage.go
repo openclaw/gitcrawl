@@ -321,7 +321,7 @@ func (s *Store) archiveLatestSuccessfulHydrationRunAt(ctx context.Context, repoI
 		  and status in ('success', 'completed')
 		  and case
 			when json_valid(stats_json) then
-			  coalesce(json_extract(stats_json, '$.metadata_only'), 1) = 0
+			  coalesce(json_extract(stats_json, '$.evidence_observed'), 0) > 0
 			  or coalesce(json_extract(stats_json, '$.revisions_created'), 0) > 0
 			  or coalesce(json_extract(stats_json, '$.fingerprints_upserted'), 0) > 0
 			else 0

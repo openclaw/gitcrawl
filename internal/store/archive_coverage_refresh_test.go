@@ -82,9 +82,20 @@ func TestArchiveCoverageFreshnessUsesSuccessfulRefreshRuns(t *testing.T) {
 		Status:     "success",
 		StartedAt:  "2026-07-13T00:00:00Z",
 		FinishedAt: "2026-07-13T00:01:00Z",
-		StatsJSON:  `{"metadata_only":false}`,
+		StatsJSON:  `{"metadata_only":false,"evidence_observed":1}`,
 	}); err != nil {
 		t.Fatalf("sync run: %v", err)
+	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID:     repoID,
+		Kind:       "sync",
+		Scope:      "open",
+		Status:     "success",
+		StartedAt:  "2026-07-13T00:02:00Z",
+		FinishedAt: "2026-07-13T00:03:00Z",
+		StatsJSON:  `{"metadata_only":false,"evidence_observed":0}`,
+	}); err != nil {
+		t.Fatalf("empty hydration sync run: %v", err)
 	}
 	if _, err := st.RecordRun(ctx, RunRecord{
 		RepoID:     repoID,
