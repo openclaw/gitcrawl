@@ -268,15 +268,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if _, err := st.UpsertDocument(ctx, documents.BuildWithContext(thread, comments, pullFiles, pullCommits)); err != nil {
 				return err
 			}
-			enrichment, err := persistThreadEnrichment(ctx, st, thread, comments, pullFiles, pullCommits, s.now().Format(time.RFC3339Nano))
-			if err != nil {
-				return err
-			}
-			if enrichment.RevisionCreated {
-				attempt.RevisionsCreated++
-			}
-			if enrichment.FingerprintUpserted {
-				attempt.FingerprintsUpserted++
+			if hasFreshThreadEvidence(options, thread) {
+				enrichment, err := persistThreadEnrichment(ctx, st, thread, comments, pullFiles, pullCommits, s.now().Format(time.RFC3339Nano))
+				if err != nil {
+					return err
+				}
+				if enrichment.RevisionCreated {
+					attempt.RevisionsCreated++
+				}
+				if enrichment.FingerprintUpserted {
+					attempt.FingerprintsUpserted++
+				}
 			}
 			attempt.ThreadsSynced++
 			if thread.Kind == "pull_request" {
@@ -291,13 +293,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			)
 		}
 		if needsClosedOverlap {
-			closed, revisions, fingerprints, err := s.applyClosedOverlapRows(ctx, st, repoID, closedOverlapRows, options.Reporter)
+			closed, err := s.applyClosedOverlapRows(ctx, st, repoID, closedOverlapRows, options.Reporter)
 			if err != nil {
 				return err
 			}
 			attempt.ThreadsClosed = closed
-			attempt.RevisionsCreated += revisions
-			attempt.FingerprintsUpserted += fingerprints
 		}
 		attempt.FinishedAt = s.now().Format(time.RFC3339Nano)
 		runStats := stats
@@ -399,45 +399,26 @@ func (s *Syncer) fetchClosedOverlapRows(ctx context.Context, options Options, si
 	}, options.Reporter)
 }
 
-func (s *Syncer) applyClosedOverlapRows(ctx context.Context, st *store.Store, repoID int64, rows []map[string]any, reporter gh.Reporter) (int, int, int, error) {
+func (s *Syncer) applyClosedOverlapRows(ctx context.Context, st *store.Store, repoID int64, rows []map[string]any, reporter gh.Reporter) (int, error) {
 	closed := 0
-	revisions := 0
-	fingerprints := 0
 	for _, row := range rows {
 		thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
 		updated, err := st.MarkOpenThreadClosedFromGitHub(ctx, thread)
 		if err != nil {
-			return 0, 0, 0, err
+			return 0, err
 		}
 		if updated {
 			closed++
-			stored, err := st.ListThreadsFiltered(ctx, store.ThreadListOptions{
-				RepoID:        repoID,
-				IncludeClosed: true,
-				Numbers:       []int{thread.Number},
-				Limit:         1,
-			})
-			if err != nil {
-				return 0, 0, 0, err
-			}
-			if len(stored) == 1 {
-				result, err := persistThreadEnrichment(ctx, st, stored[0], nil, nil, nil, s.now().Format(time.RFC3339Nano))
-				if err != nil {
-					return 0, 0, 0, err
-				}
-				if result.RevisionCreated {
-					revisions++
-				}
-				if result.FingerprintUpserted {
-					fingerprints++
-				}
-			}
 		}
 	}
 	if closed > 0 {
 		reporter.Printf("[sync] closed overlap sweep matched %d stale open thread(s)", closed)
 	}
-	return closed, revisions, fingerprints, nil
+	return closed, nil
+}
+
+func hasFreshThreadEvidence(options Options, thread store.Thread) bool {
+	return options.IncludeComments && (thread.Kind != "pull_request" || options.IncludePRDetails)
 }
 
 func normalizeSince(value string, now time.Time) (string, error) {

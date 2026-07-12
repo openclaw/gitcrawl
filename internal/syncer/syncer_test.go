@@ -145,6 +145,22 @@ func (fakeGitHub) ListWorkflowRuns(ctx context.Context, owner, repo string, opti
 	return nil, nil
 }
 
+type mutableUpdatedGitHub struct {
+	fakeGitHub
+	updatedAt string
+}
+
+func (f *mutableUpdatedGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	rows, err := f.fakeGitHub.ListRepositoryIssues(ctx, owner, repo, options, reporter)
+	if err != nil || f.updatedAt == "" {
+		return rows, err
+	}
+	for _, row := range rows {
+		row["updated_at"] = f.updatedAt
+	}
+	return rows, nil
+}
+
 type sinceCaptureGitHub struct {
 	fakeGitHub
 	since string
@@ -404,10 +420,11 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
 	var progressLogs bytes.Buffer
 	stats, err := s.Sync(ctx, Options{
-		Owner:           "openclaw",
-		Repo:            "gitcrawl",
-		IncludeComments: true,
-		Logger:          testProgressLogger(&progressLogs),
+		Owner:            "openclaw",
+		Repo:             "gitcrawl",
+		IncludeComments:  true,
+		IncludePRDetails: true,
+		Logger:           testProgressLogger(&progressLogs),
 	})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
@@ -452,7 +469,7 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	if revisions != 2 || fingerprints != 2 {
 		t.Fatalf("revision/fingerprint counts = %d/%d", revisions, fingerprints)
 	}
-	secondStats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true})
+	secondStats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true, IncludePRDetails: true})
 	if err != nil {
 		t.Fatalf("repeat sync: %v", err)
 	}
@@ -499,7 +516,7 @@ func TestSyncRollsBackThreadRevisionWhenFingerprintFails(t *testing.T) {
 
 	s := New(fakeGitHub{}, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
-	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err == nil || !strings.Contains(err.Error(), "fingerprint rejected") {
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true, IncludePRDetails: true}); err == nil || !strings.Contains(err.Error(), "fingerprint rejected") {
 		t.Fatalf("sync error = %v", err)
 	}
 	for _, table := range []string{"repositories", "threads", "thread_revisions", "thread_fingerprints"} {
@@ -544,20 +561,31 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
-	s := New(fakeGitHub{}, st)
+	client := &mutableUpdatedGitHub{}
+	s := New(client, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
-	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true}); err != nil {
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true, IncludePRDetails: true}); err != nil {
 		t.Fatalf("sync with comments: %v", err)
 	}
 	assertDocumentFTSCount(t, st, "same", 1)
+	client.updatedAt = "2026-04-27T00:00:00Z"
 	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
 	if err != nil {
 		t.Fatalf("metadata sync: %v", err)
 	}
-	if !stats.MetadataOnly || stats.CommentsSynced != 0 {
+	if !stats.MetadataOnly || stats.CommentsSynced != 0 || stats.RevisionsCreated != 0 || stats.FingerprintsUpserted != 0 {
 		t.Fatalf("metadata stats = %#v", stats)
 	}
 	assertDocumentFTSCount(t, st, "same", 1)
+	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("archive coverage: %v", err)
+	}
+	if len(coverage.Rows) != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Stale != 2 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Stale != 2 {
+		t.Fatalf("metadata-only enrichment coverage = %+v", coverage)
+	}
 }
 
 func TestSyncHydratesPullReviewComments(t *testing.T) {
