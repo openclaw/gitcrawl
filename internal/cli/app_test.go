@@ -1099,6 +1099,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	var snapshotID string
 	var sqliteImage []byte
 	var publishedSnapshot *crawlremote.ArchiveSnapshot
+	var publisherStatusSnapshotIDs []string
 	mutationCounter := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
@@ -1216,6 +1217,10 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status") {
+			publisherStatusSnapshotIDs = append(
+				publisherStatusSnapshotIDs,
+				r.URL.Query().Get("snapshot_id"),
+			)
 			if publishedSnapshot == nil {
 				http.NotFound(w, r)
 				return
@@ -1381,6 +1386,15 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	}
 	if payload["sqlite_bundle"] == nil {
 		t.Fatalf("missing sqlite bundle output: %#v", payload)
+	}
+	for _, requestedSnapshotID := range publisherStatusSnapshotIDs {
+		if requestedSnapshotID != snapshotID {
+			t.Fatalf(
+				"publisher status requested snapshot %q, want %q",
+				requestedSnapshotID,
+				snapshotID,
+			)
+		}
 	}
 	privacy, ok := payload["sqlite_bundle_privacy"].(map[string]any)
 	if !ok || privacy["includes_private_messages"] != true {
@@ -1749,6 +1763,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	uploadRequests := 0
 	ingestRequests := 0
 	publisherStatusRequests := 0
+	var publisherStatusSnapshotIDs []string
 	readerStatusRequests := 0
 	sqliteReadRequests := 0
 	cutovers := 0
@@ -1829,16 +1844,32 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status") {
 			publisherStatusRequests++
+			requestedSnapshotID := r.URL.Query().Get("snapshot_id")
+			publisherStatusSnapshotIDs = append(
+				publisherStatusSnapshotIDs,
+				requestedSnapshotID,
+			)
+			if stagedSnapshot == nil {
+				http.NotFound(w, r)
+				return
+			}
+			statusSnapshot := stagedSnapshot
+			if requestedSnapshotID == "" {
+				concurrent := *stagedSnapshot
+				concurrent.ID = strings.Repeat("c", 64)
+				concurrent.SourceSHA256 = concurrent.ID
+				statusSnapshot = &concurrent
+			}
 			activeSnapshotID := ""
-			if stagedSnapshot != nil {
-				activeSnapshotID = stagedSnapshot.ID
+			if statusSnapshot != nil {
+				activeSnapshotID = statusSnapshot.ID
 			}
 			_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
 				App:              "gitcrawl",
 				Archive:          "gitcrawl/openclaw__openclaw",
 				ActiveSnapshotID: activeSnapshotID,
-				CoverageComplete: stagedSnapshot != nil,
-				Snapshot:         stagedSnapshot,
+				CoverageComplete: statusSnapshot != nil,
+				Snapshot:         statusSnapshot,
 			})
 			return
 		}
@@ -2094,6 +2125,15 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	}
 	if publisherStatusRequests != 7 {
 		t.Fatalf("publisher status requests = %d, want 7", publisherStatusRequests)
+	}
+	for _, requestedSnapshotID := range publisherStatusSnapshotIDs {
+		if requestedSnapshotID != snapshotID {
+			t.Fatalf(
+				"publisher status requested snapshot %q, want %q",
+				requestedSnapshotID,
+				snapshotID,
+			)
+		}
 	}
 	if readerStatusRequests != 3 {
 		t.Fatalf("reader status requests = %d, want 3 serving-state checks", readerStatusRequests)

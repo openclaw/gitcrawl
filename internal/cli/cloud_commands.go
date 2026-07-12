@@ -168,7 +168,12 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	}
 
 	alreadyStaged := false
-	status, statusErr := client.PublishStatus(ctx, "gitcrawl", archiveID)
+	status, statusErr := client.PublishStatusForSnapshot(
+		ctx,
+		"gitcrawl",
+		archiveID,
+		snapshot.ID,
+	)
 	if statusErr == nil {
 		alreadyStaged = gitcrawlPublisherStatusMatches(
 			status,
@@ -1080,7 +1085,12 @@ func verifyGitcrawlSnapshotPublication(
 	publicationCapabilities []string,
 	sourceSize int64,
 ) error {
-	status, err := client.PublishStatus(ctx, "gitcrawl", archive)
+	status, err := client.PublishStatusForSnapshot(
+		ctx,
+		"gitcrawl",
+		archive,
+		snapshot.ID,
+	)
 	if err != nil {
 		return fmt.Errorf("read post-cutover publisher status: %w", err)
 	}

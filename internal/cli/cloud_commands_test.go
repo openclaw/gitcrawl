@@ -476,6 +476,14 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status"):
+					if got := r.URL.Query().Get("snapshot_id"); got != snapshotID {
+						http.Error(
+							w,
+							fmt.Sprintf("snapshot_id = %q, want %q", got, snapshotID),
+							http.StatusBadRequest,
+						)
+						return
+					}
 					w.Header().Set("content-type", "application/json")
 					_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
 						App:              "gitcrawl",
