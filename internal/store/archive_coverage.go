@@ -739,16 +739,16 @@ func (s *Store) archivePRFileCoverage(
 		detailFresh := archiveCoverageTimestampAtOrAfter(detailFetchedAt, acceptedSource)
 		filesFresh := files == 0 ||
 			archiveCoverageTimestampAtOrAfter(oldestFileFetchedAt, acceptedSource)
-		fresh := detailFresh && filesFresh
+		reservationFresh := true
 		if hasReservation != 0 {
-			fresh = archiveObservationAtOrAfter(
+			reservationFresh = archiveObservationAtOrAfter(
 				reservationSourceUpdatedAt,
 				reservationSequence,
 				acceptedSource,
 				observationSequenceOrderValue(acceptedSequence),
 			)
 		}
-		if fresh {
+		if detailFresh && filesFresh && reservationFresh {
 			metric.Fresh++
 		}
 	}

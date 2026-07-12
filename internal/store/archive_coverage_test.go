@@ -315,20 +315,21 @@ func TestArchiveCoveragePRFilesRequireCurrentObservation(t *testing.T) {
 	); err != nil || !applied {
 		t.Fatalf("reserve current PR file observation = %t, %v", applied, err)
 	}
+	assertMetric(1, 0, 0, 1, false)
 	if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{
 		ThreadID:     thread.ID,
 		RepoID:       repoID,
 		Number:       thread.Number,
 		ChangedFiles: 1,
 		RawJSON:      "{}",
-		FetchedAt:    "2026-07-12T12:02:00Z",
-		UpdatedAt:    "2026-07-12T12:02:00Z",
+		FetchedAt:    "2026-07-12T12:04:00Z",
+		UpdatedAt:    "2026-07-12T12:04:00Z",
 	}, []PullRequestFile{{
 		ThreadID:  thread.ID,
 		Position:  0,
 		Path:      "README.md",
 		RawJSON:   "{}",
-		FetchedAt: "2026-07-12T12:02:00Z",
+		FetchedAt: "2026-07-12T12:04:00Z",
 	}}, nil, nil, nil, PullRequestHydrationFamilies{
 		Details: true,
 		Files:   true,
