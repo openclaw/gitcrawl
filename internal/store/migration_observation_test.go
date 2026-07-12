@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthyV10WritableReopenIsByteStable(t *testing.T) {
@@ -36,6 +38,65 @@ func TestHealthyV10WritableReopenIsByteStable(t *testing.T) {
 	after := snapshotMigrationDBFiles(t, dbPath)
 	if before != after {
 		t.Fatalf("healthy writable reopen changed database files:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestFreshSchemaDeclaresCanonicalObservationShapes(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open fresh schema database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply fresh schema: %v", err)
+	}
+
+	st := &Store{db: db}
+	checks := []struct {
+		name string
+		run  func(context.Context) bool
+	}{
+		{name: "threads", run: st.threadsHaveCanonicalShape},
+		{
+			name: "thread revisions",
+			run: func(ctx context.Context) bool {
+				return st.tableHasCanonicalSQL(
+					ctx,
+					"thread_revisions",
+					canonicalThreadRevisionsCreateSQL,
+				)
+			},
+		},
+		{name: "thread observation allocator", run: st.threadObservationSequenceHasCurrentShape},
+		{name: "thread child reservations", run: st.threadChildObservationReservationsHaveCurrentShape},
+		{name: "workflow reservations", run: st.workflowRunObservationReservationsHaveCurrentShape},
+	}
+	for _, check := range checks {
+		if !check.run(ctx) {
+			t.Fatalf("fresh %s schema is not canonical", check.name)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+		t.Fatalf("disable foreign keys for family constraint proof: %v", err)
+	}
+	for _, family := range threadChildObservationFamilies {
+		if _, err := db.ExecContext(ctx, `
+			insert into thread_child_observation_reservations(
+				thread_id, family, observation_sequence
+			)
+			values(1, ?, 1)
+		`, family); err != nil {
+			t.Fatalf("canonical schema rejected family %q: %v", family, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+		insert into thread_child_observation_reservations(
+			thread_id, family, observation_sequence
+		)
+		values(1, 'unsupported', 1)
+	`); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("unsupported canonical family error = %v", err)
 	}
 }
 
@@ -178,9 +239,10 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 		insert into thread_child_observation_reservations(
 			thread_id, family, observation_sequence
 		)
-		values
-			(?, 'comments', 7),
-			(?, 'comments', 17);
+			values
+				(?, 'comments', 7),
+				(?, 'comments', 17),
+				(?, 'comments', 'poison');
 
 		drop table workflow_run_observation_reservations;
 		create table workflow_run_observation_reservations (
@@ -191,11 +253,12 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 		insert into workflow_run_observation_reservations(
 			repo_id, head_sha, observation_sequence
 		)
-		values
-			(?, 'malformed-shared-head', 13),
-			(?, 'malformed-shared-head', 19);
-		pragma user_version = 10;
-	`, threadID, threadID, repoID, repoID); err != nil {
+			values
+				(?, 'malformed-shared-head', 13),
+				(?, 'malformed-shared-head', 19),
+				(?, 'malformed-shared-head', 'poison');
+			pragma user_version = 10;
+		`, threadID, threadID, threadID, repoID, repoID, repoID); err != nil {
 		_ = raw.Close()
 		t.Fatalf("prepare malformed reservation lookalikes: %v", err)
 	}
@@ -244,6 +307,515 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 	}
 	if workflowSequence != 19 {
 		t.Fatalf("rebuilt workflow reservation = %d, want 19", workflowSequence)
+	}
+	for _, statement := range []string{
+		`update thread_child_observation_reservations
+		 set observation_sequence = 'poison'
+		 where thread_id = ? and family = 'comments'`,
+		`update workflow_run_observation_reservations
+		 set observation_sequence = 'poison'
+		 where repo_id = ? and head_sha = 'malformed-shared-head'`,
+	} {
+		var arg any = threadID
+		if strings.Contains(statement, "workflow_run") {
+			arg = repoID
+		}
+		if _, err := st.DB().ExecContext(ctx, statement, arg); err == nil ||
+			!strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("poisoned canonical reservation insert error = %v", err)
+		}
+	}
+}
+
+func TestMigrationRebuildsMalformedAllocatorAndConvergenceLookalikes(t *testing.T) {
+	ctx := context.Background()
+	dbPath, _, _ := seedMigrationPullRequest(t, "malformed-allocator-head", 11)
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("converge seeded store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close converged store: %v", err)
+	}
+
+	raw := openRawMigrationDB(t, dbPath)
+	if _, err := raw.ExecContext(ctx, `
+		drop table observation_schema_convergence;
+		create table observation_schema_convergence (
+			id integer,
+			checked_observation_sequence integer
+		);
+		insert into observation_schema_convergence(id, checked_observation_sequence)
+		values(1, 7), (1, 13), (1, 'poison');
+
+		drop table thread_observation_sequence;
+		create table thread_observation_sequence (
+			id integer,
+			value integer,
+			last_started_at text
+		);
+		insert into thread_observation_sequence(id, value, last_started_at)
+		values
+			(1, 13, '2026-07-12T00:00:00Z'),
+			(2, 17, '2026-07-12T01:00:00Z'),
+			(3, 'poison', 42);
+		pragma user_version = 10;
+	`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("prepare malformed allocator and convergence lookalikes: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close malformed allocator store: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	for _, migration := range []string{
+		migrationThreadObservationSequenceShape,
+		migrationObservationSchemaConvergence,
+	} {
+		if !containsString(diag.PendingMigrations, migration) {
+			t.Fatalf("malformed diagnostics = %#v, missing %q", diag, migration)
+		}
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("rebuild malformed allocator and convergence lookalikes: %v", err)
+	}
+	defer st.Close()
+	if !st.threadObservationSequenceHasCurrentShape(ctx) {
+		t.Fatal("allocator table was not rebuilt to canonical shape")
+	}
+	if !st.observationSchemaConvergenceHasCurrentShape(ctx) {
+		t.Fatal("convergence table and triggers were not rebuilt to canonical shape")
+	}
+	var allocator, checked int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select
+			thread_observation_sequence.value,
+			observation_schema_convergence.checked_observation_sequence
+		from thread_observation_sequence
+		join observation_schema_convergence using (id)
+		where thread_observation_sequence.id = 1
+	`).Scan(&allocator, &checked); err != nil {
+		t.Fatalf("read rebuilt allocator and convergence watermark: %v", err)
+	}
+	if allocator != 17 || checked != allocator {
+		t.Fatalf(
+			"rebuilt allocator/convergence = %d/%d, want 17/17",
+			allocator,
+			checked,
+		)
+	}
+	for _, statement := range []string{
+		`update thread_observation_sequence set value = 'poison' where id = 1`,
+		`update observation_schema_convergence
+		 set checked_observation_sequence = 'poison' where id = 1`,
+	} {
+		if _, err := st.DB().ExecContext(ctx, statement); err == nil ||
+			!strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("poisoned canonical allocator insert error = %v", err)
+		}
+	}
+}
+
+func TestMigrationRepairsMissingCanonicalConvergenceRow(t *testing.T) {
+	ctx := context.Background()
+	dbPath, _, _ := seedMigrationPullRequest(t, "missing-convergence-row-head", 11)
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("converge seeded store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close converged store: %v", err)
+	}
+
+	raw := openRawMigrationDB(t, dbPath)
+	if _, err := raw.ExecContext(ctx, `
+		delete from observation_schema_convergence where id = 1;
+		pragma user_version = 10;
+	`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("remove canonical convergence row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close missing convergence row store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("repair missing canonical convergence row: %v", err)
+	}
+	defer st.Close()
+	var allocator, checked int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select
+			thread_observation_sequence.value,
+			observation_schema_convergence.checked_observation_sequence
+		from thread_observation_sequence
+		join observation_schema_convergence using (id)
+		where thread_observation_sequence.id = 1
+	`).Scan(&allocator, &checked); err != nil {
+		t.Fatalf("read repaired convergence row: %v", err)
+	}
+	if checked != allocator {
+		t.Fatalf("repaired convergence watermark = %d, want allocator %d", checked, allocator)
+	}
+}
+
+func TestThreadRevisionTransitionIndexDetection(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open fresh store: %v", err)
+	}
+	defer st.Close()
+
+	if st.threadRevisionsHaveUniqueContentHash(ctx) {
+		t.Fatal("fresh schema unexpectedly has the legacy unique content-hash index")
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		create unique index legacy_thread_revision_content
+		on thread_revisions(thread_id, content_hash)
+	`); err != nil {
+		t.Fatalf("create legacy transition index: %v", err)
+	}
+	if !st.threadRevisionsHaveUniqueContentHash(ctx) {
+		t.Fatal("legacy unique content-hash index was not detected")
+	}
+}
+
+func TestSQLiteStoredSQLNormalizesSupportedDDL(t *testing.T) {
+	tests := map[string]string{
+		"create table sample(id integer)":                                             "CREATE TABLE sample(id integer)",
+		"create index if not exists idx on sample(id)":                                "CREATE INDEX idx on sample(id)",
+		"create index idx on sample(id)":                                              "CREATE INDEX idx on sample(id)",
+		"create trigger if not exists trg after insert on sample begin select 1; end": "CREATE TRIGGER trg after insert on sample begin select 1; end",
+		"create trigger trg after insert on sample begin select 1; end":               "CREATE TRIGGER trg after insert on sample begin select 1; end",
+		"CREATE VIEW sample_view AS SELECT 1":                                         "CREATE VIEW sample_view AS SELECT 1",
+	}
+	for input, want := range tests {
+		t.Run(input, func(t *testing.T) {
+			if got := sqliteStoredSQL(input); got != want {
+				t.Fatalf("sqliteStoredSQL(%q) = %q, want %q", input, got, want)
+			}
+		})
+	}
+}
+
+func TestSchemaNextStepsCoversDiagnosticStates(t *testing.T) {
+	tests := []struct {
+		state       string
+		pending     []string
+		wantContain string
+		wantCount   int
+	}{
+		{state: "missing", wantContain: "gitcrawl init", wantCount: 1},
+		{state: "newer", wantContain: "Upgrade", wantCount: 1},
+		{
+			state:       "pending_migration",
+			pending:     []string{"allocator", "convergence"},
+			wantContain: "allocator, convergence",
+			wantCount:   2,
+		},
+		{state: "error", wantContain: "SQLite file health", wantCount: 1},
+		{state: "current", wantCount: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.state, func(t *testing.T) {
+			got := schemaNextSteps(SchemaDiagnostics{
+				State:             test.state,
+				PendingMigrations: test.pending,
+			})
+			if len(got) != test.wantCount {
+				t.Fatalf("schemaNextSteps(%q) = %#v, want %d entries", test.state, got, test.wantCount)
+			}
+			if test.wantContain != "" && !strings.Contains(strings.Join(got, "\n"), test.wantContain) {
+				t.Fatalf("schemaNextSteps(%q) = %#v, missing %q", test.state, got, test.wantContain)
+			}
+		})
+	}
+}
+
+func TestInspectSchemaClassifiesBoundaryStates(t *testing.T) {
+	ctx := context.Background()
+	if diag := InspectSchema(ctx, ""); diag.State != "missing" ||
+		len(diag.NextSteps) != 1 ||
+		!strings.Contains(diag.NextSteps[0], "configured db_path") {
+		t.Fatalf("empty-path diagnostics = %#v", diag)
+	}
+	if diag := InspectSchema(ctx, string([]byte{0})); diag.State != "error" ||
+		diag.Error == "" ||
+		len(diag.NextSteps) != 1 {
+		t.Fatalf("invalid-path diagnostics = %#v", diag)
+	}
+
+	tempDir := t.TempDir()
+	missingPath := filepath.Join(tempDir, "missing.db")
+	if diag := InspectSchema(ctx, missingPath); diag.State != "missing" ||
+		diag.Exists ||
+		len(diag.NextSteps) != 1 {
+		t.Fatalf("missing-file diagnostics = %#v", diag)
+	}
+
+	corruptPath := filepath.Join(tempDir, "corrupt.db")
+	if err := os.WriteFile(corruptPath, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatalf("write corrupt database fixture: %v", err)
+	}
+	if diag := InspectSchema(ctx, corruptPath); diag.State != "error" ||
+		!diag.Exists ||
+		diag.Error == "" ||
+		len(diag.NextSteps) != 1 {
+		t.Fatalf("corrupt-file diagnostics = %#v", diag)
+	}
+	if _, err := Open(ctx, corruptPath); err == nil {
+		t.Fatal("writable open unexpectedly accepted corrupt database")
+	}
+	if _, err := OpenReadOnly(ctx, corruptPath); err == nil {
+		t.Fatal("read-only open unexpectedly accepted corrupt database")
+	}
+
+	newerPath := filepath.Join(tempDir, "newer.db")
+	st, err := Open(ctx, newerPath)
+	if err != nil {
+		t.Fatalf("open newer-schema fixture: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 11`); err != nil {
+		_ = st.Close()
+		t.Fatalf("mark newer-schema fixture: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close newer-schema fixture: %v", err)
+	}
+	if _, err := st.schemaVersion(ctx); err == nil ||
+		!strings.Contains(err.Error(), "read schema version") {
+		t.Fatalf("closed-store schema version error = %v", err)
+	}
+	if err := st.withForeignKeysDisabled(ctx, "closed store", func(*sql.Tx) error {
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), "open closed store migration connection") {
+		t.Fatalf("closed-store migration error = %v", err)
+	}
+	if diag := InspectSchema(ctx, newerPath); diag.State != "newer" ||
+		!diag.Newer ||
+		diag.PendingMigration ||
+		len(diag.NextSteps) != 1 ||
+		!strings.Contains(diag.NextSteps[0], "Upgrade") {
+		t.Fatalf("newer-schema diagnostics = %#v", diag)
+	}
+	if _, err := OpenReadOnly(ctx, newerPath); err == nil ||
+		!strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("newer read-only open error = %v", err)
+	}
+	if _, err := Open(ctx, newerPath); err == nil ||
+		!strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("newer writable open error = %v", err)
+	}
+}
+
+func TestObservationConvergenceWatermarkStates(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open fresh store: %v", err)
+	}
+	defer st.Close()
+
+	current, err := st.observationSchemaConvergenceIsCurrent(ctx)
+	if err != nil || !current {
+		t.Fatalf("fresh convergence state = %v, %v; want current", current, err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		delete from observation_schema_convergence where id = 1
+	`); err != nil {
+		t.Fatalf("delete convergence watermark: %v", err)
+	}
+	current, err = st.observationSchemaConvergenceIsCurrent(ctx)
+	if err != nil || current {
+		t.Fatalf("missing convergence state = %v, %v; want not current", current, err)
+	}
+	if err := st.markObservationSchemaConverged(ctx); err != nil {
+		t.Fatalf("restore convergence watermark: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `drop table observation_schema_convergence`); err != nil {
+		t.Fatalf("drop convergence table: %v", err)
+	}
+	if _, err := st.observationSchemaConvergenceIsCurrent(ctx); err == nil ||
+		!strings.Contains(err.Error(), "read observation schema convergence") {
+		t.Fatalf("missing convergence table error = %v", err)
+	}
+}
+
+func TestForeignKeyDisabledMigrationRejectsFailuresAndViolations(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open fresh store: %v", err)
+	}
+	defer st.Close()
+
+	sentinel := errors.New("forced migration failure")
+	err = st.withForeignKeysDisabled(ctx, "forced callback", func(*sql.Tx) error {
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "migrate forced callback") {
+		t.Fatalf("callback failure = %v", err)
+	}
+
+	err = st.withForeignKeysDisabled(ctx, "foreign key proof", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			insert into thread_revisions(
+				id, thread_id, source_updated_at, content_hash, title_hash,
+				body_hash, labels_hash, raw_json_blob_id,
+				observation_sequence, created_at
+			)
+			values(999, 999, '', 'content', 'title', 'body', 'labels', null, 0, '')
+		`)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "introduced foreign key violations") {
+		t.Fatalf("foreign key violation result = %v", err)
+	}
+	var orphanCount int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*) from thread_revisions where id = 999
+	`).Scan(&orphanCount); err != nil {
+		t.Fatalf("read rolled-back foreign key proof row: %v", err)
+	}
+	if orphanCount != 0 {
+		t.Fatalf("foreign key proof committed %d orphan rows", orphanCount)
+	}
+	var foreignKeys int
+	if err := st.DB().QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeys); err != nil {
+		t.Fatalf("read restored foreign key mode: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("foreign key mode = %d, want enabled", foreignKeys)
+	}
+}
+
+func TestObservationMigrationHelpersPropagateSchemaErrors(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		dropTable string
+		run       func(*Store) error
+		want      string
+	}{
+		{
+			name:      "legacy portable columns",
+			dropTable: "repositories",
+			run:       func(st *Store) error { return st.ensureLegacyPortableColumns(ctx) },
+			want:      "no such table",
+		},
+		{
+			name:      "legacy revision columns",
+			dropTable: "thread_revisions",
+			run:       func(st *Store) error { return st.ensureLegacyPortableColumns(ctx) },
+			want:      "no such table",
+		},
+		{
+			name:      "legacy thread columns",
+			dropTable: "threads",
+			run:       func(st *Store) error { return st.ensureLegacyPortableColumns(ctx) },
+			want:      "no such table",
+		},
+		{
+			name:      "evidence sequence",
+			dropTable: "threads",
+			run:       func(st *Store) error { return st.ensureThreadEvidenceObservationSequence(ctx) },
+			want:      "backfill thread evidence observation sequence",
+		},
+		{
+			name:      "child reservations",
+			dropTable: "thread_child_observation_reservations",
+			run:       func(st *Store) error { return st.ensureThreadChildObservationReservations(ctx) },
+			want:      "backfill comment observation reservations",
+		},
+		{
+			name:      "workflow reservations",
+			dropTable: "workflow_run_observation_reservations",
+			run:       func(st *Store) error { return st.ensureWorkflowRunObservationReservations(ctx) },
+			want:      "backfill workflow run observation reservations",
+		},
+		{
+			name:      "allocator floor",
+			dropTable: "thread_observation_sequence",
+			run:       func(st *Store) error { return st.ensureThreadObservationSequenceFloor(ctx) },
+			want:      "reconcile thread observation sequence",
+		},
+		{
+			name:      "convergence watermark",
+			dropTable: "observation_schema_convergence",
+			run:       func(st *Store) error { return st.markObservationSchemaConverged(ctx) },
+			want:      "mark observation schema converged",
+		},
+		{
+			name:      "allocator inspection",
+			dropTable: "thread_observation_sequence",
+			run: func(st *Store) error {
+				_, _, err := st.threadObservationSequenceNeedsRepair(ctx)
+				return err
+			},
+			want: "inspect thread observation allocator row",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+			st, err := Open(ctx, dbPath)
+			if err != nil {
+				t.Fatalf("open fresh store: %v", err)
+			}
+			defer st.Close()
+			if _, err := st.DB().ExecContext(
+				ctx,
+				`drop table `+sqliteIdentifier(test.dropTable),
+			); err != nil {
+				t.Fatalf("drop %s: %v", test.dropTable, err)
+			}
+			err = test.run(st)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("%s error = %v, want %q", test.name, err, test.want)
+			}
+		})
+	}
+}
+
+func TestSQLiteBusyRetryStopsOnCanceledContext(t *testing.T) {
+	if IsTransientSQLiteBusy(nil) {
+		t.Fatal("nil error classified as SQLite busy")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	err := withSQLiteBusyRetry(ctx, []time.Duration{time.Hour}, func() error {
+		calls++
+		return errors.New("database is locked")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled retry error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("canceled retry calls = %d, want 1", calls)
+	}
+}
+
+func TestQSQLBuildsFallbackQueries(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open fresh store: %v", err)
+	}
+	defer st.Close()
+
+	fallbackQueries := (&Store{db: st.DB()}).qsql()
+	if fallbackQueries == nil {
+		t.Fatal("qsql fallback did not construct generated queries")
 	}
 }
 
