@@ -51,7 +51,7 @@ The defaults match ghcrawl's tuning so the output is comparable across tools:
 
 Every active vector-backed thread is represented in the result: singleton clusters use `kind = singleton_orphan`, multi-member clusters use `kind = duplicate_candidate`.
 
-Without `--limit`, clustering is fail-closed: it verifies the exact configured model/basis coverage and refuses to mutate durable clusters when vectors are missing or stale. It never falls back to vectors from another model or basis. `--limit` preserves the existing intentional partial-run convention, reports incomplete `vector_coverage` in JSON, excludes stale vectors, and does not retire clusters outside the processed subset.
+Without `--limit`, clustering is fail-closed: it verifies the exact configured model/basis coverage and refuses to mutate durable clusters when vectors are missing or stale. It never falls back to vectors from another model or basis. `--limit` preserves the existing intentional partial-run convention, reports `partial`, `processed`, and `complete: false` in JSON when it truncates fresh vectors, excludes stale vectors, and does not retire clusters outside the processed subset.
 
 ## List clusters
 

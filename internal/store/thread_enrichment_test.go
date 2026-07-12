@@ -182,3 +182,39 @@ func TestUpsertThreadRevisionAndFingerprintRollsBackTogether(t *testing.T) {
 		t.Fatalf("revision count = %d, want rollback", revisions)
 	}
 }
+
+func TestLatestTimestampComparesRFC3339Instants(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{
+			name:   "fractional second after whole second",
+			values: []string{"2026-07-12T12:00:00Z", "2026-07-12T12:00:00.500Z"},
+			want:   "2026-07-12T12:00:00.500Z",
+		},
+		{
+			name:   "input order does not change instant ordering",
+			values: []string{"2026-07-12T12:00:00.500Z", "2026-07-12T12:00:00Z"},
+			want:   "2026-07-12T12:00:00.500Z",
+		},
+		{
+			name:   "valid timestamp wins over malformed input",
+			values: []string{"zz-invalid", "2026-07-12T12:00:00Z"},
+			want:   "2026-07-12T12:00:00Z",
+		},
+		{
+			name:   "malformed inputs retain deterministic fallback",
+			values: []string{"aa-invalid", "zz-invalid"},
+			want:   "zz-invalid",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := latestTimestamp(test.values...); got != test.want {
+				t.Fatalf("latestTimestamp(%q) = %q, want %q", test.values, got, test.want)
+			}
+		})
+	}
+}

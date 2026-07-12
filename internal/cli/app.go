@@ -1116,8 +1116,14 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		return err
 	}
 	vectors = freshVectors
+	availableFresh := len(vectors)
 	if limit > 0 && len(vectors) > limit {
 		vectors = vectors[:limit]
+	}
+	coverage.Processed = len(vectors)
+	coverage.Partial = len(vectors) < availableFresh
+	if coverage.Partial {
+		coverage.Complete = false
 	}
 	retireMissing := minSize <= 1 && limit == 0 && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" && !*includeClosed && coverage.Complete
 	clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, clusterBuildOptions{
@@ -4331,15 +4337,18 @@ type clusterVectorCoverage struct {
 	Eligible  int  `json:"eligible"`
 	Covered   int  `json:"covered"`
 	Fresh     int  `json:"fresh"`
+	Processed int  `json:"processed"`
 	Missing   int  `json:"missing"`
 	Stale     int  `json:"stale"`
+	Partial   bool `json:"partial"`
 	Complete  bool `json:"complete"`
 }
 
 func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query store.ThreadVectorQuery, storedVectors []store.ThreadVector) (clusterVectorCoverage, []store.ThreadVector, error) {
 	coverage := clusterVectorCoverage{
-		Covered: len(storedVectors),
-		Fresh:   len(storedVectors),
+		Covered:   len(storedVectors),
+		Fresh:     len(storedVectors),
+		Processed: len(storedVectors),
 	}
 	if strings.TrimSpace(query.Model) == "" || strings.TrimSpace(query.Basis) == "" || !store.SupportsEmbeddingBasis(query.Basis) {
 		return coverage, storedVectors, nil
@@ -4373,6 +4382,7 @@ func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query s
 		coverage.Stale++
 	}
 	coverage.Fresh = len(fresh)
+	coverage.Processed = len(fresh)
 	coverage.Missing = max(0, coverage.Eligible-coverage.Covered)
 	coverage.Complete = coverage.Fresh == coverage.Eligible && coverage.Missing == 0 && coverage.Stale == 0
 	return coverage, fresh, nil

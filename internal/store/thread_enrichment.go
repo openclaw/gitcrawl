@@ -579,11 +579,29 @@ func firstNonEmptyString(values ...string) string {
 }
 
 func latestTimestamp(values ...string) string {
-	latest := ""
+	latestRaw := ""
+	var latest time.Time
+	fallback := ""
 	for _, value := range values {
-		if value > latest {
-			latest = value
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			if value > fallback {
+				fallback = value
+			}
+			continue
+		}
+		parsed = parsed.UTC()
+		if latestRaw == "" || parsed.After(latest) {
+			latest = parsed
+			latestRaw = value
 		}
 	}
-	return latest
+	if latestRaw != "" {
+		return latestRaw
+	}
+	return fallback
 }

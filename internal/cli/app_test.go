@@ -4867,6 +4867,11 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--limit", "2", "--json"}); err != nil {
 		t.Fatalf("limited cluster: %v", err)
 	}
+	if !strings.Contains(stdout.String(), `"processed": 2`) ||
+		!strings.Contains(stdout.String(), `"partial": true`) ||
+		!strings.Contains(stdout.String(), `"complete": false`) {
+		t.Fatalf("limited cluster coverage output = %q", stdout.String())
+	}
 	st, err = store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("reopen store after limited cluster: %v", err)
