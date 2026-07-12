@@ -39,8 +39,16 @@ type Thread struct {
 	CloseReasonLocal  string `json:"close_reason_local,omitempty"`
 }
 
-func (s *Store) UpsertThread(ctx context.Context, thread Thread) (int64, error) {
-	id, err := s.qsql().UpsertThread(ctx, storedb.UpsertThreadParams{
+type UpsertThreadOptions struct {
+	PreserveDraft bool
+}
+
+func (s *Store) UpsertThread(ctx context.Context, thread Thread, options ...UpsertThreadOptions) (int64, error) {
+	var preserveDraft bool
+	if len(options) > 0 {
+		preserveDraft = options[0].PreserveDraft
+	}
+	params := storedb.UpsertThreadParams{
 		RepoID:            thread.RepoID,
 		GithubID:          thread.GitHubID,
 		Number:            int64(thread.Number),
@@ -64,7 +72,16 @@ func (s *Store) UpsertThread(ctx context.Context, thread Thread) (int64, error) 
 		FirstPulledAt:     nullString(thread.FirstPulledAt),
 		LastPulledAt:      nullString(thread.LastPulledAt),
 		UpdatedAt:         thread.UpdatedAt,
-	})
+	}
+	var (
+		id  int64
+		err error
+	)
+	if preserveDraft {
+		id, err = s.qsql().UpsertThreadPreservingDraft(ctx, storedb.UpsertThreadPreservingDraftParams(params))
+	} else {
+		id, err = s.qsql().UpsertThread(ctx, params)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("upsert thread: %w", err)
 	}
@@ -97,7 +114,6 @@ func (s *Store) MarkOpenThreadClosedFromGitHub(ctx context.Context, thread Threa
 		AssigneesJson:     thread.AssigneesJSON,
 		RawJson:           thread.RawJSON,
 		ContentHash:       thread.ContentHash,
-		IsDraft:           int64(boolInt(thread.IsDraft)),
 		CreatedAtGh:       nullString(thread.CreatedAtGitHub),
 		UpdatedAtGh:       nullString(thread.UpdatedAtGitHub),
 		ClosedAtGh:        nullString(thread.ClosedAtGitHub),

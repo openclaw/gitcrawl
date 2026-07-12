@@ -228,7 +228,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if payload.hasPullDetails {
 				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
 			}
-			threadID, err := st.UpsertThread(ctx, thread)
+			threadID, err := st.UpsertThread(ctx, thread, store.UpsertThreadOptions{
+				PreserveDraft: thread.Kind == "pull_request" && !payload.hasPullDetails,
+			})
 			if err != nil {
 				return err
 			}

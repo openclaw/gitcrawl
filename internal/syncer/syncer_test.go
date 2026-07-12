@@ -605,6 +605,10 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true, IncludePRDetails: true}); err != nil {
 		t.Fatalf("sync with comments: %v", err)
 	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
 	assertDocumentFTSCount(t, st, "same", 1)
 	client.updatedAt = "2026-04-27T00:00:00Z"
 	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
@@ -613,6 +617,13 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 	}
 	if !stats.MetadataOnly || stats.CommentsSynced != 0 || stats.RevisionsCreated != 0 || stats.FingerprintsUpserted != 0 {
 		t.Fatalf("metadata stats = %#v", stats)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil {
+		t.Fatalf("threads after metadata sync: %v", err)
+	}
+	if len(threads) != 2 || !threads[1].IsDraft {
+		t.Fatalf("metadata sync erased known draft state: %+v", threads)
 	}
 	assertDocumentFTSCount(t, st, "same", 1)
 	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})

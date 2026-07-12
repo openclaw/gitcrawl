@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -73,10 +75,19 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 				group by thread_id
 			) latest on latest.id = tr.id
 		)
-		select t.id, lr.id, t.number, t.kind, t.title,
+		select t.id, lr.id, t.number, t.kind,
 			b.inline_text,
 			lr.content_hash,
-			coalesce(s.input_hash, '')
+			coalesce(s.input_hash, ''),
+			t.state,
+			t.title,
+			coalesce(t.body, ''),
+			t.labels_json,
+			t.assignees_json,
+			coalesce(t.author_login, ''),
+			coalesce(t.author_type, ''),
+			coalesce(t.author_association, ''),
+			t.is_draft
 		from threads t
 		join latest_revisions lr on lr.thread_id = t.id
 		join blobs b on b.id = lr.raw_json_blob_id
@@ -106,19 +117,38 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 	for rows.Next() {
 		var task SummaryTask
 		var existingInputHash string
+		var current summaryTaskCurrentThread
+		var isDraft int
 		if err := rows.Scan(
 			&task.ThreadID,
 			&task.RevisionID,
 			&task.Number,
 			&task.Kind,
-			&task.Title,
 			&task.Text,
 			&task.RevisionHash,
 			&existingInputHash,
+			&current.state,
+			&current.title,
+			&current.body,
+			&current.labelsJSON,
+			&current.assigneesJSON,
+			&current.authorLogin,
+			&current.authorType,
+			&current.authorAssociation,
+			&isDraft,
 		); err != nil {
 			return nil, fmt.Errorf("scan summary task: %w", err)
 		}
 		task.Text = strings.TrimSpace(task.Text)
+		current.isDraft = isDraft != 0
+		var canonical canonicalThreadEvidence
+		if StableHash(task.Text) != task.RevisionHash ||
+			json.Unmarshal([]byte(task.Text), &canonical) != nil ||
+			!summaryEvidenceMatchesCurrentThread(canonical, task.Kind, current) {
+			continue
+		}
+		task.Kind = canonical.Kind
+		task.Title = canonical.Title
 		if capStringByRunesAndBytes(task.Text, MaxSummaryTextRunes, MaxSummaryTextBytes) != task.Text {
 			continue
 		}
@@ -144,6 +174,32 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 		return nil, fmt.Errorf("iterate summary tasks: %w", err)
 	}
 	return tasks, nil
+}
+
+type summaryTaskCurrentThread struct {
+	state             string
+	title             string
+	body              string
+	labelsJSON        string
+	assigneesJSON     string
+	authorLogin       string
+	authorType        string
+	authorAssociation string
+	isDraft           bool
+}
+
+func summaryEvidenceMatchesCurrentThread(canonical canonicalThreadEvidence, kind string, current summaryTaskCurrentThread) bool {
+	return canonical.Version == "thread-review-evidence-v2" &&
+		canonical.Kind == kind &&
+		canonical.State == current.state &&
+		canonical.Title == current.title &&
+		canonical.Body == current.body &&
+		slices.Equal(canonical.Labels, canonicalNameList(current.labelsJSON, "name")) &&
+		slices.Equal(canonical.Assignees, canonicalNameList(current.assigneesJSON, "login")) &&
+		canonical.AuthorLogin == current.authorLogin &&
+		canonical.AuthorType == current.authorType &&
+		canonical.AuthorAssociation == current.authorAssociation &&
+		canonical.IsDraft == current.isDraft
 }
 
 func (s *Store) UpsertThreadKeySummary(ctx context.Context, summary ThreadKeySummary) error {

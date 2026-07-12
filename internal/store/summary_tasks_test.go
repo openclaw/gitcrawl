@@ -344,6 +344,55 @@ func TestSummaryTaskIncludesCanonicalPullRequestEvidence(t *testing.T) {
 		len(canonical.Checks) != 1 || len(canonical.WorkflowRuns) != 1 || len(canonical.ReviewThreads) != 1 {
 		t.Fatalf("canonical summary evidence = %+v", canonical)
 	}
+	if tasks[0].Title != canonical.Title || tasks[0].Kind != canonical.Kind {
+		t.Fatalf("summary header = %q/%q, canonical = %q/%q", tasks[0].Kind, tasks[0].Title, canonical.Kind, canonical.Title)
+	}
+}
+
+func TestListSummaryTasksFailsClosedOnSameTimestampThreadDivergence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T03:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "44", Number: 44, Kind: "pull_request", State: "open",
+		Title: "Original title", Body: "original body", IsDraft: true,
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/pull/44",
+		LabelsJSON: `[{"name":"bug"}]`, AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T03:00:00Z", UpdatedAt: "2026-07-12T03:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T03:00:00Z"); err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	thread.Title = "Edited in the same timestamp bucket"
+	thread.Body = "edited body"
+	thread.IsDraft = false
+	thread.LabelsJSON = `[{"name":"regression"}]`
+	if _, err := st.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("divergent thread: %v", err)
+	}
+	tasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: repoID, Provider: "openai", Model: "summary-test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1, Number: thread.Number, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("list summary tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("same-timestamp divergence must fail closed: %+v", tasks)
+	}
 }
 
 func TestListSummaryTasksFailsClosedOnOversizedRevisionEvidence(t *testing.T) {
