@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 const (
 	gitcrawlCloudBatchSize             = 250
 	gitcrawlCloudSQLiteBundleChunkSize = int64(64 * 1024 * 1024)
+
+	gitcrawlSnapshotAtomicCapability     = "gitcrawl.snapshot.atomic"
+	gitcrawlSnapshotProvenanceCapability = "gitcrawl.snapshot.provenance.v1"
+	sqliteBundleGzipUploadCapability     = "sqlite.bundle.gzip.upload"
 )
 
 func (a *App) runCloud(ctx context.Context, args []string) error {
@@ -43,7 +48,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	tokenEnv := fs.String("token-env", "", "remote token environment variable")
 	allowIncomplete := fs.Bool("allow-incomplete", false, "publish even when local enrichment coverage is incomplete")
 	observationOrder := fs.Bool("observation-order", false, "publish durable observation ordering when the remote fence is enabled")
-	cutover := fs.Bool("cutover", true, "cut over unpinned reads after activating the snapshot")
+	cutover := fs.Bool("cutover", false, "cut over unpinned reads after activating the snapshot")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"remote": true, "archive": true, "token-env": true})); err != nil {
 		return usageErr(err)
@@ -107,6 +112,9 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	}
 	manifest := gitcrawlCloudManifest(archiveID, snapshot)
 	counts := gitcrawlCloudDatasetCounts(snapshot)
+	if err := requireGitcrawlSnapshotPublishContract(ctx, client); err != nil {
+		return err
+	}
 	sqliteBundle, err := uploadSQLiteSnapshotArchive(
 		ctx,
 		client,
@@ -418,6 +426,39 @@ func remoteNotFound(err error) bool {
 	return errors.As(err, &remoteErr) && remoteErr.Status == http.StatusNotFound
 }
 
+func requireGitcrawlSnapshotPublishContract(
+	ctx context.Context,
+	client *crawlremote.Client,
+) error {
+	contract, err := client.Contract(ctx)
+	if err != nil {
+		return fmt.Errorf("read remote snapshot publish contract: %w", err)
+	}
+	if err := contract.Validate(); err != nil {
+		return fmt.Errorf("validate remote snapshot publish contract: %w", err)
+	}
+	var capabilities []string
+	for _, app := range contract.Apps {
+		if app.App == "gitcrawl" {
+			capabilities = app.Capabilities
+			break
+		}
+	}
+	for _, capability := range []string{
+		gitcrawlSnapshotAtomicCapability,
+		gitcrawlSnapshotProvenanceCapability,
+		sqliteBundleGzipUploadCapability,
+	} {
+		if !slices.Contains(capabilities, capability) {
+			return fmt.Errorf(
+				"remote does not advertise required snapshot publish capability %s",
+				capability,
+			)
+		}
+	}
+	return nil
+}
+
 func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {
 	return map[string]any{
 		"includes_private_messages": true,
@@ -485,11 +526,16 @@ func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
 		{table: "pull_request_commits", name: "raw_json"},
 		{table: "pull_request_checks", name: "raw_json"},
 		{table: "pull_request_review_threads", name: "raw_json"},
+		{table: "pull_request_review_threads", name: "comments_json"},
 		{table: "github_workflow_runs", name: "raw_json"},
 		{table: "sync_runs", name: "error_text"},
+		{table: "sync_runs", name: "stats_json"},
 		{table: "summary_runs", name: "error_text"},
+		{table: "summary_runs", name: "stats_json"},
 		{table: "embedding_runs", name: "error_text"},
+		{table: "embedding_runs", name: "stats_json"},
 		{table: "cluster_runs", name: "error_text"},
+		{table: "cluster_runs", name: "stats_json"},
 	} {
 		exists, err := sqliteColumnExists(ctx, db, column.table, column.name)
 		if err != nil {

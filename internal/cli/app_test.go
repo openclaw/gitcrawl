@@ -381,27 +381,56 @@ func TestCloudSQLiteSnapshotDropsLocalCodeCorpus(t *testing.T) {
 			1, ?, 1, '{"secret":"detail"}',
 			'2026-06-06T00:00:00Z', '2026-06-06T00:00:00Z'
 		);
-		insert into pull_request_files(
-			thread_id, position, path, patch, raw_json, fetched_at
-		) values(
-			1, 0, 'secret.go', '@@ private source', '{"secret":"file"}',
-			'2026-06-06T00:00:00Z'
-		);
-		insert into blobs(
-			sha256, media_type, compression, size_bytes, storage_kind, inline_text, created_at
-		) values(
+			insert into pull_request_files(
+				thread_id, position, path, patch, raw_json, fetched_at
+			) values(
+				1, 0, 'secret.go', '@@ private source', '{"secret":"file"}',
+				'2026-06-06T00:00:00Z'
+			);
+			insert into pull_request_review_threads(
+				thread_id, review_thread_id, path, comments_json, raw_json, fetched_at
+			) values(
+				1, 'review-thread-1', 'secret.go',
+				'[{"body":"review body","diffHunk":"@@ private review source"}]',
+				'{"secret":"review-thread"}', '2026-06-06T00:00:00Z'
+			);
+			insert into blobs(
+				sha256, media_type, compression, size_bytes, storage_kind, inline_text, created_at
+			) values(
 			'blob-hash', 'application/json', 'none', 6, 'inline', 'secret',
 			'2026-06-06T00:00:00Z'
 		);
-		insert into sync_runs(
-			repo_id, scope, status, started_at, finished_at, error_text
-		) values(
-			?, 'all', 'failed', '2026-06-06T00:00:00Z',
-			'2026-06-06T00:01:00Z', '/private/host/token'
-		);
-		create table portable_metadata(key text primary key, value text not null);
-		insert into portable_metadata(key, value) values('source_path', '/private/archive.db')
-	`, repoID, repoID, repoID); err != nil {
+			insert into sync_runs(
+				repo_id, scope, status, started_at, finished_at, stats_json, error_text
+			) values(
+				?, 'all', 'failed', '2026-06-06T00:00:00Z',
+				'2026-06-06T00:01:00Z',
+				'{"message":"/private/host/token","threads":1}', '/private/host/token'
+			);
+			insert into summary_runs(
+				repo_id, scope, status, started_at, finished_at, stats_json, error_text
+			) values(
+				?, 'all', 'failed', '2026-06-06T00:00:00Z',
+				'2026-06-06T00:01:00Z',
+				'{"failures":[{"message":"provider secret"}]}', 'provider secret'
+			);
+			insert into embedding_runs(
+				repo_id, scope, status, started_at, finished_at, stats_json, error_text
+			) values(
+				?, 'all', 'failed', '2026-06-06T00:00:00Z',
+				'2026-06-06T00:01:00Z',
+				'{"failures":[{"message":"/private/embed"}]}', '/private/embed'
+			);
+			insert into cluster_runs(
+				repo_id, scope, status, started_at, finished_at, stats_json, error_text
+			) values(
+				?, 'all', 'failed', '2026-06-06T00:00:00Z',
+				'2026-06-06T00:01:00Z',
+				'{"message":"/private/cluster"}', '/private/cluster'
+			);
+			create table portable_metadata(key text primary key, value text not null);
+			insert into portable_metadata(key, value) values('source_path', '/private/archive.db')
+		`, repoID, repoID, repoID, repoID, repoID, repoID); err != nil {
 		t.Fatalf("seed private cloud payloads: %v", err)
 	}
 	snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, st.DB(), dbPath)
@@ -457,15 +486,37 @@ func TestCloudSQLiteSnapshotDropsLocalCodeCorpus(t *testing.T) {
 	if blobCount != 0 {
 		t.Fatalf("cloud snapshot retained %d blobs", blobCount)
 	}
-	var errorText, sourcePath string
-	if err := snapshotDB.QueryRowContext(ctx, `select coalesce(error_text, '') from sync_runs limit 1`).Scan(&errorText); err != nil {
-		t.Fatalf("inspect scrubbed cloud run error: %v", err)
+	var reviewComments string
+	if err := snapshotDB.QueryRowContext(ctx, `
+			select comments_json from pull_request_review_threads limit 1
+		`).Scan(&reviewComments); err != nil {
+		t.Fatalf("inspect scrubbed review comments: %v", err)
 	}
+	if reviewComments != "" {
+		t.Fatalf("cloud snapshot retained review diff payloads: %q", reviewComments)
+	}
+	for _, table := range []string{"sync_runs", "summary_runs", "embedding_runs", "cluster_runs"} {
+		var statsJSON, errorText string
+		if err := snapshotDB.QueryRowContext(ctx, `
+				select coalesce(stats_json, ''), coalesce(error_text, '') from `+table+` limit 1
+			`).Scan(&statsJSON, &errorText); err != nil {
+			t.Fatalf("inspect scrubbed cloud %s payload: %v", table, err)
+		}
+		if statsJSON != "" || errorText != "" {
+			t.Fatalf(
+				"cloud snapshot retained %s failure payloads: stats=%q error=%q",
+				table,
+				statsJSON,
+				errorText,
+			)
+		}
+	}
+	var sourcePath string
 	if err := snapshotDB.QueryRowContext(ctx, `select value from portable_metadata where key = 'source_path'`).Scan(&sourcePath); err != nil {
 		t.Fatalf("inspect scrubbed cloud source path: %v", err)
 	}
-	if errorText != "" || sourcePath != "" {
-		t.Fatalf("cloud snapshot retained private paths: error=%q source=%q", errorText, sourcePath)
+	if sourcePath != "" {
+		t.Fatalf("cloud snapshot retained private source path: %q", sourcePath)
 	}
 	var sourceCount int
 	if err := st.DB().QueryRowContext(ctx, `select count(*) from code_documents`).Scan(&sourceCount); err != nil {
@@ -774,6 +825,19 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 	}
 }
 
+func testSnapshotPublishContract() crawlremote.Contract {
+	contract := crawlremote.BaseContract()
+	contract.Apps = []crawlremote.AppSpec{{
+		App: "gitcrawl",
+		Capabilities: []string{
+			gitcrawlSnapshotAtomicCapability,
+			gitcrawlSnapshotProvenanceCapability,
+			sqliteBundleGzipUploadCapability,
+		},
+	}}
+	return contract
+}
+
 func TestCloudPublishSendsLocalRows(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -795,6 +859,11 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	var snapshotID string
 	mutationCounter := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(testSnapshotPublishContract())
+			return
+		}
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
 			return
@@ -970,6 +1039,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 		"--archive", "gitcrawl/openclaw__openclaw",
 		"--token-env", tokenEnv,
 		"--allow-incomplete",
+		"--cutover",
 		"--json",
 	}); err != nil {
 		t.Fatalf("cloud publish: %v", err)
@@ -1013,6 +1083,209 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	privacy, ok := payload["sqlite_bundle_privacy"].(map[string]any)
 	if !ok || privacy["includes_private_messages"] != true {
 		t.Fatalf("missing sqlite bundle privacy output: %#v", payload)
+	}
+}
+
+func TestCloudPublishRejectsMissingSnapshotCapabilityBeforeUpload(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+
+	const tokenEnv = "GITCRAWL_TEST_CONTRACT_TOKEN"
+	t.Setenv(tokenEnv, "publish-token")
+	mutations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
+			contract := testSnapshotPublishContract()
+			contract.Apps[0].Capabilities = []string{
+				gitcrawlSnapshotAtomicCapability,
+				sqliteBundleGzipUploadCapability,
+			}
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(contract)
+			return
+		}
+		mutations++
+		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	err := New().Run(ctx, []string{
+		"--config", configPath,
+		"cloud", "publish",
+		"--remote", server.URL,
+		"--archive", "gitcrawl/openclaw__openclaw",
+		"--token-env", tokenEnv,
+		"--allow-incomplete",
+		"--json",
+	})
+	if err == nil || !strings.Contains(err.Error(), gitcrawlSnapshotProvenanceCapability) {
+		t.Fatalf("cloud publish error = %v", err)
+	}
+	if mutations != 0 {
+		t.Fatalf("remote mutations = %d, want 0", mutations)
+	}
+}
+
+func TestCloudPublishStagesByDefaultAndResumesCutover(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+
+	const tokenEnv = "GITCRAWL_TEST_RESUME_TOKEN"
+	t.Setenv(tokenEnv, "publish-token")
+	var snapshotID string
+	ingestRequests := 0
+	cutovers := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(testSnapshotPublishContract())
+			return
+		}
+		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
+			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite") {
+			w.Header().Set("content-type", "application/json")
+			switch r.Header.Get("x-crawl-sqlite-upload") {
+			case "bundle-part":
+				snapshotID = r.Header.Get("x-crawl-snapshot-id")
+				partSHA := r.Header.Get("x-crawl-content-sha256")
+				partIndex, err := strconv.Atoi(r.Header.Get("x-crawl-bundle-part-index"))
+				if len(snapshotID) != 64 || len(partSHA) != 64 || err != nil {
+					http.Error(w, "invalid bundle part", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(crawlremote.SQLiteUploadResult{
+					App:      "gitcrawl",
+					Archive:  "gitcrawl/openclaw__openclaw",
+					Complete: false,
+					Object: &crawlremote.SQLiteObject{
+						Key: crawlremote.SQLiteSnapshotBundlePartKey(
+							"gitcrawl",
+							"gitcrawl/openclaw__openclaw",
+							snapshotID,
+							partSHA,
+							partIndex,
+						),
+					},
+				})
+			case "bundle-manifest":
+				var manifest crawlremote.SQLiteBundleManifest
+				if err := json.NewDecoder(r.Body).Decode(&manifest); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if manifest.SnapshotID != snapshotID {
+					http.Error(w, "snapshot mismatch", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(crawlremote.SQLiteBundleUploadResult{
+					App:      "gitcrawl",
+					Archive:  "gitcrawl/openclaw__openclaw",
+					Complete: true,
+					Bundle: &crawlremote.SQLiteBundle{
+						Key:      crawlremote.SQLiteSnapshotBundleManifestKey("gitcrawl", "gitcrawl/openclaw__openclaw", snapshotID),
+						Manifest: &manifest,
+					},
+				})
+			default:
+				http.Error(w, "missing upload kind", http.StatusBadRequest)
+			}
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
+			_ = json.NewEncoder(w).Encode(crawlremote.Status{
+				App:              "gitcrawl",
+				Archive:          "gitcrawl/openclaw__openclaw",
+				ActiveSnapshotID: snapshotID,
+				CoverageComplete: true,
+				Snapshot: &crawlremote.ArchiveSnapshot{
+					ID:               snapshotID,
+					SourceSHA256:     snapshotID,
+					CoverageComplete: true,
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/ingest") {
+			ingestRequests++
+			http.Error(w, "activated snapshots must not be re-ingested", http.StatusConflict)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/cutover") {
+			var request struct {
+				SnapshotID string `json:"snapshot_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil ||
+				request.SnapshotID != snapshotID {
+				http.Error(w, "cutover snapshot mismatch", http.StatusBadRequest)
+				return
+			}
+			cutovers++
+			_ = json.NewEncoder(w).Encode(crawlremote.CutoverResult{
+				Archive:      "gitcrawl/openclaw__openclaw",
+				SnapshotID:   snapshotID,
+				SnapshotMode: "snapshot",
+				CutoverAt:    "2026-07-12T11:00:00Z",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	baseArgs := []string{
+		"--config", configPath,
+		"cloud", "publish",
+		"--remote", server.URL,
+		"--archive", "gitcrawl/openclaw__openclaw",
+		"--token-env", tokenEnv,
+		"--allow-incomplete",
+		"--json",
+	}
+	for index, extra := range [][]string{nil, {"--cutover"}} {
+		app := New()
+		var output bytes.Buffer
+		app.Stdout = &output
+		args := append(append([]string(nil), baseArgs...), extra...)
+		if err := app.Run(ctx, args); err != nil {
+			t.Fatalf("cloud publish run %d: %v", index+1, err)
+		}
+		var result struct {
+			Cutover *crawlremote.CutoverResult `json:"cutover"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatalf("decode run %d output: %v\n%s", index+1, err, output.String())
+		}
+		if index == 0 && result.Cutover != nil {
+			t.Fatalf("default publish unexpectedly cut over: %#v", result.Cutover)
+		}
+		if index == 1 && result.Cutover == nil {
+			t.Fatalf("explicit cutover missing: %s", output.String())
+		}
+	}
+	if ingestRequests != 0 {
+		t.Fatalf("ingest requests = %d, want 0 for active snapshot resume", ingestRequests)
+	}
+	if cutovers != 1 {
+		t.Fatalf("cutovers = %d, want 1", cutovers)
 	}
 }
 
