@@ -1743,6 +1743,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	t.Setenv(tokenEnv, "publish-token")
 	var snapshotID string
 	var stagedSnapshot *crawlremote.ArchiveSnapshot
+	var stagedDatasets []crawlremote.DatasetCoverage
 	servingSnapshotID := strings.Repeat("f", 64)
 	var sqliteImage []byte
 	uploadRequests := 0
@@ -1775,12 +1776,25 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				http.Error(w, "missing dual-role bearer", http.StatusForbidden)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(crawlremote.Status{
+			status := crawlremote.Status{
 				App:              "gitcrawl",
 				Archive:          "gitcrawl/openclaw__openclaw",
 				ActiveSnapshotID: servingSnapshotID,
-				CoverageComplete: true,
-			})
+			}
+			if servingSnapshotID == snapshotID &&
+				readerStatusRequests >= 3 &&
+				stagedSnapshot != nil {
+				status.SchemaName = stagedSnapshot.SchemaName
+				status.SchemaVersion = stagedSnapshot.SchemaVersion
+				status.SchemaHash = stagedSnapshot.SchemaHash
+				status.Capabilities = slices.Clone(stagedSnapshot.Capabilities)
+				status.SourceSyncAt = stagedSnapshot.SourceSyncAt
+				status.DatasetGeneratedAt = stagedSnapshot.DatasetGeneratedAt
+				status.CoverageComplete = true
+				status.Datasets = slices.Clone(stagedDatasets)
+				status.Snapshot = stagedSnapshot
+			}
+			_ = json.NewEncoder(w).Encode(status)
 			return
 		}
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
@@ -1923,6 +1937,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					return
 				}
 				mutationToken = body.MutationToken
+				stagedDatasets = testGitcrawlDatasetCoverageRows(t, body.Rows)
 				stagedSnapshot = &crawlremote.ArchiveSnapshot{
 					ID:                 body.Manifest.SnapshotID,
 					SourceSHA256:       body.Manifest.SourceSHA256,
@@ -1987,7 +2002,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	stageUploadRequests := 0
 	originalServingSnapshotID := servingSnapshotID
 	var stagedDatasetGeneratedAt string
-	for index, extra := range [][]string{{"--stage-only"}, nil, nil} {
+	for index, extra := range [][]string{{"--stage-only"}, nil, nil, nil} {
 		app := New()
 		var output bytes.Buffer
 		app.Stdout = &output
@@ -2037,6 +2052,11 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			time.Sleep(2 * time.Millisecond)
 		}
 		if index == 2 {
+			if result.AlreadyCutOver || result.Cutover == nil {
+				t.Fatalf("incomplete reader status incorrectly skipped cutover: %s", output.String())
+			}
+		}
+		if index == 3 {
 			if !result.AlreadyStaged || !result.AlreadyCutOver || result.Cutover != nil {
 				t.Fatalf("retry did not reuse the staged serving snapshot: %s", output.String())
 			}
@@ -2066,21 +2086,62 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			stageUploadRequests,
 		)
 	}
-	if cutovers != 1 {
-		t.Fatalf("cutovers = %d, want 1", cutovers)
+	if cutovers != 2 {
+		t.Fatalf("cutovers = %d, want 2 after incomplete reader status", cutovers)
 	}
 	if servingSnapshotID != snapshotID {
 		t.Fatalf("serving snapshot = %q, want staged snapshot %q", servingSnapshotID, snapshotID)
 	}
-	if publisherStatusRequests != 5 {
-		t.Fatalf("publisher status requests = %d, want 5", publisherStatusRequests)
+	if publisherStatusRequests != 7 {
+		t.Fatalf("publisher status requests = %d, want 7", publisherStatusRequests)
 	}
-	if readerStatusRequests != 2 {
-		t.Fatalf("reader status requests = %d, want 2 serving-state checks", readerStatusRequests)
+	if readerStatusRequests != 3 {
+		t.Fatalf("reader status requests = %d, want 3 serving-state checks", readerStatusRequests)
 	}
-	if sqliteReadRequests != 2 {
-		t.Fatalf("SQLite read requests = %d, want failed hydration plus retry", sqliteReadRequests)
+	if sqliteReadRequests != 3 {
+		t.Fatalf("SQLite read requests = %d, want failed hydration plus two retries", sqliteReadRequests)
 	}
+}
+
+func testGitcrawlDatasetCoverageRows(
+	t *testing.T,
+	rows [][]any,
+) []crawlremote.DatasetCoverage {
+	t.Helper()
+	datasets := make([]crawlremote.DatasetCoverage, 0, len(rows))
+	for _, row := range rows {
+		if len(row) != len(gitcrawlCloudCoverageColumns) {
+			t.Fatalf("coverage row columns = %d, want %d", len(row), len(gitcrawlCloudCoverageColumns))
+		}
+		number := func(value any) int64 {
+			t.Helper()
+			switch typed := value.(type) {
+			case float64:
+				return int64(typed)
+			case int64:
+				return typed
+			default:
+				t.Fatalf("coverage count type = %T", value)
+				return 0
+			}
+		}
+		complete, ok := row[6].(bool)
+		if !ok {
+			t.Fatalf("coverage complete type = %T", row[6])
+		}
+		covered := number(row[3])
+		datasets = append(datasets, crawlremote.DatasetCoverage{
+			Dataset:            fmt.Sprint(row[0]),
+			RowCount:           number(row[1]),
+			EligibleCount:      number(row[2]),
+			CoveredCount:       covered,
+			FreshCount:         covered,
+			MaxSourceAt:        fmt.Sprint(row[4]),
+			DatasetGeneratedAt: fmt.Sprint(row[5]),
+			Complete:           complete,
+		})
+	}
+	return datasets
 }
 
 func TestCloudPublishRejectsIncompleteHydrationBeforeRemoteMutation(t *testing.T) {

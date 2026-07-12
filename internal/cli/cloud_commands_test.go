@@ -147,6 +147,271 @@ func TestSendSnapshotIngestDatasetStreamsBoundedBatches(t *testing.T) {
 	}
 }
 
+func TestCompleteGitcrawlSnapshotStagingRequiresExactAcknowledgement(t *testing.T) {
+	snapshotID := strings.Repeat("a", 64)
+	snapshot := gitcrawlCloudSnapshot{
+		ID:                 snapshotID,
+		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
+		Datasets: []gitcrawlCloudDataset{
+			{Name: "repositories", RowCount: 1, EligibleCount: 1, CoveredCount: 1, Complete: true},
+			{Name: "threads", RowCount: 3, EligibleCount: 3, CoveredCount: 3, Complete: true},
+		},
+	}
+	manifest := crawlremote.IngestManifest{
+		App:        "gitcrawl",
+		Archive:    "gitcrawl/openclaw__gitcrawl",
+		SnapshotID: snapshotID,
+	}
+	const mutationToken = "mutation-final"
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*crawlremote.IngestResult)
+		want   string
+	}{
+		{name: "exact acknowledgement"},
+		{
+			name: "wrong table",
+			mutate: func(result *crawlremote.IngestResult) {
+				result.Table = "threads"
+			},
+			want: "want dataset_coverage",
+		},
+		{
+			name: "wrong snapshot",
+			mutate: func(result *crawlremote.IngestResult) {
+				result.SnapshotID = strings.Repeat("b", 64)
+			},
+			want: "want \"" + snapshotID + "\"",
+		},
+		{
+			name: "wrong dataset count",
+			mutate: func(result *crawlremote.IngestResult) {
+				result.RowsAccepted--
+			},
+			want: "want 2 datasets",
+		},
+		{
+			name: "wrong mutation token",
+			mutate: func(result *crawlremote.IngestResult) {
+				result.MutationToken = "other-mutation"
+			},
+			want: "want \"mutation-final\"",
+		},
+		{
+			name: "partial candidate",
+			mutate: func(result *crawlremote.IngestResult) {
+				result.Complete = false
+			},
+			want: "did not complete snapshot",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request crawlremote.IngestRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if request.Table != "dataset_coverage" ||
+					!request.Final ||
+					request.MutationToken != mutationToken ||
+					len(request.Rows) != len(snapshot.Datasets) {
+					http.Error(w, "invalid final coverage request", http.StatusBadRequest)
+					return
+				}
+				result := crawlremote.IngestResult{
+					Table:         request.Table,
+					SnapshotID:    request.Manifest.SnapshotID,
+					MutationToken: request.MutationToken,
+					RowsAccepted:  int64(len(request.Rows)),
+					Complete:      true,
+				}
+				if test.mutate != nil {
+					test.mutate(&result)
+				}
+				_ = json.NewEncoder(w).Encode(result)
+			}))
+			defer server.Close()
+			client, err := crawlremote.NewClient(crawlremote.Options{
+				Endpoint:      server.URL,
+				HTTPClient:    server.Client(),
+				TokenProvider: crawlremote.StaticToken("publisher-token"),
+			})
+			if err != nil {
+				t.Fatalf("remote client: %v", err)
+			}
+
+			_, err = completeGitcrawlSnapshotStaging(
+				context.Background(),
+				client,
+				manifest.App,
+				manifest.Archive,
+				manifest,
+				snapshot,
+				mutationToken,
+			)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("complete staging: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("complete staging error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateGitcrawlSQLiteBundleUploadRequiresFinalSnapshotDigest(t *testing.T) {
+	expected := crawlremote.SQLiteBundleManifest{
+		SnapshotID: strings.Repeat("a", 64),
+		Object: crawlremote.SQLiteBundleObject{
+			Size:   123,
+			SHA256: strings.Repeat("a", 64),
+		},
+	}
+	validResult := func() crawlremote.SQLiteBundleUploadResult {
+		manifest := expected
+		return crawlremote.SQLiteBundleUploadResult{
+			App:      "gitcrawl",
+			Archive:  "gitcrawl/openclaw__gitcrawl",
+			Complete: true,
+			Bundle: &crawlremote.SQLiteBundle{
+				Manifest: &manifest,
+			},
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*crawlremote.SQLiteBundleUploadResult)
+		want   string
+	}{
+		{name: "exact acknowledgement"},
+		{
+			name: "not finalized",
+			mutate: func(result *crawlremote.SQLiteBundleUploadResult) {
+				result.Complete = false
+			},
+			want: "not finalized",
+		},
+		{
+			name: "wrong snapshot",
+			mutate: func(result *crawlremote.SQLiteBundleUploadResult) {
+				result.Bundle.Manifest.SnapshotID = strings.Repeat("b", 64)
+			},
+			want: "acknowledged snapshot",
+		},
+		{
+			name: "wrong digest",
+			mutate: func(result *crawlremote.SQLiteBundleUploadResult) {
+				result.Bundle.Manifest.Object.SHA256 = strings.Repeat("b", 64)
+			},
+			want: "acknowledged digest",
+		},
+		{
+			name: "wrong source size",
+			mutate: func(result *crawlremote.SQLiteBundleUploadResult) {
+				result.Bundle.Manifest.Object.Size++
+			},
+			want: "acknowledged source size",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := validResult()
+			if test.mutate != nil {
+				test.mutate(&result)
+			}
+			_, err := validateGitcrawlSQLiteBundleUpload(
+				result,
+				"gitcrawl",
+				"gitcrawl/openclaw__gitcrawl",
+				expected,
+			)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validate bundle upload: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("bundle validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
+	snapshotID := strings.Repeat("a", 64)
+	snapshot := gitcrawlCloudSnapshot{
+		ID:                 snapshotID,
+		SourceSyncAt:       "2026-07-12T12:00:00Z",
+		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
+		Datasets: []gitcrawlCloudDataset{{
+			Name:          "repositories",
+			RowCount:      1,
+			EligibleCount: 1,
+			CoveredCount:  1,
+			MaxSourceAt:   "2026-07-12T12:00:00Z",
+			Complete:      true,
+		}},
+	}
+	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__gitcrawl", snapshot)
+	capabilities := gitcrawlCloudPublicationCapabilities(snapshot.Capabilities)
+	status := crawlremote.Status{
+		App:                manifest.App,
+		Archive:            manifest.Archive,
+		SchemaName:         manifest.SchemaName,
+		SchemaVersion:      manifest.SchemaVersion,
+		SchemaHash:         manifest.SchemaHash,
+		Capabilities:       capabilities,
+		ActiveSnapshotID:   snapshotID,
+		SourceSyncAt:       snapshot.SourceSyncAt,
+		DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+		CoverageComplete:   true,
+		Datasets: []crawlremote.DatasetCoverage{{
+			Dataset:            "repositories",
+			RowCount:           1,
+			EligibleCount:      1,
+			CoveredCount:       1,
+			FreshCount:         1,
+			MaxSourceAt:        "2026-07-12T12:00:00Z",
+			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+			Complete:           true,
+		}},
+		Snapshot: &crawlremote.ArchiveSnapshot{
+			ID:                 snapshotID,
+			SourceSHA256:       snapshotID,
+			SchemaName:         manifest.SchemaName,
+			SchemaVersion:      manifest.SchemaVersion,
+			SchemaHash:         manifest.SchemaHash,
+			Capabilities:       capabilities,
+			SourceSyncAt:       snapshot.SourceSyncAt,
+			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+			CoverageComplete:   true,
+		},
+	}
+	if !gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+		t.Fatal("complete serving snapshot did not match")
+	}
+
+	status.CoverageComplete = false
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+		t.Fatal("top-level incomplete reader status matched")
+	}
+	status.CoverageComplete = true
+	status.Snapshot.CoverageComplete = false
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+		t.Fatal("nested incomplete reader status matched")
+	}
+	status.Snapshot.CoverageComplete = true
+	status.Datasets[0].CoveredCount = 0
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+		t.Fatal("reader dataset count drift matched")
+	}
+}
+
 func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t *testing.T) {
 	source := []byte("SQLite format 3\x00bound source")
 	snapshotID := fmt.Sprintf("%x", sha256.Sum256(source))

@@ -220,18 +220,14 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			counts[dataset.Name] = progress.RowsAccepted
 			mutationToken = progress.MutationToken
 		}
-		coverageRows := gitcrawlCloudCoverageRows(snapshot, mutationToken)
-		progress, err := sendSnapshotIngestRows(
+		progress, err := completeGitcrawlSnapshotStaging(
 			ctx,
 			client,
 			"gitcrawl",
 			archiveID,
 			manifest,
-			"dataset_coverage",
-			gitcrawlCloudCoverageColumns,
-			coverageRows,
+			snapshot,
 			mutationToken,
-			true,
 		)
 		if err != nil {
 			return fmt.Errorf("complete cloud snapshot staging: %w", err)
@@ -252,7 +248,12 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				readerStatus.Archive,
 			)
 		}
-		alreadyCutOver = readerStatus.ActiveSnapshotID == snapshot.ID
+		alreadyCutOver = gitcrawlReaderStatusMatches(
+			readerStatus,
+			snapshot,
+			manifest,
+			publicationCapabilities,
+		)
 		if !alreadyCutOver {
 			result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
 			if err != nil {
@@ -298,6 +299,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 type ingestProgress struct {
 	RowsAccepted  int64
 	MutationToken string
+	Result        crawlremote.IngestResult
 }
 
 func sendSnapshotIngestDataset(
@@ -450,8 +452,13 @@ func sendSnapshotIngestRows(
 			mutationToken,
 			final,
 		)
-		return ingestProgress{RowsAccepted: result.RowsAccepted, MutationToken: result.MutationToken}, err
+		return ingestProgress{
+			RowsAccepted:  result.RowsAccepted,
+			MutationToken: result.MutationToken,
+			Result:        result,
+		}, err
 	}
+	var lastResult crawlremote.IngestResult
 	for start := 0; start < len(rows); start += gitcrawlCloudBatchSize {
 		end := start + gitcrawlCloudBatchSize
 		if end > len(rows) {
@@ -471,12 +478,80 @@ func sendSnapshotIngestRows(
 			final && end == len(rows),
 		)
 		if err != nil {
-			return ingestProgress{RowsAccepted: total, MutationToken: mutationToken}, err
+			return ingestProgress{
+				RowsAccepted:  total,
+				MutationToken: mutationToken,
+				Result:        lastResult,
+			}, err
 		}
 		total += result.RowsAccepted
 		mutationToken = result.MutationToken
+		lastResult = result
 	}
-	return ingestProgress{RowsAccepted: total, MutationToken: mutationToken}, nil
+	return ingestProgress{
+		RowsAccepted:  total,
+		MutationToken: mutationToken,
+		Result:        lastResult,
+	}, nil
+}
+
+func completeGitcrawlSnapshotStaging(
+	ctx context.Context,
+	client *crawlremote.Client,
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	snapshot gitcrawlCloudSnapshot,
+	mutationToken string,
+) (ingestProgress, error) {
+	progress, err := sendSnapshotIngestRows(
+		ctx,
+		client,
+		app,
+		archive,
+		manifest,
+		"dataset_coverage",
+		gitcrawlCloudCoverageColumns,
+		gitcrawlCloudCoverageRows(snapshot, mutationToken),
+		mutationToken,
+		true,
+	)
+	if err != nil {
+		return progress, err
+	}
+	result := progress.Result
+	expectedRows := int64(len(snapshot.Datasets))
+	if result.Table != "dataset_coverage" {
+		return progress, fmt.Errorf(
+			"remote completed table %q, want dataset_coverage",
+			result.Table,
+		)
+	}
+	if result.SnapshotID != snapshot.ID {
+		return progress, fmt.Errorf(
+			"remote completed snapshot %q, want %q",
+			result.SnapshotID,
+			snapshot.ID,
+		)
+	}
+	if progress.RowsAccepted != expectedRows || result.RowsAccepted != expectedRows {
+		return progress, fmt.Errorf(
+			"remote accepted %d coverage rows with final batch count %d, want %d datasets",
+			progress.RowsAccepted,
+			result.RowsAccepted,
+			expectedRows,
+		)
+	}
+	if result.MutationToken != mutationToken {
+		return progress, fmt.Errorf(
+			"remote completed mutation token %q, want %q",
+			result.MutationToken,
+			mutationToken,
+		)
+	}
+	if !result.Complete {
+		return progress, fmt.Errorf("remote did not complete snapshot %s", snapshot.ID)
+	}
+	return progress, nil
 }
 
 func sendIngestBatch(
@@ -611,7 +686,61 @@ func uploadSQLiteSnapshotArchive(
 	if err != nil {
 		return nil, 0, err
 	}
-	return result.Bundle, sourceSize, nil
+	uploadedBundle, err := validateGitcrawlSQLiteBundleUpload(
+		result,
+		app,
+		archive,
+		bundle.Manifest,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	return uploadedBundle, sourceSize, nil
+}
+
+func validateGitcrawlSQLiteBundleUpload(
+	result crawlremote.SQLiteBundleUploadResult,
+	app, archive string,
+	expected crawlremote.SQLiteBundleManifest,
+) (*crawlremote.SQLiteBundle, error) {
+	if result.App != app || result.Archive != archive {
+		return nil, fmt.Errorf(
+			"SQLite bundle upload returned app=%q archive=%q, want app=%q archive=%q",
+			result.App,
+			result.Archive,
+			app,
+			archive,
+		)
+	}
+	if !result.Complete {
+		return nil, fmt.Errorf("SQLite bundle upload was not finalized")
+	}
+	if result.Bundle == nil || result.Bundle.Manifest == nil {
+		return nil, fmt.Errorf("SQLite bundle upload omitted the finalized manifest")
+	}
+	actual := result.Bundle.Manifest
+	if actual.SnapshotID != expected.SnapshotID {
+		return nil, fmt.Errorf(
+			"SQLite bundle upload acknowledged snapshot %q, want %q",
+			actual.SnapshotID,
+			expected.SnapshotID,
+		)
+	}
+	if actual.Object.SHA256 != expected.Object.SHA256 {
+		return nil, fmt.Errorf(
+			"SQLite bundle upload acknowledged digest %q, want %q",
+			actual.Object.SHA256,
+			expected.Object.SHA256,
+		)
+	}
+	if actual.Object.Size != expected.Object.Size {
+		return nil, fmt.Errorf(
+			"SQLite bundle upload acknowledged source size %d, want %d",
+			actual.Object.Size,
+			expected.Object.Size,
+		)
+	}
+	return result.Bundle, nil
 }
 
 func remoteNotFound(err error) bool {
@@ -876,6 +1005,68 @@ func gitcrawlPublisherStatusMatches(
 		return false
 	}
 	return true
+}
+
+func gitcrawlReaderStatusMatches(
+	status crawlremote.Status,
+	snapshot gitcrawlCloudSnapshot,
+	manifest crawlremote.IngestManifest,
+	publicationCapabilities []string,
+) bool {
+	if status.App != manifest.App ||
+		status.Archive != manifest.Archive ||
+		status.ActiveSnapshotID != snapshot.ID ||
+		status.SchemaName != manifest.SchemaName ||
+		status.SchemaVersion != manifest.SchemaVersion ||
+		status.SchemaHash != manifest.SchemaHash ||
+		status.SourceSyncAt != snapshot.SourceSyncAt ||
+		status.DatasetGeneratedAt != snapshot.DatasetGeneratedAt ||
+		!status.CoverageComplete ||
+		!equalUniqueStringSet(status.Capabilities, publicationCapabilities) {
+		return false
+	}
+	if !gitcrawlPublisherStatusMatches(crawlremote.PublisherStatus{
+		App:              status.App,
+		Archive:          status.Archive,
+		ActiveSnapshotID: status.ActiveSnapshotID,
+		CoverageComplete: status.CoverageComplete,
+		Snapshot:         status.Snapshot,
+	}, manifest, publicationCapabilities) ||
+		status.Snapshot.DatasetGeneratedAt != snapshot.DatasetGeneratedAt {
+		return false
+	}
+	return gitcrawlDatasetCoverageMatches(status.Datasets, snapshot)
+}
+
+func gitcrawlDatasetCoverageMatches(
+	actual []crawlremote.DatasetCoverage,
+	snapshot gitcrawlCloudSnapshot,
+) bool {
+	if len(actual) != len(snapshot.Datasets) {
+		return false
+	}
+	expected := make(map[string]gitcrawlCloudDataset, len(snapshot.Datasets))
+	for _, dataset := range snapshot.Datasets {
+		if _, duplicate := expected[dataset.Name]; duplicate {
+			return false
+		}
+		expected[dataset.Name] = dataset
+	}
+	for _, dataset := range actual {
+		want, ok := expected[dataset.Dataset]
+		if !ok ||
+			dataset.RowCount != want.RowCount ||
+			dataset.EligibleCount != want.EligibleCount ||
+			dataset.CoveredCount != want.CoveredCount ||
+			dataset.FreshCount != want.CoveredCount ||
+			dataset.MaxSourceAt != want.MaxSourceAt ||
+			dataset.DatasetGeneratedAt != snapshot.DatasetGeneratedAt ||
+			dataset.Complete != want.Complete {
+			return false
+		}
+		delete(expected, dataset.Dataset)
+	}
+	return len(expected) == 0
 }
 
 func verifyGitcrawlSnapshotPublication(
