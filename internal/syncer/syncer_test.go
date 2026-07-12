@@ -298,6 +298,11 @@ type pullDetailsGitHub struct {
 	fakeGitHub
 }
 
+type completeWorkflowRunsGitHub struct {
+	pullDetailsGitHub
+	limit int
+}
+
 type emptyHeadPullGitHub struct {
 	fakeGitHub
 	checksCalled bool
@@ -420,6 +425,22 @@ func (pullDetailsGitHub) ListWorkflowRuns(ctx context.Context, owner, repo strin
 		"created_at":  "2026-04-26T00:00:00Z",
 		"updated_at":  "2026-04-26T00:01:00Z",
 	}}, nil
+}
+
+func (g *completeWorkflowRunsGitHub) ListWorkflowRuns(ctx context.Context, owner, repo string, options gh.ListWorkflowRunsOptions, reporter gh.Reporter) ([]map[string]any, error) {
+	g.limit = options.Limit
+	rows := make([]map[string]any, 25)
+	for index := range rows {
+		rows[index] = map[string]any{
+			"id":         index + 1,
+			"run_number": index + 1,
+			"head_sha":   options.HeadSHA,
+			"status":     "completed",
+			"conclusion": "success",
+			"name":       "CI",
+		}
+	}
+	return rows, nil
 }
 
 func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
@@ -679,6 +700,49 @@ func TestSyncHydratesPullReviewComments(t *testing.T) {
 	}
 	if !foundBodylessReview {
 		t.Fatalf("bodyless pull review was not persisted: %+v", comments)
+	}
+}
+
+func TestSyncUsesCompleteWorkflowRunsForRevisionEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	client := &completeWorkflowRunsGitHub{}
+	s := New(client, st)
+	stats, err := s.Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{8}, IncludeComments: true, IncludePRDetails: true,
+	})
+	if err != nil {
+		t.Fatalf("sync pull request details: %v", err)
+	}
+	if client.limit != 0 || stats.WorkflowRunsSynced != 25 {
+		t.Fatalf("workflow run fetch limit=%d synced=%d", client.limit, stats.WorkflowRunsSynced)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{HeadSHA: "head-sha", Limit: -1})
+	if err != nil {
+		t.Fatalf("list workflow runs: %v", err)
+	}
+	if len(runs) != 25 {
+		t.Fatalf("workflow runs = %d, want 25", len(runs))
+	}
+	var revisions int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions tr
+		join threads t on t.id = tr.thread_id
+		where t.repo_id = ? and t.number = 8
+	`, repo.ID).Scan(&revisions); err != nil {
+		t.Fatalf("revision count: %v", err)
+	}
+	if revisions != 1 {
+		t.Fatalf("revision count = %d, want 1", revisions)
 	}
 }
 

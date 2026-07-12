@@ -576,7 +576,7 @@ func persistThreadEnrichment(
 		if headSHA != "" {
 			evidence.WorkflowRuns, err = st.ListWorkflowRuns(ctx, thread.RepoID, store.WorkflowRunListOptions{
 				HeadSHA: headSHA,
-				Limit:   100,
+				Limit:   -1,
 			})
 			if err != nil {
 				return store.ThreadEnrichmentResult{}, err

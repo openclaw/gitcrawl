@@ -234,6 +234,14 @@ func (s *Store) upsertPullRequestCache(ctx context.Context, detail PullRequestDe
 			return fmt.Errorf("upsert pull request check: %w", err)
 		}
 	}
+	if detail.HeadSHA != "" {
+		if _, err := s.q().ExecContext(ctx, `
+			delete from github_workflow_runs
+			where repo_id = ? and head_sha = ?
+		`, detail.RepoID, detail.HeadSHA); err != nil {
+			return fmt.Errorf("clear workflow runs for head: %w", err)
+		}
+	}
 	for _, run := range runs {
 		if err := s.qsql().UpsertWorkflowRun(ctx, storedb.UpsertWorkflowRunParams{
 			RepoID:       run.RepoID,
@@ -451,7 +459,7 @@ type WorkflowRunListOptions struct {
 
 func (s *Store) ListWorkflowRuns(ctx context.Context, repoID int64, options WorkflowRunListOptions) ([]WorkflowRun, error) {
 	limit := options.Limit
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 20
 	}
 	rows, err := s.qsql().ListWorkflowRuns(ctx, storedb.ListWorkflowRunsParams{

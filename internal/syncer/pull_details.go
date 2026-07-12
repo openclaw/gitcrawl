@@ -49,7 +49,7 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 	}
 	var runsRaw []map[string]any
 	if headSHA != "" {
-		runsRaw, err = s.client.ListWorkflowRuns(ctx, options.Owner, options.Repo, gh.ListWorkflowRunsOptions{HeadSHA: headSHA, Limit: 20}, options.Reporter)
+		runsRaw, err = s.client.ListWorkflowRuns(ctx, options.Owner, options.Repo, gh.ListWorkflowRunsOptions{HeadSHA: headSHA}, options.Reporter)
 		if err != nil {
 			return pullRequestDetailRows{}, err
 		}
