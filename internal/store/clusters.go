@@ -708,14 +708,18 @@ func (s *Store) ReopenClusterLocally(ctx context.Context, repoID, clusterID int6
 }
 
 func (s *Store) SaveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, false)
+	return s.saveDurableClusters(ctx, repoID, inputs, true, false)
+}
+
+func (s *Store) SavePartialDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
+	return s.saveDurableClusters(ctx, repoID, inputs, false, false)
 }
 
 func (s *Store) SaveCompleteDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, true)
+	return s.saveDurableClusters(ctx, repoID, inputs, true, true)
 }
 
-func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, retireMissing bool) (SaveDurableClustersResult, error) {
+func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, pruneMissingMembers, retireMissing bool) (SaveDurableClustersResult, error) {
 	if repoID <= 0 {
 		return SaveDurableClustersResult{}, fmt.Errorf("repo id must be positive")
 	}
@@ -767,8 +771,10 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 				memberIDs = append(memberIDs, member.ThreadID)
 				result.MemberCount++
 			}
-			if err := tx.markMissingClusterMembersRemoved(ctx, clusterID, memberIDs, now); err != nil {
-				return err
+			if pruneMissingMembers {
+				if err := tx.markMissingClusterMembersRemoved(ctx, clusterID, memberIDs, now); err != nil {
+					return err
+				}
 			}
 			if err := tx.applyClusterOverrides(ctx, repoID, clusterID, now); err != nil {
 				return err

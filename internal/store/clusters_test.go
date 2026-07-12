@@ -872,6 +872,49 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 	}
 }
 
+func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	input := DurableClusterInput{
+		StableKey:              "members:301,302",
+		StableSlug:             "cluster-301-302",
+		RepresentativeThreadID: threadIDs[0],
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "canonical"},
+			{ThreadID: threadIDs[1], Role: "member"},
+		},
+	}
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("seed durable cluster: %v", err)
+	}
+	input.Members = input.Members[:1]
+	if _, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("partial durable cluster save: %v", err)
+	}
+	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 302, false)
+	if err != nil {
+		t.Fatalf("unobserved member should remain active: %v", err)
+	}
+	detail, err := st.DurableClusterDetail(ctx, ClusterDetailOptions{
+		RepoID:        repoID,
+		ClusterID:     clusterID,
+		IncludeClosed: true,
+		MemberLimit:   10,
+	})
+	if err != nil {
+		t.Fatalf("cluster detail: %v", err)
+	}
+	if len(detail.Members) != 2 || detail.Members[1].State != "active" {
+		t.Fatalf("partial save pruned unobserved member: %+v", detail.Members)
+	}
+}
+
 func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

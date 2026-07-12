@@ -4478,7 +4478,7 @@ func clusterRepository(ctx context.Context, st *store.Store, repoID int64, store
 	if options.RetireMissing {
 		saveResult, err = st.SaveCompleteDurableClusters(ctx, repoID, inputs)
 	} else {
-		saveResult, err = st.SaveDurableClusters(ctx, repoID, inputs)
+		saveResult, err = st.SavePartialDurableClusters(ctx, repoID, inputs)
 	}
 	if err != nil {
 		return clusterRepositoryResult{}, err
