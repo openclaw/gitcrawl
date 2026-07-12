@@ -7,12 +7,77 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestOpenRepairsMinimumThreadObservationSequence(t *testing.T) {
+	ctx := context.Background()
+	dbPath, _, threadID := seedMigrationPullRequest(t, "minimum-sequence-head", 11)
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("converge seeded store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close converged store: %v", err)
+	}
+
+	raw := openRawMigrationDB(t, dbPath)
+	if _, err := raw.ExecContext(ctx, `pragma ignore_check_constraints = on`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("disable check constraints: %v", err)
+	}
+	if _, err := raw.ExecContext(
+		ctx,
+		`update threads set observation_sequence = ? where id = ?`,
+		int64(math.MinInt64),
+		threadID,
+	); err != nil {
+		_ = raw.Close()
+		t.Fatalf("poison thread observation sequence: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `pragma ignore_check_constraints = off`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("restore check constraints: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close poisoned store: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if !containsString(diag.PendingMigrations, migrationThreadObservationSequenceValue) {
+		t.Fatalf("minimum sequence diagnostics = %#v", diag)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("repair minimum sequence: %v", err)
+	}
+	defer st.Close()
+	var sequence int64
+	if err := st.DB().QueryRowContext(
+		ctx,
+		`select observation_sequence from threads where id = ?`,
+		threadID,
+	).Scan(&sequence); err != nil {
+		t.Fatalf("read repaired sequence: %v", err)
+	}
+	if sequence != 0 {
+		t.Fatalf("repaired sequence = %d, want 0", sequence)
+	}
+	if _, err := st.DB().ExecContext(
+		ctx,
+		`update threads set observation_sequence = ? where id = ?`,
+		int64(math.MinInt64),
+		threadID,
+	); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("minimum canonical sequence update error = %v", err)
+	}
+}
 
 func TestHealthyV10WritableReopenIsByteStable(t *testing.T) {
 	ctx := context.Background()

@@ -276,6 +276,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureCanonicalObservationTables(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureThreadObservationSequenceValues(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureThreadEvidenceObservationSequence(ctx); err != nil {
 		return err
 	}
@@ -359,6 +362,17 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt where body is null and body_excerpt is not null`); err != nil {
 			return fmt.Errorf("backfill thread body from portable excerpt: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) ensureThreadObservationSequenceValues(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		update threads
+		set observation_sequence = 0
+		where observation_sequence < -9223372036854775807
+	`); err != nil {
+		return fmt.Errorf("normalize thread observation sequence values: %w", err)
 	}
 	return nil
 }
@@ -491,6 +505,8 @@ func (s *Store) ensureThreadObservationSequenceFloor(ctx context.Context) error 
 			value,
 			coalesce((
 				select max(case
+					when observation_sequence < -9223372036854775807
+						then 9223372036854775807
 					when observation_sequence < 0 then -observation_sequence
 					else observation_sequence
 				end)

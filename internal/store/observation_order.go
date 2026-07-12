@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -14,6 +15,9 @@ type observationOrder struct {
 func observationSequenceOrderValue(sequence int64) int64 {
 	// Negative thread sequences mark metadata-only observations; their absolute
 	// value still participates in durable fetch ordering.
+	if sequence == math.MinInt64 {
+		return math.MaxInt64
+	}
 	if sequence < 0 {
 		return -sequence
 	}

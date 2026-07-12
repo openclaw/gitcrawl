@@ -35,7 +35,10 @@ create table threads (
   first_pulled_at text,
   last_pulled_at text,
   observation_sequence integer not null default 0
-    check (typeof(observation_sequence) = 'integer'),
+    check (
+      typeof(observation_sequence) = 'integer'
+      and observation_sequence >= -9223372036854775807
+    ),
   evidence_observation_sequence integer not null default 0
     check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
   updated_at text not null,

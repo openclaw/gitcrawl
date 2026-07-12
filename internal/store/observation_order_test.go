@@ -2,10 +2,17 @@ package store
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestObservationSequenceOrderValueHandlesMinInt64(t *testing.T) {
+	if got := observationSequenceOrderValue(math.MinInt64); got != math.MaxInt64 {
+		t.Fatalf("minimum sequence order value = %d, want %d", got, int64(math.MaxInt64))
+	}
+}
 
 func TestCompareObservationOrder(t *testing.T) {
 	tests := []struct {

@@ -8,6 +8,7 @@ import (
 const (
 	migrationThreadsCanonicalSchema            = "threads_canonical_schema"
 	migrationThreadRevisionsCanonicalSchema    = "thread_revisions_canonical_schema"
+	migrationThreadObservationSequenceValue    = "threads_observation_sequence_value"
 	migrationThreadObservationSequenceTable    = "thread_observation_sequence_table"
 	migrationThreadObservationSequenceShape    = "thread_observation_sequence_shape"
 	migrationThreadObservationSequenceRow      = "thread_observation_sequence_row"
@@ -149,6 +150,15 @@ func inspectCompatibilityMigrationsMode(
 		return pending, nil
 	}
 
+	if threadsCanonical {
+		drift, err := st.threadObservationSequenceValuesNeedRepair(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if drift {
+			add(migrationThreadObservationSequenceValue)
+		}
+	}
 	if threadsCanonical && revisionsCanonical {
 		drift, err := st.threadEvidenceObservationSequenceNeedsRepair(ctx)
 		if err != nil {
@@ -189,6 +199,21 @@ func inspectCompatibilityMigrationsMode(
 		}
 	}
 	return pending, nil
+}
+
+func (s *Store) threadObservationSequenceValuesNeedRepair(ctx context.Context) (bool, error) {
+	var drift bool
+	if err := s.q().QueryRowContext(ctx, `
+		select exists(
+			select 1
+			from threads
+			where observation_sequence < -9223372036854775807
+			limit 1
+		)
+	`).Scan(&drift); err != nil {
+		return false, fmt.Errorf("inspect thread observation sequence values: %w", err)
+	}
+	return drift, nil
 }
 
 func (s *Store) threadEvidenceObservationSequenceNeedsRepair(ctx context.Context) (bool, error) {
@@ -298,6 +323,8 @@ func (s *Store) threadObservationSequenceNeedsRepair(
 		select max(
 			coalesce((
 				select max(case
+					when observation_sequence < -9223372036854775807
+						then 9223372036854775807
 					when observation_sequence < 0 then -observation_sequence
 					else observation_sequence
 				end)
