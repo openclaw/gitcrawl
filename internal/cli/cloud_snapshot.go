@@ -261,7 +261,7 @@ order by thread_id, position`,
 		var rowCount int64
 		if err := db.QueryRowContext(
 			ctx,
-			"select count(*) from ("+spec.query+")",
+			"select count(*) from "+spec.name,
 		).Scan(&rowCount); err != nil {
 			return nil, fmt.Errorf("count cloud dataset %s: %w", spec.name, err)
 		}
