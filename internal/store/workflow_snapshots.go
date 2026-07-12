@@ -53,6 +53,14 @@ func (s *Store) applyLegacyWorkflowRunCache(
 		return nil
 	}
 
+	sourceByHead := make(map[string]string, len(runsByHead))
+	for headSHA, incoming := range runsByHead {
+		sourceUpdatedAt, err := legacyWorkflowSnapshotSource(detail, incoming)
+		if err != nil {
+			return err
+		}
+		sourceByHead[headSHA] = sourceUpdatedAt
+	}
 	sequence, err := s.NextThreadObservationSequence(ctx, detail.FetchedAt)
 	if err != nil {
 		return err
@@ -72,15 +80,11 @@ func (s *Store) applyLegacyWorkflowRunCache(
 		if headSHA != targetHeadSHA {
 			desired = mergeLegacyWorkflowRuns(expected.Runs, incoming)
 		}
-		sourceUpdatedAt, err := workflowRunSnapshotSource(incoming)
-		if err != nil {
-			return err
-		}
 		if _, err := s.ApplyWorkflowRunSnapshot(
 			ctx,
 			detail.RepoID,
 			headSHA,
-			sourceUpdatedAt,
+			sourceByHead[headSHA],
 			sequence,
 			expected,
 			desired,
@@ -112,6 +116,47 @@ func normalizeLegacyWorkflowRunSource(
 		return nil
 	}
 	return fmt.Errorf("missing created_at, updated_at, and fetched_at")
+}
+
+func legacyWorkflowSnapshotSource(
+	detail PullRequestDetail,
+	runs []WorkflowRun,
+) (string, error) {
+	if len(runs) > 0 {
+		return workflowRunSnapshotSource(runs)
+	}
+	latestSource := ""
+	latestKey := ""
+	for _, candidate := range []struct {
+		name  string
+		value string
+	}{
+		{name: "fetched_at", value: detail.FetchedAt},
+		{name: "updated_at", value: detail.UpdatedAt},
+	} {
+		value := strings.TrimSpace(candidate.value)
+		if value == "" {
+			continue
+		}
+		key, ok := timestampOrderKey(value)
+		if !ok {
+			return "", fmt.Errorf(
+				"empty workflow snapshot source %s is invalid: %q",
+				candidate.name,
+				value,
+			)
+		}
+		if latestSource == "" || key > latestKey {
+			latestSource = value
+			latestKey = key
+		}
+	}
+	if latestSource == "" {
+		return "", fmt.Errorf(
+			"empty workflow snapshot source requires valid pull request fetched_at or updated_at",
+		)
+	}
+	return latestSource, nil
 }
 
 func workflowRunSnapshotSource(runs []WorkflowRun) (string, error) {

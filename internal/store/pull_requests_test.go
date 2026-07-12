@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -309,6 +310,97 @@ func TestPullRequestCacheWorkflowWritesHonorOrderedSnapshotAcrossStores(t *testi
 		len(state.Runs) != 1 ||
 		state.Runs[0].RunID != "100" {
 		t.Fatalf("stale legacy write resurrected deleted workflow run: %+v", state)
+	}
+}
+
+func TestPullRequestCacheRejectsStaleEmptyWorkflowSnapshotAcrossStores(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	firstStore, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	t.Cleanup(func() { _ = firstStore.Close() })
+	repoID, threadIDs := seedVectorThreads(t, ctx, firstStore)
+	detail := PullRequestDetail{
+		ThreadID: threadIDs[1], RepoID: repoID, Number: 302, HeadSHA: "head",
+		RawJSON: "{}", FetchedAt: "2026-07-12T03:00:00Z", UpdatedAt: "2026-07-12T03:00:00Z",
+	}
+	initial := []WorkflowRun{{
+		RepoID: repoID, RunID: "100", RunNumber: 1, HeadSHA: "head",
+		UpdatedAtGH: "2026-07-12T03:00:00Z", RawJSON: "{}", FetchedAt: detail.FetchedAt,
+	}}
+	if err := firstStore.UpsertPullRequestCache(ctx, detail, nil, nil, nil, initial); err != nil {
+		t.Fatalf("seed newer workflow cache: %v", err)
+	}
+
+	secondStore, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open second store: %v", err)
+	}
+	t.Cleanup(func() { _ = secondStore.Close() })
+	staleDetail := detail
+	staleDetail.FetchedAt = "2026-07-12T02:00:00Z"
+	staleDetail.UpdatedAt = "2026-07-12T02:00:00Z"
+	if err := secondStore.UpsertPullRequestCacheFamilies(
+		ctx,
+		staleDetail,
+		nil,
+		nil,
+		nil,
+		nil,
+		PullRequestHydrationFamilies{WorkflowRuns: true},
+	); err != nil {
+		t.Fatalf("apply stale empty workflow cache: %v", err)
+	}
+
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+	if err := secondStore.Close(); err != nil {
+		t.Fatalf("close second store: %v", err)
+	}
+	reopened, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	state, err := reopened.ReadWorkflowRunSnapshotState(ctx, repoID, detail.HeadSHA)
+	if err != nil {
+		t.Fatalf("read reopened workflow snapshot: %v", err)
+	}
+	if state.SourceUpdatedAt != "2026-07-12T03:00:00Z" ||
+		len(state.Runs) != 1 ||
+		state.Runs[0].RunID != "100" {
+		t.Fatalf("stale empty workflow cache deleted newer state: %+v", state)
+	}
+}
+
+func TestPullRequestCacheRejectsClocklessEmptyWorkflowSnapshot(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	err = st.UpsertPullRequestCacheFamilies(
+		ctx,
+		PullRequestDetail{
+			ThreadID: threadIDs[1],
+			RepoID:   repoID,
+			Number:   302,
+			HeadSHA:  "head",
+			RawJSON:  "{}",
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		PullRequestHydrationFamilies{WorkflowRuns: true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "empty workflow snapshot source") {
+		t.Fatalf("clockless empty workflow snapshot error = %v", err)
 	}
 }
 
