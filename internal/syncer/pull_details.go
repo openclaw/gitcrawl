@@ -131,7 +131,9 @@ func (s *Syncer) workflowSnapshotObservation(
 			return "", false, fmt.Errorf("validate workflow reservation source: %w", err)
 		}
 	}
+	currentRunIDs := make(map[string]struct{}, len(currentRuns))
 	for _, current := range currentRuns {
+		currentRunIDs[current.RunID] = struct{}{}
 		currentSource, err := latestWorkflowTimestamp(current.UpdatedAtGH, current.CreatedAtGH)
 		if err != nil {
 			return "", false, fmt.Errorf(
@@ -179,6 +181,53 @@ func (s *Syncer) workflowSnapshotObservation(
 		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, currentSource)
 		if err != nil {
 			return "", false, err
+		}
+	}
+	for runID, incomingSource := range incoming {
+		if _, present := currentRunIDs[runID]; present {
+			continue
+		}
+		if !found || workflowTimestampBefore(reservationSource, incomingSource) {
+			continue
+		}
+		lookup, ok := s.client.(workflowRunLookupClient)
+		if !ok {
+			return "", false, fmt.Errorf(
+				"cannot verify reappearing workflow run %s for head %s",
+				runID,
+				headSHA,
+			)
+		}
+		exact, lookupErr := lookup.GetWorkflowRun(
+			ctx,
+			options.Owner,
+			options.Repo,
+			runID,
+			options.Reporter,
+		)
+		var requestErr *gh.RequestError
+		if errors.As(lookupErr, &requestErr) && requestErr.Status == 404 {
+			return sourceUpdatedAt, false, nil
+		}
+		if lookupErr != nil {
+			return "", false, fmt.Errorf("verify reappearing workflow run %s: %w", runID, lookupErr)
+		}
+		if exactRunID := jsonID(exact["id"]); exactRunID != runID {
+			return "", false, fmt.Errorf(
+				"verify reappearing workflow run %s: exact lookup returned %s",
+				runID,
+				exactRunID,
+			)
+		}
+		exactSource, err := latestWorkflowTimestamp(
+			stringValue(exact["updated_at"]),
+			stringValue(exact["created_at"]),
+		)
+		if err != nil {
+			return "", false, fmt.Errorf("verify reappearing workflow run %s source: %w", runID, err)
+		}
+		if workflowTimestampBefore(incomingSource, exactSource) {
+			return sourceUpdatedAt, false, nil
 		}
 	}
 	if found {
