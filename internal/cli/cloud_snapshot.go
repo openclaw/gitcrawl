@@ -132,28 +132,28 @@ from thread_revisions`
 	}
 
 	specs := []struct {
-		name        string
-		columns     []string
-		query       string
-		maxSourceAt string
+		name          string
+		columns       []string
+		query         string
+		sourceAtQuery string
 	}{
 		{
-			name:        "repositories",
-			columns:     gitcrawlRepositoryColumns,
-			query:       gitcrawlRepositoryExportSQL,
-			maxSourceAt: `select coalesce(max(updated_at), '') from repositories`,
+			name:          "repositories",
+			columns:       gitcrawlRepositoryColumns,
+			query:         gitcrawlRepositoryExportSQL,
+			sourceAtQuery: `select coalesce(updated_at, '') from repositories`,
 		},
 		{
-			name:        "threads",
-			columns:     threadColumns,
-			query:       threadSelect + "\norder by repo_id, number",
-			maxSourceAt: `select coalesce(max(coalesce(nullif(updated_at_gh, ''), updated_at)), '') from threads`,
+			name:          "threads",
+			columns:       threadColumns,
+			query:         threadSelect + "\norder by repo_id, number",
+			sourceAtQuery: `select coalesce(nullif(updated_at_gh, ''), updated_at, '') from threads`,
 		},
 		{
-			name:        "thread_revisions",
-			columns:     revisionColumns,
-			query:       revisionSelect + "\norder by id",
-			maxSourceAt: `select coalesce(max(coalesce(nullif(source_updated_at, ''), created_at)), '') from thread_revisions`,
+			name:          "thread_revisions",
+			columns:       revisionColumns,
+			query:         revisionSelect + "\norder by id",
+			sourceAtQuery: `select coalesce(nullif(source_updated_at, ''), created_at, '') from thread_revisions`,
 		},
 		{
 			name: "thread_fingerprints",
@@ -166,7 +166,7 @@ select id, thread_revision_id, algorithm_version, fingerprint_hash,
        fingerprint_slug, body_token_hash, file_set_hash, simhash64, created_at
 from thread_fingerprints
 order by id`,
-			maxSourceAt: `select coalesce(max(created_at), '') from thread_fingerprints`,
+			sourceAtQuery: `select coalesce(created_at, '') from thread_fingerprints`,
 		},
 		{
 			name: "thread_key_summaries",
@@ -179,7 +179,7 @@ select id, thread_revision_id, summary_kind, prompt_version, provider,
        model, input_hash, output_hash, key_text, created_at
 from thread_key_summaries
 order by id`,
-			maxSourceAt: `select coalesce(max(created_at), '') from thread_key_summaries`,
+			sourceAtQuery: `select coalesce(created_at, '') from thread_key_summaries`,
 		},
 		{
 			name: "cluster_groups",
@@ -196,7 +196,7 @@ select cluster.id, cluster.repo_id, cluster.stable_key, cluster.stable_slug,
        cluster.created_at, cluster.updated_at, coalesce(cluster.closed_at, '')
 from cluster_groups cluster
 order by cluster.id`,
-			maxSourceAt: `select coalesce(max(updated_at), '') from cluster_groups`,
+			sourceAtQuery: `select coalesce(updated_at, '') from cluster_groups`,
 		},
 		{
 			name: "cluster_memberships",
@@ -209,7 +209,7 @@ select cluster_id, thread_id, role, state, score_to_representative,
        created_at, updated_at, coalesce(removed_at, '')
 from cluster_memberships
 order by cluster_id, thread_id`,
-			maxSourceAt: `select coalesce(max(updated_at), '') from cluster_memberships`,
+			sourceAtQuery: `select coalesce(updated_at, '') from cluster_memberships`,
 		},
 		{
 			name: "pull_request_details",
@@ -225,7 +225,7 @@ select thread_id, repo_id, number, coalesce(base_sha, ''), coalesce(head_sha, ''
        fetched_at, updated_at
 from pull_request_details
 order by thread_id`,
-			maxSourceAt: `select coalesce(max(fetched_at), '') from pull_request_details`,
+			sourceAtQuery: `select coalesce(fetched_at, '') from pull_request_details`,
 		},
 		{
 			name: "pull_request_files",
@@ -238,7 +238,7 @@ select thread_id, position, path, coalesce(status, ''), additions, deletions,
        changes, coalesce(previous_path, ''), fetched_at
 from pull_request_files
 order by thread_id, position`,
-			maxSourceAt: `select coalesce(max(fetched_at), '') from pull_request_files`,
+			sourceAtQuery: `select coalesce(fetched_at, '') from pull_request_files`,
 		},
 	}
 
@@ -248,8 +248,8 @@ order by thread_id, position`,
 		if err != nil {
 			return nil, fmt.Errorf("export cloud dataset %s: %w", spec.name, err)
 		}
-		var maxSourceAt string
-		if err := db.QueryRowContext(ctx, spec.maxSourceAt).Scan(&maxSourceAt); err != nil {
+		maxSourceAt, err := latestRFC3339QueryValue(ctx, db, spec.sourceAtQuery)
+		if err != nil {
 			return nil, fmt.Errorf("read cloud dataset %s freshness: %w", spec.name, err)
 		}
 		datasets = append(datasets, gitcrawlCloudDataset{
@@ -283,9 +283,8 @@ func gitcrawlCloudCapabilities(ctx context.Context, db *sql.DB, observationOrder
 }
 
 func gitcrawlCloudSourceSyncAt(ctx context.Context, db *sql.DB) (string, error) {
-	var sourceSyncAt string
-	err := db.QueryRowContext(ctx, `
-select coalesce(max(value), '')
+	sourceSyncAt, err := latestRFC3339QueryValue(ctx, db, `
+select value
 from (
   select coalesce(finished_at, started_at, '') as value
   from sync_runs
@@ -294,11 +293,45 @@ from (
   select coalesce(nullif(updated_at_gh, ''), updated_at, '') from threads
   union all
   select coalesce(updated_at, '') from repositories
-)`).Scan(&sourceSyncAt)
+)`)
 	if err != nil {
 		return "", fmt.Errorf("read cloud snapshot source sync time: %w", err)
 	}
 	return sourceSyncAt, nil
+}
+
+func latestRFC3339QueryValue(ctx context.Context, db *sql.DB, query string) (string, error) {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var latest time.Time
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return "", err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return "", fmt.Errorf("parse RFC3339 timestamp %q: %w", value, err)
+		}
+		if latest.IsZero() || parsed.After(latest) {
+			latest = parsed
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if latest.IsZero() {
+		return "", nil
+	}
+	return latest.UTC().Format(time.RFC3339Nano), nil
 }
 
 func gitcrawlCloudHydration(ctx context.Context, snapshotPath string) (crawlstore.EnrichmentCoverage, error) {
