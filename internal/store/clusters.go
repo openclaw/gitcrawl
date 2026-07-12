@@ -736,6 +736,12 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 			if len(input.Members) == 0 {
 				return fmt.Errorf("durable cluster %q has no members", strings.TrimSpace(input.StableKey))
 			}
+			if !pruneMissingMembers && !retireMissing {
+				input, err = tx.reconcilePartialDurableClusterInput(ctx, repoID, input)
+				if err != nil {
+					return err
+				}
+			}
 			clusterID, err := tx.upsertDurableCluster(ctx, repoID, runID, input, now)
 			if err != nil {
 				return err
@@ -812,6 +818,103 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 		return SaveDurableClustersResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) reconcilePartialDurableClusterInput(ctx context.Context, repoID int64, input DurableClusterInput) (DurableClusterInput, error) {
+	placeholders := make([]string, 0, len(input.Members))
+	args := []any{repoID}
+	for _, member := range input.Members {
+		if member.ThreadID <= 0 {
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, member.ThreadID)
+	}
+	if len(placeholders) == 0 {
+		return input, nil
+	}
+	rows, err := s.q().QueryContext(ctx, `
+		select distinct cg.id, cg.stable_key, cg.stable_slug, cg.cluster_type,
+			coalesce(cg.representative_thread_id, 0), coalesce(cg.title, '')
+		from cluster_groups cg
+		join cluster_memberships cm on cm.cluster_id = cg.id
+		where cg.repo_id = ?
+			and cg.status = 'active'
+			and cg.closed_at is null
+			and cm.state = 'active'
+			and cm.thread_id in (`+strings.Join(placeholders, ",")+`)
+		order by cg.id
+	`, args...)
+	if err != nil {
+		return DurableClusterInput{}, fmt.Errorf("find partial durable cluster identity: %w", err)
+	}
+	defer rows.Close()
+
+	type clusterIdentity struct {
+		id                     int64
+		stableKey              string
+		stableSlug             string
+		clusterType            string
+		representativeThreadID int64
+		title                  string
+	}
+	var identities []clusterIdentity
+	for rows.Next() {
+		var identity clusterIdentity
+		if err := rows.Scan(
+			&identity.id,
+			&identity.stableKey,
+			&identity.stableSlug,
+			&identity.clusterType,
+			&identity.representativeThreadID,
+			&identity.title,
+		); err != nil {
+			return DurableClusterInput{}, fmt.Errorf("scan partial durable cluster identity: %w", err)
+		}
+		identities = append(identities, identity)
+	}
+	if err := rows.Err(); err != nil {
+		return DurableClusterInput{}, fmt.Errorf("iterate partial durable cluster identities: %w", err)
+	}
+	if len(identities) == 0 {
+		return input, nil
+	}
+	if len(identities) > 1 {
+		return DurableClusterInput{}, fmt.Errorf(
+			"partial durable cluster %q overlaps multiple active identities (%d and %d)",
+			strings.TrimSpace(input.StableKey),
+			identities[0].id,
+			identities[1].id,
+		)
+	}
+
+	identity := identities[0]
+	representativeChanged := identity.representativeThreadID != 0 &&
+		identity.representativeThreadID != input.RepresentativeThreadID
+	input.StableKey = identity.stableKey
+	input.StableSlug = identity.stableSlug
+	input.ClusterType = identity.clusterType
+	input.Title = identity.title
+	if identity.representativeThreadID != 0 {
+		input.RepresentativeThreadID = identity.representativeThreadID
+	}
+	input.Members = append([]DurableClusterMemberInput(nil), input.Members...)
+	for index := range input.Members {
+		member := &input.Members[index]
+		if member.ThreadID == input.RepresentativeThreadID {
+			member.Role = "canonical"
+			score := 1.0
+			member.ScoreToRepresentative = &score
+			continue
+		}
+		if representativeChanged {
+			if member.Role == "canonical" || member.Role == "representative" {
+				member.Role = "related"
+			}
+			member.ScoreToRepresentative = nil
+		}
+	}
+	return input, nil
 }
 
 func (s *Store) ExcludeClusterMemberLocally(ctx context.Context, repoID, clusterID int64, number int, reason string) (ClusterMemberOverride, error) {
