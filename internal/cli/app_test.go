@@ -829,7 +829,8 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 func testSnapshotPublishContract() crawlremote.Contract {
 	contract := crawlremote.BaseContract()
 	contract.Apps = []crawlremote.AppSpec{{
-		App: "gitcrawl",
+		App:     "gitcrawl",
+		Queries: gitcrawlCloudReaderQuerySpecs(),
 		IngestTables: []crawlremote.IngestTableSpec{
 			{Name: "repositories", Columns: gitcrawlRepositoryColumns},
 			{Name: "threads", Columns: gitcrawlThreadColumns},
@@ -1303,12 +1304,13 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 }
 
 func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
-	tests := []struct {
+	type remoteSurfaceTest struct {
 		name      string
 		want      string
 		mutate    func(*crawlremote.Contract)
 		extraArgs []string
-	}{
+	}
+	tests := []remoteSurfaceTest{
 		{
 			name: "missing ingest column",
 			want: "pull_request_files is missing required column position",
@@ -1337,6 +1339,64 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 				)
 			},
 		},
+		{
+			name: "missing reader query route",
+			want: "POST /v1/apps/:app/archives/:archive/query",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Routes = slices.DeleteFunc(
+					contract.Routes,
+					func(route crawlremote.RouteSpec) bool {
+						return route.Method == http.MethodPost &&
+							route.Path == "/v1/apps/:app/archives/:archive/query"
+					},
+				)
+			},
+		},
+		{
+			name: "zero reader queries",
+			want: "required reader query gitcrawl.threads.search",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Apps[0].Queries = nil
+			},
+		},
+		{
+			name: "duplicate reader query",
+			want: "required reader query gitcrawl.threads.search more than once",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Apps[0].Queries = append(
+					contract.Apps[0].Queries,
+					contract.Apps[0].Queries[0],
+				)
+			},
+		},
+	}
+	for _, required := range gitcrawlCloudReaderQuerySpecs() {
+		tests = append(tests,
+			remoteSurfaceTest{
+				name: "missing reader query " + required.Name,
+				want: "required reader query " + required.Name,
+				mutate: func(contract *crawlremote.Contract) {
+					contract.Apps[0].Queries = slices.DeleteFunc(
+						contract.Apps[0].Queries,
+						func(query crawlremote.QuerySpec) bool {
+							return query.Name == required.Name
+						},
+					)
+				},
+			},
+			remoteSurfaceTest{
+				name: "drifted reader query " + required.Name,
+				want: "reader query " + required.Name + " has arguments",
+				mutate: func(contract *crawlremote.Contract) {
+					for queryIndex := range contract.Apps[0].Queries {
+						query := &contract.Apps[0].Queries[queryIndex]
+						if query.Name == required.Name {
+							query.Args = append(slices.Clone(query.Args), "unexpected")
+						}
+					}
+				},
+			},
+		)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

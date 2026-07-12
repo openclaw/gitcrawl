@@ -34,6 +34,17 @@ var gitcrawlCloudCoverageColumns = []string{
 	"max_source_at", "dataset_generated_at", "complete", "mutation_token",
 }
 
+func gitcrawlCloudReaderQuerySpecs() []crawlremote.QuerySpec {
+	return []crawlremote.QuerySpec{
+		{Name: "gitcrawl.threads.search", Args: []string{"owner", "repo", "query", "kind", "state"}},
+		{Name: "gitcrawl.clusters.related", Args: []string{"owner", "repo", "number"}},
+		{Name: "gitcrawl.clusters.list", Args: []string{"owner", "repo", "status", "min_size"}},
+		{Name: "gitcrawl.clusters.members", Args: []string{"owner", "repo", "cluster_id"}},
+		{Name: "gitcrawl.pull_requests.review_context", Args: []string{"owner", "repo", "number"}},
+		{Name: "gitcrawl.coverage", Args: []string{"dataset"}},
+	}
+}
+
 func (a *App) runCloud(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageErr(fmt.Errorf("cloud requires a subcommand"))
@@ -487,6 +498,11 @@ func requireGitcrawlSnapshotPublishContract(
 		},
 		{
 			Method: http.MethodPost,
+			Path:   "/v1/apps/:app/archives/:archive/query",
+			Auth:   crawlremote.AuthReader,
+		},
+		{
+			Method: http.MethodPost,
 			Path:   "/v1/apps/:app/archives/:archive/ingest",
 			Auth:   crawlremote.AuthPublisher,
 		},
@@ -512,6 +528,36 @@ func requireGitcrawlSnapshotPublishContract(
 				required.Method,
 				required.Path,
 				required.Auth,
+			)
+		}
+	}
+	for _, required := range gitcrawlCloudReaderQuerySpecs() {
+		queryIndex := -1
+		for index, query := range appSpec.Queries {
+			if query.Name != required.Name {
+				continue
+			}
+			if queryIndex >= 0 {
+				return fmt.Errorf(
+					"remote contract advertises required reader query %s more than once",
+					required.Name,
+				)
+			}
+			queryIndex = index
+		}
+		if queryIndex < 0 {
+			return fmt.Errorf(
+				"remote contract does not advertise required reader query %s",
+				required.Name,
+			)
+		}
+		remoteArgs := appSpec.Queries[queryIndex].Args
+		if !slices.Equal(remoteArgs, required.Args) {
+			return fmt.Errorf(
+				"remote contract reader query %s has arguments %v, want %v",
+				required.Name,
+				remoteArgs,
+				required.Args,
 			)
 		}
 	}
