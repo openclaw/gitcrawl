@@ -212,6 +212,7 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
         from thread_revisions latest
         where latest.thread_id = t.id
         order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+          latest.observation_sequence desc,
           latest.id desc
         limit 1
       )
@@ -240,6 +241,7 @@ where t.repo_id = sqlc.arg(repo_id)
           from thread_revisions latest
           where latest.thread_id = t.id
           order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+            latest.observation_sequence desc,
             latest.id desc
           limit 1
         )

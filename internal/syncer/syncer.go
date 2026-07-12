@@ -120,6 +120,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
+	if err != nil {
+		return Stats{}, err
+	}
 	repoRaw, err := s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
 	if err != nil {
 		return Stats{}, err
@@ -285,7 +289,16 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			}
 			if hasFreshThreadEvidence(options, thread) {
 				attempt.EvidenceObserved++
-				enrichment, err := persistThreadEnrichment(ctx, st, thread, comments, pullFiles, pullCommits, s.now().Format(time.RFC3339Nano))
+				enrichment, err := persistThreadEnrichment(
+					ctx,
+					st,
+					thread,
+					comments,
+					pullFiles,
+					pullCommits,
+					s.now().Format(time.RFC3339Nano),
+					observationSequence,
+				)
 				if err != nil {
 					return err
 				}
@@ -531,12 +544,14 @@ func persistThreadEnrichment(
 	files []store.PullRequestFile,
 	commits []store.PullRequestCommit,
 	createdAt string,
+	observationSequence int64,
 ) (store.ThreadEnrichmentResult, error) {
 	evidence := store.ThreadEvidence{
-		Thread:   thread,
-		Comments: comments,
-		Files:    files,
-		Commits:  commits,
+		Thread:              thread,
+		ObservationSequence: observationSequence,
+		Comments:            comments,
+		Files:               files,
+		Commits:             commits,
 	}
 	var err error
 	if evidence.Comments == nil {

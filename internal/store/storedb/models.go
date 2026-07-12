@@ -309,16 +309,23 @@ type ThreadKeySummary struct {
 	CreatedAt        string `json:"created_at"`
 }
 
+type ThreadObservationSequence struct {
+	ID            int64  `json:"id"`
+	Value         int64  `json:"value"`
+	LastStartedAt string `json:"last_started_at"`
+}
+
 type ThreadRevision struct {
-	ID              int64          `json:"id"`
-	ThreadID        int64          `json:"thread_id"`
-	SourceUpdatedAt sql.NullString `json:"source_updated_at"`
-	ContentHash     string         `json:"content_hash"`
-	TitleHash       string         `json:"title_hash"`
-	BodyHash        string         `json:"body_hash"`
-	LabelsHash      string         `json:"labels_hash"`
-	RawJsonBlobID   sql.NullInt64  `json:"raw_json_blob_id"`
-	CreatedAt       string         `json:"created_at"`
+	ID                  int64          `json:"id"`
+	ThreadID            int64          `json:"thread_id"`
+	SourceUpdatedAt     sql.NullString `json:"source_updated_at"`
+	ContentHash         string         `json:"content_hash"`
+	TitleHash           string         `json:"title_hash"`
+	BodyHash            string         `json:"body_hash"`
+	LabelsHash          string         `json:"labels_hash"`
+	RawJsonBlobID       sql.NullInt64  `json:"raw_json_blob_id"`
+	ObservationSequence int64          `json:"observation_sequence"`
+	CreatedAt           string         `json:"created_at"`
 }
 
 type ThreadVector struct {

@@ -21,15 +21,16 @@ var (
 )
 
 type ThreadRevision struct {
-	ID              int64  `json:"id"`
-	ThreadID        int64  `json:"thread_id"`
-	SourceUpdatedAt string `json:"source_updated_at,omitempty"`
-	ContentHash     string `json:"content_hash"`
-	TitleHash       string `json:"title_hash"`
-	BodyHash        string `json:"body_hash"`
-	LabelsHash      string `json:"labels_hash"`
-	EvidenceJSON    string `json:"-"`
-	CreatedAt       string `json:"created_at"`
+	ID                  int64  `json:"id"`
+	ThreadID            int64  `json:"thread_id"`
+	SourceUpdatedAt     string `json:"source_updated_at,omitempty"`
+	ObservationSequence int64  `json:"observation_sequence"`
+	ContentHash         string `json:"content_hash"`
+	TitleHash           string `json:"title_hash"`
+	BodyHash            string `json:"body_hash"`
+	LabelsHash          string `json:"labels_hash"`
+	EvidenceJSON        string `json:"-"`
+	CreatedAt           string `json:"created_at"`
 }
 
 type ThreadFingerprint struct {
@@ -49,14 +50,15 @@ type ThreadFingerprint struct {
 }
 
 type ThreadEvidence struct {
-	Thread        Thread
-	Comments      []Comment
-	Detail        *PullRequestDetail
-	Files         []PullRequestFile
-	Commits       []PullRequestCommit
-	Checks        []PullRequestCheck
-	WorkflowRuns  []WorkflowRun
-	ReviewThreads []PullRequestReviewThread
+	Thread              Thread
+	ObservationSequence int64
+	Comments            []Comment
+	Detail              *PullRequestDetail
+	Files               []PullRequestFile
+	Commits             []PullRequestCommit
+	Checks              []PullRequestCheck
+	WorkflowRuns        []WorkflowRun
+	ReviewThreads       []PullRequestReviewThread
 }
 
 type ThreadEnrichmentResult struct {
@@ -167,23 +169,39 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	if strings.TrimSpace(createdAt) == "" {
 		createdAt = time.Now().UTC().Format(timeLayout)
 	}
+	if evidence.ObservationSequence <= 0 {
+		sequence, err := s.NextThreadObservationSequence(ctx, createdAt)
+		if err != nil {
+			return ThreadEnrichmentResult{}, err
+		}
+		evidence.ObservationSequence = sequence
+	}
 	revision, fingerprint := buildThreadEnrichment(evidence, createdAt)
 	evidenceBlobID, err := s.upsertThreadRevisionEvidenceBlob(ctx, revision)
 	if err != nil {
 		return ThreadEnrichmentResult{}, err
 	}
-	var latestID int64
-	var latestHash, latestSourceUpdatedAt string
+	var latestID, latestObservationSequence int64
+	var latestHash, latestSourceUpdatedAt, latestCreatedAt string
 	err = s.q().QueryRowContext(ctx, `
-		select id, content_hash, coalesce(source_updated_at, '')
+		select id, content_hash, coalesce(source_updated_at, ''), observation_sequence, created_at
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
+		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+			observation_sequence desc,
+			id desc
 		limit 1
-	`, revision.ThreadID).Scan(&latestID, &latestHash, &latestSourceUpdatedAt)
+	`, revision.ThreadID).Scan(
+		&latestID,
+		&latestHash,
+		&latestSourceUpdatedAt,
+		&latestObservationSequence,
+		&latestCreatedAt,
+	)
 	if err != nil && err != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
 	}
+	latestExists := err == nil
 	var observedID int64
 	observedSourceUpdatedAt := strings.TrimSpace(revision.SourceUpdatedAt)
 	observedTimestampKey, observedTimestampValid := timestampOrderKey(observedSourceUpdatedAt)
@@ -199,42 +217,71 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		where thread_id = ?
 			and content_hash = ?
 			and %s
-		order by id desc
+		order by observation_sequence desc, id desc
 		limit 1
 	`, observedTimestampCondition), revision.ThreadID, revision.ContentHash, observedTimestampValue).Scan(&observedID)
 	if observedErr != nil && observedErr != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read matching thread revision observation: %w", observedErr)
 	}
 
+	observationOrder := 1
+	if latestExists {
+		observationOrder = compareRevisionObservationOrder(revision, ThreadRevision{
+			ID:                  latestID,
+			ThreadID:            revision.ThreadID,
+			SourceUpdatedAt:     latestSourceUpdatedAt,
+			ObservationSequence: latestObservationSequence,
+			ContentHash:         latestHash,
+			CreatedAt:           latestCreatedAt,
+		})
+	}
 	created := false
 	switch {
-	case observedErr == nil:
+	case latestExists && observationOrder < 0 && observedErr == nil:
 		revision.ID = observedID
 		if _, err := s.q().ExecContext(ctx, `
 			update thread_revisions
 			set raw_json_blob_id = ?
 			where id = ?
 		`, evidenceBlobID, revision.ID); err != nil {
-			return ThreadEnrichmentResult{}, fmt.Errorf("refresh matching thread revision observation: %w", err)
+			return ThreadEnrichmentResult{}, fmt.Errorf("refresh historical thread revision evidence: %w", err)
 		}
-	case err == nil && latestHash == revision.ContentHash:
+	case latestExists && latestHash == revision.ContentHash:
 		revision.ID = latestID
-		refreshedSourceUpdatedAt := latestTimestamp(latestSourceUpdatedAt, revision.SourceUpdatedAt)
+		refreshedSourceUpdatedAt := latestSourceUpdatedAt
+		refreshedObservationSequence := latestObservationSequence
+		if observationOrder > 0 {
+			refreshedSourceUpdatedAt = latestTimestamp(
+				latestSourceUpdatedAt,
+				revision.SourceUpdatedAt,
+			)
+			refreshedObservationSequence = revision.ObservationSequence
+		}
 		if _, err := s.q().ExecContext(ctx, `
 			update thread_revisions
-			set source_updated_at = ?, raw_json_blob_id = ?
+			set source_updated_at = ?,
+				observation_sequence = ?,
+				raw_json_blob_id = ?
 			where id = ?
-		`, nullString(refreshedSourceUpdatedAt), evidenceBlobID, revision.ID); err != nil {
+		`, nullString(refreshedSourceUpdatedAt), refreshedObservationSequence, evidenceBlobID, revision.ID); err != nil {
 			return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision evidence: %w", err)
 		}
+	case latestExists && observationOrder == 0:
+		return ThreadEnrichmentResult{}, fmt.Errorf(
+			"conflicting thread revision observations share sequence %d",
+			revision.ObservationSequence,
+		)
 	default:
 		created = true
 		insert, err := s.q().ExecContext(ctx, `
 			insert into thread_revisions(
-				thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, raw_json_blob_id, created_at
+				thread_id, source_updated_at, observation_sequence, content_hash,
+				title_hash, body_hash, labels_hash, raw_json_blob_id, created_at
 			)
-			values(?, ?, ?, ?, ?, ?, ?, ?)
-		`, revision.ThreadID, nullString(revision.SourceUpdatedAt), revision.ContentHash, revision.TitleHash, revision.BodyHash, revision.LabelsHash, evidenceBlobID, revision.CreatedAt)
+			values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, revision.ThreadID, nullString(revision.SourceUpdatedAt), revision.ObservationSequence,
+			revision.ContentHash, revision.TitleHash, revision.BodyHash, revision.LabelsHash,
+			evidenceBlobID, revision.CreatedAt)
 		if err != nil {
 			return ThreadEnrichmentResult{}, fmt.Errorf("insert thread revision: %w", err)
 		}
@@ -357,14 +404,15 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 	evidenceJSON := mustStableJSON(canonical)
 	contentHash := StableHash(evidenceJSON)
 	revision := ThreadRevision{
-		ThreadID:        thread.ID,
-		SourceUpdatedAt: sourceUpdatedAt,
-		ContentHash:     contentHash,
-		TitleHash:       StableHash(thread.Title),
-		BodyHash:        StableHash(thread.Body),
-		LabelsHash:      StableHash(labelsJSON),
-		EvidenceJSON:    evidenceJSON,
-		CreatedAt:       createdAt,
+		ThreadID:            thread.ID,
+		SourceUpdatedAt:     sourceUpdatedAt,
+		ObservationSequence: evidence.ObservationSequence,
+		ContentHash:         contentHash,
+		TitleHash:           StableHash(thread.Title),
+		BodyHash:            StableHash(thread.Body),
+		LabelsHash:          StableHash(labelsJSON),
+		EvidenceJSON:        evidenceJSON,
+		CreatedAt:           createdAt,
 	}
 
 	titleTokens := fingerprintTokens(thread.Title, 4)
@@ -735,6 +783,42 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func compareRevisionObservationOrder(incoming, latest ThreadRevision) int {
+	incomingTimestamp := strings.TrimSpace(incoming.SourceUpdatedAt)
+	if incomingTimestamp == "" {
+		incomingTimestamp = strings.TrimSpace(incoming.CreatedAt)
+	}
+	latestTimestamp := strings.TrimSpace(latest.SourceUpdatedAt)
+	if latestTimestamp == "" {
+		latestTimestamp = strings.TrimSpace(latest.CreatedAt)
+	}
+	incomingKey, incomingValid := timestampOrderKey(incomingTimestamp)
+	latestKey, latestValid := timestampOrderKey(latestTimestamp)
+	switch {
+	case incomingValid && latestValid:
+		if incomingKey < latestKey {
+			return -1
+		}
+		if incomingKey > latestKey {
+			return 1
+		}
+	case incomingValid:
+		return 1
+	case latestValid:
+		return -1
+	case incomingTimestamp != latestTimestamp:
+		return -1
+	}
+	switch {
+	case incoming.ObservationSequence < latest.ObservationSequence:
+		return -1
+	case incoming.ObservationSequence > latest.ObservationSequence:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func latestTimestamp(values ...string) string {

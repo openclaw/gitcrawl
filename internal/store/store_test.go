@@ -266,7 +266,11 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	if !st.hasColumn(ctx, "thread_revisions", "raw_json_blob_id") {
 		t.Fatal("portable-pruned raw_json_blob_id column was not restored")
 	}
+	if !st.hasColumn(ctx, "thread_revisions", "observation_sequence") {
+		t.Fatal("thread revision observation sequence column was not restored")
+	}
 	var version, fingerprints int
+	var observationSequence int64
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
@@ -278,6 +282,34 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	}
 	if fingerprints != 1 {
 		t.Fatalf("preserved fingerprints = %d, want 1", fingerprints)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_revisions
+		where id = ?
+	`, result.RevisionID).Scan(&observationSequence); err != nil {
+		t.Fatalf("read migrated observation sequence: %v", err)
+	}
+	if observationSequence != result.RevisionID {
+		t.Fatalf(
+			"migrated observation sequence = %d, want revision id %d",
+			observationSequence,
+			result.RevisionID,
+		)
+	}
+	nextObservationSequence, err := st.NextThreadObservationSequence(
+		ctx,
+		"2026-07-12T00:03:00Z",
+	)
+	if err != nil {
+		t.Fatalf("next observation sequence: %v", err)
+	}
+	if nextObservationSequence <= observationSequence {
+		t.Fatalf(
+			"next observation sequence = %d, want > %d",
+			nextObservationSequence,
+			observationSequence,
+		)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
 		insert into thread_revisions(
@@ -372,7 +404,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_6") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_7") {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -405,7 +437,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 6;
+		pragma user_version = 7;
 	`)
 	if err != nil {
 		_ = db.Close()
@@ -511,7 +543,8 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_6") || !containsString(diag.PendingMigrations, "pull_request_files_position_key") {
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_7") ||
+		!containsString(diag.PendingMigrations, "pull_request_files_position_key") {
 		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
 	}
 	if len(diag.NextSteps) == 0 {

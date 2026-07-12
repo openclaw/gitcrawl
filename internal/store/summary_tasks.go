@@ -71,9 +71,10 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			from (
 				select tr.*,
 					row_number() over (
-						partition by tr.thread_id
-						order by gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) desc,
-							tr.id desc
+							partition by tr.thread_id
+							order by gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) desc,
+								tr.observation_sequence desc,
+								tr.id desc
 					) as observation_rank
 				from thread_revisions tr
 			)

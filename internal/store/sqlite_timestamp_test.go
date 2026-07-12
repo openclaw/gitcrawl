@@ -66,7 +66,9 @@ func TestSQLiteTimestampKeyOrdersSubMillisecondRevisions(t *testing.T) {
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
+		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+			observation_sequence desc,
+			id desc
 		limit 1
 	`, thread.ID).Scan(&latestID); err != nil {
 		t.Fatalf("latest revision: %v", err)

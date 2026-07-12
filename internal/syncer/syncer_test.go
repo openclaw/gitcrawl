@@ -17,6 +17,26 @@ import (
 
 type fakeGitHub struct{}
 
+type observationProbeGitHub struct {
+	fakeGitHub
+	store    *store.Store
+	sequence int64
+}
+
+func (f *observationProbeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.Reporter) (map[string]any, error) {
+	if err := f.store.DB().QueryRowContext(ctx, `
+		select value
+		from thread_observation_sequence
+		where id = 1
+	`).Scan(&f.sequence); err != nil {
+		return nil, err
+	}
+	if f.sequence <= 0 {
+		return nil, errors.New("thread observation sequence was not allocated before fetch")
+	}
+	return f.fakeGitHub.GetRepo(ctx, owner, repo, reporter)
+}
+
 type mutableCommentGitHub struct {
 	fakeGitHub
 	empty bool
@@ -556,6 +576,39 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 		if !strings.Contains(progressLogs.String(), want) {
 			t.Fatalf("missing %q in progress logs:\n%s", want, progressLogs.String())
 		}
+	}
+}
+
+func TestSyncAllocatesObservationSequenceBeforeFetching(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &observationProbeGitHub{store: st}
+	s := New(client, st)
+	s.now = func() time.Time { return time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC) }
+	if _, err := s.Sync(ctx, Options{
+		Owner:           "openclaw",
+		Repo:            "gitcrawl",
+		IncludeComments: true,
+	}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if client.sequence <= 0 {
+		t.Fatal("GitHub fetch did not observe an allocated sequence")
+	}
+	var revisionSequences int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(distinct observation_sequence)
+		from thread_revisions
+	`).Scan(&revisionSequences); err != nil {
+		t.Fatalf("revision observation sequences: %v", err)
+	}
+	if revisionSequences != 1 {
+		t.Fatalf("revision observation sequence count = %d, want 1", revisionSequences)
 	}
 }
 

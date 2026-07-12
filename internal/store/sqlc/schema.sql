@@ -66,6 +66,12 @@ create table blobs (
   created_at text not null
 );
 
+create table thread_observation_sequence (
+  id integer primary key check (id = 1),
+  value integer not null,
+  last_started_at text not null
+);
+
 create table thread_revisions (
   id integer primary key,
   thread_id integer not null references threads(id) on delete cascade,
@@ -75,6 +81,7 @@ create table thread_revisions (
   body_hash text not null,
   labels_hash text not null,
   raw_json_blob_id integer references blobs(id) on delete set null,
+  observation_sequence integer not null default 0,
   created_at text not null
 );
 

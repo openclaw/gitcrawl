@@ -425,20 +425,29 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 			if err != nil {
 				t.Fatalf("thread: %v", err)
 			}
-			firstA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:01Z")
+			firstA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+				Thread:              thread,
+				ObservationSequence: 1,
+			}, "2026-07-12T12:00:01Z")
 			if err != nil {
 				t.Fatalf("first A: %v", err)
 			}
 
 			thread.Title = "state B"
-			currentB, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:02Z")
+			currentB, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+				Thread:              thread,
+				ObservationSequence: 3,
+			}, "2026-07-12T12:00:02Z")
 			if err != nil {
 				t.Fatalf("current B: %v", err)
 			}
 			thread.Title = "state A"
 			thread.UpdatedAtGitHub = test.repeatedSourceUpdatedAt
 			thread.UpdatedAt = test.repeatedSourceUpdatedAt
-			repeatedA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:03Z")
+			repeatedA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+				Thread:              thread,
+				ObservationSequence: 2,
+			}, "2026-07-12T12:00:03Z")
 			if err != nil {
 				t.Fatalf("repeated A: %v", err)
 			}
@@ -456,10 +465,12 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 				t.Fatalf("revision count: %v", err)
 			}
 			if err := st.DB().QueryRowContext(ctx, `
-				select id
-				from thread_revisions
-				where thread_id = ?
-				order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
+					select id
+					from thread_revisions
+					where thread_id = ?
+					order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+						observation_sequence desc,
+						id desc
 				limit 1
 			`, thread.ID).Scan(&latestID); err != nil {
 				t.Fatalf("latest revision: %v", err)
@@ -468,6 +479,86 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 				t.Fatalf("revision count/latest = %d/%d, want 2/%d", revisionCount, latestID, currentB.RevisionID)
 			}
 		})
+	}
+}
+
+func TestUpsertThreadRevisionPreservesSameClockReviewThreadReversion(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "12", Number: 12, Kind: "pull_request", State: "open",
+		Title: "review thread transition", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/12",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T12:00:00Z", UpdatedAt: "2026-07-12T12:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	reviewThread := PullRequestReviewThread{
+		ThreadID: thread.ID, ReviewThreadID: "RT_1", IsResolved: false,
+		FirstCommentUpdatedAt: "2026-07-12T12:00:00Z", CommentsJSON: "[]", RawJSON: "{}",
+	}
+	firstA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread, ReviewThreads: []PullRequestReviewThread{reviewThread}, ObservationSequence: 1,
+	}, "2026-07-12T12:00:01Z")
+	if err != nil {
+		t.Fatalf("first A: %v", err)
+	}
+	reviewThread.IsResolved = true
+	currentB, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread, ReviewThreads: []PullRequestReviewThread{reviewThread}, ObservationSequence: 2,
+	}, "2026-07-12T12:00:02Z")
+	if err != nil {
+		t.Fatalf("current B: %v", err)
+	}
+	reviewThread.IsResolved = false
+	revertedA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread, ReviewThreads: []PullRequestReviewThread{reviewThread}, ObservationSequence: 3,
+	}, "2026-07-12T12:00:03Z")
+	if err != nil {
+		t.Fatalf("reverted A: %v", err)
+	}
+	if !revertedA.RevisionCreated ||
+		revertedA.RevisionID == firstA.RevisionID ||
+		revertedA.RevisionID == currentB.RevisionID {
+		t.Fatalf("first A=%+v, current B=%+v, reverted A=%+v", firstA, currentB, revertedA)
+	}
+
+	var revisionCount int
+	var latestID int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions
+		where thread_id = ?
+	`, thread.ID).Scan(&revisionCount); err != nil {
+		t.Fatalf("revision count: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select id
+		from thread_revisions
+		where thread_id = ?
+		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+			observation_sequence desc,
+			id desc
+		limit 1
+	`, thread.ID).Scan(&latestID); err != nil {
+		t.Fatalf("latest revision: %v", err)
+	}
+	if revisionCount != 3 || latestID != revertedA.RevisionID {
+		t.Fatalf("revision count/latest = %d/%d, want 3/%d", revisionCount, latestID, revertedA.RevisionID)
 	}
 }
 
@@ -550,7 +641,9 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
+		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+			observation_sequence desc,
+			id desc
 		limit 1
 	`, thread.ID).Scan(&latestID); err != nil {
 		t.Fatalf("latest revision: %v", err)

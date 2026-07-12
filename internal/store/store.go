@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 6
+	schemaVersion = 7
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -267,6 +267,16 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "thread_revisions", "raw_json_blob_id", "integer references blobs(id) on delete set null"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "thread_revisions", "observation_sequence", "integer not null default 0"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		update thread_revisions
+		set observation_sequence = id
+		where observation_sequence <= 0
+	`); err != nil {
+		return fmt.Errorf("backfill thread revision observation sequence: %w", err)
+	}
 	hadThreadBody := s.hasColumn(ctx, "threads", "body")
 	if err := s.ensureColumn(ctx, "threads", "body", "text"); err != nil {
 		return err
@@ -441,18 +451,19 @@ func (s *Store) ensureThreadRevisionTransitionHistory(ctx context.Context) error
 			source_updated_at text,
 			content_hash text not null,
 			title_hash text not null,
-			body_hash text not null,
-			labels_hash text not null,
-			raw_json_blob_id integer references blobs(id) on delete set null,
-			created_at text not null
-		)`,
+				body_hash text not null,
+				labels_hash text not null,
+				raw_json_blob_id integer references blobs(id) on delete set null,
+				observation_sequence integer not null default 0,
+				created_at text not null
+			)`,
 		`insert into thread_revisions_new(
-			id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
-			labels_hash, raw_json_blob_id, created_at
-		)
-		select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
-			labels_hash, raw_json_blob_id, created_at
-		from thread_revisions`,
+				id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+				labels_hash, raw_json_blob_id, observation_sequence, created_at
+			)
+			select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+				labels_hash, raw_json_blob_id, id, created_at
+			from thread_revisions`,
 		`drop table thread_revisions`,
 		`alter table thread_revisions_new rename to thread_revisions`,
 		`create index if not exists idx_thread_revisions_thread_created on thread_revisions(thread_id, created_at)`,

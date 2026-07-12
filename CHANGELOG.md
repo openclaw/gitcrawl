@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Select the latest thread revision by lossless RFC3339Nano source observation time rather than insertion order so out-of-order hydration cannot hide summaries, embeddings, or archive coverage behind stale evidence, while keeping repeated stale observations idempotent.
+- Select the latest thread revision by lossless RFC3339Nano source time plus a durable pre-fetch observation sequence, so delayed stale hydration cannot hide summaries, embeddings, or archive coverage while legitimate same-clock state reversions remain visible.
 
 ## 0.7.1 - 2026-07-09
 
