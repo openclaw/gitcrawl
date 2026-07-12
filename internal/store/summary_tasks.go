@@ -12,7 +12,7 @@ const (
 	SummaryPromptVersionV1  = "key-summary-v1"
 	MaxSummaryTextRunes     = 12_000
 	MaxSummaryTextBytes     = 24_000
-	summaryInputHashVersion = "summary-input:v1"
+	summaryInputHashVersion = "summary-input:v2"
 )
 
 type SummaryTask struct {
@@ -74,12 +74,12 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			) latest on latest.id = tr.id
 		)
 		select t.id, lr.id, t.number, t.kind, t.title,
-			coalesce(nullif(d.raw_text, ''), nullif(d.dedupe_text, ''), nullif(t.body, ''), t.title),
+			b.inline_text,
 			lr.content_hash,
 			coalesce(s.input_hash, '')
 		from threads t
 		join latest_revisions lr on lr.thread_id = t.id
-		left join documents d on d.thread_id = t.id
+		join blobs b on b.id = lr.raw_json_blob_id
 		left join thread_key_summaries s
 			on s.thread_revision_id = lr.id
 			and s.summary_kind = ?
@@ -89,7 +89,10 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 		where t.repo_id = ?
 			and (? != 0 or (t.state = 'open' and t.closed_at_local is null))
 			and (? is null or t.number = ?)
-			and d.thread_id is not null
+			and b.sha256 = lr.content_hash
+			and b.storage_kind = 'inline'
+			and b.compression = 'none'
+			and nullif(b.inline_text, '') is not null
 			and julianday(coalesce(nullif(lr.source_updated_at, ''), lr.created_at)) >=
 				julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
@@ -115,9 +118,10 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 		); err != nil {
 			return nil, fmt.Errorf("scan summary task: %w", err)
 		}
-		capped := capStringByRunesAndBytes(strings.TrimSpace(task.Text), MaxSummaryTextRunes, MaxSummaryTextBytes)
-		task.TextTruncated = capped != strings.TrimSpace(task.Text)
-		task.Text = capped
+		task.Text = strings.TrimSpace(task.Text)
+		if capStringByRunesAndBytes(task.Text, MaxSummaryTextRunes, MaxSummaryTextBytes) != task.Text {
+			continue
+		}
 		task.InputHash = StableHash(fmt.Sprintf(
 			"%s\nprovider=%s\nmodel=%s\nkind=%s\nprompt=%s\nrevision=%s\n%s",
 			summaryInputHashVersion,

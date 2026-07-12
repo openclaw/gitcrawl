@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,7 +160,7 @@ func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 	}
 }
 
-func TestSummaryTasksValidateAndBoundStoredEvidence(t *testing.T) {
+func TestSummaryTasksUseImmutableRevisionEvidence(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -236,8 +237,10 @@ func TestSummaryTasksValidateAndBoundStoredEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
-	if len(tasks) != 1 || !tasks[0].TextTruncated || len([]rune(tasks[0].Text)) > MaxSummaryTextRunes {
-		t.Fatalf("bounded task = %+v", tasks)
+	if len(tasks) != 1 || tasks[0].TextTruncated ||
+		!strings.Contains(tasks[0].Text, `"title":"Bound summary evidence"`) ||
+		strings.Contains(tasks[0].Text, strings.Repeat("evidence ", 100)) {
+		t.Fatalf("revision-bound task = %+v", tasks)
 	}
 	summary := ThreadKeySummary{
 		ThreadRevisionID: enrichment.RevisionID,
@@ -279,7 +282,110 @@ func TestSummaryTasksValidateAndBoundStoredEvidence(t *testing.T) {
 	}
 }
 
-func TestListSummaryTasksRequiresFullDocumentEvidence(t *testing.T) {
+func TestSummaryTaskIncludesCanonicalPullRequestEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T03:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "42", Number: 42, Kind: "pull_request", State: "open",
+		Title: "Bind summary evidence", Body: "body", IsDraft: true,
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/pull/42",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T03:00:00Z", UpdatedAt: "2026-07-12T03:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread,
+		Detail: &PullRequestDetail{
+			ThreadID: thread.ID, RepoID: repoID, Number: thread.Number,
+			BaseSHA: "base", HeadSHA: "head", MergeableState: "blocked", Additions: 8, Deletions: 2, ChangedFiles: 3,
+		},
+		Checks: []PullRequestCheck{{
+			ThreadID: thread.ID, Name: "test", Status: "completed", Conclusion: "failure", WorkflowName: "CI",
+		}},
+		WorkflowRuns: []WorkflowRun{{
+			RepoID: repoID, RunID: "99", RunNumber: 7, HeadSHA: "head", Status: "completed", Conclusion: "failure", WorkflowName: "CI",
+		}},
+		ReviewThreads: []PullRequestReviewThread{{
+			ThreadID: thread.ID, ReviewThreadID: "RT1", Path: "internal/store/summary_tasks.go",
+			IsResolved: false, FirstCommentBody: "include canonical evidence", CommentsJSON: `[{"body":"include canonical evidence"}]`,
+		}},
+	}, "2026-07-12T03:01:00Z")
+	if err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	tasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: repoID, Provider: "openai", Model: "summary-test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1, Number: thread.Number,
+	})
+	if err != nil {
+		t.Fatalf("list summary tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].RevisionID != enrichment.RevisionID || StableHash(tasks[0].Text) != tasks[0].RevisionHash {
+		t.Fatalf("summary tasks = %+v", tasks)
+	}
+	var canonical canonicalThreadEvidence
+	if err := json.Unmarshal([]byte(tasks[0].Text), &canonical); err != nil {
+		t.Fatalf("decode canonical evidence: %v", err)
+	}
+	if !canonical.IsDraft || canonical.MergeableState != "blocked" ||
+		len(canonical.Checks) != 1 || len(canonical.WorkflowRuns) != 1 || len(canonical.ReviewThreads) != 1 {
+		t.Fatalf("canonical summary evidence = %+v", canonical)
+	}
+}
+
+func TestListSummaryTasksFailsClosedOnOversizedRevisionEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T03:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "43", Number: 43, Kind: "issue", State: "open",
+		Title: "Oversized evidence", Body: strings.Repeat("x", MaxSummaryTextBytes+1),
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/issues/43",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T03:00:00Z", UpdatedAt: "2026-07-12T03:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T03:01:00Z"); err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	tasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: repoID, Provider: "openai", Model: "summary-test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1,
+	})
+	if err != nil {
+		t.Fatalf("list summary tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("oversized canonical evidence must fail closed: %+v", tasks)
+	}
+}
+
+func TestListSummaryTasksRequiresStoredRevisionEvidence(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -304,8 +410,12 @@ func TestListSummaryTasksRequiresFullDocumentEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("thread: %v", err)
 	}
-	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z"); err != nil {
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z")
+	if err != nil {
 		t.Fatalf("enrichment: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `update thread_revisions set raw_json_blob_id = null where id = ?`, enrichment.RevisionID); err != nil {
+		t.Fatalf("clear revision evidence: %v", err)
 	}
 	tasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
 		RepoID: repoID, Provider: "openai", Model: "summary-test",
@@ -315,6 +425,6 @@ func TestListSummaryTasksRequiresFullDocumentEvidence(t *testing.T) {
 		t.Fatalf("list summary tasks: %v", err)
 	}
 	if len(tasks) != 0 {
-		t.Fatalf("portable body fallback must not replace full-evidence summary: %+v", tasks)
+		t.Fatalf("missing revision evidence must fail closed: %+v", tasks)
 	}
 }

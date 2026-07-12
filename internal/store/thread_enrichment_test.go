@@ -41,6 +41,7 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 		AssigneesJSON:     `[{"login":"bob"}]`,
 		RawJSON:           "{}",
 		ContentHash:       "github-thread-hash",
+		IsDraft:           true,
 		UpdatedAtGitHub:   "2026-07-12T00:00:00Z",
 		UpdatedAt:         "2026-07-12T00:00:00Z",
 	}
@@ -50,7 +51,11 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 	}
 	evidence := ThreadEvidence{
 		Thread: thread,
-		Detail: &PullRequestDetail{ThreadID: thread.ID, RepoID: repoID, Number: 42, BaseSHA: "base", HeadSHA: "head", FetchedAt: "2026-07-12T00:01:00Z", UpdatedAt: "2026-07-12T00:01:00Z"},
+		Detail: &PullRequestDetail{
+			ThreadID: thread.ID, RepoID: repoID, Number: 42, BaseSHA: "base", HeadSHA: "head",
+			MergeableState: "clean", Additions: 12, Deletions: 3, ChangedFiles: 2,
+			FetchedAt: "2026-07-12T00:01:00Z", UpdatedAt: "2026-07-12T00:01:00Z",
+		},
 		Files: []PullRequestFile{
 			{ThreadID: thread.ID, Path: "internal/store/portable.go", Status: "modified", Patch: "@@ portable"},
 			{ThreadID: thread.ID, Path: "internal/store/schema.go", Status: "modified", Patch: "@@ schema"},
@@ -63,6 +68,12 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 			{ThreadID: thread.ID, ReviewThreadID: "RT2", Path: "internal/store/schema.go", FirstCommentBody: "schema note", CommentsJSON: `[{"body":"schema note"}]`},
 			{ThreadID: thread.ID, ReviewThreadID: "RT1", Path: "internal/store/portable.go", FirstCommentBody: "portable note", CommentsJSON: `[{"body":"portable note"}]`},
 		},
+		Checks: []PullRequestCheck{
+			{ThreadID: thread.ID, Name: "test", Status: "completed", Conclusion: "success", WorkflowName: "CI"},
+		},
+		WorkflowRuns: []WorkflowRun{
+			{RepoID: repoID, RunID: "99", RunNumber: 7, HeadSHA: "head", Status: "completed", Conclusion: "success", WorkflowName: "CI"},
+		},
 	}
 
 	first, err := st.UpsertThreadRevisionAndFingerprint(ctx, evidence, "2026-07-12T00:02:00Z")
@@ -71,6 +82,23 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 	}
 	if !first.RevisionCreated || !first.FingerprintUpserted {
 		t.Fatalf("first result = %+v", first)
+	}
+	var evidenceHash, evidenceJSON string
+	if err := st.DB().QueryRowContext(ctx, `
+		select b.sha256, b.inline_text
+		from thread_revisions tr
+		join blobs b on b.id = tr.raw_json_blob_id
+		where tr.id = ?
+	`, first.RevisionID).Scan(&evidenceHash, &evidenceJSON); err != nil {
+		t.Fatalf("revision evidence: %v", err)
+	}
+	if evidenceHash != StableHash(evidenceJSON) ||
+		!strings.Contains(evidenceJSON, `"is_draft":true`) ||
+		!strings.Contains(evidenceJSON, `"mergeable_state":"clean"`) ||
+		!strings.Contains(evidenceJSON, `"checks":[`) ||
+		!strings.Contains(evidenceJSON, `"workflow_runs":[`) ||
+		!strings.Contains(evidenceJSON, `"review_threads":[`) {
+		t.Fatalf("revision evidence hash=%q json=%s", evidenceHash, evidenceJSON)
 	}
 
 	evidence.Files[0], evidence.Files[1] = evidence.Files[1], evidence.Files[0]

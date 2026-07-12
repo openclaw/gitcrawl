@@ -28,6 +28,7 @@ type ThreadRevision struct {
 	TitleHash       string `json:"title_hash"`
 	BodyHash        string `json:"body_hash"`
 	LabelsHash      string `json:"labels_hash"`
+	EvidenceJSON    string `json:"-"`
 	CreatedAt       string `json:"created_at"`
 }
 
@@ -78,6 +79,10 @@ type canonicalThreadEvidence struct {
 	IsDraft           bool                    `json:"is_draft"`
 	BaseSHA           string                  `json:"base_sha,omitempty"`
 	HeadSHA           string                  `json:"head_sha,omitempty"`
+	MergeableState    string                  `json:"mergeable_state,omitempty"`
+	Additions         int                     `json:"additions,omitempty"`
+	Deletions         int                     `json:"deletions,omitempty"`
+	ChangedFiles      int                     `json:"changed_files,omitempty"`
 	Comments          []canonicalComment      `json:"comments,omitempty"`
 	Files             []canonicalChangedFile  `json:"files,omitempty"`
 	Commits           []canonicalCommit       `json:"commits,omitempty"`
@@ -163,9 +168,13 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		createdAt = time.Now().UTC().Format(timeLayout)
 	}
 	revision, fingerprint := buildThreadEnrichment(evidence, createdAt)
+	evidenceBlobID, err := s.upsertThreadRevisionEvidenceBlob(ctx, revision)
+	if err != nil {
+		return ThreadEnrichmentResult{}, err
+	}
 	var latestID int64
 	var latestHash, latestSourceUpdatedAt string
-	err := s.q().QueryRowContext(ctx, `
+	err = s.q().QueryRowContext(ctx, `
 		select id, content_hash, coalesce(source_updated_at, '')
 		from thread_revisions
 		where thread_id = ?
@@ -179,10 +188,10 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	if created {
 		insert, err := s.q().ExecContext(ctx, `
 			insert into thread_revisions(
-				thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at
+				thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, raw_json_blob_id, created_at
 			)
-			values(?, ?, ?, ?, ?, ?, ?)
-		`, revision.ThreadID, nullString(revision.SourceUpdatedAt), revision.ContentHash, revision.TitleHash, revision.BodyHash, revision.LabelsHash, revision.CreatedAt)
+			values(?, ?, ?, ?, ?, ?, ?, ?)
+		`, revision.ThreadID, nullString(revision.SourceUpdatedAt), revision.ContentHash, revision.TitleHash, revision.BodyHash, revision.LabelsHash, evidenceBlobID, revision.CreatedAt)
 		if err != nil {
 			return ThreadEnrichmentResult{}, fmt.Errorf("insert thread revision: %w", err)
 		}
@@ -193,14 +202,12 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	} else {
 		revision.ID = latestID
 		refreshedSourceUpdatedAt := latestTimestamp(latestSourceUpdatedAt, revision.SourceUpdatedAt)
-		if refreshedSourceUpdatedAt != latestSourceUpdatedAt {
-			if _, err := s.q().ExecContext(ctx, `
-				update thread_revisions
-				set source_updated_at = ?
-				where id = ?
-			`, nullString(refreshedSourceUpdatedAt), revision.ID); err != nil {
-				return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision source timestamp: %w", err)
-			}
+		if _, err := s.q().ExecContext(ctx, `
+			update thread_revisions
+			set source_updated_at = ?, raw_json_blob_id = ?
+			where id = ?
+		`, nullString(refreshedSourceUpdatedAt), evidenceBlobID, revision.ID); err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision evidence: %w", err)
 		}
 	}
 	fingerprint.ThreadRevisionID = revision.ID
@@ -244,6 +251,25 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	}, nil
 }
 
+func (s *Store) upsertThreadRevisionEvidenceBlob(ctx context.Context, revision ThreadRevision) (int64, error) {
+	var blobID int64
+	if err := s.q().QueryRowContext(ctx, `
+		insert into blobs(sha256, media_type, compression, size_bytes, storage_kind, inline_text, created_at)
+		values(?, 'application/json', 'none', ?, 'inline', ?, ?)
+		on conflict(sha256) do update set
+			media_type = excluded.media_type,
+			compression = excluded.compression,
+			size_bytes = excluded.size_bytes,
+			storage_kind = excluded.storage_kind,
+			storage_path = null,
+			inline_text = excluded.inline_text
+		returning id
+	`, revision.ContentHash, len([]byte(revision.EvidenceJSON)), revision.EvidenceJSON, revision.CreatedAt).Scan(&blobID); err != nil {
+		return 0, fmt.Errorf("store thread revision evidence: %w", err)
+	}
+	return blobID, nil
+}
+
 func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRevision, ThreadFingerprint) {
 	thread := evidence.Thread
 	labels := canonicalNameList(thread.LabelsJSON, "name")
@@ -277,6 +303,10 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 	if evidence.Detail != nil {
 		canonical.BaseSHA = evidence.Detail.BaseSHA
 		canonical.HeadSHA = evidence.Detail.HeadSHA
+		canonical.MergeableState = evidence.Detail.MergeableState
+		canonical.Additions = evidence.Detail.Additions
+		canonical.Deletions = evidence.Detail.Deletions
+		canonical.ChangedFiles = evidence.Detail.ChangedFiles
 		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, evidence.Detail.UpdatedAt, evidence.Detail.FetchedAt)
 	}
 	for _, reviewThread := range evidence.ReviewThreads {
@@ -292,7 +322,8 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, run.UpdatedAtGH, run.CreatedAtGH, run.FetchedAt)
 	}
 	labelsJSON := mustStableJSON(labels)
-	contentHash := StableHash(mustStableJSON(canonical))
+	evidenceJSON := mustStableJSON(canonical)
+	contentHash := StableHash(evidenceJSON)
 	revision := ThreadRevision{
 		ThreadID:        thread.ID,
 		SourceUpdatedAt: sourceUpdatedAt,
@@ -300,6 +331,7 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 		TitleHash:       StableHash(thread.Title),
 		BodyHash:        StableHash(thread.Body),
 		LabelsHash:      StableHash(labelsJSON),
+		EvidenceJSON:    evidenceJSON,
 		CreatedAt:       createdAt,
 	}
 
