@@ -153,7 +153,7 @@ func TestOpenMigratesAuthorAssociationFromVersionFour(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesThreadRevisionTransitionHistoryFromVersionFive(t *testing.T) {
+func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
 	st, err := Open(ctx, dbPath)
@@ -227,15 +227,19 @@ func TestOpenMigratesThreadRevisionTransitionHistoryFromVersionFive(t *testing.T
 			title_hash text not null,
 			body_hash text not null,
 			labels_hash text not null,
-			raw_json_blob_id integer references blobs(id) on delete set null,
 			created_at text not null,
 			unique(thread_id, content_hash)
 		)`,
-		`insert into thread_revisions_legacy
-			select * from thread_revisions`,
+		`insert into thread_revisions_legacy(
+			id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, created_at
+		)
+		select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, created_at
+		from thread_revisions`,
 		`drop table thread_revisions`,
 		`alter table thread_revisions_legacy rename to thread_revisions`,
-		`pragma user_version = 5`,
+		`pragma user_version = 4`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			_ = tx.Rollback()
@@ -258,6 +262,9 @@ func TestOpenMigratesThreadRevisionTransitionHistoryFromVersionFive(t *testing.T
 	defer st.Close()
 	if st.threadRevisionsHaveUniqueContentHash(ctx) {
 		t.Fatal("legacy thread revision uniqueness was not removed")
+	}
+	if !st.hasColumn(ctx, "thread_revisions", "raw_json_blob_id") {
+		t.Fatal("portable-pruned raw_json_blob_id column was not restored")
 	}
 	var version, fingerprints int
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {

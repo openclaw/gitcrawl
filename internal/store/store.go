@@ -264,6 +264,9 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "repositories", "raw_json", "text"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "thread_revisions", "raw_json_blob_id", "integer references blobs(id) on delete set null"); err != nil {
+		return err
+	}
 	hadThreadBody := s.hasColumn(ctx, "threads", "body")
 	if err := s.ensureColumn(ctx, "threads", "body", "text"); err != nil {
 		return err
