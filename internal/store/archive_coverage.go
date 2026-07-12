@@ -291,7 +291,7 @@ func (s *Store) archiveEnrichmentCoverage(ctx context.Context, repoID int64) (En
 	if err != nil {
 		return EnrichmentCoverage{}, err
 	}
-	syncObservedAt, ok, err := s.archiveLatestSuccessfulRunAt(ctx, repoID, "sync_runs")
+	syncObservedAt, ok, err := s.archiveLatestSuccessfulHydrationRunAt(ctx, repoID)
 	if err != nil {
 		return EnrichmentCoverage{}, err
 	}
@@ -307,6 +307,36 @@ func (s *Store) archiveEnrichmentCoverage(ctx context.Context, repoID int64) (En
 		coverage.Summaries.LatestAt = formatArchiveCoverageTimestamp(summaryObservedAt)
 	}
 	return coverage, nil
+}
+
+func (s *Store) archiveLatestSuccessfulHydrationRunAt(ctx context.Context, repoID int64) (time.Time, bool, error) {
+	if !s.archiveCoverageHasColumns(ctx, "sync_runs", "repo_id", "status", "finished_at", "stats_json") {
+		return time.Time{}, false, nil
+	}
+	var value sql.NullString
+	if err := s.q().QueryRowContext(ctx, `
+		select max(finished_at)
+		from sync_runs
+		where repo_id = ?
+		  and status in ('success', 'completed')
+		  and case
+			when json_valid(stats_json) then
+			  coalesce(json_extract(stats_json, '$.metadata_only'), 1) = 0
+			  or coalesce(json_extract(stats_json, '$.revisions_created'), 0) > 0
+			  or coalesce(json_extract(stats_json, '$.fingerprints_upserted'), 0) > 0
+			else 0
+		  end
+	`, repoID).Scan(&value); err != nil {
+		return time.Time{}, false, fmt.Errorf("read latest successful sync hydration observation: %w", err)
+	}
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, ok := parseArchiveCoverageTimestamp(value.String)
+	if !ok {
+		return time.Time{}, false, fmt.Errorf("latest successful sync hydration observation is invalid: %q", value.String)
+	}
+	return parsed, true, nil
 }
 
 func (s *Store) archiveLatestSuccessfulRunAt(ctx context.Context, repoID int64, table string) (time.Time, bool, error) {

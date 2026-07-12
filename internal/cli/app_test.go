@@ -4890,6 +4890,15 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	if err := run.Run(ctx, []string{"--config", configPath, "configure", "--embed-model", "text-embedding-3-large"}); err != nil {
 		t.Fatalf("configure new embed model: %v", err)
 	}
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--json"}); err != nil {
+		t.Fatalf("compatible model fallback cluster: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"fallback": true`) ||
+		!strings.Contains(stdout.String(), `"partial": true`) ||
+		!strings.Contains(stdout.String(), `"complete": false`) {
+		t.Fatalf("compatible model fallback coverage output = %q", stdout.String())
+	}
 	st, err = store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("reopen store before model migration cluster: %v", err)
@@ -4917,8 +4926,13 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--json"}); err == nil || !strings.Contains(err.Error(), "vector coverage is incomplete") {
-		t.Fatalf("model migration cluster error = %v", err)
+	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--json"}); err != nil {
+		t.Fatalf("compatible partial model migration cluster: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"complete": false`) ||
+		!strings.Contains(stdout.String(), `"partial": true`) ||
+		!strings.Contains(stdout.String(), `"missing": 1`) {
+		t.Fatalf("compatible partial cluster coverage output = %q", stdout.String())
 	}
 	st, err = store.Open(ctx, dbPath)
 	if err != nil {
@@ -4933,6 +4947,11 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store after model migration cluster: %v", err)
+	}
+
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--strict-vectors", "--json"}); err == nil || !strings.Contains(err.Error(), "vector coverage is incomplete") {
+		t.Fatalf("strict model migration cluster error = %v", err)
 	}
 
 	stdout.Reset()
@@ -4976,7 +4995,7 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	}
 }
 
-func TestClusterAndRefreshRejectMissingVectorsBeforeMutation(t *testing.T) {
+func TestClusterAndRefreshStrictVectorsRejectMissingCoverageBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -5007,8 +5026,8 @@ func TestClusterAndRefreshRejectMissingVectorsBeforeMutation(t *testing.T) {
 	}
 
 	for _, args := range [][]string{
-		{"--config", configPath, "cluster", "openclaw/openclaw", "--json"},
-		{"--config", configPath, "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--json"},
+		{"--config", configPath, "cluster", "openclaw/openclaw", "--strict-vectors", "--json"},
+		{"--config", configPath, "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--strict-vectors", "--json"},
 	} {
 		err := New().Run(ctx, args)
 		if err == nil || !strings.Contains(err.Error(), "no fresh vectors are available") {
@@ -5275,6 +5294,9 @@ func TestClusterCommandAllowsExplicitUnsupportedBasisWithoutRetirement(t *testin
 	}
 	if !strings.Contains(stdout.String(), `"cluster_count": 1`) {
 		t.Fatalf("configured cluster output = %q", stdout.String())
+	}
+	if err := configured.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--strict-vectors", "--json"}); err == nil || !strings.Contains(err.Error(), "vector coverage cannot be verified") {
+		t.Fatalf("strict custom basis error = %v", err)
 	}
 }
 

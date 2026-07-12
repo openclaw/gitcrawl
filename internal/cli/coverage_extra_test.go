@@ -191,8 +191,22 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 		{"--config", configPath, "--json", "cluster", "openclaw/openclaw", "--threshold", "0.5", "--min-size", "2", "--limit", "2"},
 		{"--config", configPath, "--json", "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--threshold", "0.5", "--min-size", "2"},
 	} {
+		run := New()
+		var stdout bytes.Buffer
+		run.Stdout = &stdout
+		if err := run.Run(ctx, args); err != nil {
+			t.Fatalf("%v compatible fallback failed: %v", args, err)
+		}
+		if !strings.Contains(stdout.String(), `"fallback": true`) {
+			t.Fatalf("%v fallback output = %q", args, stdout.String())
+		}
+	}
+	for _, args := range [][]string{
+		{"--config", configPath, "--json", "cluster", "openclaw/openclaw", "--threshold", "0.5", "--min-size", "2", "--limit", "2", "--strict-vectors"},
+		{"--config", configPath, "--json", "refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--threshold", "0.5", "--min-size", "2", "--strict-vectors"},
+	} {
 		err := New().Run(ctx, args)
-		if err == nil || !strings.Contains(err.Error(), "no fresh vectors are available") {
+		if err == nil || !strings.Contains(err.Error(), "vector coverage cannot be verified") {
 			t.Fatalf("%v error = %v", args, err)
 		}
 	}

@@ -349,6 +349,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
 	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
+	strictVectors := fs.Bool("strict-vectors", false, "require complete fresh configured vectors before clustering")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true, "threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true, "with": true})); err != nil {
 		return usageErr(err)
@@ -446,11 +447,31 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			_ = rt.Store.Close()
 			return err
 		}
-		if err := requireCompleteClusterVectorCoverage(owner, repoName, query, coverage, len(freshVectors), false); err != nil {
-			_ = rt.Store.Close()
-			return err
+		if *strictVectors {
+			if err := requireCompleteClusterVectorCoverage(owner, repoName, query, coverage, len(freshVectors), false); err != nil {
+				_ = rt.Store.Close()
+				return err
+			}
 		}
 		vectors = freshVectors
+		if len(vectors) == 0 && !*strictVectors {
+			fallbackQuery := store.ThreadVectorQuery{RepoID: repo.ID, IncludeClosed: stateIncludesClosed(*state)}
+			fallbackVectors, err := rt.Store.ListThreadVectorsFiltered(ctx, fallbackQuery)
+			if err != nil {
+				_ = rt.Store.Close()
+				return err
+			}
+			if len(fallbackVectors) > 0 {
+				query = fallbackQuery
+				vectors = dedupeThreadVectorsByThread(fallbackVectors)
+				coverage.Fallback = true
+			}
+		}
+		coverage.Processed = len(vectors)
+		coverage.Partial = coverage.Fallback || !coverage.Complete
+		if coverage.Partial {
+			coverage.Complete = false
+		}
 		retireMissing := minSize <= 1 && !stateIncludesClosed(*state) && coverage.Complete
 		clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, clusterBuildOptions{
 			Threshold:          threshold,
@@ -1056,6 +1077,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	model := fs.String("model", "", "embedding model")
 	basis := fs.String("basis", "", "embedding basis")
 	includeClosed := fs.Bool("include-closed", false, "include closed issue and pull request vectors")
+	strictVectors := fs.Bool("strict-vectors", false, "require complete fresh configured vectors before clustering")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true, "limit": true, "model": true, "basis": true})); err != nil {
 		return usageErr(err)
@@ -1114,16 +1136,30 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		return err
 	}
 	partial := limit > 0
-	if err := requireCompleteClusterVectorCoverage(owner, repoName, query, coverage, len(freshVectors), partial); err != nil {
-		return err
+	if *strictVectors {
+		if err := requireCompleteClusterVectorCoverage(owner, repoName, query, coverage, len(freshVectors), partial); err != nil {
+			return err
+		}
 	}
 	vectors = freshVectors
+	if len(vectors) == 0 && !*strictVectors && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" {
+		fallbackQuery := store.ThreadVectorQuery{RepoID: repo.ID, IncludeClosed: *includeClosed}
+		fallbackVectors, err := rt.Store.ListThreadVectorsFiltered(ctx, fallbackQuery)
+		if err != nil {
+			return err
+		}
+		if len(fallbackVectors) > 0 {
+			query = fallbackQuery
+			vectors = dedupeThreadVectorsByThread(fallbackVectors)
+			coverage.Fallback = true
+		}
+	}
 	availableFresh := len(vectors)
 	if limit > 0 && len(vectors) > limit {
 		vectors = vectors[:limit]
 	}
 	coverage.Processed = len(vectors)
-	coverage.Partial = (coverage.Supported && !coverage.Complete) || len(vectors) < availableFresh
+	coverage.Partial = coverage.Fallback || !coverage.Complete || len(vectors) < availableFresh
 	if coverage.Partial {
 		coverage.Complete = false
 	}
@@ -4336,6 +4372,7 @@ type clusterRepositoryResult struct {
 
 type clusterVectorCoverage struct {
 	Supported    bool `json:"supported"`
+	Fallback     bool `json:"fallback"`
 	Eligible     int  `json:"eligible"`
 	Covered      int  `json:"covered"`
 	Fresh        int  `json:"fresh"`
@@ -4393,6 +4430,9 @@ func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query s
 }
 
 func requireCompleteClusterVectorCoverage(owner, repoName string, query store.ThreadVectorQuery, coverage clusterVectorCoverage, freshVectorCount int, allowPartial bool) error {
+	if !coverage.Supported {
+		return clusterVectorCoverageError(owner, repoName, query, coverage, "vector coverage cannot be verified")
+	}
 	if coverage.Eligible == 0 && coverage.Supported {
 		return nil
 	}
@@ -4723,7 +4763,7 @@ Usage:
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 
 Usage:
-  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--json]
+  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--strict-vectors] [--json]
 `,
 	"summarize": `gitcrawl summarize generates key summaries for current thread revisions.
 
@@ -4754,7 +4794,7 @@ Usage:
 	"cluster": `gitcrawl cluster builds durable clusters from local thread vectors.
 
 Usage:
-  gitcrawl cluster owner/repo [--threshold N] [--min-size N] [--max-cluster-size N] [--k N] [--cross-kind-threshold N] [--limit N] [--model name] [--basis semantic|references|hybrid] [--include-closed] [--json]
+  gitcrawl cluster owner/repo [--threshold N] [--min-size N] [--max-cluster-size N] [--k N] [--cross-kind-threshold N] [--limit N] [--model name] [--basis semantic|references|hybrid] [--include-closed] [--strict-vectors] [--json]
 `,
 	"clusters": `gitcrawl clusters lists latest display clusters with durable fallback.
 

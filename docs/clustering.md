@@ -48,10 +48,11 @@ The defaults match ghcrawl's tuning so the output is comparable across tools:
 | `--model <name>` | _(config)_ | Embedding model override |
 | `--basis <name>` | _(config)_ | Embedding basis override |
 | `--include-closed` | _(off)_ | Include closed threads |
+| `--strict-vectors` | _(off)_ | Require complete fresh configured vectors before mutation |
 
 Every active vector-backed thread is represented in the result: singleton clusters use `kind = singleton_orphan`, multi-member clusters use `kind = duplicate_candidate`.
 
-Without `--limit`, clustering is fail-closed: it verifies the exact configured model/basis coverage and refuses to mutate durable clusters when vectors are missing or stale. It never falls back to vectors from another model or basis. `--limit` preserves the existing intentional partial-run convention, reports `partial`, `processed`, and `complete: false` in JSON when it truncates fresh vectors, excludes stale vectors, and does not retire clusters outside the processed subset.
+Clustering excludes stale configured vectors and reports incomplete work as `partial` without retiring clusters outside the processed subset. When no fresh configured vectors exist, the default preserves the established compatible fallback to existing vectors from another model or basis. Use `--strict-vectors` to require complete fresh configured coverage and fail before mutation; `--limit` remains an explicit non-retiring partial run even in strict mode.
 
 ## List clusters
 

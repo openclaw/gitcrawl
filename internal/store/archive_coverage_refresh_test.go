@@ -82,6 +82,7 @@ func TestArchiveCoverageFreshnessUsesSuccessfulRefreshRuns(t *testing.T) {
 		Status:     "success",
 		StartedAt:  "2026-07-13T00:00:00Z",
 		FinishedAt: "2026-07-13T00:01:00Z",
+		StatsJSON:  `{"metadata_only":false}`,
 	}); err != nil {
 		t.Fatalf("sync run: %v", err)
 	}
@@ -104,6 +105,17 @@ func TestArchiveCoverageFreshnessUsesSuccessfulRefreshRuns(t *testing.T) {
 		FinishedAt: "2026-07-13T00:04:00Z",
 	}); err != nil {
 		t.Fatalf("failed summary run: %v", err)
+	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID:     repoID,
+		Kind:       "sync",
+		Scope:      "open",
+		Status:     "success",
+		StartedAt:  "2026-07-14T00:00:00Z",
+		FinishedAt: "2026-07-14T00:01:00Z",
+		StatsJSON:  `{"metadata_only":true}`,
+	}); err != nil {
+		t.Fatalf("metadata-only sync run: %v", err)
 	}
 
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})

@@ -43,7 +43,7 @@ These work on every command.
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
 | `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report archive, PR-detail, and enrichment coverage/freshness | — |
-| `gitcrawl refresh owner/repo [--with pr-details --no-sync --no-embed --no-cluster ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
+| `gitcrawl refresh owner/repo [--with pr-details --no-sync --no-embed --no-cluster --strict-vectors ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
 | `gitcrawl embed owner/repo [--number <ref> --limit --force --include-closed --json]` | Generate OpenAI embeddings for thread documents | [Refresh and embed](/refresh-and-embed/#embed) |
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
 | `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
@@ -83,7 +83,7 @@ This applies to `sync --numbers`, `threads --numbers`, `summarize --number`, `em
 
 | Command | Purpose | Docs |
 | --- | --- | --- |
-| `gitcrawl cluster owner/repo [--threshold --min-size --max-cluster-size --k --cross-kind-threshold --limit --model --basis --include-closed --json]` | Build durable clusters from vectors | [Clustering](/clustering/#generate-clusters) |
+| `gitcrawl cluster owner/repo [--threshold --min-size --max-cluster-size --k --cross-kind-threshold --limit --model --basis --include-closed --strict-vectors --json]` | Build durable clusters from vectors | [Clustering](/clustering/#generate-clusters) |
 | `gitcrawl clusters owner/repo [--sort size\|recent\|oldest --min-size --limit --hide-closed --json]` | Latest-run cluster summary, merged with closed durable rows | [Clustering](/clustering/#list-clusters) |
 | `gitcrawl clusters-report owner/repo [--sort size\|recent\|oldest --min-size --limit --member-limit --body-chars --hide-closed --json]` | Markdown or JSON report for top display clusters | [Clustering](/clustering/#cluster-report) |
 | `gitcrawl durable-clusters owner/repo [--include-closed --sort --min-size --limit --json]` | Strict durable-cluster audit view | [Clustering](/clustering/#list-clusters) |
