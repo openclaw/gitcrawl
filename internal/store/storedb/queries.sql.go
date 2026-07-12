@@ -409,8 +409,13 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
     from thread_key_summaries tks
     join thread_revisions tr on tr.id = tks.thread_revision_id
     where tr.thread_id = t.id
-      and tks.summary_kind in ('llm_key_summary', 'llm_key_3line')
-    order by tks.created_at desc, tr.created_at desc, tks.id desc
+      and tr.id = (
+        select max(latest.id)
+        from thread_revisions latest
+        where latest.thread_id = t.id
+      )
+      and tks.summary_kind = 'llm_key_summary'
+    order by tks.created_at desc, tks.id desc
     limit 1
   ), '') as text) as key_summary,
   coalesce(tv.content_hash, '') as existing_hash

@@ -49,7 +49,7 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 		insert into thread_revisions(id, thread_id, content_hash, title_hash, body_hash, labels_hash, created_at)
 		values(1, ?, 'hash', 'title', 'body', 'labels', '2026-04-26T00:00:00Z');
 		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
-		values(1, 'llm_key_3line', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'intent: fix downloads\nsurface: downloader\nmechanism: retry stalled stream', '2026-04-26T00:01:00Z');
+		values(1, 'llm_key_summary', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'intent: fix downloads\nsurface: downloader\nmechanism: retry stalled stream', '2026-04-26T00:01:00Z');
 	`, threadID); err != nil {
 		t.Fatalf("seed summary: %v", err)
 	}
@@ -67,6 +67,67 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	}
 	if !strings.Contains(tasks[0].Text, "title: Download stalls") || !strings.Contains(tasks[0].Text, "key_summary:") {
 		t.Fatalf("unexpected embedding text: %q", tasks[0].Text)
+	}
+}
+
+func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID:        repoID,
+		GitHubID:      "2",
+		Number:        8,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "Refresh review evidence",
+		Body:          "The title remains stable while review evidence changes.",
+		HTMLURL:       "https://github.com/openclaw/gitcrawl/pull/8",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "thread",
+		UpdatedAt:     "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values
+			(1, ?, 'old', 'title', 'body', 'labels', '2026-07-12T00:00:00Z'),
+			(2, ?, 'new', 'title', 'body', 'labels', '2026-07-12T00:02:00Z');
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(1, 'llm_key_summary', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'stale review evidence', '2026-07-12T00:01:00Z');
+	`, threadID, threadID); err != nil {
+		t.Fatalf("seed revisions: %v", err)
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID,
+		Basis:  "llm_key_summary",
+		Model:  "text-embedding-3-large",
+		Force:  true,
+	})
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %+v, want no task until the latest revision is summarized", tasks)
 	}
 }
 
