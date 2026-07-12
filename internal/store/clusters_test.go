@@ -1171,6 +1171,19 @@ func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
 	if summaries[thread.ID]["llm_key_summary"] != "current summary" {
 		t.Fatalf("current summary missing: %+v", summaries)
 	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values(902, ?, '2026-07-12T00:01:30Z', 'stale-late', 'title', 'body', 'labels', '2026-07-12T00:05:00Z')
+	`, thread.ID); err != nil {
+		t.Fatalf("late stale revision: %v", err)
+	}
+	summaries, err = st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("observed summaries: %v", err)
+	}
+	if summaries[thread.ID]["llm_key_summary"] != "current summary" {
+		t.Fatalf("higher stale revision hid current summary: %+v", summaries)
+	}
 }
 
 func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {

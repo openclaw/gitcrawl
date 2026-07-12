@@ -91,6 +91,54 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	}
 }
 
+func TestListEmbeddingTasksUsesLatestObservedRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:02:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "observed", Number: 71, Kind: "issue", State: "open",
+		Title: "Use observed summary", Body: "Current evidence has the lower revision id.",
+		HTMLURL: "https://github.com/openclaw/gitcrawl/issues/71", LabelsJSON: "[]", AssigneesJSON: "[]",
+		RawJSON: "{}", ContentHash: "current", UpdatedAtGitHub: "2026-07-12T00:02:00Z", UpdatedAt: "2026-07-12T00:02:00Z",
+	})
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values
+			(710, ?, '2026-07-12T00:02:00Z', 'current', 'title', 'body', 'labels', '2026-07-12T00:02:00Z'),
+			(711, ?, '2026-07-12T00:01:00Z', 'stale', 'title', 'body', 'labels', '2026-07-12T00:03:00Z');
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(710, 'llm_key_summary', 'v1', 'test', 'test', 'input', 'output', 'current observed summary', '2026-07-12T00:04:00Z');
+	`, threadID, threadID); err != nil {
+		t.Fatalf("seed observed revisions: %v", err)
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID,
+		Basis:  "llm_key_summary",
+		Model:  "text-embedding-3-large",
+		Force:  true,
+	})
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(tasks) != 1 || !strings.Contains(tasks[0].Text, "current observed summary") {
+		t.Fatalf("observed summary tasks = %+v", tasks)
+	}
+}
+
 func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

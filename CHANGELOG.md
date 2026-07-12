@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Select the latest thread revision by source observation time rather than insertion order so out-of-order hydration cannot attach summaries, fingerprints, or archive coverage to stale evidence.
+- Select the latest thread revision by source observation time rather than insertion order so out-of-order hydration cannot hide summaries, embeddings, or archive coverage behind stale evidence, while keeping repeated stale observations idempotent.
 
 ## 0.7.1 - 2026-07-09
 

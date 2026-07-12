@@ -1558,9 +1558,12 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 			join threads t on t.id = tr.thread_id
 			where tr.thread_id in (`+strings.Join(placeholders, ",")+`)
 				and tr.id = (
-					select max(latest.id)
+					select latest.id
 					from thread_revisions latest
 					where latest.thread_id = tr.thread_id
+					order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+						latest.id desc
+					limit 1
 				)
 				and julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
 					julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))

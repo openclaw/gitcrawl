@@ -327,6 +327,17 @@ func TestArchiveCoverageUsesLatestObservedRevision(t *testing.T) {
 	if staleEnrichment.RevisionID <= currentEnrichment.RevisionID {
 		t.Fatalf("stale revision id = %d, current revision id = %d", staleEnrichment.RevisionID, currentEnrichment.RevisionID)
 	}
+	repeatedStale, err := st.UpsertThreadRevisionAndFingerprint(
+		ctx,
+		ThreadEvidence{Thread: stale},
+		"2026-07-12T00:03:00Z",
+	)
+	if err != nil {
+		t.Fatalf("repeat stale enrichment: %v", err)
+	}
+	if repeatedStale.RevisionCreated || repeatedStale.RevisionID != staleEnrichment.RevisionID {
+		t.Fatalf("repeat stale enrichment = %+v, want revision %d", repeatedStale, staleEnrichment.RevisionID)
+	}
 	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
 		ThreadRevisionID: currentEnrichment.RevisionID,
 		SummaryKind:      SummaryKindLLMKey,

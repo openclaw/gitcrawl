@@ -184,8 +184,43 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	if err != nil && err != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
 	}
-	created := err == sql.ErrNoRows || latestHash != revision.ContentHash
-	if created {
+	var insertedID int64
+	var insertedHash, insertedSourceUpdatedAt string
+	insertedErr := s.q().QueryRowContext(ctx, `
+		select id, content_hash, coalesce(source_updated_at, '')
+		from thread_revisions
+		where thread_id = ?
+		order by id desc
+		limit 1
+	`, revision.ThreadID).Scan(&insertedID, &insertedHash, &insertedSourceUpdatedAt)
+	if insertedErr != nil && insertedErr != sql.ErrNoRows {
+		return ThreadEnrichmentResult{}, fmt.Errorf("read latest inserted thread revision: %w", insertedErr)
+	}
+
+	created := false
+	switch {
+	case insertedErr == nil && insertedHash == revision.ContentHash:
+		revision.ID = insertedID
+		refreshedSourceUpdatedAt := latestTimestamp(insertedSourceUpdatedAt, revision.SourceUpdatedAt)
+		if _, err := s.q().ExecContext(ctx, `
+			update thread_revisions
+			set source_updated_at = ?, raw_json_blob_id = ?
+			where id = ?
+		`, nullString(refreshedSourceUpdatedAt), evidenceBlobID, revision.ID); err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("refresh latest inserted thread revision evidence: %w", err)
+		}
+	case err == nil && latestHash == revision.ContentHash:
+		revision.ID = latestID
+		refreshedSourceUpdatedAt := latestTimestamp(latestSourceUpdatedAt, revision.SourceUpdatedAt)
+		if _, err := s.q().ExecContext(ctx, `
+			update thread_revisions
+			set source_updated_at = ?, raw_json_blob_id = ?
+			where id = ?
+		`, nullString(refreshedSourceUpdatedAt), evidenceBlobID, revision.ID); err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision evidence: %w", err)
+		}
+	default:
+		created = true
 		insert, err := s.q().ExecContext(ctx, `
 			insert into thread_revisions(
 				thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, raw_json_blob_id, created_at
@@ -198,16 +233,6 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		revision.ID, err = insert.LastInsertId()
 		if err != nil {
 			return ThreadEnrichmentResult{}, fmt.Errorf("read inserted thread revision id: %w", err)
-		}
-	} else {
-		revision.ID = latestID
-		refreshedSourceUpdatedAt := latestTimestamp(latestSourceUpdatedAt, revision.SourceUpdatedAt)
-		if _, err := s.q().ExecContext(ctx, `
-			update thread_revisions
-			set source_updated_at = ?, raw_json_blob_id = ?
-			where id = ?
-		`, nullString(refreshedSourceUpdatedAt), evidenceBlobID, revision.ID); err != nil {
-			return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision evidence: %w", err)
 		}
 	}
 	fingerprint.ThreadRevisionID = revision.ID

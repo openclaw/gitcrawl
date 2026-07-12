@@ -438,9 +438,12 @@ where t.repo_id = ?3
       join thread_revisions eligible_revision on eligible_revision.id = eligible_summary.thread_revision_id
       where eligible_revision.thread_id = t.id
         and eligible_revision.id = (
-          select max(latest.id)
+          select latest.id
           from thread_revisions latest
           where latest.thread_id = t.id
+          order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+            latest.id desc
+          limit 1
         )
         and julianday(coalesce(nullif(eligible_revision.source_updated_at, ''), eligible_revision.created_at)) >=
           julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
