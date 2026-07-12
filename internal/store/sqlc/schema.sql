@@ -34,8 +34,10 @@ create table threads (
   close_reason_local text,
   first_pulled_at text,
   last_pulled_at text,
-  observation_sequence integer not null default 0,
-  evidence_observation_sequence integer not null default 0,
+  observation_sequence integer not null default 0
+    check (typeof(observation_sequence) = 'integer'),
+  evidence_observation_sequence integer not null default 0
+    check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
   updated_at text not null,
   unique(repo_id, kind, number)
 );
@@ -70,7 +72,7 @@ create table blobs (
 
 create table thread_observation_sequence (
   id integer primary key check (id = 1),
-  value integer not null,
+  value integer not null check (typeof(value) = 'integer' and value >= 0),
   last_started_at text not null
 );
 
@@ -84,14 +86,16 @@ create table thread_child_observation_reservations (
     'pull_request_checks',
     'pull_request_review_threads'
   )),
-  observation_sequence integer not null check (observation_sequence > 0),
+  observation_sequence integer not null
+    check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(thread_id, family)
 );
 
 create table workflow_run_observation_reservations (
   repo_id integer not null references repositories(id) on delete cascade,
   head_sha text not null check (trim(head_sha) <> ''),
-  observation_sequence integer not null check (observation_sequence > 0),
+  observation_sequence integer not null
+    check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(repo_id, head_sha)
 );
 
@@ -104,7 +108,8 @@ create table thread_revisions (
   body_hash text not null,
   labels_hash text not null,
   raw_json_blob_id integer references blobs(id) on delete set null,
-  observation_sequence integer not null default 0,
+  observation_sequence integer not null default 0
+    check (typeof(observation_sequence) = 'integer' and observation_sequence >= 0),
   created_at text not null
 );
 

@@ -3,8 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -34,8 +34,10 @@ const canonicalThreadsCreateSQL = `create table threads (
   close_reason_local text,
   first_pulled_at text,
   last_pulled_at text,
-  observation_sequence integer not null default 0,
-  evidence_observation_sequence integer not null default 0,
+  observation_sequence integer not null default 0
+    check (typeof(observation_sequence) = 'integer'),
+  evidence_observation_sequence integer not null default 0
+    check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
   updated_at text not null,
   unique(repo_id, kind, number)
 )`
@@ -49,13 +51,14 @@ const canonicalThreadRevisionsCreateSQL = `create table thread_revisions (
   body_hash text not null,
   labels_hash text not null,
   raw_json_blob_id integer references blobs(id) on delete set null,
-  observation_sequence integer not null default 0,
+  observation_sequence integer not null default 0
+    check (typeof(observation_sequence) = 'integer' and observation_sequence >= 0),
   created_at text not null
 )`
 
 const canonicalThreadObservationSequenceCreateSQL = `create table thread_observation_sequence (
   id integer primary key check (id = 1),
-  value integer not null,
+  value integer not null check (typeof(value) = 'integer' and value >= 0),
   last_started_at text not null
 )`
 
@@ -69,20 +72,23 @@ const canonicalThreadChildReservationsCreateSQL = `create table thread_child_obs
     'pull_request_checks',
     'pull_request_review_threads'
   )),
-  observation_sequence integer not null check (observation_sequence > 0),
+  observation_sequence integer not null
+    check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(thread_id, family)
 )`
 
 const canonicalWorkflowReservationsCreateSQL = `create table workflow_run_observation_reservations (
   repo_id integer not null references repositories(id) on delete cascade,
   head_sha text not null check (trim(head_sha) <> ''),
-  observation_sequence integer not null check (observation_sequence > 0),
+  observation_sequence integer not null
+    check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(repo_id, head_sha)
 )`
 
 const canonicalObservationConvergenceCreateSQL = `create table observation_schema_convergence (
   id integer primary key check (id = 1),
   checked_observation_sequence integer not null
+    check (typeof(checked_observation_sequence) = 'integer')
 )`
 
 const (
@@ -122,30 +128,6 @@ var observationConvergenceTriggers = []observationConvergenceTrigger{
 	{name: "observation_convergence_allocator_delete", table: "thread_observation_sequence", event: "delete"},
 }
 
-var (
-	threadChildFamilyCheckPattern = regexp.MustCompile(
-		`(?is)\bfamily\s+text\s+not\s+null\s+check\s*\(\s*family\s+in\s*\(([^)]*)\)\s*\)`,
-	)
-	sqlStringLiteralPattern = regexp.MustCompile(`'([^']*)'`)
-)
-
-type schemaColumn struct {
-	name       string
-	columnType string
-	notNull    int
-	defaultSQL string
-	primaryKey int
-}
-
-type schemaForeignKey struct {
-	table    string
-	from     string
-	to       string
-	onUpdate string
-	onDelete string
-	match    string
-}
-
 func (s *Store) threadsHaveCanonicalShape(ctx context.Context) bool {
 	return s.tableHasCanonicalSQL(ctx, "threads", canonicalThreadsCreateSQL) &&
 		s.indexHasCanonicalSQL(ctx, "idx_threads_repo_number", createThreadsRepoNumberIndexSQL) &&
@@ -168,105 +150,19 @@ func (s *Store) threadObservationSequenceHasCurrentShape(ctx context.Context) bo
 }
 
 func (s *Store) threadChildObservationReservationsHaveCurrentShape(ctx context.Context) bool {
-	if !s.tableHasCanonicalSQL(
+	return s.tableHasCanonicalSQL(
 		ctx,
 		"thread_child_observation_reservations",
 		canonicalThreadChildReservationsCreateSQL,
-	) {
-		return false
-	}
-	if !s.tableColumnsMatch(ctx, "thread_child_observation_reservations", []schemaColumn{
-		{name: "thread_id", columnType: "INTEGER", notNull: 1, primaryKey: 1},
-		{name: "family", columnType: "TEXT", notNull: 1, primaryKey: 2},
-		{name: "observation_sequence", columnType: "INTEGER", notNull: 1},
-	}) {
-		return false
-	}
-	if !s.tableForeignKeysMatch(ctx, "thread_child_observation_reservations", []schemaForeignKey{
-		{
-			table:    "threads",
-			from:     "thread_id",
-			to:       "id",
-			onUpdate: "NO ACTION",
-			onDelete: "CASCADE",
-			match:    "NONE",
-		},
-	}) {
-		return false
-	}
-	if !s.tableHasUniqueColumns(
-		ctx,
-		"thread_child_observation_reservations",
-		[]string{"thread_id", "family"},
-	) {
-		return false
-	}
-	createSQL, ok := s.tableCreateSQL(ctx, "thread_child_observation_reservations")
-	if !ok || !strings.Contains(compactSQL(createSQL), "check(observation_sequence>0)") {
-		return false
-	}
-	match := threadChildFamilyCheckPattern.FindStringSubmatch(createSQL)
-	if len(match) != 2 {
-		return false
-	}
-	literals := sqlStringLiteralPattern.FindAllStringSubmatch(match[1], -1)
-	if len(literals) != len(threadChildObservationFamilies) {
-		return false
-	}
-	expected := make(map[string]struct{}, len(threadChildObservationFamilies))
-	for _, family := range threadChildObservationFamilies {
-		expected[string(family)] = struct{}{}
-	}
-	for _, literal := range literals {
-		if _, ok := expected[literal[1]]; !ok {
-			return false
-		}
-		delete(expected, literal[1])
-	}
-	return len(expected) == 0
+	)
 }
 
 func (s *Store) workflowRunObservationReservationsHaveCurrentShape(ctx context.Context) bool {
-	if !s.tableHasCanonicalSQL(
+	return s.tableHasCanonicalSQL(
 		ctx,
 		"workflow_run_observation_reservations",
 		canonicalWorkflowReservationsCreateSQL,
-	) {
-		return false
-	}
-	if !s.tableColumnsMatch(ctx, "workflow_run_observation_reservations", []schemaColumn{
-		{name: "repo_id", columnType: "INTEGER", notNull: 1, primaryKey: 1},
-		{name: "head_sha", columnType: "TEXT", notNull: 1, primaryKey: 2},
-		{name: "observation_sequence", columnType: "INTEGER", notNull: 1},
-	}) {
-		return false
-	}
-	if !s.tableForeignKeysMatch(ctx, "workflow_run_observation_reservations", []schemaForeignKey{
-		{
-			table:    "repositories",
-			from:     "repo_id",
-			to:       "id",
-			onUpdate: "NO ACTION",
-			onDelete: "CASCADE",
-			match:    "NONE",
-		},
-	}) {
-		return false
-	}
-	if !s.tableHasUniqueColumns(
-		ctx,
-		"workflow_run_observation_reservations",
-		[]string{"repo_id", "head_sha"},
-	) {
-		return false
-	}
-	createSQL, ok := s.tableCreateSQL(ctx, "workflow_run_observation_reservations")
-	if !ok {
-		return false
-	}
-	compact := compactSQL(createSQL)
-	return strings.Contains(compact, "check(trim(head_sha)<>'')") &&
-		strings.Contains(compact, "check(observation_sequence>0)")
+	)
 }
 
 func (s *Store) observationSchemaConvergenceHasCurrentShape(ctx context.Context) bool {
@@ -339,145 +235,6 @@ func sqliteStoredSQL(createSQL string) string {
 	}
 }
 
-func compactSQL(value string) string {
-	return strings.ToLower(strings.Join(strings.Fields(value), ""))
-}
-
-func (s *Store) tableColumnsMatch(ctx context.Context, table string, expected []schemaColumn) bool {
-	rows, err := s.q().QueryContext(ctx, `pragma table_info(`+sqliteIdentifier(table)+`)`)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	var actual []schemaColumn
-	for rows.Next() {
-		var (
-			cid          int
-			column       schemaColumn
-			defaultValue sql.NullString
-		)
-		if err := rows.Scan(
-			&cid,
-			&column.name,
-			&column.columnType,
-			&column.notNull,
-			&defaultValue,
-			&column.primaryKey,
-		); err != nil {
-			return false
-		}
-		if defaultValue.Valid {
-			column.defaultSQL = defaultValue.String
-		}
-		actual = append(actual, column)
-	}
-	if err := rows.Err(); err != nil || len(actual) != len(expected) {
-		return false
-	}
-	for i := range expected {
-		if actual[i] != expected[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Store) tableForeignKeysMatch(
-	ctx context.Context,
-	table string,
-	expected []schemaForeignKey,
-) bool {
-	rows, err := s.q().QueryContext(ctx, `pragma foreign_key_list(`+sqliteIdentifier(table)+`)`)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	var actual []schemaForeignKey
-	for rows.Next() {
-		var (
-			id, sequence int
-			foreignKey   schemaForeignKey
-		)
-		if err := rows.Scan(
-			&id,
-			&sequence,
-			&foreignKey.table,
-			&foreignKey.from,
-			&foreignKey.to,
-			&foreignKey.onUpdate,
-			&foreignKey.onDelete,
-			&foreignKey.match,
-		); err != nil {
-			return false
-		}
-		actual = append(actual, foreignKey)
-	}
-	if err := rows.Err(); err != nil || len(actual) != len(expected) {
-		return false
-	}
-	for i := range expected {
-		if actual[i] != expected[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Store) tableHasUniqueColumns(ctx context.Context, table string, expected []string) bool {
-	rows, err := s.q().QueryContext(ctx, `pragma index_list(`+sqliteIdentifier(table)+`)`)
-	if err != nil {
-		return false
-	}
-	var indexes []string
-	for rows.Next() {
-		var sequence, unique, partial int
-		var name, origin string
-		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
-			_ = rows.Close()
-			return false
-		}
-		if unique != 0 && partial == 0 {
-			indexes = append(indexes, name)
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return false
-	}
-	for _, index := range indexes {
-		indexRows, err := s.q().QueryContext(ctx, `pragma index_info(`+sqliteIdentifier(index)+`)`)
-		if err != nil {
-			continue
-		}
-		var columns []string
-		for indexRows.Next() {
-			var sequence, columnID int
-			var name sql.NullString
-			if err := indexRows.Scan(&sequence, &columnID, &name); err != nil {
-				columns = nil
-				break
-			}
-			columns = append(columns, name.String)
-		}
-		_ = indexRows.Close()
-		if stringSlicesEqual(columns, expected) {
-			return true
-		}
-	}
-	return false
-}
-
-func stringSlicesEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 	if s.threadsHaveCanonicalShape(ctx) && s.threadRevisionsHaveCanonicalShape(ctx) {
 		return nil
@@ -507,8 +264,19 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 				content_hash, is_draft,
 				created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
 				closed_at_local, close_reason_local, first_pulled_at,
-				last_pulled_at, observation_sequence,
-				evidence_observation_sequence, updated_at
+				last_pulled_at,
+				case
+					when typeof(observation_sequence) = 'integer'
+						then observation_sequence
+					else 0
+				end,
+				case
+					when typeof(evidence_observation_sequence) = 'integer'
+						and evidence_observation_sequence >= 0
+						then evidence_observation_sequence
+					else 0
+				end,
+				updated_at
 			from threads_migration_backup`,
 			canonicalThreadRevisionsCreateSQL,
 			`insert into thread_revisions(
@@ -519,7 +287,13 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 			select
 				id, thread_id, source_updated_at, content_hash, title_hash,
 				body_hash, labels_hash, raw_json_blob_id,
-				observation_sequence, created_at
+				case
+					when typeof(observation_sequence) = 'integer'
+						and observation_sequence >= 0
+						then observation_sequence
+					else 0
+				end,
+				created_at
 			from thread_revisions_migration_backup`,
 			`drop table thread_revisions_migration_backup`,
 			`drop table threads_migration_backup`,
@@ -569,8 +343,11 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 				)
 				select repo_id, trim(head_sha), max(observation_sequence)
 				from workflow_run_observation_reservations
-				where repo_id in (select id from repositories)
+				where typeof(repo_id) = 'integer'
+					and repo_id in (select id from repositories)
+					and typeof(head_sha) = 'text'
 					and trim(coalesce(head_sha, '')) <> ''
+					and typeof(observation_sequence) = 'integer'
 					and observation_sequence > 0
 				group by repo_id, trim(head_sha)
 			`); err != nil {
@@ -626,7 +403,9 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 				)
 				select thread_id, family, max(observation_sequence)
 				from thread_child_observation_reservations
-				where thread_id in (select id from threads)
+				where typeof(thread_id) = 'integer'
+					and thread_id in (select id from threads)
+					and typeof(family) = 'text'
 					and family in (
 						'comments',
 						'pull_request_details',
@@ -635,6 +414,7 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 						'pull_request_checks',
 						'pull_request_review_threads'
 					)
+					and typeof(observation_sequence) = 'integer'
 					and observation_sequence > 0
 				group by thread_id, family
 			`); err != nil {
@@ -683,10 +463,16 @@ func (s *Store) ensureThreadObservationSequenceSchema(ctx context.Context) error
 		}
 		if hasColumns {
 			if _, err := tx.ExecContext(ctx, `
-				insert into thread_observation_sequence_migration_backup(value, last_started_at)
-				select max(coalesce(value, 0)), max(coalesce(last_started_at, ''))
-				from thread_observation_sequence
-			`); err != nil {
+					insert into thread_observation_sequence_migration_backup(value, last_started_at)
+					select
+						max(value),
+						max(case
+							when typeof(last_started_at) = 'text' then last_started_at
+							else ''
+						end)
+					from thread_observation_sequence
+					where typeof(value) = 'integer' and value >= 0
+				`); err != nil {
 				return err
 			}
 		}
@@ -740,6 +526,7 @@ func (s *Store) ensureObservationSchemaConvergence(ctx context.Context) error {
 				select max(checked_observation_sequence)
 				from observation_schema_convergence
 				where id = 1
+					and typeof(checked_observation_sequence) = 'integer'
 			`); err != nil {
 				return err
 			}
@@ -821,7 +608,7 @@ func (s *Store) withForeignKeysDisabled(
 	ctx context.Context,
 	name string,
 	fn func(*sql.Tx) error,
-) error {
+) (resultErr error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("open %s migration connection: %w", name, err)
@@ -835,7 +622,12 @@ func (s *Store) withForeignKeysDisabled(
 		if _, err := conn.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
 			return fmt.Errorf("disable foreign keys for %s: %w", name, err)
 		}
-		defer conn.ExecContext(context.Background(), `pragma foreign_keys = on`)
+		defer func() {
+			if _, err := conn.ExecContext(context.Background(), `pragma foreign_keys = on`); err != nil {
+				restoreErr := fmt.Errorf("restore foreign keys after %s: %w", name, err)
+				resultErr = errors.Join(resultErr, restoreErr)
+			}
+		}()
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -845,24 +637,23 @@ func (s *Store) withForeignKeysDisabled(
 	if err := fn(tx); err != nil {
 		return fmt.Errorf("migrate %s: %w", name, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit %s migration: %w", name, err)
-	}
-	if foreignKeys != 0 {
-		if _, err := conn.ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
-			return fmt.Errorf("restore foreign keys after %s: %w", name, err)
-		}
-	}
-	rows, err := conn.QueryContext(ctx, `pragma foreign_key_check`)
+	rows, err := tx.QueryContext(ctx, `pragma foreign_key_check`)
 	if err != nil {
 		return fmt.Errorf("check %s foreign keys: %w", name, err)
 	}
-	defer rows.Close()
 	if rows.Next() {
+		_ = rows.Close()
 		return fmt.Errorf("%s migration introduced foreign key violations", name)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return fmt.Errorf("read %s foreign key check: %w", name, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close %s foreign key check: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s migration: %w", name, err)
 	}
 	return nil
 }
