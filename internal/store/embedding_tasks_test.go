@@ -48,7 +48,8 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	}
 	if _, err := st.DB().ExecContext(ctx, `
 		update threads
-		set observation_sequence = 0
+		set observation_sequence = 0,
+			evidence_observation_sequence = 0
 		where id = ?
 	`, threadID); err != nil {
 		t.Fatalf("mark legacy thread: %v", err)
@@ -124,7 +125,8 @@ func TestListEmbeddingTasksUsesLatestObservedRevision(t *testing.T) {
 	}
 	if _, err := st.DB().ExecContext(ctx, `
 		update threads
-		set observation_sequence = 0
+		set observation_sequence = 0,
+			evidence_observation_sequence = 0
 		where id = ?
 	`, threadID); err != nil {
 		t.Fatalf("mark legacy thread: %v", err)

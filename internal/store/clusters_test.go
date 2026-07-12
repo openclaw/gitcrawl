@@ -1143,7 +1143,8 @@ func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
 	}
 	if _, err := st.DB().ExecContext(ctx, `
 		update threads
-		set observation_sequence = 0
+		set observation_sequence = 0,
+			evidence_observation_sequence = 0
 		where id = ?
 	`, thread.ID); err != nil {
 		t.Fatalf("mark legacy thread: %v", err)
