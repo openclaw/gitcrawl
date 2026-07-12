@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -881,6 +883,56 @@ func TestValidateGitcrawlSQLiteBundleUploadRequiresFinalSnapshotDigest(t *testin
 				t.Fatalf("bundle validation error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestUploadSQLiteSnapshotArchiveRejectsSameSizeSourceDigestDrift(t *testing.T) {
+	snapshotPath := filepath.Join(t.TempDir(), "snapshot.db")
+	selectedSource := []byte("SQLite format 3\x00selected-source")
+	driftedSource := []byte("SQLite format 3\x00drifted--source")
+	if len(selectedSource) != len(driftedSource) {
+		t.Fatalf("test sources differ in size: %d != %d", len(selectedSource), len(driftedSource))
+	}
+	if err := os.WriteFile(snapshotPath, selectedSource, 0o600); err != nil {
+		t.Fatalf("write selected source: %v", err)
+	}
+	selectedSnapshotID, err := cloudFileSHA256(snapshotPath)
+	if err != nil {
+		t.Fatalf("hash selected source: %v", err)
+	}
+	if err := os.WriteFile(snapshotPath, driftedSource, 0o600); err != nil {
+		t.Fatalf("rewrite drifted source: %v", err)
+	}
+
+	uploadRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uploadRequests++
+		http.Error(w, "unexpected upload", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("publisher-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+
+	_, _, err = uploadSQLiteSnapshotArchive(
+		context.Background(),
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw__gitcrawl",
+		snapshotPath,
+		selectedSnapshotID,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "SQLite bundle source digest changed") {
+		t.Fatalf("same-size source drift error = %v", err)
+	}
+	if uploadRequests != 0 {
+		t.Fatalf("same-size source drift sent %d upload requests", uploadRequests)
 	}
 }
 

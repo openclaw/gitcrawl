@@ -199,6 +199,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			"gitcrawl",
 			archiveID,
 			snapshotPath,
+			snapshot.ID,
 			counts,
 		)
 		if err != nil {
@@ -922,14 +923,26 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		return nil, err
 	}
 	defer cleanup()
-	bundle, _, err := uploadSQLiteSnapshotArchive(ctx, client, app, archive, snapshotPath, counts)
+	snapshotID, err := cloudFileSHA256(snapshotPath)
+	if err != nil {
+		return nil, err
+	}
+	bundle, _, err := uploadSQLiteSnapshotArchive(
+		ctx,
+		client,
+		app,
+		archive,
+		snapshotPath,
+		snapshotID,
+		counts,
+	)
 	return bundle, err
 }
 
 func uploadSQLiteSnapshotArchive(
 	ctx context.Context,
 	client *crawlremote.Client,
-	app, archive, snapshotPath string,
+	app, archive, snapshotPath, expectedSnapshotID string,
 	counts map[string]int64,
 ) (*crawlremote.SQLiteBundle, int64, error) {
 	bundle, err := crawlremote.BuildSnapshotGzipSQLiteBundle(ctx, crawlremote.SQLiteBundleBuildOptions{
@@ -944,6 +957,19 @@ func uploadSQLiteSnapshotArchive(
 		return nil, 0, err
 	}
 	defer bundle.Cleanup()
+	expectedSnapshotID = strings.TrimSpace(expectedSnapshotID)
+	if expectedSnapshotID == "" {
+		return nil, 0, fmt.Errorf("selected SQLite snapshot digest is required")
+	}
+	if bundle.Manifest.SnapshotID != expectedSnapshotID ||
+		bundle.Manifest.Object.SHA256 != expectedSnapshotID {
+		return nil, 0, fmt.Errorf(
+			"SQLite bundle source digest changed from selected snapshot %s to snapshot %s with object digest %s",
+			expectedSnapshotID,
+			bundle.Manifest.SnapshotID,
+			bundle.Manifest.Object.SHA256,
+		)
+	}
 	sourceSize := bundle.Manifest.Object.Size
 	if sourceSize <= 0 {
 		return nil, 0, fmt.Errorf("SQLite bundle manifest has invalid source size %d", sourceSize)
