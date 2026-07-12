@@ -894,7 +894,7 @@ func testSnapshotPublishContract() crawlremote.Contract {
 	return contract
 }
 
-func TestGitcrawlSnapshotStatusMatchesExactMetadata(t *testing.T) {
+func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
 	manifest := crawlremote.IngestManifest{
 		App:           "gitcrawl",
@@ -905,11 +905,11 @@ func TestGitcrawlSnapshotStatusMatchesExactMetadata(t *testing.T) {
 		SnapshotID:    snapshotID,
 		SourceSHA256:  snapshotID,
 	}
-	status := crawlremote.Status{
+	status := crawlremote.PublisherStatus{
 		App:              "gitcrawl",
 		Archive:          manifest.Archive,
-		ActiveSnapshotID: snapshotID,
-		CoverageComplete: true,
+		ActiveSnapshotID: strings.Repeat("f", 64),
+		CoverageComplete: false,
 		Snapshot: &crawlremote.ArchiveSnapshot{
 			ID:               snapshotID,
 			SourceSHA256:     snapshotID,
@@ -919,15 +919,15 @@ func TestGitcrawlSnapshotStatusMatchesExactMetadata(t *testing.T) {
 			CoverageComplete: true,
 		},
 	}
-	if !gitcrawlSnapshotStatusMatches(status, manifest) {
-		t.Fatal("exact active snapshot did not match")
+	if !gitcrawlPublisherStatusMatches(status, manifest) {
+		t.Fatal("exact staged snapshot did not match")
 	}
 
 	sourceMismatch := status
 	sourceMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
 	*sourceMismatch.Snapshot = *status.Snapshot
 	sourceMismatch.Snapshot.SourceSHA256 = strings.Repeat("b", 64)
-	if gitcrawlSnapshotStatusMatches(sourceMismatch, manifest) {
+	if gitcrawlPublisherStatusMatches(sourceMismatch, manifest) {
 		t.Fatal("source digest mismatch was reused")
 	}
 
@@ -935,22 +935,25 @@ func TestGitcrawlSnapshotStatusMatchesExactMetadata(t *testing.T) {
 	schemaMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
 	*schemaMismatch.Snapshot = *status.Snapshot
 	schemaMismatch.Snapshot.SchemaVersion++
-	if gitcrawlSnapshotStatusMatches(schemaMismatch, manifest) {
+	if gitcrawlPublisherStatusMatches(schemaMismatch, manifest) {
 		t.Fatal("schema mismatch was reused")
 	}
 
 	manifest.Capabilities = []string{gitcrawlObservationOrderCapability}
-	if gitcrawlSnapshotStatusMatches(status, manifest) {
+	if gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("staged snapshot reused without snapshot capability proof")
 	}
-	status.Capabilities = []string{"gitcrawl.threads.search"}
 	status.Snapshot.Capabilities = []string{gitcrawlObservationOrderCapability}
-	if !gitcrawlSnapshotStatusMatches(status, manifest) {
+	if !gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("staged snapshot with requested capability did not match")
 	}
 	status.Snapshot.Capabilities = nil
-	if gitcrawlSnapshotStatusMatches(status, manifest) {
+	if gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("snapshot reused without requested capability")
+	}
+	status.Snapshot.CoverageComplete = false
+	if gitcrawlPublisherStatusMatches(status, manifest) {
+		t.Fatal("incomplete staged snapshot was reused")
 	}
 }
 
@@ -1079,7 +1082,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			}
 			return
 		}
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status") {
 			http.NotFound(w, r)
 			return
 		}
@@ -1358,6 +1361,32 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 			},
 		},
 		{
+			name: "missing publisher status route",
+			want: "GET /v1/apps/:app/archives/:archive/publish-status",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Routes = slices.DeleteFunc(
+					contract.Routes,
+					func(route crawlremote.RouteSpec) bool {
+						return route.Method == http.MethodGet &&
+							route.Path == "/v1/apps/:app/archives/:archive/publish-status"
+					},
+				)
+			},
+		},
+		{
+			name: "publisher status route with reader auth",
+			want: "GET /v1/apps/:app/archives/:archive/publish-status",
+			mutate: func(contract *crawlremote.Contract) {
+				for index := range contract.Routes {
+					route := &contract.Routes[index]
+					if route.Method == http.MethodGet &&
+						route.Path == "/v1/apps/:app/archives/:archive/publish-status" {
+						route.Auth = crawlremote.AuthReader
+					}
+				}
+			},
+		},
+		{
 			name: "missing reader query route",
 			want: "POST /v1/apps/:app/archives/:archive/query",
 			mutate: func(contract *crawlremote.Contract) {
@@ -1375,6 +1404,15 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 			want: "required reader query gitcrawl.threads.search",
 			mutate: func(contract *crawlremote.Contract) {
 				contract.Apps[0].Queries = nil
+			},
+		},
+		{
+			name: "thread search missing mode and limit",
+			want: "reader query gitcrawl.threads.search has arguments",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Apps[0].Queries[0].Args = []string{
+					"owner", "repo", "query", "kind", "state",
+				}
 			},
 		},
 		{
@@ -1481,7 +1519,11 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	const tokenEnv = "GITCRAWL_TEST_RESUME_TOKEN"
 	t.Setenv(tokenEnv, "publish-token")
 	var snapshotID string
+	var stagedSnapshot *crawlremote.ArchiveSnapshot
+	servingSnapshotID := strings.Repeat("f", 64)
 	ingestRequests := 0
+	publisherStatusRequests := 0
+	readerStatusRequests := 0
 	cutovers := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
@@ -1500,8 +1542,33 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(contract)
 			return
 		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
+			readerStatusRequests++
+			if r.Header.Get("authorization") != "Bearer reader-token" {
+				http.Error(w, "publisher token has no reader role", http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(crawlremote.Status{
+				App:              "gitcrawl",
+				Archive:          "gitcrawl/openclaw__openclaw",
+				ActiveSnapshotID: servingSnapshotID,
+				CoverageComplete: true,
+			})
+			return
+		}
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status") {
+			publisherStatusRequests++
+			_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
+				App:              "gitcrawl",
+				Archive:          "gitcrawl/openclaw__openclaw",
+				ActiveSnapshotID: servingSnapshotID,
+				CoverageComplete: servingSnapshotID == snapshotID,
+				Snapshot:         stagedSnapshot,
+			})
 			return
 		}
 		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite") {
@@ -1553,27 +1620,42 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			}
 			return
 		}
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
-			_ = json.NewEncoder(w).Encode(crawlremote.Status{
-				App:              "gitcrawl",
-				Archive:          "gitcrawl/openclaw__openclaw",
-				ActiveSnapshotID: snapshotID,
-				CoverageComplete: true,
-				Snapshot: &crawlremote.ArchiveSnapshot{
-					ID:               snapshotID,
-					SourceSHA256:     snapshotID,
-					SchemaName:       gitcrawlCloudSchemaName,
-					SchemaVersion:    gitcrawlCloudSchemaVersion,
-					SchemaHash:       gitcrawlCloudSchemaHash,
-					Capabilities:     []string{gitcrawlObservationOrderCapability},
-					CoverageComplete: true,
-				},
-			})
-			return
-		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/ingest") {
 			ingestRequests++
-			http.Error(w, "activated snapshots must not be re-ingested", http.StatusConflict)
+			var body crawlremote.IngestRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if body.Manifest.SnapshotID != snapshotID ||
+				body.Manifest.SourceSHA256 != snapshotID {
+				http.Error(w, "ingest provenance mismatch", http.StatusBadRequest)
+				return
+			}
+			mutationToken := fmt.Sprintf("resume-mutation-%d", ingestRequests)
+			if body.Final {
+				if body.Table != "dataset_coverage" || body.MutationToken == "" {
+					http.Error(w, "invalid snapshot activation", http.StatusBadRequest)
+					return
+				}
+				mutationToken = body.MutationToken
+				stagedSnapshot = &crawlremote.ArchiveSnapshot{
+					ID:               body.Manifest.SnapshotID,
+					SourceSHA256:     body.Manifest.SourceSHA256,
+					SchemaName:       body.Manifest.SchemaName,
+					SchemaVersion:    body.Manifest.SchemaVersion,
+					SchemaHash:       body.Manifest.SchemaHash,
+					Capabilities:     slices.Clone(body.Manifest.Capabilities),
+					CoverageComplete: true,
+				}
+			}
+			_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+				Table:         body.Table,
+				SnapshotID:    body.Manifest.SnapshotID,
+				MutationToken: mutationToken,
+				RowsAccepted:  int64(len(body.Rows)),
+				Complete:      body.Final,
+			})
 			return
 		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/cutover") {
@@ -1585,7 +1667,12 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				http.Error(w, "cutover snapshot mismatch", http.StatusBadRequest)
 				return
 			}
+			if stagedSnapshot == nil || stagedSnapshot.ID != request.SnapshotID {
+				http.Error(w, "snapshot is not staged", http.StatusConflict)
+				return
+			}
 			cutovers++
+			servingSnapshotID = request.SnapshotID
 			_ = json.NewEncoder(w).Encode(crawlremote.CutoverResult{
 				Archive:      "gitcrawl/openclaw__openclaw",
 				SnapshotID:   snapshotID,
@@ -1608,6 +1695,8 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		"--observation-order",
 		"--json",
 	}
+	stageIngestRequests := 0
+	originalServingSnapshotID := servingSnapshotID
 	for index, extra := range [][]string{{"--stage-only"}, nil} {
 		app := New()
 		var output bytes.Buffer
@@ -1617,7 +1706,8 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			t.Fatalf("cloud publish run %d: %v", index+1, err)
 		}
 		var result struct {
-			Cutover *crawlremote.CutoverResult `json:"cutover"`
+			AlreadyStaged bool                       `json:"already_staged"`
+			Cutover       *crawlremote.CutoverResult `json:"cutover"`
 		}
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatalf("decode run %d output: %v\n%s", index+1, err, output.String())
@@ -1625,15 +1715,43 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		if index == 0 && result.Cutover != nil {
 			t.Fatalf("stage-only publish unexpectedly cut over: %#v", result.Cutover)
 		}
+		if index == 0 && result.AlreadyStaged {
+			t.Fatal("initial stage-only publish unexpectedly reused a candidate")
+		}
+		if index == 0 {
+			stageIngestRequests = ingestRequests
+			if stageIngestRequests == 0 || stagedSnapshot == nil {
+				t.Fatal("stage-only publish did not complete the candidate snapshot")
+			}
+			if servingSnapshotID != originalServingSnapshotID {
+				t.Fatalf("stage-only changed serving snapshot to %q", servingSnapshotID)
+			}
+		}
 		if index == 1 && result.Cutover == nil {
 			t.Fatalf("default cutover missing: %s", output.String())
 		}
+		if index == 1 && !result.AlreadyStaged {
+			t.Fatal("default publish did not report the staged candidate reuse")
+		}
 	}
-	if ingestRequests != 0 {
-		t.Fatalf("ingest requests = %d, want 0 for active snapshot resume", ingestRequests)
+	if ingestRequests != stageIngestRequests {
+		t.Fatalf(
+			"ingest requests = %d after resume, want stage-only count %d",
+			ingestRequests,
+			stageIngestRequests,
+		)
 	}
 	if cutovers != 1 {
 		t.Fatalf("cutovers = %d, want 1", cutovers)
+	}
+	if servingSnapshotID != snapshotID {
+		t.Fatalf("serving snapshot = %q, want staged snapshot %q", servingSnapshotID, snapshotID)
+	}
+	if publisherStatusRequests != 2 {
+		t.Fatalf("publisher status requests = %d, want 2", publisherStatusRequests)
+	}
+	if readerStatusRequests != 0 {
+		t.Fatalf("reader status requests = %d, publisher-only flow must not require reader role", readerStatusRequests)
 	}
 }
 

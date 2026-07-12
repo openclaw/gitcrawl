@@ -74,10 +74,12 @@ same image, negotiates the remote snapshot-provenance contract before touching
 R2, uploads its digest-scoped bundle, and activates complete D1 coverage.
 Publishing moves unpinned reads to the complete snapshot by default, preserving
 the existing reader-refresh behavior. `--stage-only` keeps the immutable
-snapshot staged for a later publish to resume and cut over. Incomplete local
-enrichment fails before any remote mutation; `--allow-incomplete` is an explicit
-escape hatch, and `--observation-order` publishes durable fetch ordering after
-the remote operator fence is enabled.
+snapshot staged without changing serving state. A later publish verifies the
+candidate through the publisher-only status projection, skips repeated ingest
+when its digest, schema, capabilities, and coverage match, then cuts it over.
+Incomplete local enrichment fails before any remote mutation;
+`--allow-incomplete` is an explicit escape hatch, and `--observation-order`
+publishes durable fetch ordering after the remote operator fence is enabled.
 `gitcrawl clusters-report` writes a Markdown report for the top clusters using the same display view, with an at-a-glance table, per-cluster metadata, member tables, and key snippets. Use `--json` for the hydrated report payload.
 `gitcrawl cluster` and `gitcrawl refresh` build ghcrawl-shaped durable clusters by default (`--threshold 0.80`, `--min-size 1`, `--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`): every active vector-backed thread is represented, singleton rows use `singleton_orphan`, multi-member rows use `duplicate_candidate`, and stable IDs are derived from the representative thread. They also add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.

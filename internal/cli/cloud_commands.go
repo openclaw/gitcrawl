@@ -150,15 +150,15 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		return err
 	}
 
-	alreadyActive := false
-	status, statusErr := client.Status(ctx, "gitcrawl", archiveID)
+	alreadyStaged := false
+	status, statusErr := client.PublishStatus(ctx, "gitcrawl", archiveID)
 	if statusErr == nil {
-		alreadyActive = gitcrawlSnapshotStatusMatches(status, manifest)
+		alreadyStaged = gitcrawlPublisherStatusMatches(status, manifest)
 	} else if !remoteNotFound(statusErr) {
 		return statusErr
 	}
 	var mutationToken string
-	if !alreadyActive {
+	if !alreadyStaged {
 		for _, dataset := range snapshot.Datasets {
 			progress, err := sendSnapshotIngestRows(
 				ctx,
@@ -215,7 +215,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		"capabilities":          snapshot.Capabilities,
 		"datasets":              counts,
 		"hydration":             snapshot.Hydration,
-		"already_active":        alreadyActive,
+		"already_staged":        alreadyStaged,
 		"mutation_token":        mutationToken,
 		"cutover":               cutoverResult,
 		"sqlite_bundle":         sqliteBundle,
@@ -493,8 +493,8 @@ func requireGitcrawlSnapshotPublishContract(
 	requiredRoutes := []crawlremote.RouteSpec{
 		{
 			Method: http.MethodGet,
-			Path:   "/v1/apps/:app/archives/:archive/status",
-			Auth:   crawlremote.AuthReader,
+			Path:   "/v1/apps/:app/archives/:archive/publish-status",
+			Auth:   crawlremote.AuthPublisher,
 		},
 		{
 			Method: http.MethodPost,
@@ -596,14 +596,12 @@ func requireGitcrawlSnapshotPublishContract(
 	return nil
 }
 
-func gitcrawlSnapshotStatusMatches(
-	status crawlremote.Status,
+func gitcrawlPublisherStatusMatches(
+	status crawlremote.PublisherStatus,
 	manifest crawlremote.IngestManifest,
 ) bool {
 	snapshot := status.Snapshot
 	if snapshot == nil ||
-		status.ActiveSnapshotID != manifest.SnapshotID ||
-		!status.CoverageComplete ||
 		snapshot.ID != manifest.SnapshotID ||
 		snapshot.SourceSHA256 != manifest.SourceSHA256 ||
 		snapshot.SchemaName != manifest.SchemaName ||
