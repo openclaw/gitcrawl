@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gitcrawlopenai "github.com/openclaw/gitcrawl/internal/openai"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -317,5 +318,98 @@ func TestSummaryFailurePreservesGenericErrors(t *testing.T) {
 	if apiFailure.Status != http.StatusTooManyRequests || apiFailure.Type != "rate_limit_error" ||
 		apiFailure.Code != "rate_limit" || !strings.Contains(apiFailure.Message, "slow down") {
 		t.Fatalf("API failure = %+v", apiFailure)
+	}
+}
+
+func TestSummarizeCancelsWorkersAfterPersistenceFailure(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	for _, number := range []int{42, 43} {
+		thread := store.Thread{
+			RepoID: repoID, GitHubID: fmt.Sprintf("%d", number), Number: number, Kind: "issue", State: "open",
+			Title: fmt.Sprintf("Persistence failure %d", number), Body: "evidence",
+			HTMLURL:    fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
+			LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: fmt.Sprintf("thread-%d", number),
+			UpdatedAtGitHub: "2026-07-12T00:00:00Z", UpdatedAt: "2026-07-12T00:00:00Z",
+		}
+		thread.ID, err = st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("thread %d: %v", number, err)
+		}
+		if _, err := st.UpsertDocument(ctx, store.Document{
+			ThreadID: thread.ID, Title: thread.Title, Body: thread.Body,
+			RawText: thread.Title + "\n\n" + thread.Body, DedupeText: thread.Title + " " + thread.Body,
+			UpdatedAt: thread.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("document %d: %v", number, err)
+		}
+		if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, store.ThreadEvidence{Thread: thread}, thread.UpdatedAt); err != nil {
+			t.Fatalf("enrichment %d: %v", number, err)
+		}
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		create trigger reject_summary_insert
+		before insert on thread_key_summaries
+		begin
+			select raise(abort, 'summary persistence rejected');
+		end
+	`); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	blockedStarted := make(chan struct{})
+	blockedCancelled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if strings.Contains(payload.Input, "number: #42") {
+			close(blockedStarted)
+			<-r.Context().Done()
+			close(blockedCancelled)
+			return
+		}
+		select {
+		case <-blockedStarted:
+		case <-time.After(2 * time.Second):
+			t.Error("second summary worker did not start")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "completed", "output_text": "Fast summary."})
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_OPENAI_RETRY_DISABLED", "1")
+
+	err = New().Run(ctx, []string{"--config", configPath, "summarize", "openclaw/openclaw", "--json"})
+	if err == nil || !strings.Contains(err.Error(), "summary persistence rejected") {
+		t.Fatalf("summarize error = %v", err)
+	}
+	select {
+	case <-blockedCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked summary worker was not cancelled and joined")
 	}
 }

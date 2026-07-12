@@ -129,6 +129,8 @@ func (a *App) summarizeRepository(ctx context.Context, owner, repoName string, o
 	if concurrency > len(tasks) {
 		concurrency = len(tasks)
 	}
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
 
 	type summaryAPIResult struct {
 		task store.SummaryTask
@@ -144,7 +146,7 @@ func (a *App) summarizeRepository(ctx context.Context, owner, repoName string, o
 			defer workers.Done()
 			for task := range jobs {
 				fmt.Fprintf(a.Stderr, "[summarize] #%d\n", task.Number)
-				text, err := client.Summarize(ctx, rt.Config.OpenAI.SummaryModel, keySummaryInstructions, summaryInput(task))
+				text, err := client.Summarize(workerCtx, rt.Config.OpenAI.SummaryModel, keySummaryInstructions, summaryInput(task))
 				results <- summaryAPIResult{task: task, text: text, err: err}
 			}
 		}()
@@ -154,7 +156,7 @@ func (a *App) summarizeRepository(ctx context.Context, owner, repoName string, o
 		for _, task := range tasks {
 			select {
 			case jobs <- task:
-			case <-ctx.Done():
+			case <-workerCtx.Done():
 				return
 			}
 		}
@@ -167,7 +169,11 @@ func (a *App) summarizeRepository(ctx context.Context, owner, repoName string, o
 	summarized := 0
 	var failures []summaryFailureStat
 	cancelled := false
+	var persistErr error
 	for result := range results {
+		if persistErr != nil {
+			continue
+		}
 		if result.err != nil {
 			if ctx.Err() != nil && (errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded)) {
 				cancelled = true
@@ -187,9 +193,14 @@ func (a *App) summarizeRepository(ctx context.Context, owner, repoName string, o
 			KeyText:          result.text,
 			CreatedAt:        now,
 		}); err != nil {
-			return summaryResult{}, err
+			persistErr = err
+			cancelWorkers()
+			continue
 		}
 		summarized++
+	}
+	if persistErr != nil {
+		return summaryResult{}, persistErr
 	}
 
 	status := "success"

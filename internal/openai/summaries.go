@@ -22,6 +22,7 @@ type summaryRequest struct {
 
 type summaryResponse struct {
 	OutputText string `json:"output_text,omitempty"`
+	Status     string `json:"status,omitempty"`
 	Output     []struct {
 		Type    string `json:"type"`
 		Content []struct {
@@ -34,6 +35,9 @@ type summaryResponse struct {
 		Type    string `json:"type"`
 		Code    string `json:"code"`
 	} `json:"error,omitempty"`
+	IncompleteDetails *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details,omitempty"`
 }
 
 func (c *Client) Summarize(ctx context.Context, model, instructions, input string) (string, error) {
@@ -139,6 +143,16 @@ func (c *Client) summarizeOnce(ctx context.Context, model, instructions, input s
 			Code:    decoded.Error.Code,
 			Message: decoded.Error.Message,
 		}, nil
+	}
+	if status := strings.TrimSpace(decoded.Status); status != "" && status != "completed" {
+		reason := ""
+		if decoded.IncompleteDetails != nil {
+			reason = strings.TrimSpace(decoded.IncompleteDetails.Reason)
+		}
+		if reason != "" {
+			return "", nil, fmt.Errorf("OpenAI summary response status %q: %s", status, reason)
+		}
+		return "", nil, fmt.Errorf("OpenAI summary response status %q", status)
 	}
 	if text := strings.TrimSpace(decoded.OutputText); text != "" {
 		return text, nil, nil

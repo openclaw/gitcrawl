@@ -65,6 +65,16 @@ func TestSummarizeRejectsMissingOutputAndAPIError(t *testing.T) {
 			want:    "no output text",
 		},
 		{
+			name:   "incomplete output",
+			status: http.StatusOK,
+			payload: map[string]any{
+				"status":             "incomplete",
+				"incomplete_details": map[string]any{"reason": "max_output_tokens"},
+				"output_text":        "truncated summary",
+			},
+			want: "max_output_tokens",
+		},
+		{
 			name:   "api error",
 			status: http.StatusBadRequest,
 			payload: map[string]any{"error": map[string]any{
