@@ -251,7 +251,8 @@ func (fakeGitHub) ListWorkflowRuns(ctx context.Context, owner, repo string, opti
 
 type mutableUpdatedGitHub struct {
 	fakeGitHub
-	updatedAt string
+	updatedAt        string
+	commentUpdatedAt string
 }
 
 func (f *mutableUpdatedGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
@@ -261,6 +262,17 @@ func (f *mutableUpdatedGitHub) ListRepositoryIssues(ctx context.Context, owner, 
 	}
 	for _, row := range rows {
 		row["updated_at"] = f.updatedAt
+	}
+	return rows, nil
+}
+
+func (f *mutableUpdatedGitHub) ListIssueComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	rows, err := f.fakeGitHub.ListIssueComments(ctx, owner, repo, number, reporter)
+	if err != nil || f.commentUpdatedAt == "" {
+		return rows, err
+	}
+	for _, row := range rows {
+		row["updated_at"] = f.commentUpdatedAt
 	}
 	return rows, nil
 }
@@ -840,7 +852,7 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
-	client := &mutableUpdatedGitHub{}
+	client := &mutableUpdatedGitHub{commentUpdatedAt: "2026-04-28T00:00:00Z"}
 	s := New(client, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true, IncludePRDetails: true}); err != nil {

@@ -242,7 +242,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
-	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
+	if err := s.ensureLegacyPortableColumns(ctx, current); err != nil {
 		return err
 	}
 	if err := s.ensureThreadVectorsCompositeKey(ctx); err != nil {
@@ -260,27 +260,32 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
+func (s *Store) ensureLegacyPortableColumns(ctx context.Context, currentSchemaVersion int) error {
 	if err := s.ensureColumn(ctx, "repositories", "raw_json", "text"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "thread_revisions", "raw_json_blob_id", "integer references blobs(id) on delete set null"); err != nil {
 		return err
 	}
+	hadRevisionObservationSequence := s.hasColumn(ctx, "thread_revisions", "observation_sequence")
 	if err := s.ensureColumn(ctx, "thread_revisions", "observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		update thread_revisions
-		set observation_sequence = id
-		where observation_sequence <= 0
-	`); err != nil {
-		return fmt.Errorf("backfill thread revision observation sequence: %w", err)
+	if !hadRevisionObservationSequence || currentSchemaVersion < schemaVersion {
+		if _, err := s.db.ExecContext(ctx, `
+			update thread_revisions
+			set observation_sequence = id
+			where observation_sequence <= 0
+		`); err != nil {
+			return fmt.Errorf("backfill thread revision observation sequence: %w", err)
+		}
 	}
+	hadThreadObservationSequence := s.hasColumn(ctx, "threads", "observation_sequence")
 	if err := s.ensureColumn(ctx, "threads", "observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if !hadThreadObservationSequence || currentSchemaVersion < schemaVersion {
+		if _, err := s.db.ExecContext(ctx, `
 		with latest_revisions as (
 			select
 				tr.thread_id,
@@ -312,8 +317,9 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 			id
 		)
 		where observation_sequence <= 0
-	`); err != nil {
-		return fmt.Errorf("backfill thread observation sequence: %w", err)
+		`); err != nil {
+			return fmt.Errorf("backfill thread observation sequence: %w", err)
+		}
 	}
 	hadThreadBody := s.hasColumn(ctx, "threads", "body")
 	if err := s.ensureColumn(ctx, "threads", "body", "text"); err != nil {

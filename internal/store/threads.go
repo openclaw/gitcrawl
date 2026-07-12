@@ -40,9 +40,11 @@ type Thread struct {
 }
 
 type UpsertThreadOptions struct {
-	PreserveDraft               bool
-	PreserveObservationSequence bool
-	ObservationSequence         int64
+	PreserveDraft bool
+	// IncompleteEvidence stores the sequence as negative until full evidence for
+	// the same source revision arrives.
+	IncompleteEvidence  bool
+	ObservationSequence int64
 }
 
 type UpsertThreadResult struct {
@@ -118,30 +120,36 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		existing.contentHash == thread.ContentHash &&
 		existing.state == thread.State &&
 		existing.isDraft == expectedDraft
-	if options.PreserveObservationSequence {
-		if !exists {
-			options.ObservationSequence = 0
-		} else {
-			incomingKey, incomingValid := timestampOrderKey(thread.UpdatedAtGitHub)
-			currentKey, currentValid := timestampOrderKey(existing.sourceUpdatedAt)
-			if samePayload || (incomingValid && (!currentValid || incomingKey > currentKey)) {
-				options.ObservationSequence = existing.observationSequence
-			}
+	storedObservationSequence := options.ObservationSequence
+	if options.IncompleteEvidence {
+		storedObservationSequence = -storedObservationSequence
+		if samePayload {
+			storedObservationSequence = existing.observationSequence
 		}
 	}
 	if exists {
+		sourceOrder, err := compareObservationOrder(
+			observationOrder{SourceUpdatedAt: thread.UpdatedAtGitHub},
+			observationOrder{SourceUpdatedAt: existing.sourceUpdatedAt},
+		)
+		if err != nil {
+			return UpsertThreadResult{}, fmt.Errorf("compare thread observation source order: %w", err)
+		}
 		order, err := compareObservationOrder(
 			observationOrder{
 				SourceUpdatedAt:     thread.UpdatedAtGitHub,
-				ObservationSequence: options.ObservationSequence,
+				ObservationSequence: observationSequenceOrderValue(storedObservationSequence),
 			},
 			observationOrder{
 				SourceUpdatedAt:     existing.sourceUpdatedAt,
-				ObservationSequence: existing.observationSequence,
+				ObservationSequence: observationSequenceOrderValue(existing.observationSequence),
 			},
 		)
 		if err != nil {
 			return UpsertThreadResult{}, fmt.Errorf("compare thread observation order: %w", err)
+		}
+		if sourceOrder == 0 && !options.IncompleteEvidence && existing.observationSequence < 0 {
+			order = 1
 		}
 		if order < 0 {
 			return UpsertThreadResult{
@@ -152,7 +160,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		}
 		if order == 0 {
 			if samePayload {
-				if !options.PreserveObservationSequence {
+				if !options.IncompleteEvidence {
 					return UpsertThreadResult{
 						ID:            existing.id,
 						Applied:       false,
@@ -162,7 +170,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 			} else {
 				return UpsertThreadResult{}, fmt.Errorf(
 					"conflicting thread observations share sequence %d",
-					options.ObservationSequence,
+					observationSequenceOrderValue(storedObservationSequence),
 				)
 			}
 		}
@@ -190,7 +198,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		MergedAtGh:          nullString(thread.MergedAtGitHub),
 		FirstPulledAt:       nullString(thread.FirstPulledAt),
 		LastPulledAt:        nullString(thread.LastPulledAt),
-		ObservationSequence: options.ObservationSequence,
+		ObservationSequence: storedObservationSequence,
 		UpdatedAt:           thread.UpdatedAt,
 	}
 	var id int64

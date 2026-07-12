@@ -11,6 +11,15 @@ type observationOrder struct {
 	ObservationSequence int64
 }
 
+func observationSequenceOrderValue(sequence int64) int64 {
+	// Negative thread sequences mark metadata-only observations; their absolute
+	// value still participates in durable fetch ordering.
+	if sequence < 0 {
+		return -sequence
+	}
+	return sequence
+}
+
 func compareObservationOrder(incoming, current observationOrder) (int, error) {
 	incomingTimestamp := strings.TrimSpace(incoming.SourceUpdatedAt)
 	currentTimestamp := strings.TrimSpace(current.SourceUpdatedAt)
@@ -73,7 +82,10 @@ func (s *Store) threadRevisionFreshnessPredicate(
 		s.hasColumn(ctx, "threads", "observation_sequence")
 
 	if hasSequence {
-		sequenceFresh := revision + "observation_sequence >= " + thread + "observation_sequence"
+		sequenceFresh := thread + "observation_sequence >= 0 and (" +
+			revision + "observation_sequence <= 0 or " +
+			thread + "observation_sequence = 0 or " +
+			revision + "observation_sequence >= " + thread + "observation_sequence)"
 		if !hasRevisionSource || !hasThreadSource {
 			return sequenceFresh
 		}
@@ -84,10 +96,7 @@ func (s *Store) threadRevisionFreshnessPredicate(
 		threadClockUsable := threadTimestamp + " is not null or trim(coalesce(" +
 			thread + "updated_at_gh, '')) = ''"
 		return "((" + revisionTimestamp + " is not null and " + threadTimestamp + " is not null and (" +
-			revisionTimestamp + " > " + threadTimestamp + " or (" +
-			revisionTimestamp + " = " + threadTimestamp + " and (" +
-			revision + "observation_sequence <= 0 or " + thread + "observation_sequence <= 0 or " +
-			sequenceFresh + ")))) or ((" +
+			sequenceFresh + ") and " + revisionTimestamp + " >= " + threadTimestamp + ") or ((" +
 			revisionTimestamp + " is null or " + threadTimestamp + " is null) and " +
 			"(" + revisionClockUsable + ") and (" + threadClockUsable + ") and " +
 			sequenceFresh + "))"

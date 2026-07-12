@@ -193,7 +193,7 @@ func TestUpsertThreadObservationIsIdempotentButRejectsTiedConflicts(t *testing.T
 	}
 }
 
-func TestUpsertThreadObservationPreservesEvidenceGenerationForIncompletePayloads(t *testing.T) {
+func TestUpsertThreadObservationTracksIncompleteEvidenceGeneration(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -233,8 +233,8 @@ func TestUpsertThreadObservationPreservesEvidenceGenerationForIncompletePayloads
 	}
 
 	repeated, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
-		PreserveObservationSequence: true,
-		ObservationSequence:         3,
+		IncompleteEvidence:  true,
+		ObservationSequence: 3,
 	})
 	if err != nil || !repeated.Applied {
 		t.Fatalf("repeated incomplete observation = %+v, %v", repeated, err)
@@ -248,14 +248,14 @@ func TestUpsertThreadObservationPreservesEvidenceGenerationForIncompletePayloads
 	thread.ContentHash = "metadata-update"
 	thread.UpdatedAtGitHub = "2026-07-12T00:00:01Z"
 	updated, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
-		PreserveObservationSequence: true,
-		ObservationSequence:         4,
+		IncompleteEvidence:  true,
+		ObservationSequence: 4,
 	})
 	if err != nil || !updated.Applied {
 		t.Fatalf("newer incomplete observation = %+v, %v", updated, err)
 	}
-	if sequence := readSequence(); sequence != 1 {
-		t.Fatalf("newer incomplete sequence = %d, want 1", sequence)
+	if sequence := readSequence(); sequence != -4 {
+		t.Fatalf("newer incomplete sequence = %d, want -4", sequence)
 	}
 
 	hydrated, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
@@ -272,24 +272,24 @@ func TestUpsertThreadObservationPreservesEvidenceGenerationForIncompletePayloads
 	thread.RawJSON = `{"state":"same-clock-conflict"}`
 	thread.ContentHash = "same-clock-conflict"
 	conflict, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
-		PreserveObservationSequence: true,
-		ObservationSequence:         5,
+		IncompleteEvidence:  true,
+		ObservationSequence: 5,
 	})
 	if err != nil || !conflict.Applied {
 		t.Fatalf("same-clock incomplete conflict = %+v, %v", conflict, err)
 	}
-	if sequence := readSequence(); sequence != 5 {
-		t.Fatalf("same-clock conflict sequence = %d, want 5", sequence)
+	if sequence := readSequence(); sequence != -5 {
+		t.Fatalf("same-clock conflict sequence = %d, want -5", sequence)
 	}
 }
 
 func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
@@ -305,8 +305,8 @@ func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration
 		ContentHash: "metadata", UpdatedAtGitHub: "2026-07-12T00:00:00Z",
 		UpdatedAt: "2026-07-12T00:01:00Z",
 	}, UpsertThreadOptions{
-		PreserveObservationSequence: true,
-		ObservationSequence:         7,
+		IncompleteEvidence:  true,
+		ObservationSequence: 7,
 	})
 	if err != nil || !result.Applied {
 		t.Fatalf("incomplete observation = %+v, %v", result, err)
@@ -319,8 +319,26 @@ func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration
 	`, result.ID).Scan(&sequence); err != nil {
 		t.Fatalf("read observation sequence: %v", err)
 	}
-	if sequence != 0 {
-		t.Fatalf("new incomplete sequence = %d, want 0", sequence)
+	if sequence != -7 {
+		t.Fatalf("new incomplete sequence = %d, want -7", sequence)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from threads
+		where id = ?
+	`, result.ID).Scan(&sequence); err != nil {
+		t.Fatalf("read reopened observation sequence: %v", err)
+	}
+	if sequence != -7 {
+		t.Fatalf("reopened incomplete sequence = %d, want -7", sequence)
 	}
 }
 
