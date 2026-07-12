@@ -259,7 +259,7 @@ func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 	assertConsumersStale("malformed thread clock")
 }
 
-func TestRevisionConsumersPreferFreshSourceOverNewerFetch(t *testing.T) {
+func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -333,8 +333,11 @@ func TestRevisionConsumersPreferFreshSourceOverNewerFetch(t *testing.T) {
 	if !freshUpsert.Applied {
 		t.Fatal("newer source observation was not applied")
 	}
+	if freshUpsert.EvidenceApplied {
+		t.Fatal("lower sequence unexpectedly replaced accepted evidence")
+	}
 	freshThread.ID = freshUpsert.ID
-	freshRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+	unacceptedRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
 		Thread:              freshThread,
 		ObservationSequence: 1,
 	}, "2026-07-12T00:03:00Z")
@@ -342,7 +345,7 @@ func TestRevisionConsumersPreferFreshSourceOverNewerFetch(t *testing.T) {
 		t.Fatalf("fresh revision: %v", err)
 	}
 	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
-		ThreadRevisionID: freshRevision.RevisionID,
+		ThreadRevisionID: unacceptedRevision.RevisionID,
 		SummaryKind:      SummaryKindLLMKey,
 		PromptVersion:    SummaryPromptVersionV1,
 		Provider:         "test",
@@ -363,6 +366,50 @@ func TestRevisionConsumersPreferFreshSourceOverNewerFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary tasks: %v", err)
 	}
+	if len(summaryTasks) != 0 {
+		t.Fatalf("unaccepted lower-sequence summary tasks = %+v", summaryTasks)
+	}
+
+	acceptedUpsert, err := st.UpsertThreadObservation(
+		ctx,
+		freshThread,
+		UpsertThreadOptions{ObservationSequence: 3},
+	)
+	if err != nil {
+		t.Fatalf("accepted fresh thread observation: %v", err)
+	}
+	if !acceptedUpsert.Applied || !acceptedUpsert.EvidenceApplied ||
+		acceptedUpsert.EvidenceObservationSequence != 3 {
+		t.Fatalf("accepted fresh thread observation = %+v", acceptedUpsert)
+	}
+	freshRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              freshThread,
+		ObservationSequence: 3,
+	}, "2026-07-12T00:04:00Z")
+	if err != nil {
+		t.Fatalf("accepted fresh revision: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: freshRevision.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "test",
+		Model:            "test",
+		InputHash:        "accepted-fresh-input",
+		OutputHash:       "accepted-fresh-output",
+		KeyText:          "accepted fresh source summary",
+		CreatedAt:        "2026-07-12T00:04:01Z",
+	}); err != nil {
+		t.Fatalf("accepted fresh summary: %v", err)
+	}
+	summaryTasks, err = st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: repoID, Provider: "test", Model: "test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1,
+		Number: freshThread.Number, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("accepted summary tasks: %v", err)
+	}
 	if len(summaryTasks) != 1 || summaryTasks[0].RevisionID != freshRevision.RevisionID {
 		t.Fatalf("summary tasks = %+v, want fresh revision %d", summaryTasks, freshRevision.RevisionID)
 	}
@@ -374,7 +421,7 @@ func TestRevisionConsumersPreferFreshSourceOverNewerFetch(t *testing.T) {
 		t.Fatalf("embedding tasks: %v", err)
 	}
 	if len(embeddingTasks) != 1 ||
-		!strings.Contains(embeddingTasks[0].Text, "fresh source summary") ||
+		!strings.Contains(embeddingTasks[0].Text, "accepted fresh source summary") ||
 		strings.Contains(embeddingTasks[0].Text, "stale source summary") {
 		t.Fatalf("embedding tasks = %+v, want fresh summary", embeddingTasks)
 	}
@@ -382,7 +429,7 @@ func TestRevisionConsumersPreferFreshSourceOverNewerFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cluster summaries: %v", err)
 	}
-	if summaries[freshThread.ID][SummaryKindLLMKey] != "fresh source summary" {
+	if summaries[freshThread.ID][SummaryKindLLMKey] != "accepted fresh source summary" {
 		t.Fatalf("cluster summaries = %+v", summaries)
 	}
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})

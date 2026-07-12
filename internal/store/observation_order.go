@@ -115,8 +115,15 @@ func (s *Store) threadRevisionFreshnessPredicate(
 ) string {
 	revision := sqliteIdentifier(revisionAlias) + "."
 	thread := sqliteIdentifier(threadAlias) + "."
-	hasSequence := s.hasColumn(ctx, "thread_revisions", "observation_sequence") &&
-		s.hasColumn(ctx, "threads", "observation_sequence")
+	sequenceFloorColumn := ""
+	if s.hasColumn(ctx, "thread_revisions", "observation_sequence") {
+		switch {
+		case s.hasColumn(ctx, "threads", "evidence_observation_sequence"):
+			sequenceFloorColumn = "evidence_observation_sequence"
+		case s.hasColumn(ctx, "threads", "observation_sequence"):
+			sequenceFloorColumn = "observation_sequence"
+		}
+	}
 	revisionLegacyTimestamp := "gitcrawl_timestamp_key(" + revision + "created_at)"
 	revisionSourceTimestamp := "null"
 	revisionSourceUsable := "1 = 1"
@@ -142,16 +149,17 @@ func (s *Store) threadRevisionFreshnessPredicate(
 		threadLegacyTimestamp + " is not null and " +
 		revisionLegacyTimestamp + " >= " + threadLegacyTimestamp
 
-	if hasSequence {
+	if sequenceFloorColumn != "" {
+		sequenceFloor := thread + sequenceFloorColumn
 		sourceClockFresh := "(" + revisionSourceUsable + ") and (" + threadSourceUsable +
 			") and (" + revisionSourceTimestamp + " is null or " +
 			threadSourceTimestamp + " is null or " +
 			revisionSourceTimestamp + " >= " + threadSourceTimestamp + ")"
-		sequenceFresh := thread + "observation_sequence > 0 and " +
+		sequenceFresh := sequenceFloor + " > 0 and " +
 			revision + "observation_sequence > 0 and " +
-			revision + "observation_sequence >= " + thread + "observation_sequence"
+			revision + "observation_sequence >= " + sequenceFloor
 		return "((" + sequenceFresh + ") and (" + sourceClockFresh + ")) or (" +
-			thread + "observation_sequence = 0 and (" + legacyClockFresh + "))"
+			sequenceFloor + " = 0 and (" + legacyClockFresh + "))"
 	}
 
 	return legacyClockFresh

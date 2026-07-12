@@ -1143,7 +1143,7 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		t.Fatalf("sequence two stats = %#v", first.stats)
 	}
 
-	var threadID, parentSequence, evidenceSequence, latestRevisionSequence, revisions int64
+	var threadID, parentSequence, evidenceSequence, latestRevisionID, latestRevisionSequence, revisions int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select id, observation_sequence, evidence_observation_sequence
 		from threads
@@ -1152,12 +1152,12 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		t.Fatalf("parent sequence: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select id, observation_sequence
 		from thread_revisions
 		where thread_id = ?
 		order by observation_sequence desc
 		limit 1
-	`, threadID).Scan(&latestRevisionSequence); err != nil {
+	`, threadID).Scan(&latestRevisionID, &latestRevisionSequence); err != nil {
 		t.Fatalf("latest revision sequence: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
@@ -1181,6 +1181,36 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 			revisions,
 			comments,
 		)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	summaryTasks, err := st.ListSummaryTasks(ctx, store.SummaryTaskOptions{
+		RepoID:        repo.ID,
+		Provider:      "test",
+		Model:         "test",
+		SummaryKind:   store.SummaryKindLLMKey,
+		PromptVersion: store.SummaryPromptVersionV1,
+		Number:        7,
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("summary tasks: %v", err)
+	}
+	if len(summaryTasks) != 1 || summaryTasks[0].RevisionID != latestRevisionID {
+		t.Fatalf("summary tasks after metadata-only observation = %+v", summaryTasks)
+	}
+	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{
+		RepoIDs: []int64{repo.ID},
+	})
+	if err != nil {
+		t.Fatalf("archive coverage: %v", err)
+	}
+	if len(coverage.Rows) != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Fresh != 1 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Fresh != 1 {
+		t.Fatalf("coverage after metadata-only observation = %+v", coverage)
 	}
 }
 
