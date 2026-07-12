@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Order canonical thread state, accepted evidence, hydrated child snapshots, and repository/head-SHA workflow runs by GitHub source revision before durable pre-fetch generation, so a delayed newer fetch can replace an older snapshot without allowing late stale hydration to overwrite it, while preserving legacy read-only archives.
+- Order canonical thread state, accepted evidence, hydrated child snapshots, and repository/head-SHA workflow runs by GitHub source revision before durable pre-fetch generation, so delayed newer fetches replace older snapshots without allowing late stale hydration to overwrite them. Validate workflow snapshots member by member, verify deletions with an exact GitHub lookup, preserve legacy read-only archives, and repair observation migrations without synthesizing source/sequence pairs that never existed.
 
 ## 0.7.1 - 2026-07-09
 

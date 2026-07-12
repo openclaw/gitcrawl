@@ -1,6 +1,8 @@
 package syncer
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -56,32 +58,63 @@ func mapWorkflowRuns(repoID int64, rows []map[string]any, fetchedAt string) []st
 	return out
 }
 
-func workflowSnapshotSourceUpdatedAt(rows []map[string]any) string {
+func workflowSnapshotOrder(rows []map[string]any) (string, map[string]string, error) {
 	sourceUpdatedAt := ""
+	byRunID := make(map[string]string, len(rows))
 	for _, row := range rows {
-		sourceUpdatedAt = latestWorkflowTimestamp(
-			sourceUpdatedAt,
+		runID := jsonID(row["id"])
+		if runID == "" {
+			continue
+		}
+		if _, exists := byRunID[runID]; exists {
+			return "", nil, fmt.Errorf("workflow snapshot contains duplicate run %s", runID)
+		}
+		runSourceUpdatedAt, err := latestWorkflowTimestamp(
 			stringValue(row["updated_at"]),
 			stringValue(row["created_at"]),
 		)
+		if err != nil {
+			return "", nil, fmt.Errorf("workflow run %s source: %w", runID, err)
+		}
+		byRunID[runID] = runSourceUpdatedAt
+		sourceUpdatedAt, err = latestWorkflowTimestamp(
+			sourceUpdatedAt,
+			runSourceUpdatedAt,
+		)
+		if err != nil {
+			return "", nil, err
+		}
 	}
-	return sourceUpdatedAt
+	return sourceUpdatedAt, byRunID, nil
 }
 
-func latestWorkflowTimestamp(values ...string) string {
+func latestWorkflowTimestamp(values ...string) (string, error) {
 	latestValue := ""
 	var latestTime time.Time
 	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
 		parsed, err := time.Parse(time.RFC3339Nano, value)
 		if err != nil {
-			continue
+			return "", fmt.Errorf("invalid timestamp %q", value)
 		}
 		if latestValue == "" || parsed.After(latestTime) {
 			latestValue = value
 			latestTime = parsed
 		}
 	}
-	return latestValue
+	return latestValue, nil
+}
+
+func workflowTimestampBefore(incoming, current string) bool {
+	if strings.TrimSpace(current) == "" {
+		return false
+	}
+	incomingTime, incomingErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(incoming))
+	currentTime, currentErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(current))
+	return incomingErr == nil && currentErr == nil && incomingTime.Before(currentTime)
 }
 
 func nestedString(row map[string]any, path ...string) string {

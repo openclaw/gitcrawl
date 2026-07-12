@@ -165,6 +165,8 @@ func TestClientSingleResourceAndCollectionEndpoints(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{"name": "test"}}})
 		case "/repos/openclaw/gitcrawl/actions/runs":
 			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 99}}})
+		case "/repos/openclaw/gitcrawl/actions/runs/99":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.String())
 		}
@@ -202,7 +204,11 @@ func TestClientSingleResourceAndCollectionEndpoints(t *testing.T) {
 			t.Fatalf("%s rows = %+v err=%v", name, rows, err)
 		}
 	}
-	if len(requests) != 10 {
+	if run, err := client.GetWorkflowRun(ctx, "openclaw", "gitcrawl", "99", nil); err != nil ||
+		intValue(run["id"]) != 99 {
+		t.Fatalf("get workflow run = %+v err=%v", run, err)
+	}
+	if len(requests) != 11 {
 		t.Fatalf("requests = %+v", requests)
 	}
 }

@@ -113,6 +113,7 @@ type sameHeadWorkflowGitHub struct {
 	number      int
 	version     int
 	prUpdatedAt string
+	deletedRun  string
 	fetched     chan struct{}
 	release     chan struct{}
 }
@@ -440,11 +441,19 @@ func (f sameHeadWorkflowGitHub) ListWorkflowRuns(
 		"created_at":  "2026-07-12T00:00:00Z",
 		"updated_at":  "2026-07-12T00:00:00Z",
 	}}
-	if f.version == 2 {
+	if f.version >= 2 {
 		rows[0]["status"] = "completed"
 		rows[0]["conclusion"] = "success"
 		rows[0]["name"] = "new CI"
 		rows[0]["updated_at"] = "2026-07-12T00:01:00Z"
+	}
+	if f.version == 4 {
+		rows[0]["status"] = "queued"
+		rows[0]["conclusion"] = ""
+		rows[0]["name"] = "stale CI"
+		rows[0]["updated_at"] = "2026-07-12T00:00:00Z"
+	}
+	if f.version == 2 {
 		rows = append(rows, map[string]any{
 			"id":          901,
 			"run_number":  2,
@@ -455,8 +464,36 @@ func (f sameHeadWorkflowGitHub) ListWorkflowRuns(
 			"name":        "new lint",
 			"event":       "pull_request",
 			"created_at":  "2026-07-12T00:01:00Z",
-			"updated_at":  "2026-07-12T00:01:00Z",
+			"updated_at":  "2026-07-12T00:02:00Z",
 		})
+	}
+	if f.version == 4 {
+		rows = append(rows,
+			map[string]any{
+				"id":          901,
+				"run_number":  2,
+				"head_branch": "shared-branch",
+				"head_sha":    options.HeadSHA,
+				"status":      "completed",
+				"conclusion":  "success",
+				"name":        "new lint",
+				"event":       "pull_request",
+				"created_at":  "2026-07-12T00:01:00Z",
+				"updated_at":  "2026-07-12T00:02:00Z",
+			},
+			map[string]any{
+				"id":          902,
+				"run_number":  3,
+				"head_branch": "shared-branch",
+				"head_sha":    options.HeadSHA,
+				"status":      "completed",
+				"conclusion":  "success",
+				"name":        "future sibling",
+				"event":       "pull_request",
+				"created_at":  "2026-07-12T00:03:00Z",
+				"updated_at":  "2026-07-12T00:03:00Z",
+			},
+		)
 	}
 	if f.fetched != nil {
 		close(f.fetched)
@@ -467,6 +504,22 @@ func (f sameHeadWorkflowGitHub) ListWorkflowRuns(
 		}
 	}
 	return rows, nil
+}
+
+func (f sameHeadWorkflowGitHub) GetWorkflowRun(
+	_ context.Context,
+	_, _ string,
+	runID string,
+	_ gh.Reporter,
+) (map[string]any, error) {
+	if runID == f.deletedRun {
+		return nil, &gh.RequestError{
+			Method: "GET",
+			URL:    "/repos/openclaw/gitcrawl/actions/runs/" + runID,
+			Status: 404,
+		}
+	}
+	return map[string]any{"id": runID}, nil
 }
 
 func interleavedSignals(
@@ -1776,6 +1829,122 @@ func TestSyncWorkflowRunsSharedHeadRejectsOlderPRSnapshot(t *testing.T) {
 	}
 	if legacyReservations != 0 {
 		t.Fatalf("legacy workflow reservations = %d, want none", legacyReservations)
+	}
+}
+
+func TestSyncWorkflowRunsAcceptsVerifiedDeletionWithoutRegressingSnapshotClock(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	initial := New(sameHeadWorkflowGitHub{number: 9, version: 2}, st)
+	initial.now = func() time.Time { return time.Date(2026, 7, 12, 1, 0, 0, 0, time.UTC) }
+	if _, err := initial.Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{9}, IncludePRDetails: true,
+	}); err != nil {
+		t.Fatalf("initial workflow sync: %v", err)
+	}
+
+	deleted := New(sameHeadWorkflowGitHub{
+		number: 9, version: 3, deletedRun: "901",
+	}, st)
+	deleted.now = func() time.Time { return time.Date(2026, 7, 12, 1, 1, 0, 0, time.UTC) }
+	if _, err := deleted.Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{9}, IncludePRDetails: true,
+	}); err != nil {
+		t.Fatalf("verified deletion sync: %v", err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: "shared-head",
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RunID != "900" {
+		t.Fatalf("workflow runs after verified deletion = %+v", runs)
+	}
+	source, sequence, found, err := st.WorkflowRunObservationReservation(
+		ctx,
+		repo.ID,
+		"shared-head",
+	)
+	if err != nil || !found {
+		t.Fatalf("workflow reservation = %q/%d found=%t err=%v", source, sequence, found, err)
+	}
+	if source != "2026-07-12T00:02:00Z" || sequence != 2 {
+		t.Fatalf("workflow reservation after deletion = %s/%d", source, sequence)
+	}
+}
+
+func TestSyncWorkflowRunsRejectsRegressedMemberDespiteNewerSibling(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	initial := New(sameHeadWorkflowGitHub{number: 9, version: 2}, st)
+	if _, err := initial.Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{9}, IncludePRDetails: true,
+	}); err != nil {
+		t.Fatalf("initial workflow sync: %v", err)
+	}
+
+	regressed := New(sameHeadWorkflowGitHub{number: 9, version: 4}, st)
+	stats, err := regressed.Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{9}, IncludePRDetails: true,
+	})
+	if err != nil {
+		t.Fatalf("regressed workflow sync: %v", err)
+	}
+	if stats.WorkflowRunsSynced != 0 {
+		t.Fatalf("regressed workflow stats = %#v", stats)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: "shared-head",
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("workflow runs = %+v, want original two-run snapshot", runs)
+	}
+	for _, run := range runs {
+		if run.RunID == "900" && run.WorkflowName != "new CI" {
+			t.Fatalf("workflow run 900 regressed: %+v", run)
+		}
+		if run.RunID == "902" {
+			t.Fatalf("newer sibling admitted stale snapshot: %+v", runs)
+		}
+	}
+}
+
+func TestWorkflowSnapshotRejectsMalformedSourceTimestamp(t *testing.T) {
+	_, _, err := workflowSnapshotOrder([]map[string]any{{
+		"id":         900,
+		"updated_at": "not-a-timestamp",
+		"created_at": "2026-07-12T00:00:00Z",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "invalid timestamp") {
+		t.Fatalf("malformed workflow timestamp error = %v", err)
 	}
 }
 

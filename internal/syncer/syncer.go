@@ -291,14 +291,16 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 						return err
 					}
 				}
-				if childWritesAllowed && payload.hasPullDetails {
+				if childWritesAllowed &&
+					payload.hasPullDetails &&
+					payload.pullDetails.workflowSnapshotFresh {
 					headSHA := nestedString(payload.pullDetails.pull, "head", "sha")
 					if headSHA != "" {
 						workflowRunsReserved, err = st.ReserveWorkflowRunObservation(
 							ctx,
 							thread.RepoID,
 							headSHA,
-							workflowSnapshotSourceUpdatedAt(payload.pullDetails.runsRaw),
+							payload.pullDetails.workflowSourceUpdatedAt,
 							observationSequence,
 						)
 						if err != nil {

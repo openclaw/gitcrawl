@@ -2,6 +2,9 @@ package syncer
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/documents"
@@ -18,12 +21,24 @@ type pullDetailStats struct {
 }
 
 type pullRequestDetailRows struct {
-	fetchedAt  string
-	pull       map[string]any
-	filesRaw   []map[string]any
-	commitsRaw []map[string]any
-	checksRaw  []map[string]any
-	runsRaw    []map[string]any
+	fetchedAt               string
+	workflowSourceUpdatedAt string
+	workflowSnapshotFresh   bool
+	pull                    map[string]any
+	filesRaw                []map[string]any
+	commitsRaw              []map[string]any
+	checksRaw               []map[string]any
+	runsRaw                 []map[string]any
+}
+
+type workflowRunLookupClient interface {
+	GetWorkflowRun(
+		ctx context.Context,
+		owner string,
+		repo string,
+		runID string,
+		reporter gh.Reporter,
+	) (map[string]any, error)
 }
 
 func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, number int) (pullRequestDetailRows, error) {
@@ -55,14 +70,124 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 			return pullRequestDetailRows{}, err
 		}
 	}
+	workflowSourceUpdatedAt, workflowSnapshotFresh, err := s.workflowSnapshotObservation(
+		ctx,
+		options,
+		headSHA,
+		runsRaw,
+	)
+	if err != nil {
+		return pullRequestDetailRows{}, err
+	}
 	return pullRequestDetailRows{
-		fetchedAt:  fetchedAt,
-		pull:       pull,
-		filesRaw:   filesRaw,
-		commitsRaw: commitsRaw,
-		checksRaw:  checksRaw,
-		runsRaw:    runsRaw,
+		fetchedAt:               fetchedAt,
+		workflowSourceUpdatedAt: workflowSourceUpdatedAt,
+		workflowSnapshotFresh:   workflowSnapshotFresh,
+		pull:                    pull,
+		filesRaw:                filesRaw,
+		commitsRaw:              commitsRaw,
+		checksRaw:               checksRaw,
+		runsRaw:                 runsRaw,
 	}, nil
+}
+
+func (s *Syncer) workflowSnapshotObservation(
+	ctx context.Context,
+	options Options,
+	headSHA string,
+	rows []map[string]any,
+) (sourceUpdatedAt string, fresh bool, err error) {
+	sourceUpdatedAt, incoming, err := workflowSnapshotOrder(rows)
+	if err != nil {
+		return "", false, err
+	}
+	if headSHA == "" {
+		return sourceUpdatedAt, true, nil
+	}
+	repo, err := s.store.RepositoryByFullName(ctx, options.Owner+"/"+options.Repo)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sourceUpdatedAt, true, nil
+		}
+		return "", false, err
+	}
+	currentRuns, err := s.store.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: headSHA,
+		Limit:   -1,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	reservationSource, _, found, err := s.store.WorkflowRunObservationReservation(
+		ctx,
+		repo.ID,
+		headSHA,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	if found {
+		if _, err = latestWorkflowTimestamp(reservationSource); err != nil {
+			return "", false, fmt.Errorf("validate workflow reservation source: %w", err)
+		}
+	}
+	for _, current := range currentRuns {
+		currentSource, err := latestWorkflowTimestamp(current.UpdatedAtGH, current.CreatedAtGH)
+		if err != nil {
+			return "", false, fmt.Errorf(
+				"validate stored workflow run %s source: %w",
+				current.RunID,
+				err,
+			)
+		}
+		incomingSource, present := incoming[current.RunID]
+		if present {
+			if workflowTimestampBefore(incomingSource, currentSource) {
+				return sourceUpdatedAt, false, nil
+			}
+			continue
+		}
+		lookup, ok := s.client.(workflowRunLookupClient)
+		if !ok {
+			if workflowTimestampBefore(sourceUpdatedAt, reservationSource) {
+				return sourceUpdatedAt, false, nil
+			}
+			return "", false, fmt.Errorf(
+				"cannot verify missing workflow run %s before replacing head %s",
+				current.RunID,
+				headSHA,
+			)
+		}
+		_, lookupErr := lookup.GetWorkflowRun(
+			ctx,
+			options.Owner,
+			options.Repo,
+			current.RunID,
+			options.Reporter,
+		)
+		var requestErr *gh.RequestError
+		if lookupErr == nil {
+			return sourceUpdatedAt, false, nil
+		}
+		if !errors.As(lookupErr, &requestErr) || requestErr.Status != 404 {
+			return "", false, fmt.Errorf(
+				"verify missing workflow run %s: %w",
+				current.RunID,
+				lookupErr,
+			)
+		}
+		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, currentSource)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	if found {
+		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, reservationSource)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	return sourceUpdatedAt, true, nil
 }
 
 func (s *Syncer) persistPullRequestDetails(
