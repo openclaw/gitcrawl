@@ -183,7 +183,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		if alreadyStaged {
 			snapshot.DatasetGeneratedAt = status.Snapshot.DatasetGeneratedAt
 		}
-	} else if !remoteNotFound(statusErr) {
+	} else if !remoteNotFound(statusErr) && !remoteSnapshotIncomplete(statusErr) {
 		return statusErr
 	}
 	var sqliteBundle *crawlremote.SQLiteBundle
@@ -751,6 +751,13 @@ func validateGitcrawlSQLiteBundleUpload(
 func remoteNotFound(err error) bool {
 	var remoteErr *crawlremote.Error
 	return errors.As(err, &remoteErr) && remoteErr.Status == http.StatusNotFound
+}
+
+func remoteSnapshotIncomplete(err error) bool {
+	var remoteErr *crawlremote.Error
+	return errors.As(err, &remoteErr) &&
+		remoteErr.Status == http.StatusConflict &&
+		remoteErr.Code == "snapshot_mismatch"
 }
 
 func requireGitcrawlSnapshotPublishContract(

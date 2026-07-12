@@ -1764,6 +1764,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	ingestRequests := 0
 	publisherStatusRequests := 0
 	var publisherStatusSnapshotIDs []string
+	snapshotMismatchResponsesRemaining := 1
 	readerStatusRequests := 0
 	sqliteReadRequests := 0
 	cutovers := 0
@@ -1849,6 +1850,15 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				publisherStatusSnapshotIDs,
 				requestedSnapshotID,
 			)
+			if requestedSnapshotID != "" && snapshotMismatchResponsesRemaining > 0 {
+				snapshotMismatchResponsesRemaining--
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":   "snapshot_mismatch",
+					"message": "snapshot ingest is incomplete",
+				})
+				return
+			}
 			if stagedSnapshot == nil {
 				http.NotFound(w, r)
 				return
