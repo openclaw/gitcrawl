@@ -442,6 +442,108 @@ func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 	}
 }
 
+func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t *testing.T) {
+	snapshotID := strings.Repeat("a", 64)
+	snapshot := gitcrawlCloudSnapshot{
+		ID:                 snapshotID,
+		SourceSyncAt:       "2026-07-12T12:00:00Z",
+		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
+	}
+	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__openclaw", snapshot)
+	publicationCapabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
+	const winnerGeneration = "2026-07-12T12:02:00Z"
+
+	for _, test := range []struct {
+		name             string
+		activeSnapshotID string
+		coverageComplete bool
+		wantGeneration   string
+		want             string
+	}{
+		{
+			name:             "independent winner generation",
+			activeSnapshotID: snapshotID,
+			coverageComplete: true,
+			wantGeneration:   winnerGeneration,
+		},
+		{
+			name:             "unrelated active candidate",
+			activeSnapshotID: strings.Repeat("b", 64),
+			coverageComplete: true,
+			want:             "does not match the requested digest, profile, and coverage",
+		},
+		{
+			name:             "incomplete candidate",
+			activeSnapshotID: snapshotID,
+			want:             "does not match the requested digest, profile, and coverage",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("snapshot_id"); got != snapshotID {
+					http.Error(w, fmt.Sprintf("snapshot_id = %q, want %q", got, snapshotID), http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
+					App:              manifest.App,
+					Archive:          manifest.Archive,
+					ActiveSnapshotID: test.activeSnapshotID,
+					CoverageComplete: test.coverageComplete,
+					Snapshot: &crawlremote.ArchiveSnapshot{
+						ID:                 snapshotID,
+						SourceSHA256:       snapshotID,
+						SourceSyncAt:       snapshot.SourceSyncAt,
+						DatasetGeneratedAt: winnerGeneration,
+						SchemaName:         manifest.SchemaName,
+						SchemaVersion:      manifest.SchemaVersion,
+						SchemaHash:         manifest.SchemaHash,
+						Capabilities:       publicationCapabilities,
+						CoverageComplete:   test.coverageComplete,
+					},
+				})
+			}))
+			defer server.Close()
+			client, err := crawlremote.NewClient(crawlremote.Options{
+				Endpoint:      server.URL,
+				HTTPClient:    server.Client(),
+				TokenProvider: crawlremote.StaticToken("publisher-token"),
+			})
+			if err != nil {
+				t.Fatalf("remote client: %v", err)
+			}
+
+			generation, err := recoverConcurrentGitcrawlSnapshot(
+				context.Background(),
+				client,
+				manifest.Archive,
+				snapshot,
+				manifest,
+				publicationCapabilities,
+				&crawlremote.Error{
+					Status:  http.StatusConflict,
+					Code:    "snapshot_active",
+					Message: "a concurrent publisher completed the snapshot",
+				},
+			)
+			if test.want != "" {
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("recovery error = %v, want %q", err, test.want)
+				}
+				if generation != "" {
+					t.Fatalf("recovered generation = %q, want none", generation)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("recover concurrent snapshot: %v", err)
+			}
+			if generation != test.wantGeneration {
+				t.Fatalf("recovered generation = %q, want %q", generation, test.wantGeneration)
+			}
+		})
+	}
+}
+
 func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t *testing.T) {
 	source := []byte("SQLite format 3\x00bound source")
 	snapshotID := fmt.Sprintf("%x", sha256.Sum256(source))
@@ -454,11 +556,19 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 	publicationCapabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
 
 	for _, test := range []struct {
-		name       string
-		statusCode int
-		body       []byte
-		want       string
+		name             string
+		statusGeneration string
+		statusCode       int
+		body             []byte
+		want             string
 	}{
+		{
+			name:             "publisher generation mismatch",
+			statusGeneration: "2026-07-12T12:02:00Z",
+			statusCode:       http.StatusOK,
+			body:             source,
+			want:             "post-cutover publisher status does not match",
+		},
 		{
 			name:       "bound snapshot unavailable",
 			statusCode: http.StatusConflict,
@@ -485,6 +595,10 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 						return
 					}
 					w.Header().Set("content-type", "application/json")
+					statusGeneration := snapshot.DatasetGeneratedAt
+					if test.statusGeneration != "" {
+						statusGeneration = test.statusGeneration
+					}
 					_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
 						App:              "gitcrawl",
 						Archive:          manifest.Archive,
@@ -494,7 +608,7 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 							ID:                 snapshotID,
 							SourceSHA256:       snapshotID,
 							SourceSyncAt:       snapshot.SourceSyncAt,
-							DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+							DatasetGeneratedAt: statusGeneration,
 							SchemaName:         manifest.SchemaName,
 							SchemaVersion:      manifest.SchemaVersion,
 							SchemaHash:         manifest.SchemaHash,

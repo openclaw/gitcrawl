@@ -1754,6 +1754,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	seedCommandFlowStore(t, dbPath)
 
 	const tokenEnv = "GITCRAWL_TEST_RESUME_TOKEN"
+	const concurrentDatasetGeneratedAt = "2000-01-02T03:04:05.678901234Z"
 	t.Setenv(tokenEnv, "publish-token")
 	var snapshotID string
 	var stagedSnapshot *crawlremote.ArchiveSnapshot
@@ -1980,11 +1981,17 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				}
 				mutationToken = body.MutationToken
 				stagedDatasets = testGitcrawlDatasetCoverageRows(t, body.Rows)
+				if got := fmt.Sprint(body.Rows[0][5]); got == concurrentDatasetGeneratedAt {
+					t.Fatalf("loser generation unexpectedly equals independent winner generation %q", got)
+				}
+				for index := range stagedDatasets {
+					stagedDatasets[index].DatasetGeneratedAt = concurrentDatasetGeneratedAt
+				}
 				stagedSnapshot = &crawlremote.ArchiveSnapshot{
 					ID:                 body.Manifest.SnapshotID,
 					SourceSHA256:       body.Manifest.SourceSHA256,
 					SourceSyncAt:       body.Manifest.SourceSyncAt,
-					DatasetGeneratedAt: fmt.Sprint(body.Rows[0][5]),
+					DatasetGeneratedAt: concurrentDatasetGeneratedAt,
 					SchemaName:         body.Manifest.SchemaName,
 					SchemaVersion:      body.Manifest.SchemaVersion,
 					SchemaHash:         body.Manifest.SchemaHash,
@@ -2097,7 +2104,8 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				t.Fatalf("stage-only changed serving snapshot to %q", servingSnapshotID)
 			}
 			stagedDatasetGeneratedAt = result.DatasetGeneratedAt
-			if stagedDatasetGeneratedAt == "" || result.MutationToken == "" {
+			if stagedDatasetGeneratedAt != concurrentDatasetGeneratedAt ||
+				result.MutationToken == "" {
 				t.Fatalf("stage-only did not bind its generation: %#v", result)
 			}
 			time.Sleep(2 * time.Millisecond)

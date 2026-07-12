@@ -221,7 +221,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				mutationToken,
 			)
 			if err != nil {
-				recovered, recoveryErr := recoverConcurrentGitcrawlSnapshot(
+				recoveredGeneration, recoveryErr := recoverConcurrentGitcrawlSnapshot(
 					ctx,
 					client,
 					archiveID,
@@ -237,7 +237,8 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 						recoveryErr,
 					)
 				}
-				if recovered {
+				if recoveredGeneration != "" {
+					snapshot.DatasetGeneratedAt = recoveredGeneration
 					alreadyStaged = true
 					completedConcurrently = true
 					break
@@ -258,7 +259,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				mutationToken,
 			)
 			if err != nil {
-				recovered, recoveryErr := recoverConcurrentGitcrawlSnapshot(
+				recoveredGeneration, recoveryErr := recoverConcurrentGitcrawlSnapshot(
 					ctx,
 					client,
 					archiveID,
@@ -270,9 +271,10 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				if recoveryErr != nil {
 					return fmt.Errorf("complete cloud snapshot staging: %w", recoveryErr)
 				}
-				if !recovered {
+				if recoveredGeneration == "" {
 					return fmt.Errorf("complete cloud snapshot staging: %w", err)
 				}
+				snapshot.DatasetGeneratedAt = recoveredGeneration
 				alreadyStaged = true
 			} else {
 				mutationToken = progress.MutationToken
@@ -808,12 +810,12 @@ func recoverConcurrentGitcrawlSnapshot(
 	manifest crawlremote.IngestManifest,
 	publicationCapabilities []string,
 	cause error,
-) (bool, error) {
+) (string, error) {
 	var remoteErr *crawlremote.Error
 	if !errors.As(cause, &remoteErr) ||
 		remoteErr.Status != http.StatusConflict ||
 		remoteErr.Code != "snapshot_active" {
-		return false, nil
+		return "", nil
 	}
 	status, err := client.PublishStatusForSnapshot(
 		ctx,
@@ -822,16 +824,15 @@ func recoverConcurrentGitcrawlSnapshot(
 		snapshot.ID,
 	)
 	if err != nil {
-		return false, fmt.Errorf("re-probe concurrent snapshot completion: %w", err)
+		return "", fmt.Errorf("re-probe concurrent snapshot completion: %w", err)
 	}
-	if !gitcrawlPublisherStatusMatches(status, manifest, publicationCapabilities) ||
-		status.Snapshot.DatasetGeneratedAt != snapshot.DatasetGeneratedAt {
-		return false, fmt.Errorf(
-			"concurrent active snapshot %s does not match the requested digest, profile, generation, and coverage",
+	if !gitcrawlPublisherStatusMatches(status, manifest, publicationCapabilities) {
+		return "", fmt.Errorf(
+			"concurrent active snapshot %s does not match the requested digest, profile, and coverage",
 			snapshot.ID,
 		)
 	}
-	return true, nil
+	return status.Snapshot.DatasetGeneratedAt, nil
 }
 
 func requireGitcrawlSnapshotPublishContract(
