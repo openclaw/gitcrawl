@@ -41,6 +41,7 @@ create table if not exists threads (
   close_reason_local text,
   first_pulled_at text,
   last_pulled_at text,
+  observation_sequence integer not null default 0,
   updated_at text not null,
   unique(repo_id, kind, number)
 );

@@ -40,52 +40,156 @@ type Thread struct {
 }
 
 type UpsertThreadOptions struct {
-	PreserveDraft bool
+	PreserveDraft       bool
+	ObservationSequence int64
+}
+
+type UpsertThreadResult struct {
+	ID            int64
+	Applied       bool
+	PreviousState string
 }
 
 func (s *Store) UpsertThread(ctx context.Context, thread Thread, options ...UpsertThreadOptions) (int64, error) {
-	var preserveDraft bool
+	result, err := s.UpsertThreadObservation(ctx, thread, options...)
+	return result.ID, err
+}
+
+func (s *Store) UpsertThreadObservation(ctx context.Context, thread Thread, options ...UpsertThreadOptions) (UpsertThreadResult, error) {
+	var upsertOptions UpsertThreadOptions
 	if len(options) > 0 {
-		preserveDraft = options[0].PreserveDraft
+		upsertOptions = options[0]
+	}
+	if s.queries != nil {
+		return s.upsertThreadObservation(ctx, thread, upsertOptions)
+	}
+	var result UpsertThreadResult
+	err := s.WithTx(ctx, func(tx *Store) error {
+		var err error
+		result, err = tx.upsertThreadObservation(ctx, thread, upsertOptions)
+		return err
+	})
+	return result, err
+}
+
+func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, options UpsertThreadOptions) (UpsertThreadResult, error) {
+	if options.ObservationSequence <= 0 {
+		sequence, err := s.NextThreadObservationSequence(ctx, thread.UpdatedAt)
+		if err != nil {
+			return UpsertThreadResult{}, err
+		}
+		options.ObservationSequence = sequence
+	}
+
+	var existing struct {
+		id                  int64
+		sourceUpdatedAt     string
+		observationSequence int64
+		rawJSON             string
+		contentHash         string
+		state               string
+		isDraft             int64
+	}
+	err := s.q().QueryRowContext(ctx, `
+		select id, coalesce(updated_at_gh, ''), observation_sequence,
+			coalesce(raw_json, ''), content_hash, state, is_draft
+		from threads
+		where repo_id = ? and kind = ? and number = ?
+	`, thread.RepoID, thread.Kind, thread.Number).Scan(
+		&existing.id,
+		&existing.sourceUpdatedAt,
+		&existing.observationSequence,
+		&existing.rawJSON,
+		&existing.contentHash,
+		&existing.state,
+		&existing.isDraft,
+	)
+	if err != nil && err != sql.ErrNoRows {
+		return UpsertThreadResult{}, fmt.Errorf("read current thread observation: %w", err)
+	}
+	exists := err == nil
+	if exists {
+		order, err := compareObservationOrder(
+			observationOrder{
+				SourceUpdatedAt:     thread.UpdatedAtGitHub,
+				ObservationSequence: options.ObservationSequence,
+			},
+			observationOrder{
+				SourceUpdatedAt:     existing.sourceUpdatedAt,
+				ObservationSequence: existing.observationSequence,
+			},
+		)
+		if err != nil {
+			return UpsertThreadResult{}, fmt.Errorf("compare thread observation order: %w", err)
+		}
+		if order < 0 {
+			return UpsertThreadResult{
+				ID:            existing.id,
+				Applied:       false,
+				PreviousState: existing.state,
+			}, nil
+		}
+		if order == 0 {
+			expectedDraft := int64(boolInt(thread.IsDraft))
+			if options.PreserveDraft {
+				expectedDraft = existing.isDraft
+			}
+			if existing.rawJSON == thread.RawJSON &&
+				existing.contentHash == thread.ContentHash &&
+				existing.state == thread.State &&
+				existing.isDraft == expectedDraft {
+				return UpsertThreadResult{
+					ID:            existing.id,
+					Applied:       false,
+					PreviousState: existing.state,
+				}, nil
+			}
+			return UpsertThreadResult{}, fmt.Errorf(
+				"conflicting thread observations share sequence %d",
+				options.ObservationSequence,
+			)
+		}
 	}
 	params := storedb.UpsertThreadParams{
-		RepoID:            thread.RepoID,
-		GithubID:          thread.GitHubID,
-		Number:            int64(thread.Number),
-		Kind:              thread.Kind,
-		State:             thread.State,
-		Title:             thread.Title,
-		Body:              nullString(thread.Body),
-		AuthorLogin:       nullString(thread.AuthorLogin),
-		AuthorType:        nullString(thread.AuthorType),
-		AuthorAssociation: nullString(thread.AuthorAssociation),
-		HtmlUrl:           thread.HTMLURL,
-		LabelsJson:        thread.LabelsJSON,
-		AssigneesJson:     thread.AssigneesJSON,
-		RawJson:           thread.RawJSON,
-		ContentHash:       thread.ContentHash,
-		IsDraft:           int64(boolInt(thread.IsDraft)),
-		CreatedAtGh:       nullString(thread.CreatedAtGitHub),
-		UpdatedAtGh:       nullString(thread.UpdatedAtGitHub),
-		ClosedAtGh:        nullString(thread.ClosedAtGitHub),
-		MergedAtGh:        nullString(thread.MergedAtGitHub),
-		FirstPulledAt:     nullString(thread.FirstPulledAt),
-		LastPulledAt:      nullString(thread.LastPulledAt),
-		UpdatedAt:         thread.UpdatedAt,
+		RepoID:              thread.RepoID,
+		GithubID:            thread.GitHubID,
+		Number:              int64(thread.Number),
+		Kind:                thread.Kind,
+		State:               thread.State,
+		Title:               thread.Title,
+		Body:                nullString(thread.Body),
+		AuthorLogin:         nullString(thread.AuthorLogin),
+		AuthorType:          nullString(thread.AuthorType),
+		AuthorAssociation:   nullString(thread.AuthorAssociation),
+		HtmlUrl:             thread.HTMLURL,
+		LabelsJson:          thread.LabelsJSON,
+		AssigneesJson:       thread.AssigneesJSON,
+		RawJson:             thread.RawJSON,
+		ContentHash:         thread.ContentHash,
+		IsDraft:             int64(boolInt(thread.IsDraft)),
+		CreatedAtGh:         nullString(thread.CreatedAtGitHub),
+		UpdatedAtGh:         nullString(thread.UpdatedAtGitHub),
+		ClosedAtGh:          nullString(thread.ClosedAtGitHub),
+		MergedAtGh:          nullString(thread.MergedAtGitHub),
+		FirstPulledAt:       nullString(thread.FirstPulledAt),
+		LastPulledAt:        nullString(thread.LastPulledAt),
+		ObservationSequence: options.ObservationSequence,
+		UpdatedAt:           thread.UpdatedAt,
 	}
-	var (
-		id  int64
-		err error
-	)
-	if preserveDraft {
+	var id int64
+	if options.PreserveDraft {
 		id, err = s.qsql().UpsertThreadPreservingDraft(ctx, storedb.UpsertThreadPreservingDraftParams(params))
 	} else {
 		id, err = s.qsql().UpsertThread(ctx, params)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("upsert thread: %w", err)
+		return UpsertThreadResult{}, fmt.Errorf("upsert thread: %w", err)
 	}
-	return id, nil
+	return UpsertThreadResult{
+		ID:            id,
+		Applied:       true,
+		PreviousState: existing.state,
+	}, nil
 }
 
 func (s *Store) MarkOpenThreadClosedFromGitHub(ctx context.Context, thread Thread) (bool, error) {
@@ -101,33 +205,38 @@ func (s *Store) MarkOpenThreadClosedFromGitHub(ctx context.Context, thread Threa
 	if thread.State == "" {
 		thread.State = "closed"
 	}
-	affected, err := s.qsql().MarkOpenThreadClosedFromGitHub(ctx, storedb.MarkOpenThreadClosedFromGitHubParams{
-		GithubID:          thread.GitHubID,
-		State:             thread.State,
-		Title:             thread.Title,
-		Body:              nullString(thread.Body),
-		AuthorLogin:       nullString(thread.AuthorLogin),
-		AuthorType:        nullString(thread.AuthorType),
-		AuthorAssociation: nullString(thread.AuthorAssociation),
-		HtmlUrl:           thread.HTMLURL,
-		LabelsJson:        thread.LabelsJSON,
-		AssigneesJson:     thread.AssigneesJSON,
-		RawJson:           thread.RawJSON,
-		ContentHash:       thread.ContentHash,
-		CreatedAtGh:       nullString(thread.CreatedAtGitHub),
-		UpdatedAtGh:       nullString(thread.UpdatedAtGitHub),
-		ClosedAtGh:        nullString(thread.ClosedAtGitHub),
-		MergedAtGh:        nullString(thread.MergedAtGitHub),
-		LastPulledAt:      nullString(thread.LastPulledAt),
-		UpdatedAt:         thread.UpdatedAt,
-		RepoID:            thread.RepoID,
-		Kind:              thread.Kind,
-		Number:            int64(thread.Number),
+	if s.queries == nil {
+		var updated bool
+		err := s.WithTx(ctx, func(tx *Store) error {
+			var err error
+			updated, err = tx.MarkOpenThreadClosedFromGitHub(ctx, thread)
+			return err
+		})
+		return updated, err
+	}
+	var state string
+	var closedAtLocal sql.NullString
+	err := s.q().QueryRowContext(ctx, `
+		select state, closed_at_local
+		from threads
+		where repo_id = ? and kind = ? and number = ?
+	`, thread.RepoID, thread.Kind, thread.Number).Scan(&state, &closedAtLocal)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read open thread before github close: %w", err)
+	}
+	if state != "open" || closedAtLocal.Valid {
+		return false, nil
+	}
+	result, err := s.upsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		PreserveDraft: thread.Kind == "pull_request",
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark open thread closed from github: %w", err)
 	}
-	return affected > 0, nil
+	return result.Applied, nil
 }
 
 func (s *Store) ListThreads(ctx context.Context, repoID int64, includeClosed bool) ([]Thread, error) {

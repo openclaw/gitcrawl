@@ -28,26 +28,27 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 		t.Fatalf("repo: %v", err)
 	}
 	threadID, err := st.UpsertThread(ctx, Thread{
-		RepoID:        repoID,
-		GitHubID:      "1",
-		Number:        7,
-		Kind:          "issue",
-		State:         "open",
-		Title:         "Download stalls",
-		Body:          "Large download stalls near completion.",
-		HTMLURL:       "https://github.com/openclaw/gitcrawl/issues/7",
-		LabelsJSON:    "[]",
-		AssigneesJSON: "[]",
-		RawJSON:       "{}",
-		ContentHash:   "hash",
-		UpdatedAt:     "2026-04-26T00:00:00Z",
+		RepoID:          repoID,
+		GitHubID:        "1",
+		Number:          7,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "Download stalls",
+		Body:            "Large download stalls near completion.",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/7",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "hash",
+		UpdatedAtGitHub: "2026-04-26T00:00:00Z",
+		UpdatedAt:       "2026-04-26T00:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("thread: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
-		insert into thread_revisions(id, thread_id, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(1, ?, 'hash', 'title', 'body', 'labels', '2026-04-26T00:00:00Z');
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values(1, ?, '2026-04-26T00:00:00Z', 'hash', 'title', 'body', 'labels', '2026-04-26T00:00:00Z');
 		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
 		values(1, 'llm_key_summary', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'intent: fix downloads\nsurface: downloader\nmechanism: retry stalled stream', '2026-04-26T00:01:00Z');
 	`, threadID); err != nil {

@@ -23,7 +23,8 @@ func (s *Store) NextThreadObservationSequence(ctx context.Context, startedAt str
 		update thread_observation_sequence
 		set value = max(
 			value,
-			coalesce((select max(observation_sequence) from thread_revisions), 0)
+			coalesce((select max(observation_sequence) from thread_revisions), 0),
+			coalesce((select max(observation_sequence) from threads), 0)
 		) + 1,
 			last_started_at = ?
 		where id = 1

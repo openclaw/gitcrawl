@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 7
+	schemaVersion = 8
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -276,6 +276,23 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		where observation_sequence <= 0
 	`); err != nil {
 		return fmt.Errorf("backfill thread revision observation sequence: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "threads", "observation_sequence", "integer not null default 0"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		update threads
+		set observation_sequence = max(
+			id,
+			coalesce((
+				select max(tr.observation_sequence)
+				from thread_revisions tr
+				where tr.thread_id = threads.id
+			), 0)
+		)
+		where observation_sequence <= 0
+	`); err != nil {
+		return fmt.Errorf("backfill thread observation sequence: %w", err)
 	}
 	hadThreadBody := s.hasColumn(ctx, "threads", "body")
 	if err := s.ensureColumn(ctx, "threads", "body", "text"); err != nil {

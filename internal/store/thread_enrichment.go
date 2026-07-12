@@ -182,12 +182,12 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		return ThreadEnrichmentResult{}, err
 	}
 	var latestID, latestObservationSequence int64
-	var latestHash, latestSourceUpdatedAt, latestCreatedAt string
+	var latestHash, latestSourceUpdatedAt string
 	err = s.q().QueryRowContext(ctx, `
-		select id, content_hash, coalesce(source_updated_at, ''), observation_sequence, created_at
+		select id, content_hash, coalesce(source_updated_at, ''), observation_sequence
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			observation_sequence desc,
 			id desc
 		limit 1
@@ -196,7 +196,6 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		&latestHash,
 		&latestSourceUpdatedAt,
 		&latestObservationSequence,
-		&latestCreatedAt,
 	)
 	if err != nil && err != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
@@ -224,20 +223,25 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		return ThreadEnrichmentResult{}, fmt.Errorf("read matching thread revision observation: %w", observedErr)
 	}
 
-	observationOrder := 1
+	order := 1
 	if latestExists {
-		observationOrder = compareRevisionObservationOrder(revision, ThreadRevision{
-			ID:                  latestID,
-			ThreadID:            revision.ThreadID,
-			SourceUpdatedAt:     latestSourceUpdatedAt,
-			ObservationSequence: latestObservationSequence,
-			ContentHash:         latestHash,
-			CreatedAt:           latestCreatedAt,
-		})
+		order, err = compareObservationOrder(
+			observationOrder{
+				SourceUpdatedAt:     revision.SourceUpdatedAt,
+				ObservationSequence: revision.ObservationSequence,
+			},
+			observationOrder{
+				SourceUpdatedAt:     latestSourceUpdatedAt,
+				ObservationSequence: latestObservationSequence,
+			},
+		)
+		if err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("compare thread revision observation order: %w", err)
+		}
 	}
 	created := false
 	switch {
-	case latestExists && observationOrder < 0 && observedErr == nil:
+	case latestExists && order < 0 && observedErr == nil:
 		revision.ID = observedID
 		if _, err := s.q().ExecContext(ctx, `
 			update thread_revisions
@@ -250,11 +254,8 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		revision.ID = latestID
 		refreshedSourceUpdatedAt := latestSourceUpdatedAt
 		refreshedObservationSequence := latestObservationSequence
-		if observationOrder > 0 {
-			refreshedSourceUpdatedAt = latestTimestamp(
-				latestSourceUpdatedAt,
-				revision.SourceUpdatedAt,
-			)
+		if order > 0 {
+			refreshedSourceUpdatedAt = revision.SourceUpdatedAt
 			refreshedObservationSequence = revision.ObservationSequence
 		}
 		if _, err := s.q().ExecContext(ctx, `
@@ -266,7 +267,7 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		`, nullString(refreshedSourceUpdatedAt), refreshedObservationSequence, evidenceBlobID, revision.ID); err != nil {
 			return ThreadEnrichmentResult{}, fmt.Errorf("refresh thread revision evidence: %w", err)
 		}
-	case latestExists && observationOrder == 0:
+	case latestExists && order == 0:
 		return ThreadEnrichmentResult{}, fmt.Errorf(
 			"conflicting thread revision observations share sequence %d",
 			revision.ObservationSequence,
@@ -379,7 +380,7 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 		WorkflowRuns:      workflowRuns,
 		ReviewThreads:     reviewThreads,
 	}
-	sourceUpdatedAt := firstNonEmptyString(thread.UpdatedAtGitHub, thread.UpdatedAt)
+	sourceUpdatedAt := strings.TrimSpace(thread.UpdatedAtGitHub)
 	if evidence.Detail != nil {
 		canonical.BaseSHA = evidence.Detail.BaseSHA
 		canonical.HeadSHA = evidence.Detail.HeadSHA
@@ -774,51 +775,6 @@ func mustStableJSON(value any) string {
 		return "null"
 	}
 	return string(data)
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func compareRevisionObservationOrder(incoming, latest ThreadRevision) int {
-	incomingTimestamp := strings.TrimSpace(incoming.SourceUpdatedAt)
-	if incomingTimestamp == "" {
-		incomingTimestamp = strings.TrimSpace(incoming.CreatedAt)
-	}
-	latestTimestamp := strings.TrimSpace(latest.SourceUpdatedAt)
-	if latestTimestamp == "" {
-		latestTimestamp = strings.TrimSpace(latest.CreatedAt)
-	}
-	incomingKey, incomingValid := timestampOrderKey(incomingTimestamp)
-	latestKey, latestValid := timestampOrderKey(latestTimestamp)
-	switch {
-	case incomingValid && latestValid:
-		if incomingKey < latestKey {
-			return -1
-		}
-		if incomingKey > latestKey {
-			return 1
-		}
-	case incomingValid:
-		return 1
-	case latestValid:
-		return -1
-	case incomingTimestamp != latestTimestamp:
-		return -1
-	}
-	switch {
-	case incoming.ObservationSequence < latest.ObservationSequence:
-		return -1
-	case incoming.ObservationSequence > latest.ObservationSequence:
-		return 1
-	default:
-		return 0
-	}
 }
 
 func latestTimestamp(values ...string) string {

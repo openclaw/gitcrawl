@@ -52,14 +52,14 @@ insert into threads(
   repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, raw_json, content_hash, is_draft,
   created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-  first_pulled_at, last_pulled_at, updated_at
+  first_pulled_at, last_pulled_at, observation_sequence, updated_at
 )
 values(
   sqlc.arg(repo_id), sqlc.arg(github_id), sqlc.arg(number), sqlc.arg(kind), sqlc.arg(state), sqlc.arg(title),
   sqlc.narg(body), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.narg(author_association), sqlc.arg(html_url),
   sqlc.arg(labels_json), sqlc.arg(assignees_json), sqlc.arg(raw_json), sqlc.arg(content_hash), sqlc.arg(is_draft),
   sqlc.narg(created_at_gh), sqlc.narg(updated_at_gh), sqlc.narg(closed_at_gh), sqlc.narg(merged_at_gh),
-  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(updated_at)
+  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(observation_sequence), sqlc.arg(updated_at)
 )
 on conflict(repo_id, kind, number) do update set
   github_id=excluded.github_id,
@@ -80,6 +80,7 @@ on conflict(repo_id, kind, number) do update set
   closed_at_gh=excluded.closed_at_gh,
   merged_at_gh=excluded.merged_at_gh,
   last_pulled_at=excluded.last_pulled_at,
+  observation_sequence=excluded.observation_sequence,
   updated_at=excluded.updated_at
 returning id;
 
@@ -88,14 +89,14 @@ insert into threads(
   repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, raw_json, content_hash, is_draft,
   created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-  first_pulled_at, last_pulled_at, updated_at
+  first_pulled_at, last_pulled_at, observation_sequence, updated_at
 )
 values(
   sqlc.arg(repo_id), sqlc.arg(github_id), sqlc.arg(number), sqlc.arg(kind), sqlc.arg(state), sqlc.arg(title),
   sqlc.narg(body), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.narg(author_association), sqlc.arg(html_url),
   sqlc.arg(labels_json), sqlc.arg(assignees_json), sqlc.arg(raw_json), sqlc.arg(content_hash), sqlc.arg(is_draft),
   sqlc.narg(created_at_gh), sqlc.narg(updated_at_gh), sqlc.narg(closed_at_gh), sqlc.narg(merged_at_gh),
-  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(updated_at)
+  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(observation_sequence), sqlc.arg(updated_at)
 )
 on conflict(repo_id, kind, number) do update set
   github_id=excluded.github_id,
@@ -116,6 +117,7 @@ on conflict(repo_id, kind, number) do update set
   closed_at_gh=excluded.closed_at_gh,
   merged_at_gh=excluded.merged_at_gh,
   last_pulled_at=excluded.last_pulled_at,
+  observation_sequence=excluded.observation_sequence,
   updated_at=excluded.updated_at
 returning id;
 
@@ -211,12 +213,12 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
         select latest.id
         from thread_revisions latest
         where latest.thread_id = t.id
-        order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+        order by gitcrawl_timestamp_key(nullif(latest.source_updated_at, '')) desc,
           latest.observation_sequence desc,
           latest.id desc
         limit 1
       )
-      and gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+      and gitcrawl_timestamp_key(nullif(tr.source_updated_at, '')) >=
         gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
       and tks.summary_kind = 'llm_key_summary'
     order by tks.created_at desc, tks.id desc
@@ -240,12 +242,12 @@ where t.repo_id = sqlc.arg(repo_id)
           select latest.id
           from thread_revisions latest
           where latest.thread_id = t.id
-          order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+          order by gitcrawl_timestamp_key(nullif(latest.source_updated_at, '')) desc,
             latest.observation_sequence desc,
             latest.id desc
           limit 1
         )
-        and gitcrawl_timestamp_key(coalesce(nullif(eligible_revision.source_updated_at, ''), eligible_revision.created_at)) >=
+        and gitcrawl_timestamp_key(nullif(eligible_revision.source_updated_at, '')) >=
           gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
         and eligible_summary.summary_kind = 'llm_key_summary'
     )

@@ -468,7 +468,7 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 					select id
 					from thread_revisions
 					where thread_id = ?
-					order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+					order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 						observation_sequence desc,
 						id desc
 				limit 1
@@ -550,7 +550,7 @@ func TestUpsertThreadRevisionPreservesSameClockReviewThreadReversion(t *testing.
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			observation_sequence desc,
 			id desc
 		limit 1
@@ -641,7 +641,7 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc,
+		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			observation_sequence desc,
 			id desc
 		limit 1
@@ -663,6 +663,120 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 			current.RevisionID,
 			"2026-07-12T12:02:00Z",
 		)
+	}
+}
+
+func TestUpsertThreadRevisionUsesSequenceWhenSourceTimestampIsMissing(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "12", Number: 12, Kind: "issue", State: "open",
+		Title: "current B", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/12",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAt: "2026-07-12T12:03:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	current, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 2,
+	}, "2026-07-12T12:03:00Z")
+	if err != nil {
+		t.Fatalf("current revision: %v", err)
+	}
+
+	staleThread := thread
+	staleThread.Title = "stale A"
+	staleThread.UpdatedAt = "2026-07-12T13:00:00Z"
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              staleThread,
+		ObservationSequence: 1,
+	}, "2026-07-12T13:00:00Z"); err != nil {
+		t.Fatalf("stale revision: %v", err)
+	}
+
+	var latestID int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select id
+		from thread_revisions
+		where thread_id = ?
+		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
+			observation_sequence desc,
+			id desc
+		limit 1
+	`, thread.ID).Scan(&latestID); err != nil {
+		t.Fatalf("latest revision: %v", err)
+	}
+	if latestID != current.RevisionID {
+		t.Fatalf("latest revision = %d, want %d", latestID, current.RevisionID)
+	}
+}
+
+func TestUpsertThreadRevisionRejectsAmbiguousMalformedSourceTimestamps(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "13", Number: 13, Kind: "issue", State: "open",
+		Title: "state A", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/13",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "malformed-a", UpdatedAt: "2026-07-12T12:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 1,
+	}, "2026-07-12T12:01:00Z"); err != nil {
+		t.Fatalf("first revision: %v", err)
+	}
+
+	thread.Title = "state B"
+	thread.UpdatedAtGitHub = "malformed-b"
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 2,
+	}, "2026-07-12T12:02:00Z"); err == nil ||
+		!strings.Contains(err.Error(), "ambiguous malformed observation timestamps") {
+		t.Fatalf("ambiguous revision error = %v", err)
+	}
+	var revisions int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions
+		where thread_id = ?
+	`, thread.ID).Scan(&revisions); err != nil {
+		t.Fatalf("revision count: %v", err)
+	}
+	if revisions != 1 {
+		t.Fatalf("revision count = %d, want 1", revisions)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,76 @@ func (f *observationProbeGitHub) GetRepo(ctx context.Context, owner, repo string
 type mutableCommentGitHub struct {
 	fakeGitHub
 	empty bool
+}
+
+type delayedObservationGitHub struct {
+	fakeGitHub
+	mu               sync.Mutex
+	listCalls        int
+	commentCalls     int
+	firstListStarted chan struct{}
+	releaseFirstList chan struct{}
+}
+
+func (f *delayedObservationGitHub) ListRepositoryIssues(
+	ctx context.Context,
+	owner, repo string,
+	options gh.ListIssuesOptions,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.listCalls++
+	call := f.listCalls
+	f.mu.Unlock()
+	if call == 1 {
+		close(f.firstListStarted)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.releaseFirstList:
+		}
+	}
+	state := "state-b"
+	if call == 1 {
+		state = "state-a"
+	}
+	return []map[string]any{{
+		"id":                 1,
+		"number":             7,
+		"state":              "open",
+		"title":              state,
+		"body":               state + " body",
+		"html_url":           "https://github.com/openclaw/gitcrawl/issues/7",
+		"created_at":         "2026-07-12T00:00:00Z",
+		"updated_at":         "2026-07-12T00:00:00Z",
+		"labels":             []map[string]any{},
+		"assignees":          []map[string]any{},
+		"user":               map[string]any{"login": "vincentkoc", "type": "User"},
+		"author_association": "MEMBER",
+	}}, nil
+}
+
+func (f *delayedObservationGitHub) ListIssueComments(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.commentCalls++
+	call := f.commentCalls
+	f.mu.Unlock()
+	body := "state-b comment"
+	if call == 2 {
+		body = "state-a comment"
+	}
+	return []map[string]any{{
+		"id":         11,
+		"body":       body,
+		"created_at": "2026-07-12T00:00:00Z",
+		"updated_at": "2026-07-12T00:00:00Z",
+		"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+	}}, nil
 }
 
 func (f *mutableCommentGitHub) ListIssueComments(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
@@ -609,6 +680,99 @@ func TestSyncAllocatesObservationSequenceBeforeFetching(t *testing.T) {
 	}
 	if revisionSequences != 1 {
 		t.Fatalf("revision observation sequence count = %d, want 1", revisionSequences)
+	}
+}
+
+func TestSyncDelayedObservationCannotOverwriteNewerHydration(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &delayedObservationGitHub{
+		firstListStarted: make(chan struct{}),
+		releaseFirstList: make(chan struct{}),
+	}
+	s := New(client, st)
+	s.now = func() time.Time { return time.Date(2026, 7, 12, 0, 1, 0, 0, time.UTC) }
+	options := Options{
+		Owner:           "openclaw",
+		Repo:            "gitcrawl",
+		IncludeComments: true,
+	}
+	type syncResult struct {
+		stats Stats
+		err   error
+	}
+	firstResult := make(chan syncResult, 1)
+	go func() {
+		stats, err := s.Sync(ctx, options)
+		firstResult <- syncResult{stats: stats, err: err}
+	}()
+
+	select {
+	case <-client.firstListStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first sync did not reach delayed issue fetch")
+	}
+	secondStats, secondErr := s.Sync(ctx, options)
+	close(client.releaseFirstList)
+	first := <-firstResult
+	if secondErr != nil {
+		t.Fatalf("newer sync: %v", secondErr)
+	}
+	if first.err != nil {
+		t.Fatalf("delayed sync: %v", first.err)
+	}
+	if secondStats.ThreadsSynced != 1 || secondStats.ThreadsSkippedStale != 0 {
+		t.Fatalf("newer sync stats = %#v", secondStats)
+	}
+	if first.stats.ThreadsSynced != 0 || first.stats.ThreadsSkippedStale != 1 ||
+		first.stats.CommentsSynced != 0 || first.stats.EvidenceObserved != 0 {
+		t.Fatalf("delayed sync stats = %#v", first.stats)
+	}
+
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil {
+		t.Fatalf("threads: %v", err)
+	}
+	if len(threads) != 1 || threads[0].Title != "state-b" || threads[0].Body != "state-b body" {
+		t.Fatalf("canonical threads = %+v", threads)
+	}
+	comments, err := st.ListComments(ctx, threads[0].ID)
+	if err != nil {
+		t.Fatalf("comments: %v", err)
+	}
+	if len(comments) != 1 || comments[0].Body != "state-b comment" {
+		t.Fatalf("canonical comments = %+v", comments)
+	}
+	var documentText string
+	if err := st.DB().QueryRowContext(ctx, `
+		select raw_text
+		from documents
+		where thread_id = ?
+	`, threads[0].ID).Scan(&documentText); err != nil {
+		t.Fatalf("document: %v", err)
+	}
+	if !strings.Contains(documentText, "state-b comment") || strings.Contains(documentText, "state-a comment") {
+		t.Fatalf("canonical document = %q", documentText)
+	}
+	var revisions int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions
+		where thread_id = ?
+	`, threads[0].ID).Scan(&revisions); err != nil {
+		t.Fatalf("revisions: %v", err)
+	}
+	if revisions != 1 {
+		t.Fatalf("revision count = %d, want 1", revisions)
 	}
 }
 

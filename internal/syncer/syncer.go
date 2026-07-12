@@ -67,6 +67,7 @@ type Stats struct {
 	RevisionsCreated     int    `json:"revisions_created"`
 	FingerprintsUpserted int    `json:"fingerprints_upserted"`
 	ThreadsClosed        int    `json:"threads_closed"`
+	ThreadsSkippedStale  int    `json:"threads_skipped_stale"`
 	RequestedSince       string `json:"requested_since,omitempty"`
 	Limit                int    `json:"limit,omitempty"`
 	Numbers              []int  `json:"numbers,omitempty"`
@@ -90,6 +91,7 @@ type syncPersistStats struct {
 	RevisionsCreated     int
 	FingerprintsUpserted int
 	ThreadsClosed        int
+	ThreadsSkippedStale  int
 	FinishedAt           string
 }
 
@@ -160,6 +162,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		rows = mergeIssueRows(rows, closedOverlapRows)
 	}
+	closedOverlapNumbers := make(map[int]struct{}, len(closedOverlapRows))
+	for _, row := range closedOverlapRows {
+		closedOverlapNumbers[intValue(row["number"])] = struct{}{}
+	}
 
 	payloads := make([]threadSyncPayload, 0, len(rows))
 	for _, row := range rows {
@@ -220,26 +226,35 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		if err != nil {
 			return err
 		}
-		if needsClosedOverlap {
-			closed, err := s.applyClosedOverlapRows(ctx, st, repoID, closedOverlapRows, options.Reporter)
-			if err != nil {
-				return err
-			}
-			attempt.ThreadsClosed = closed
-		}
 		for _, payload := range payloads {
 			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
 			_, hasIssueDraft := payload.row["draft"]
 			if payload.hasPullDetails {
 				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
 			}
-			threadID, err := st.UpsertThread(ctx, thread, store.UpsertThreadOptions{
-				PreserveDraft: thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
+			upsert, err := st.UpsertThreadObservation(ctx, thread, store.UpsertThreadOptions{
+				PreserveDraft:       thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
+				ObservationSequence: observationSequence,
 			})
 			if err != nil {
 				return err
 			}
-			thread.ID = threadID
+			if !upsert.Applied {
+				attempt.ThreadsSkippedStale++
+				tracker.Add(1,
+					"number", thread.Number,
+					"kind", thread.Kind,
+					"thread_state", thread.State,
+					"result", "stale_skipped",
+				)
+				continue
+			}
+			thread.ID = upsert.ID
+			if _, overlap := closedOverlapNumbers[thread.Number]; overlap &&
+				upsert.PreviousState == "open" &&
+				thread.State == "closed" {
+				attempt.ThreadsClosed++
+			}
 			var comments []store.Comment
 			if options.IncludeComments {
 				comments, err = persistComments(ctx, st, thread, payload.commentRows)
@@ -321,6 +336,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				"thread_state", thread.State,
 			)
 		}
+		if attempt.ThreadsClosed > 0 {
+			options.Reporter.Printf(
+				"[sync] closed overlap sweep matched %d stale open thread(s)",
+				attempt.ThreadsClosed,
+			)
+		}
 		attempt.FinishedAt = s.now().Format(time.RFC3339Nano)
 		runStats := stats
 		applySyncPersistStats(&runStats, attempt)
@@ -362,6 +383,7 @@ func applySyncPersistStats(stats *Stats, persisted syncPersistStats) {
 	stats.RevisionsCreated = persisted.RevisionsCreated
 	stats.FingerprintsUpserted = persisted.FingerprintsUpserted
 	stats.ThreadsClosed = persisted.ThreadsClosed
+	stats.ThreadsSkippedStale = persisted.ThreadsSkippedStale
 	stats.FinishedAt = persisted.FinishedAt
 }
 
@@ -441,24 +463,6 @@ func (s *Syncer) fetchClosedOverlapRows(ctx context.Context, options Options, si
 		State: "closed",
 		Since: since,
 	}, options.Reporter)
-}
-
-func (s *Syncer) applyClosedOverlapRows(ctx context.Context, st *store.Store, repoID int64, rows []map[string]any, reporter gh.Reporter) (int, error) {
-	closed := 0
-	for _, row := range rows {
-		thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
-		updated, err := st.MarkOpenThreadClosedFromGitHub(ctx, thread)
-		if err != nil {
-			return 0, err
-		}
-		if updated {
-			closed++
-		}
-	}
-	if closed > 0 {
-		reporter.Printf("[sync] closed overlap sweep matched %d stale open thread(s)", closed)
-	}
-	return closed, nil
 }
 
 func hasFreshThreadEvidence(options Options, thread store.Thread) bool {

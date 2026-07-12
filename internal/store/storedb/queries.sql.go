@@ -413,12 +413,12 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
         select latest.id
         from thread_revisions latest
         where latest.thread_id = t.id
-        order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+        order by gitcrawl_timestamp_key(nullif(latest.source_updated_at, '')) desc,
           latest.observation_sequence desc,
           latest.id desc
         limit 1
       )
-      and gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+      and gitcrawl_timestamp_key(nullif(tr.source_updated_at, '')) >=
         gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
       and tks.summary_kind = 'llm_key_summary'
     order by tks.created_at desc, tks.id desc
@@ -442,12 +442,12 @@ where t.repo_id = ?3
           select latest.id
           from thread_revisions latest
           where latest.thread_id = t.id
-          order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+          order by gitcrawl_timestamp_key(nullif(latest.source_updated_at, '')) desc,
             latest.observation_sequence desc,
             latest.id desc
           limit 1
         )
-        and gitcrawl_timestamp_key(coalesce(nullif(eligible_revision.source_updated_at, ''), eligible_revision.created_at)) >=
+        and gitcrawl_timestamp_key(nullif(eligible_revision.source_updated_at, '')) >=
           gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
         and eligible_summary.summary_kind = 'llm_key_summary'
     )
@@ -1583,14 +1583,14 @@ insert into threads(
   repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, raw_json, content_hash, is_draft,
   created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-  first_pulled_at, last_pulled_at, updated_at
+  first_pulled_at, last_pulled_at, observation_sequence, updated_at
 )
 values(
   ?1, ?2, ?3, ?4, ?5, ?6,
   ?7, ?8, ?9, ?10, ?11,
   ?12, ?13, ?14, ?15, ?16,
   ?17, ?18, ?19, ?20,
-  ?21, ?22, ?23
+  ?21, ?22, ?23, ?24
 )
 on conflict(repo_id, kind, number) do update set
   github_id=excluded.github_id,
@@ -1611,34 +1611,36 @@ on conflict(repo_id, kind, number) do update set
   closed_at_gh=excluded.closed_at_gh,
   merged_at_gh=excluded.merged_at_gh,
   last_pulled_at=excluded.last_pulled_at,
+  observation_sequence=excluded.observation_sequence,
   updated_at=excluded.updated_at
 returning id
 `
 
 type UpsertThreadParams struct {
-	RepoID            int64          `json:"repo_id"`
-	GithubID          string         `json:"github_id"`
-	Number            int64          `json:"number"`
-	Kind              string         `json:"kind"`
-	State             string         `json:"state"`
-	Title             string         `json:"title"`
-	Body              sql.NullString `json:"body"`
-	AuthorLogin       sql.NullString `json:"author_login"`
-	AuthorType        sql.NullString `json:"author_type"`
-	AuthorAssociation sql.NullString `json:"author_association"`
-	HtmlUrl           string         `json:"html_url"`
-	LabelsJson        string         `json:"labels_json"`
-	AssigneesJson     string         `json:"assignees_json"`
-	RawJson           string         `json:"raw_json"`
-	ContentHash       string         `json:"content_hash"`
-	IsDraft           int64          `json:"is_draft"`
-	CreatedAtGh       sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh       sql.NullString `json:"updated_at_gh"`
-	ClosedAtGh        sql.NullString `json:"closed_at_gh"`
-	MergedAtGh        sql.NullString `json:"merged_at_gh"`
-	FirstPulledAt     sql.NullString `json:"first_pulled_at"`
-	LastPulledAt      sql.NullString `json:"last_pulled_at"`
-	UpdatedAt         string         `json:"updated_at"`
+	RepoID              int64          `json:"repo_id"`
+	GithubID            string         `json:"github_id"`
+	Number              int64          `json:"number"`
+	Kind                string         `json:"kind"`
+	State               string         `json:"state"`
+	Title               string         `json:"title"`
+	Body                sql.NullString `json:"body"`
+	AuthorLogin         sql.NullString `json:"author_login"`
+	AuthorType          sql.NullString `json:"author_type"`
+	AuthorAssociation   sql.NullString `json:"author_association"`
+	HtmlUrl             string         `json:"html_url"`
+	LabelsJson          string         `json:"labels_json"`
+	AssigneesJson       string         `json:"assignees_json"`
+	RawJson             string         `json:"raw_json"`
+	ContentHash         string         `json:"content_hash"`
+	IsDraft             int64          `json:"is_draft"`
+	CreatedAtGh         sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh         sql.NullString `json:"updated_at_gh"`
+	ClosedAtGh          sql.NullString `json:"closed_at_gh"`
+	MergedAtGh          sql.NullString `json:"merged_at_gh"`
+	FirstPulledAt       sql.NullString `json:"first_pulled_at"`
+	LastPulledAt        sql.NullString `json:"last_pulled_at"`
+	ObservationSequence int64          `json:"observation_sequence"`
+	UpdatedAt           string         `json:"updated_at"`
 }
 
 func (q *Queries) UpsertThread(ctx context.Context, arg UpsertThreadParams) (int64, error) {
@@ -1665,6 +1667,7 @@ func (q *Queries) UpsertThread(ctx context.Context, arg UpsertThreadParams) (int
 		arg.MergedAtGh,
 		arg.FirstPulledAt,
 		arg.LastPulledAt,
+		arg.ObservationSequence,
 		arg.UpdatedAt,
 	)
 	var id int64
@@ -1677,14 +1680,14 @@ insert into threads(
   repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, raw_json, content_hash, is_draft,
   created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-  first_pulled_at, last_pulled_at, updated_at
+  first_pulled_at, last_pulled_at, observation_sequence, updated_at
 )
 values(
   ?1, ?2, ?3, ?4, ?5, ?6,
   ?7, ?8, ?9, ?10, ?11,
   ?12, ?13, ?14, ?15, ?16,
   ?17, ?18, ?19, ?20,
-  ?21, ?22, ?23
+  ?21, ?22, ?23, ?24
 )
 on conflict(repo_id, kind, number) do update set
   github_id=excluded.github_id,
@@ -1705,34 +1708,36 @@ on conflict(repo_id, kind, number) do update set
   closed_at_gh=excluded.closed_at_gh,
   merged_at_gh=excluded.merged_at_gh,
   last_pulled_at=excluded.last_pulled_at,
+  observation_sequence=excluded.observation_sequence,
   updated_at=excluded.updated_at
 returning id
 `
 
 type UpsertThreadPreservingDraftParams struct {
-	RepoID            int64          `json:"repo_id"`
-	GithubID          string         `json:"github_id"`
-	Number            int64          `json:"number"`
-	Kind              string         `json:"kind"`
-	State             string         `json:"state"`
-	Title             string         `json:"title"`
-	Body              sql.NullString `json:"body"`
-	AuthorLogin       sql.NullString `json:"author_login"`
-	AuthorType        sql.NullString `json:"author_type"`
-	AuthorAssociation sql.NullString `json:"author_association"`
-	HtmlUrl           string         `json:"html_url"`
-	LabelsJson        string         `json:"labels_json"`
-	AssigneesJson     string         `json:"assignees_json"`
-	RawJson           string         `json:"raw_json"`
-	ContentHash       string         `json:"content_hash"`
-	IsDraft           int64          `json:"is_draft"`
-	CreatedAtGh       sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh       sql.NullString `json:"updated_at_gh"`
-	ClosedAtGh        sql.NullString `json:"closed_at_gh"`
-	MergedAtGh        sql.NullString `json:"merged_at_gh"`
-	FirstPulledAt     sql.NullString `json:"first_pulled_at"`
-	LastPulledAt      sql.NullString `json:"last_pulled_at"`
-	UpdatedAt         string         `json:"updated_at"`
+	RepoID              int64          `json:"repo_id"`
+	GithubID            string         `json:"github_id"`
+	Number              int64          `json:"number"`
+	Kind                string         `json:"kind"`
+	State               string         `json:"state"`
+	Title               string         `json:"title"`
+	Body                sql.NullString `json:"body"`
+	AuthorLogin         sql.NullString `json:"author_login"`
+	AuthorType          sql.NullString `json:"author_type"`
+	AuthorAssociation   sql.NullString `json:"author_association"`
+	HtmlUrl             string         `json:"html_url"`
+	LabelsJson          string         `json:"labels_json"`
+	AssigneesJson       string         `json:"assignees_json"`
+	RawJson             string         `json:"raw_json"`
+	ContentHash         string         `json:"content_hash"`
+	IsDraft             int64          `json:"is_draft"`
+	CreatedAtGh         sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh         sql.NullString `json:"updated_at_gh"`
+	ClosedAtGh          sql.NullString `json:"closed_at_gh"`
+	MergedAtGh          sql.NullString `json:"merged_at_gh"`
+	FirstPulledAt       sql.NullString `json:"first_pulled_at"`
+	LastPulledAt        sql.NullString `json:"last_pulled_at"`
+	ObservationSequence int64          `json:"observation_sequence"`
+	UpdatedAt           string         `json:"updated_at"`
 }
 
 func (q *Queries) UpsertThreadPreservingDraft(ctx context.Context, arg UpsertThreadPreservingDraftParams) (int64, error) {
@@ -1759,6 +1764,7 @@ func (q *Queries) UpsertThreadPreservingDraft(ctx context.Context, arg UpsertThr
 		arg.MergedAtGh,
 		arg.FirstPulledAt,
 		arg.LastPulledAt,
+		arg.ObservationSequence,
 		arg.UpdatedAt,
 	)
 	var id int64
