@@ -170,6 +170,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		return Stats{}, err
 	}
 	payloads := make([]threadSyncPayload, 0, len(rows))
+	workflowObservationOrder := 0
 	for _, row := range rows {
 		payload := threadSyncPayload{row: row}
 		number := intValue(row["number"])
@@ -192,12 +193,14 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if err != nil {
 				return Stats{}, err
 			}
+			workflowObservationOrder++
+			pullDetails.workflowObservationOrder = workflowObservationOrder
 			payload.pullDetails = pullDetails
 			payload.hasPullDetails = true
 		}
 		payloads = append(payloads, payload)
 	}
-	if err := consolidateWorkflowSnapshots(payloads); err != nil {
+	if err := s.consolidateWorkflowSnapshots(ctx, options, payloads); err != nil {
 		return Stats{}, err
 	}
 	if s.beforePersist != nil {

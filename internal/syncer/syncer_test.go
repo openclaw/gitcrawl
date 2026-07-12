@@ -2300,9 +2300,10 @@ func TestSyncWorkflowRunsEqualReservationDoesNotReplaceSameSyncSnapshot(t *testi
 	for _, test := range []struct {
 		name        string
 		subsetFirst bool
+		wantLookups int
 	}{
 		{name: "subset then superset", subsetFirst: true},
-		{name: "superset then subset"},
+		{name: "superset then subset", wantLookups: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -2324,6 +2325,13 @@ func TestSyncWorkflowRunsEqualReservationDoesNotReplaceSameSyncSnapshot(t *testi
 			if stats.PRDetailsSynced != 2 || stats.WorkflowRunsSynced != 2 {
 				t.Fatalf("same-sync shared-head stats = %#v", stats)
 			}
+			if client.lookupCalls != test.wantLookups {
+				t.Fatalf(
+					"exact workflow lookups = %d, want %d",
+					client.lookupCalls,
+					test.wantLookups,
+				)
+			}
 			repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
 			if err != nil {
 				t.Fatalf("repository: %v", err)
@@ -2341,6 +2349,189 @@ func TestSyncWorkflowRunsEqualReservationDoesNotReplaceSameSyncSnapshot(t *testi
 			}
 			if len(runs) != 2 || !runIDs["900"] || !runIDs["901"] {
 				t.Fatalf("equal reservation lost a live run: %+v", runs)
+			}
+		})
+	}
+}
+
+func TestSyncWorkflowRunsLaterSiblingTombstonesNewlyObservedRun(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &sameSyncSharedHeadGitHub{verifiedDeletion: true}
+	stats, err := New(client, st).Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{8, 9}, IncludePRDetails: true,
+	})
+	if err != nil {
+		t.Fatalf("same-generation new-run deletion sync: %v", err)
+	}
+	if stats.PRDetailsSynced != 2 || stats.WorkflowRunsSynced != 1 {
+		t.Fatalf("same-generation new-run deletion stats = %#v", stats)
+	}
+	if client.lookupCalls != 1 {
+		t.Fatalf("exact workflow lookups = %d, want 1", client.lookupCalls)
+	}
+
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: "same-sync-head",
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RunID != "900" {
+		t.Fatalf("later sibling deletion resurrected new run: %+v", runs)
+	}
+	assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 1)
+}
+
+func TestConsolidateWorkflowSnapshotsTombstonesDeletionAcrossStaleReappearanceOrders(t *testing.T) {
+	runRow := func(id int, updatedAt string) map[string]any {
+		return map[string]any{
+			"id":          id,
+			"run_number":  id - 899,
+			"head_branch": "same-sync-branch",
+			"head_sha":    "same-sync-head",
+			"status":      "completed",
+			"conclusion":  "success",
+			"name":        fmt.Sprintf("workflow-%d", id),
+			"event":       "pull_request",
+			"created_at":  "2026-07-12T00:00:00Z",
+			"updated_at":  updatedAt,
+		}
+	}
+	makePayloads := func(reverse bool) []threadSyncPayload {
+		pull := map[string]any{"head": map[string]any{"sha": "same-sync-head"}}
+		observed := threadSyncPayload{
+			hasPullDetails: true,
+			pullDetails: pullRequestDetailRows{
+				workflowSourceUpdatedAt:  "2026-07-12T00:02:00Z",
+				workflowSnapshotFresh:    true,
+				workflowObservationOrder: 1,
+				pull:                     pull,
+				runsRaw: []map[string]any{
+					runRow(900, "2026-07-12T00:02:00Z"),
+					runRow(901, "2026-07-12T00:01:00Z"),
+				},
+			},
+		}
+		deleted := threadSyncPayload{
+			hasPullDetails: true,
+			pullDetails: pullRequestDetailRows{
+				workflowSourceUpdatedAt:  "2026-07-12T00:02:00Z",
+				workflowSnapshotFresh:    true,
+				workflowObservationOrder: 2,
+				pull:                     pull,
+				runsRaw: []map[string]any{
+					runRow(900, "2026-07-12T00:02:00Z"),
+				},
+			},
+		}
+		staleReappearance := threadSyncPayload{
+			hasPullDetails: true,
+			pullDetails: pullRequestDetailRows{
+				workflowSourceUpdatedAt:  "2026-07-12T00:02:00Z",
+				workflowSnapshotFresh:    true,
+				workflowObservationOrder: 3,
+				pull:                     pull,
+				runsRaw: []map[string]any{
+					runRow(900, "2026-07-12T00:02:00Z"),
+					runRow(901, "2026-07-12T00:01:00Z"),
+				},
+			},
+		}
+		if reverse {
+			return []threadSyncPayload{staleReappearance, deleted, observed}
+		}
+		return []threadSyncPayload{observed, deleted, staleReappearance}
+	}
+
+	for _, test := range []struct {
+		name    string
+		reverse bool
+	}{
+		{name: "observation order"},
+		{name: "reverse persistence order", reverse: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			payloads := makePayloads(test.reverse)
+			client := workflowLookupResultGitHub{
+				err: &gh.RequestError{
+					Method: "GET",
+					URL:    "/repos/openclaw/gitcrawl/actions/runs/901",
+					Status: 404,
+				},
+			}
+			s := New(client, nil)
+			if err := s.consolidateWorkflowSnapshots(ctx, Options{
+				Owner: "openclaw",
+				Repo:  "gitcrawl",
+			}, payloads); err != nil {
+				t.Fatalf("consolidate workflow snapshots: %v", err)
+			}
+			for index := range payloads {
+				rows := payloads[index].pullDetails
+				if len(rows.runsRaw) != 1 || jsonID(rows.runsRaw[0]["id"]) != "900" {
+					t.Fatalf("payload %d workflow rows = %#v", index, rows.runsRaw)
+				}
+				if len(rows.workflowDeletedRunIDs) != 1 ||
+					rows.workflowDeletedRunIDs[0] != "901" {
+					t.Fatalf(
+						"payload %d workflow tombstones = %v",
+						index,
+						rows.workflowDeletedRunIDs,
+					)
+				}
+			}
+
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+			repoID, err := st.UpsertRepository(ctx, store.Repository{
+				Owner:     "openclaw",
+				Name:      "gitcrawl",
+				FullName:  "openclaw/gitcrawl",
+				RawJSON:   "{}",
+				UpdatedAt: "2026-07-12T00:03:00Z",
+			})
+			if err != nil {
+				t.Fatalf("seed repository: %v", err)
+			}
+			for index := range payloads {
+				rows := payloads[index].pullDetails
+				if _, err := st.ApplyWorkflowRunSnapshot(
+					ctx,
+					repoID,
+					"same-sync-head",
+					rows.workflowSourceUpdatedAt,
+					1,
+					rows.workflowBaseline,
+					mapWorkflowRuns(repoID, rows.runsRaw, "2026-07-12T00:03:00Z"),
+				); err != nil {
+					t.Fatalf("persist payload %d: %v", index, err)
+				}
+			}
+			runs, err := st.ListWorkflowRuns(ctx, repoID, store.WorkflowRunListOptions{
+				HeadSHA: "same-sync-head",
+				Limit:   -1,
+			})
+			if err != nil {
+				t.Fatalf("list persisted workflow runs: %v", err)
+			}
+			if len(runs) != 1 || runs[0].RunID != "900" {
+				t.Fatalf("persistence order resurrected deletion: %+v", runs)
 			}
 		})
 	}

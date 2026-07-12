@@ -22,16 +22,17 @@ type pullDetailStats struct {
 }
 
 type pullRequestDetailRows struct {
-	fetchedAt               string
-	workflowSourceUpdatedAt string
-	workflowSnapshotFresh   bool
-	workflowBaseline        store.WorkflowRunSnapshotState
-	workflowDeletedRunIDs   []string
-	pull                    map[string]any
-	filesRaw                []map[string]any
-	commitsRaw              []map[string]any
-	checksRaw               []map[string]any
-	runsRaw                 []map[string]any
+	fetchedAt                string
+	workflowSourceUpdatedAt  string
+	workflowSnapshotFresh    bool
+	workflowBaseline         store.WorkflowRunSnapshotState
+	workflowDeletedRunIDs    []string
+	workflowObservationOrder int
+	pull                     map[string]any
+	filesRaw                 []map[string]any
+	commitsRaw               []map[string]any
+	checksRaw                []map[string]any
+	runsRaw                  []map[string]any
 }
 
 type workflowRunLookupClient interface {
@@ -255,7 +256,11 @@ func (s *Syncer) workflowSnapshotObservation(
 	return sourceUpdatedAt, true, baseline, deletedRunIDs, nil
 }
 
-func consolidateWorkflowSnapshots(payloads []threadSyncPayload) error {
+func (s *Syncer) consolidateWorkflowSnapshots(
+	ctx context.Context,
+	options Options,
+	payloads []threadSyncPayload,
+) error {
 	type snapshotGroup struct {
 		headSHA  string
 		baseline store.WorkflowRunSnapshotState
@@ -298,10 +303,24 @@ func consolidateWorkflowSnapshots(payloads []threadSyncPayload) error {
 		if len(group.indices) < 2 {
 			continue
 		}
+		observationIndices := append([]int(nil), group.indices...)
+		sort.SliceStable(observationIndices, func(i, j int) bool {
+			left := payloads[observationIndices[i]].pullDetails.workflowObservationOrder
+			right := payloads[observationIndices[j]].pullDetails.workflowObservationOrder
+			if left <= 0 {
+				left = observationIndices[i] + 1
+			}
+			if right <= 0 {
+				right = observationIndices[j] + 1
+			}
+			return left < right
+		})
 		sourceUpdatedAt := ""
 		rowsByID := make(map[string]map[string]any)
 		deletedRunIDs := make(map[string]struct{})
-		for _, index := range group.indices {
+		observedRunIDs := make(map[string]struct{})
+		laterAbsentRunIDs := make(map[string]struct{})
+		for _, index := range observationIndices {
 			rows := &payloads[index].pullDetails
 			var err error
 			sourceUpdatedAt, err = latestWorkflowTimestamp(
@@ -316,11 +335,13 @@ func consolidateWorkflowSnapshots(payloads []threadSyncPayload) error {
 					deletedRunIDs[runID] = struct{}{}
 				}
 			}
+			presentRunIDs := make(map[string]struct{}, len(rows.runsRaw))
 			for _, row := range rows.runsRaw {
 				runID := jsonID(row["id"])
 				if runID == "" {
 					continue
 				}
+				presentRunIDs[runID] = struct{}{}
 				existing, found := rowsByID[runID]
 				if !found {
 					rowsByID[runID] = row
@@ -353,6 +374,31 @@ func consolidateWorkflowSnapshots(payloads []threadSyncPayload) error {
 					}
 				}
 			}
+			for runID := range observedRunIDs {
+				if _, present := presentRunIDs[runID]; !present {
+					laterAbsentRunIDs[runID] = struct{}{}
+				}
+			}
+			for runID := range presentRunIDs {
+				observedRunIDs[runID] = struct{}{}
+			}
+		}
+		for runID := range laterAbsentRunIDs {
+			if _, deleted := deletedRunIDs[runID]; deleted {
+				continue
+			}
+			deleted, err := s.verifySiblingWorkflowRunDeletion(
+				ctx,
+				options,
+				group.headSHA,
+				runID,
+			)
+			if err != nil {
+				return err
+			}
+			if deleted {
+				deletedRunIDs[runID] = struct{}{}
+			}
 		}
 		for runID := range deletedRunIDs {
 			delete(rowsByID, runID)
@@ -380,6 +426,58 @@ func consolidateWorkflowSnapshots(payloads []threadSyncPayload) error {
 		}
 	}
 	return nil
+}
+
+func (s *Syncer) verifySiblingWorkflowRunDeletion(
+	ctx context.Context,
+	options Options,
+	headSHA string,
+	runID string,
+) (bool, error) {
+	lookup, ok := s.client.(workflowRunLookupClient)
+	if !ok {
+		return false, fmt.Errorf(
+			"cannot verify workflow run %s absent from later sibling for head %s",
+			runID,
+			headSHA,
+		)
+	}
+	exact, lookupErr := lookup.GetWorkflowRun(
+		ctx,
+		options.Owner,
+		options.Repo,
+		runID,
+		options.Reporter,
+	)
+	var requestErr *gh.RequestError
+	if errors.As(lookupErr, &requestErr) && requestErr.Status == 404 {
+		return true, nil
+	}
+	if lookupErr != nil {
+		return false, fmt.Errorf(
+			"verify workflow run %s absent from later sibling: %w",
+			runID,
+			lookupErr,
+		)
+	}
+	if exactRunID := jsonID(exact["id"]); exactRunID != runID {
+		return false, fmt.Errorf(
+			"verify workflow run %s absent from later sibling: exact lookup returned %s",
+			runID,
+			exactRunID,
+		)
+	}
+	if _, err := workflowRunTimestamp(
+		stringValue(exact["updated_at"]),
+		stringValue(exact["created_at"]),
+	); err != nil {
+		return false, fmt.Errorf(
+			"verify workflow run %s absent from later sibling source: %w",
+			runID,
+			err,
+		)
+	}
+	return false, nil
 }
 
 func workflowSnapshotBaselinesEqual(
