@@ -4,6 +4,7 @@
 
 - Add fail-closed, immutable thread revisions, deterministic fingerprints, and revision-bound key summaries from fully hydrated GitHub evidence.
 - Preserve incomplete cluster memberships during partial runs, and include pull request draft, review decision, check, and workflow state in canonical revision evidence.
+- Reject incomplete model summaries, cancel outstanding summary work after persistence failures, and keep embedding and cluster projections bound to eligible current revisions.
 
 ## 0.7.1 - 2026-07-09
 
