@@ -145,9 +145,9 @@ func TestObservationOrderRevisionCoverageCountsFreshSelectedThreads(t *testing.T
 	if err != nil {
 		t.Fatalf("seed repository: %v", err)
 	}
-	threadIDs := make([]int64, 0, 3)
-	threads := make([]crawlstore.Thread, 0, 3)
-	for number := 1; number <= 3; number++ {
+	threadIDs := make([]int64, 0, 4)
+	threads := make([]crawlstore.Thread, 0, 4)
+	for number := 1; number <= 4; number++ {
 		thread := crawlstore.Thread{
 			RepoID:          repoID,
 			GitHubID:        fmt.Sprintf("thread-%d", number),
@@ -192,8 +192,8 @@ func TestObservationOrderRevisionCoverageCountsFreshSelectedThreads(t *testing.T
 		t.Fatalf("archive coverage: %v", err)
 	}
 	revisions := coverage.Totals.Enrichment.Revisions
-	if revisions.Eligible != 3 || revisions.Covered != 2 || revisions.Fresh != 1 {
-		t.Fatalf("revision hydration = %#v, want eligible=3 covered=2 fresh=1", revisions)
+	if revisions.Eligible != 4 || revisions.Covered != 2 || revisions.Fresh != 1 {
+		t.Fatalf("revision hydration = %#v, want eligible=4 covered=2 fresh=1", revisions)
 	}
 	datasets, err := loadGitcrawlCloudDatasets(ctx, st.DB(), true, coverage.Totals.Enrichment)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestObservationOrderRevisionCoverageCountsFreshSelectedThreads(t *testing.T
 		}
 	}
 	if revisionDataset.RowCount != 3 ||
-		revisionDataset.EligibleCount != 3 ||
+		revisionDataset.EligibleCount != 4 ||
 		revisionDataset.CoveredCount != 1 ||
 		revisionDataset.Complete {
 		t.Fatalf("revision dataset coverage = %#v", revisionDataset)
