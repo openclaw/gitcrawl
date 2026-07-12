@@ -252,6 +252,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 		ThreadID:  detailedPRID,
 		RepoID:    gitcrawlID,
 		Number:    3,
+		HeadSHA:   "coverage-head",
 		RawJSON:   "{}",
 		FetchedAt: "2026-07-03T00:00:00Z",
 		UpdatedAt: "2026-07-03T00:00:00Z",
@@ -273,6 +274,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 	}}, []store.WorkflowRun{{
 		RepoID:    gitcrawlID,
 		RunID:     "99",
+		HeadSHA:   "coverage-head",
 		RawJSON:   "{}",
 		FetchedAt: "2026-07-03T00:00:00Z",
 	}}); err != nil {

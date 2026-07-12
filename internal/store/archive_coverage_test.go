@@ -514,11 +514,11 @@ func seedArchiveCoverageRows(t *testing.T, ctx context.Context, st *Store) (int6
 			t.Fatalf("comment: %v", err)
 		}
 	}
-	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{ThreadID: detailedPRID, RepoID: primaryID, Number: 2, RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z", UpdatedAt: "2026-07-06T00:01:00Z"},
+	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{ThreadID: detailedPRID, RepoID: primaryID, Number: 2, HeadSHA: "coverage-head", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z", UpdatedAt: "2026-07-06T00:01:00Z"},
 		[]PullRequestFile{{ThreadID: detailedPRID, Path: "README.md", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
 		[]PullRequestCommit{{ThreadID: detailedPRID, SHA: "abc", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
 		[]PullRequestCheck{{ThreadID: detailedPRID, Name: "test", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
-		[]WorkflowRun{{RepoID: primaryID, RunID: "1", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
+		[]WorkflowRun{{RepoID: primaryID, RunID: "1", HeadSHA: "coverage-head", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
 	); err != nil {
 		t.Fatalf("PR cache: %v", err)
 	}

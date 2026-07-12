@@ -295,7 +295,7 @@ func (s *Store) upsertPullRequestCacheFamilies(
 		}
 	}
 	if families.WorkflowRuns {
-		if err := s.replaceWorkflowRuns(ctx, detail.RepoID, detail.HeadSHA, runs); err != nil {
+		if err := s.applyLegacyWorkflowRunCache(ctx, detail, runs); err != nil {
 			return err
 		}
 	}

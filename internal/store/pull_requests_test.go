@@ -192,6 +192,16 @@ func TestPullRequestCacheReplacesCompleteWorkflowRunSnapshot(t *testing.T) {
 	if len(all) != 25 {
 		t.Fatalf("complete workflow runs = %d, want 25", len(all))
 	}
+	state, err := st.ReadWorkflowRunSnapshotState(ctx, repoID, detail.HeadSHA)
+	if err != nil {
+		t.Fatalf("read normalized legacy workflow snapshot: %v", err)
+	}
+	if !state.ReservationFound ||
+		state.SourceUpdatedAt != detail.FetchedAt ||
+		len(state.Runs) != 25 ||
+		state.Runs[0].UpdatedAtGH != detail.FetchedAt {
+		t.Fatalf("normalized legacy workflow snapshot = %+v", state)
+	}
 	replacement := initial[:3]
 	if err := st.UpsertPullRequestCache(ctx, detail, nil, nil, nil, replacement); err != nil {
 		t.Fatalf("replace workflow runs: %v", err)
@@ -202,6 +212,103 @@ func TestPullRequestCacheReplacesCompleteWorkflowRunSnapshot(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("replacement workflow runs = %+v", all)
+	}
+}
+
+func TestPullRequestCacheWorkflowWritesHonorOrderedSnapshotAcrossStores(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	firstStore, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	t.Cleanup(func() { _ = firstStore.Close() })
+	repoID, threadIDs := seedVectorThreads(t, ctx, firstStore)
+	detail := PullRequestDetail{
+		ThreadID: threadIDs[1], RepoID: repoID, Number: 302, HeadSHA: "head",
+		RawJSON: "{}", FetchedAt: "2026-07-12T03:00:00Z", UpdatedAt: "2026-07-12T03:00:00Z",
+	}
+	initial := []WorkflowRun{
+		{
+			RepoID: repoID, RunID: "100", RunNumber: 1, HeadSHA: "head",
+			UpdatedAtGH: "2026-07-12T03:01:00Z", RawJSON: "{}", FetchedAt: detail.FetchedAt,
+		},
+		{
+			RepoID: repoID, RunID: "101", RunNumber: 2, HeadSHA: "head",
+			UpdatedAtGH: "2026-07-12T03:02:00Z", RawJSON: "{}", FetchedAt: detail.FetchedAt,
+		},
+	}
+	if err := firstStore.UpsertPullRequestCache(ctx, detail, nil, nil, nil, initial); err != nil {
+		t.Fatalf("seed legacy workflow cache: %v", err)
+	}
+	baseline, err := firstStore.ReadWorkflowRunSnapshotState(ctx, repoID, detail.HeadSHA)
+	if err != nil {
+		t.Fatalf("read legacy workflow snapshot: %v", err)
+	}
+	if !baseline.ReservationFound || len(baseline.Runs) != 2 {
+		t.Fatalf("legacy workflow snapshot = %+v, want ordered two-run snapshot", baseline)
+	}
+
+	deletionSequence, err := firstStore.NextThreadObservationSequence(
+		ctx,
+		"2026-07-12T03:03:00Z",
+	)
+	if err != nil {
+		t.Fatalf("allocate deletion observation: %v", err)
+	}
+	deleted, err := firstStore.ApplyWorkflowRunSnapshot(
+		ctx,
+		repoID,
+		detail.HeadSHA,
+		"2026-07-12T03:03:00Z",
+		deletionSequence,
+		baseline,
+		initial[:1],
+	)
+	if err != nil {
+		t.Fatalf("apply ordered deletion: %v", err)
+	}
+	if !deleted.Applied || deleted.RowsSynced != 1 {
+		t.Fatalf("ordered deletion = %+v", deleted)
+	}
+
+	secondStore, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open second store: %v", err)
+	}
+	t.Cleanup(func() { _ = secondStore.Close() })
+	if err := secondStore.UpsertPullRequestCacheFamilies(
+		ctx,
+		detail,
+		nil,
+		nil,
+		nil,
+		initial,
+		PullRequestHydrationFamilies{WorkflowRuns: true},
+	); err != nil {
+		t.Fatalf("replay stale legacy workflow cache: %v", err)
+	}
+
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+	if err := secondStore.Close(); err != nil {
+		t.Fatalf("close second store: %v", err)
+	}
+	reopened, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	state, err := reopened.ReadWorkflowRunSnapshotState(ctx, repoID, detail.HeadSHA)
+	if err != nil {
+		t.Fatalf("read reopened workflow snapshot: %v", err)
+	}
+	if state.SourceUpdatedAt != "2026-07-12T03:03:00Z" ||
+		state.ObservationSequence != deletionSequence ||
+		len(state.Runs) != 1 ||
+		state.Runs[0].RunID != "100" {
+		t.Fatalf("stale legacy write resurrected deleted workflow run: %+v", state)
 	}
 }
 

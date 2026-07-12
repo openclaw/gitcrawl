@@ -19,6 +19,133 @@ type WorkflowRunSnapshotResult struct {
 	RowsSynced int
 }
 
+func (s *Store) applyLegacyWorkflowRunCache(
+	ctx context.Context,
+	detail PullRequestDetail,
+	runs []WorkflowRun,
+) error {
+	targetHeadSHA := strings.TrimSpace(detail.HeadSHA)
+	runsByHead := make(map[string][]WorkflowRun)
+	if targetHeadSHA != "" {
+		runsByHead[targetHeadSHA] = nil
+	}
+	for _, input := range runs {
+		run := input
+		if run.RepoID == 0 {
+			run.RepoID = detail.RepoID
+		}
+		run.HeadSHA = strings.TrimSpace(run.HeadSHA)
+		if run.HeadSHA == "" {
+			if targetHeadSHA == "" {
+				return fmt.Errorf(
+					"legacy workflow run %s has no head SHA and pull request detail has no head SHA",
+					run.RunID,
+				)
+			}
+			run.HeadSHA = targetHeadSHA
+		}
+		if err := normalizeLegacyWorkflowRunSource(&run, detail); err != nil {
+			return fmt.Errorf("normalize legacy workflow run %s source: %w", run.RunID, err)
+		}
+		runsByHead[run.HeadSHA] = append(runsByHead[run.HeadSHA], run)
+	}
+	if len(runsByHead) == 0 {
+		return nil
+	}
+
+	sequence, err := s.NextThreadObservationSequence(ctx, detail.FetchedAt)
+	if err != nil {
+		return err
+	}
+	headSHAs := make([]string, 0, len(runsByHead))
+	for headSHA := range runsByHead {
+		headSHAs = append(headSHAs, headSHA)
+	}
+	sort.Strings(headSHAs)
+	for _, headSHA := range headSHAs {
+		incoming := runsByHead[headSHA]
+		expected, err := s.ReadWorkflowRunSnapshotState(ctx, detail.RepoID, headSHA)
+		if err != nil {
+			return err
+		}
+		desired := incoming
+		if headSHA != targetHeadSHA {
+			desired = mergeLegacyWorkflowRuns(expected.Runs, incoming)
+		}
+		sourceUpdatedAt, err := workflowRunSnapshotSource(incoming)
+		if err != nil {
+			return err
+		}
+		if _, err := s.ApplyWorkflowRunSnapshot(
+			ctx,
+			detail.RepoID,
+			headSHA,
+			sourceUpdatedAt,
+			sequence,
+			expected,
+			desired,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeLegacyWorkflowRunSource(
+	run *WorkflowRun,
+	detail PullRequestDetail,
+) error {
+	if strings.TrimSpace(run.UpdatedAtGH) != "" ||
+		strings.TrimSpace(run.CreatedAtGH) != "" {
+		_, err := workflowRunSourceTimestamp(*run)
+		return err
+	}
+	for _, value := range []string{run.FetchedAt, detail.FetchedAt, detail.UpdatedAt} {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := timestampOrderKey(value); !ok {
+			return fmt.Errorf("invalid fallback timestamp %q", value)
+		}
+		run.UpdatedAtGH = value
+		return nil
+	}
+	return fmt.Errorf("missing created_at, updated_at, and fetched_at")
+}
+
+func workflowRunSnapshotSource(runs []WorkflowRun) (string, error) {
+	latestSource := ""
+	latestKey := ""
+	for _, run := range runs {
+		source, err := workflowRunSourceTimestamp(run)
+		if err != nil {
+			return "", fmt.Errorf("workflow run %s source: %w", run.RunID, err)
+		}
+		key, _ := timestampOrderKey(source)
+		if latestSource == "" || key > latestKey {
+			latestSource = source
+			latestKey = key
+		}
+	}
+	return latestSource, nil
+}
+
+func mergeLegacyWorkflowRuns(current, incoming []WorkflowRun) []WorkflowRun {
+	mergedByID := make(map[string]WorkflowRun, len(current)+len(incoming))
+	for _, run := range current {
+		mergedByID[run.RunID] = run
+	}
+	for _, run := range incoming {
+		mergedByID[run.RunID] = run
+	}
+	merged := make([]WorkflowRun, 0, len(mergedByID))
+	for _, run := range mergedByID {
+		merged = append(merged, run)
+	}
+	return merged
+}
+
 func (s *Store) ReadWorkflowRunSnapshotState(
 	ctx context.Context,
 	repoID int64,
