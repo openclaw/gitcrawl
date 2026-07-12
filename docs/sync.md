@@ -25,7 +25,7 @@ A sync writes:
 
 - `repositories` — repo metadata
 - `threads` — issues and PRs (titles, bodies, authors, author association, labels, state, timestamps)
-- `thread_revisions` — immutable revisions when fully hydrated canonical thread or review evidence changes
+- `thread_revisions` — immutable revisions with content-addressed canonical evidence payloads when fully hydrated thread or review evidence changes
 - `thread_fingerprints` — one deterministic `thread-fingerprint-v2` row for each persisted revision
 - `documents` — canonical thread documents (when bodies change)
 - `run_records` — sync run statistics
@@ -37,7 +37,8 @@ updates the thread and document rows but intentionally does not create a revisio
 could appear complete while omitting discussion, review, file, commit, or check evidence.
 Pull request revisions also track draft state, review decisions, workflow runs, and check
 transitions, so those changes invalidate downstream summaries and review evidence even
-when the title and body are unchanged.
+when the title and body are unchanged. Summary prompts read the exact canonical payload
+bound to the selected revision and skip revisions whose payload is missing or too large.
 
 ## State filters
 

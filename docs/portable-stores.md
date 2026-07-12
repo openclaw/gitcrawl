@@ -91,7 +91,7 @@ Portable v2 keeps the data agents most often need for offline GitHub reads:
 
 It strips the data that is large, easy to regenerate, or mainly useful for exact API replay: raw GitHub JSON, generated documents and FTS indexes, embeddings and vectors, code snapshots and diff blobs, cluster run history, similarity edges, and blob storage. The database records this contract in `portable_metadata` with `schema=gitcrawl-portable-sync-v2`, `includes`, `excluded`, `capabilities`, and `thread_author_profile` keys. The added revision, fingerprint, summary, and author-association fields are additive; the portable schema identifier remains v2 so older readers can continue using the columns and tables they understand.
 
-Portable mirrors retain existing revision-bound key summaries, but do not regenerate them from compact body excerpts. Run a fully hydrated sync in a writable archive before `summarize`; the summary queue requires the canonical document that produced the revision.
+Portable mirrors retain existing revision-bound key summaries, but do not regenerate them from compact body excerpts. Pruning removes canonical revision evidence blobs, so run a fully hydrated sync in a writable archive before `summarize`; the summary queue requires the exact content-addressed payload bound to the revision.
 
 | Flag | Default | Description |
 | --- | --- | --- |
