@@ -53,6 +53,68 @@ type delayedObservationGitHub struct {
 	releaseFirstList chan struct{}
 }
 
+type interleavedEvidenceGitHub struct {
+	fakeGitHub
+	mu                 sync.Mutex
+	issueCalls         int
+	commentCalls       int
+	firstIssueStarted  chan struct{}
+	secondIssueStarted chan struct{}
+	releaseFirstIssue  chan struct{}
+	releaseSecondIssue chan struct{}
+}
+
+func (f *interleavedEvidenceGitHub) GetIssue(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) (map[string]any, error) {
+	f.mu.Lock()
+	f.issueCalls++
+	call := f.issueCalls
+	f.mu.Unlock()
+	var started, release chan struct{}
+	switch call {
+	case 1:
+		started, release = f.firstIssueStarted, f.releaseFirstIssue
+	case 2:
+		started, release = f.secondIssueStarted, f.releaseSecondIssue
+	}
+	if started != nil {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+		}
+	}
+	return f.fakeGitHub.GetIssue(ctx, owner, repo, number, reporter)
+}
+
+func (f *interleavedEvidenceGitHub) ListIssueComments(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.commentCalls++
+	call := f.commentCalls
+	f.mu.Unlock()
+	body := "sequence two comment"
+	if call == 2 {
+		body = "sequence three comment"
+	}
+	return []map[string]any{{
+		"id":         11,
+		"body":       body,
+		"created_at": "2026-04-26T00:00:00Z",
+		"updated_at": "2026-04-26T00:00:00Z",
+		"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+	}}, nil
+}
+
 func (f *delayedObservationGitHub) ListRepositoryIssues(
 	ctx context.Context,
 	owner, repo string,
@@ -700,6 +762,129 @@ func TestSyncAllocatesObservationSequenceBeforeFetching(t *testing.T) {
 	}
 	if revisionSequences != 1 {
 		t.Fatalf("revision observation sequence count = %d, want 1", revisionSequences)
+	}
+}
+
+func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	if sequence, err := st.NextThreadObservationSequence(ctx, "2026-07-12T00:00:00Z"); err != nil || sequence != 1 {
+		t.Fatalf("sequence floor = %d, %v", sequence, err)
+	}
+	client := &interleavedEvidenceGitHub{
+		firstIssueStarted:  make(chan struct{}),
+		secondIssueStarted: make(chan struct{}),
+		releaseFirstIssue:  make(chan struct{}),
+		releaseSecondIssue: make(chan struct{}),
+	}
+	s := New(client, st)
+	s.now = func() time.Time { return time.Date(2026, 7, 12, 0, 1, 0, 0, time.UTC) }
+	fullOptions := Options{
+		Owner:           "openclaw",
+		Repo:            "gitcrawl",
+		Numbers:         []int{7},
+		IncludeComments: true,
+	}
+	type syncResult struct {
+		stats Stats
+		err   error
+	}
+	firstResult := make(chan syncResult, 1)
+	go func() {
+		stats, err := s.Sync(ctx, fullOptions)
+		firstResult <- syncResult{stats: stats, err: err}
+	}()
+	select {
+	case <-client.firstIssueStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sequence two sync did not reach issue fetch")
+	}
+	secondResult := make(chan syncResult, 1)
+	go func() {
+		stats, err := s.Sync(ctx, fullOptions)
+		secondResult <- syncResult{stats: stats, err: err}
+	}()
+	select {
+	case <-client.secondIssueStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sequence three sync did not reach issue fetch")
+	}
+
+	metadataStats, err := s.Sync(ctx, Options{
+		Owner:   "openclaw",
+		Repo:    "gitcrawl",
+		Numbers: []int{7},
+	})
+	if err != nil {
+		t.Fatalf("sequence four metadata sync: %v", err)
+	}
+	if metadataStats.ThreadsSynced != 1 || metadataStats.EvidenceObserved != 0 {
+		t.Fatalf("sequence four metadata stats = %#v", metadataStats)
+	}
+
+	close(client.releaseFirstIssue)
+	first := <-firstResult
+	if first.err != nil {
+		t.Fatalf("sequence two sync: %v", first.err)
+	}
+	if first.stats.ThreadsSynced != 1 || first.stats.ThreadsSkippedStale != 0 ||
+		first.stats.CommentsSynced != 1 || first.stats.EvidenceObserved != 1 ||
+		first.stats.RevisionsCreated != 1 || first.stats.FingerprintsUpserted != 1 {
+		t.Fatalf("sequence two stats = %#v", first.stats)
+	}
+	close(client.releaseSecondIssue)
+	second := <-secondResult
+	if second.err != nil {
+		t.Fatalf("sequence three sync: %v", second.err)
+	}
+	if second.stats.ThreadsSynced != 1 || second.stats.ThreadsSkippedStale != 0 ||
+		second.stats.CommentsSynced != 1 || second.stats.EvidenceObserved != 1 ||
+		second.stats.RevisionsCreated != 1 || second.stats.FingerprintsUpserted != 1 {
+		t.Fatalf("sequence three stats = %#v", second.stats)
+	}
+
+	var threadID, parentSequence, latestRevisionSequence, revisions int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select id, observation_sequence
+		from threads
+		where number = 7
+	`).Scan(&threadID, &parentSequence); err != nil {
+		t.Fatalf("parent sequence: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_revisions
+		where thread_id = ?
+		order by observation_sequence desc
+		limit 1
+	`, threadID).Scan(&latestRevisionSequence); err != nil {
+		t.Fatalf("latest revision sequence: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions
+		where thread_id = ?
+	`, threadID).Scan(&revisions); err != nil {
+		t.Fatalf("revision count: %v", err)
+	}
+	comments, err := st.ListComments(ctx, threadID)
+	if err != nil {
+		t.Fatalf("comments: %v", err)
+	}
+	if parentSequence != 4 || latestRevisionSequence != 3 || revisions != 2 ||
+		len(comments) != 1 || comments[0].Body != "sequence three comment" {
+		t.Fatalf(
+			"persisted state = parent %d, revision %d, revisions %d, comments %+v",
+			parentSequence,
+			latestRevisionSequence,
+			revisions,
+			comments,
+		)
 	}
 }
 

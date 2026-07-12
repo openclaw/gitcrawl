@@ -240,7 +240,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if err != nil {
 				return err
 			}
-			if !upsert.Applied {
+			if !upsert.Applied && !upsert.EvidenceApplied {
 				attempt.ThreadsSkippedStale++
 				tracker.Add(1,
 					"number", thread.Number,
@@ -251,10 +251,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				continue
 			}
 			thread.ID = upsert.ID
-			if _, overlap := closedOverlapNumbers[thread.Number]; overlap &&
-				upsert.PreviousState == "open" &&
-				thread.State == "closed" {
-				attempt.ThreadsClosed++
+			if upsert.Applied {
+				if _, overlap := closedOverlapNumbers[thread.Number]; overlap &&
+					upsert.PreviousState == "open" &&
+					thread.State == "closed" {
+					attempt.ThreadsClosed++
+				}
 			}
 			var comments []store.Comment
 			if options.IncludeComments {
@@ -303,7 +305,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if _, err := st.UpsertDocument(ctx, documents.BuildWithContext(thread, comments, pullFiles, pullCommits)); err != nil {
 				return err
 			}
-			if hasFreshThreadEvidence(options, thread) {
+			if hasFreshThreadEvidence(options, thread) && upsert.EvidenceApplied {
 				attempt.EvidenceObserved++
 				enrichment, err := persistThreadEnrichment(
 					ctx,
@@ -313,7 +315,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					pullFiles,
 					pullCommits,
 					s.now().Format(time.RFC3339Nano),
-					upsert.ObservationSequence,
+					upsert.EvidenceObservationSequence,
 				)
 				if err != nil {
 					return err
