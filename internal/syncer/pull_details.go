@@ -10,6 +10,7 @@ import (
 )
 
 type pullDetailStats struct {
+	details bool
 	files   int
 	commits int
 	checks  int
@@ -64,7 +65,13 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 	}, nil
 }
 
-func (s *Syncer) persistPullRequestDetails(ctx context.Context, st *store.Store, thread store.Thread, rows pullRequestDetailRows) (pullDetailStats, error) {
+func (s *Syncer) persistPullRequestDetails(
+	ctx context.Context,
+	st *store.Store,
+	thread store.Thread,
+	rows pullRequestDetailRows,
+	families store.PullRequestHydrationFamilies,
+) (pullDetailStats, error) {
 	fetchedAt := rows.fetchedAt
 	if fetchedAt == "" {
 		fetchedAt = s.now().Format(time.RFC3339Nano)
@@ -74,15 +81,49 @@ func (s *Syncer) persistPullRequestDetails(ctx context.Context, st *store.Store,
 	commits := mapPullCommits(thread.ID, rows.commitsRaw, fetchedAt)
 	checks := mapPullChecks(thread.ID, rows.checksRaw, fetchedAt)
 	runs := mapWorkflowRuns(thread.RepoID, rows.runsRaw, fetchedAt)
+	if err := st.UpsertPullRequestCacheFamilies(
+		ctx,
+		detail,
+		files,
+		commits,
+		checks,
+		runs,
+		families,
+	); err != nil {
+		return pullDetailStats{}, err
+	}
 	comments, err := st.ListComments(ctx, thread.ID)
 	if err != nil {
 		return pullDetailStats{}, err
 	}
-	document := documents.BuildWithContext(thread, comments, files, commits)
-	if err := st.UpsertPullRequestCacheAndDocument(ctx, detail, files, commits, checks, runs, document); err != nil {
+	storedFiles, err := st.PullRequestFiles(ctx, thread.ID)
+	if err != nil {
 		return pullDetailStats{}, err
 	}
-	return pullDetailStats{files: len(files), commits: len(commits), checks: len(checks), runs: len(runs)}, nil
+	storedCommits, err := st.PullRequestCommits(ctx, thread.ID)
+	if err != nil {
+		return pullDetailStats{}, err
+	}
+	if _, err := st.UpsertDocument(
+		ctx,
+		documents.BuildWithContext(thread, comments, storedFiles, storedCommits),
+	); err != nil {
+		return pullDetailStats{}, err
+	}
+	stats := pullDetailStats{details: families.Details}
+	if families.Files {
+		stats.files = len(files)
+	}
+	if families.Commits {
+		stats.commits = len(commits)
+	}
+	if families.Checks {
+		stats.checks = len(checks)
+	}
+	if families.WorkflowRuns {
+		stats.runs = len(runs)
+	}
+	return stats, nil
 }
 
 func mapPullDetail(thread store.Thread, pull map[string]any, fetchedAt string) store.PullRequestDetail {

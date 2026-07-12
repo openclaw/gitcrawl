@@ -254,6 +254,42 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			completeEvidence := hasFreshThreadEvidence(options, thread)
 			evidenceApplied := completeEvidence && upsert.EvidenceApplied
 			childWritesAllowed := !completeEvidence || evidenceApplied
+			childReservations := make(map[store.ThreadChildObservationFamily]bool)
+			reserveChild := func(family store.ThreadChildObservationFamily) error {
+				if !childWritesAllowed {
+					return nil
+				}
+				applied, err := st.ReserveThreadChildObservation(
+					ctx,
+					thread.ID,
+					family,
+					observationSequence,
+				)
+				if err != nil {
+					return err
+				}
+				childReservations[family] = applied
+				return nil
+			}
+			if options.IncludeComments {
+				if err := reserveChild(store.ThreadChildComments); err != nil {
+					return err
+				}
+			}
+			if options.IncludePRDetails && thread.Kind == "pull_request" {
+				for _, family := range []store.ThreadChildObservationFamily{
+					store.ThreadChildPullRequestDetails,
+					store.ThreadChildPullRequestFiles,
+					store.ThreadChildPullRequestCommits,
+					store.ThreadChildPullRequestChecks,
+					store.ThreadChildWorkflowRuns,
+					store.ThreadChildReviewThreads,
+				} {
+					if err := reserveChild(family); err != nil {
+						return err
+					}
+				}
+			}
 			if upsert.Applied {
 				if _, overlap := closedOverlapNumbers[thread.Number]; overlap &&
 					upsert.PreviousState == "open" &&
@@ -262,7 +298,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				}
 			}
 			var comments []store.Comment
-			if options.IncludeComments && childWritesAllowed {
+			if options.IncludeComments && childReservations[store.ThreadChildComments] {
 				comments, err = persistComments(ctx, st, thread, payload.commentRows)
 				if err != nil {
 					return err
@@ -275,18 +311,34 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 			}
-			if options.IncludePRDetails && thread.Kind == "pull_request" && childWritesAllowed {
-				count, err := s.persistPullReviewThreads(ctx, st, thread, payload.reviewThreads, payload.reviewThreadsFetchedAt)
-				if err != nil {
-					return err
-				}
-				attempt.ReviewThreadsSynced += count
-				if payload.hasPullDetails {
-					detailStats, err := s.persistPullRequestDetails(ctx, st, thread, payload.pullDetails)
+			if options.IncludePRDetails && thread.Kind == "pull_request" {
+				if childReservations[store.ThreadChildReviewThreads] {
+					count, err := s.persistPullReviewThreads(ctx, st, thread, payload.reviewThreads, payload.reviewThreadsFetchedAt)
 					if err != nil {
 						return err
 					}
-					attempt.PRDetailsSynced++
+					attempt.ReviewThreadsSynced += count
+				}
+				if payload.hasPullDetails {
+					detailStats, err := s.persistPullRequestDetails(
+						ctx,
+						st,
+						thread,
+						payload.pullDetails,
+						store.PullRequestHydrationFamilies{
+							Details:      childReservations[store.ThreadChildPullRequestDetails],
+							Files:        childReservations[store.ThreadChildPullRequestFiles],
+							Commits:      childReservations[store.ThreadChildPullRequestCommits],
+							Checks:       childReservations[store.ThreadChildPullRequestChecks],
+							WorkflowRuns: childReservations[store.ThreadChildWorkflowRuns],
+						},
+					)
+					if err != nil {
+						return err
+					}
+					if detailStats.details {
+						attempt.PRDetailsSynced++
+					}
 					attempt.PRFilesSynced += detailStats.files
 					attempt.PRCommitsSynced += detailStats.commits
 					attempt.PRChecksSynced += detailStats.checks

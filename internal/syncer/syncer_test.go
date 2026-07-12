@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,36 @@ type interleavedEvidenceGitHub struct {
 	releaseSecondEvidence chan struct{}
 }
 
+type interleavedPRCommentsGitHub struct {
+	fakeGitHub
+	mu            sync.Mutex
+	commentCalls  int
+	firstFetched  chan struct{}
+	secondFetched chan struct{}
+	releaseFirst  chan struct{}
+	releaseSecond chan struct{}
+}
+
+type interleavedPRDetailsGitHub struct {
+	fakeGitHub
+	mu            sync.Mutex
+	pullCalls     int
+	fileCalls     int
+	commitCalls   int
+	checkCalls    int
+	runCalls      int
+	reviewCalls   int
+	firstFetched  chan struct{}
+	secondFetched chan struct{}
+	releaseFirst  chan struct{}
+	releaseSecond chan struct{}
+}
+
+type versionedPRDetailsGitHub struct {
+	fakeGitHub
+	version int
+}
+
 func (f *interleavedEvidenceGitHub) ListIssueComments(
 	ctx context.Context,
 	owner, repo string,
@@ -100,6 +131,283 @@ func (f *interleavedEvidenceGitHub) ListIssueComments(
 		}
 	}
 	return rows, nil
+}
+
+func (f *interleavedPRCommentsGitHub) ListIssueComments(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.commentCalls++
+	call := f.commentCalls
+	f.mu.Unlock()
+	rows := pullCommentRows(call)
+	fetched, release := interleavedSignals(
+		call,
+		f.firstFetched,
+		f.secondFetched,
+		f.releaseFirst,
+		f.releaseSecond,
+	)
+	if fetched != nil {
+		close(fetched)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+		}
+	}
+	return rows, nil
+}
+
+func (f *interleavedPRDetailsGitHub) GetPull(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) (map[string]any, error) {
+	f.mu.Lock()
+	f.pullCalls++
+	call := f.pullCalls
+	f.mu.Unlock()
+	return pullDetailRow(number, call), nil
+}
+
+func (f *interleavedPRDetailsGitHub) ListPullFiles(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.fileCalls++
+	call := f.fileCalls
+	f.mu.Unlock()
+	return pullFileRows(call), nil
+}
+
+func (f *interleavedPRDetailsGitHub) ListPullCommits(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.commitCalls++
+	call := f.commitCalls
+	f.mu.Unlock()
+	return pullCommitRows(call), nil
+}
+
+func (f *interleavedPRDetailsGitHub) ListCommitCheckRuns(
+	ctx context.Context,
+	owner, repo, ref string,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.checkCalls++
+	call := f.checkCalls
+	f.mu.Unlock()
+	return pullCheckRows(call), nil
+}
+
+func (f *interleavedPRDetailsGitHub) ListWorkflowRuns(
+	ctx context.Context,
+	owner, repo string,
+	options gh.ListWorkflowRunsOptions,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.runCalls++
+	call := f.runCalls
+	f.mu.Unlock()
+	rows := pullWorkflowRows(call, options.HeadSHA)
+	fetched, release := interleavedSignals(
+		call,
+		f.firstFetched,
+		f.secondFetched,
+		f.releaseFirst,
+		f.releaseSecond,
+	)
+	if fetched != nil {
+		close(fetched)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+		}
+	}
+	return rows, nil
+}
+
+func (f *interleavedPRDetailsGitHub) ListPullReviewThreads(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	f.mu.Lock()
+	f.reviewCalls++
+	call := f.reviewCalls
+	f.mu.Unlock()
+	return pullReviewThreadRows(call), nil
+}
+
+func (f versionedPRDetailsGitHub) GetPull(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) (map[string]any, error) {
+	return pullDetailRow(number, f.version), nil
+}
+
+func (f versionedPRDetailsGitHub) ListPullFiles(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	return pullFileRows(f.version), nil
+}
+
+func (f versionedPRDetailsGitHub) ListPullCommits(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	return pullCommitRows(f.version), nil
+}
+
+func (f versionedPRDetailsGitHub) ListCommitCheckRuns(
+	ctx context.Context,
+	owner, repo, ref string,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	return pullCheckRows(f.version), nil
+}
+
+func (f versionedPRDetailsGitHub) ListWorkflowRuns(
+	ctx context.Context,
+	owner, repo string,
+	options gh.ListWorkflowRunsOptions,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	return pullWorkflowRows(f.version, options.HeadSHA), nil
+}
+
+func (f versionedPRDetailsGitHub) ListPullReviewThreads(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	return pullReviewThreadRows(f.version), nil
+}
+
+func interleavedSignals(
+	call int,
+	firstFetched, secondFetched, releaseFirst, releaseSecond chan struct{},
+) (chan struct{}, chan struct{}) {
+	switch call {
+	case 1:
+		return firstFetched, releaseFirst
+	case 2:
+		return secondFetched, releaseSecond
+	default:
+		return nil, nil
+	}
+}
+
+func pullCommentRows(version int) []map[string]any {
+	return []map[string]any{{
+		"id":         80 + version,
+		"body":       fmt.Sprintf("comment-v%d", version),
+		"created_at": "2026-07-12T00:00:00Z",
+		"updated_at": fmt.Sprintf("2026-07-12T00:00:0%dZ", version),
+		"user":       map[string]any{"login": "alice", "type": "User"},
+	}}
+}
+
+func pullDetailRow(number, version int) map[string]any {
+	return map[string]any{
+		"number": number,
+		"head": map[string]any{
+			"sha":  fmt.Sprintf("head-v%d", version),
+			"ref":  fmt.Sprintf("feature-v%d", version),
+			"repo": map[string]any{"full_name": "openclaw/gitcrawl"},
+		},
+		"base":            map[string]any{"sha": fmt.Sprintf("base-v%d", version)},
+		"mergeable_state": fmt.Sprintf("state-v%d", version),
+		"additions":       version,
+		"deletions":       version,
+		"changed_files":   1,
+		"draft":           false,
+	}
+}
+
+func pullFileRows(version int) []map[string]any {
+	return []map[string]any{{
+		"filename":  fmt.Sprintf("file-v%d.go", version),
+		"status":    "modified",
+		"additions": version,
+		"changes":   version,
+		"patch":     fmt.Sprintf("@@ file-v%d", version),
+	}}
+}
+
+func pullCommitRows(version int) []map[string]any {
+	return []map[string]any{{
+		"sha":      fmt.Sprintf("commit-v%d", version),
+		"html_url": fmt.Sprintf("https://github.com/openclaw/gitcrawl/commit/v%d", version),
+		"author":   map[string]any{"login": "alice"},
+		"commit": map[string]any{
+			"message": fmt.Sprintf("fix: version %d", version),
+			"author":  map[string]any{"name": "Alice", "date": "2026-07-12T00:00:00Z"},
+		},
+	}}
+}
+
+func pullCheckRows(version int) []map[string]any {
+	return []map[string]any{{
+		"name":        fmt.Sprintf("check-v%d", version),
+		"status":      "completed",
+		"conclusion":  "success",
+		"details_url": fmt.Sprintf("https://github.com/openclaw/gitcrawl/actions/check-v%d", version),
+	}}
+}
+
+func pullWorkflowRows(version int, headSHA string) []map[string]any {
+	return []map[string]any{{
+		"id":          900 + version,
+		"run_number":  version,
+		"head_branch": fmt.Sprintf("feature-v%d", version),
+		"head_sha":    headSHA,
+		"status":      "completed",
+		"conclusion":  "success",
+		"name":        fmt.Sprintf("workflow-v%d", version),
+		"event":       "pull_request",
+	}}
+}
+
+func pullReviewThreadRows(version int) []map[string]any {
+	return []map[string]any{{
+		"id":         fmt.Sprintf("review-thread-v%d", version),
+		"path":       fmt.Sprintf("file-v%d.go", version),
+		"line":       version,
+		"isResolved": false,
+		"isOutdated": false,
+		"comments": map[string]any{"nodes": []any{map[string]any{
+			"id":        fmt.Sprintf("review-comment-v%d", version),
+			"body":      fmt.Sprintf("review-v%d", version),
+			"author":    map[string]any{"login": "alice", "__typename": "User"},
+			"createdAt": "2026-07-12T00:00:00Z",
+			"updatedAt": fmt.Sprintf("2026-07-12T00:00:0%dZ", version),
+		}}},
+	}}
 }
 
 func (f *delayedObservationGitHub) ListRepositoryIssues(
@@ -876,6 +1184,357 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 	}
 }
 
+func TestSyncPartialPRCommentsAreReleaseOrderIndependent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		newerFirst bool
+	}{
+		{name: "lower sequence persists first"},
+		{name: "higher sequence persists first", newerFirst: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+
+			client := &interleavedPRCommentsGitHub{
+				firstFetched:  make(chan struct{}),
+				secondFetched: make(chan struct{}),
+				releaseFirst:  make(chan struct{}),
+				releaseSecond: make(chan struct{}),
+			}
+			s := New(client, st)
+			s.now = func() time.Time { return time.Date(2026, 7, 12, 1, 0, 0, 0, time.UTC) }
+			runInterleavedSyncs(
+				t,
+				ctx,
+				s,
+				Options{
+					Owner:           "openclaw",
+					Repo:            "gitcrawl",
+					Numbers:         []int{8},
+					IncludeComments: true,
+				},
+				client.firstFetched,
+				client.secondFetched,
+				client.releaseFirst,
+				client.releaseSecond,
+				test.newerFirst,
+			)
+
+			repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+			if err != nil {
+				t.Fatalf("repository: %v", err)
+			}
+			threads, err := st.ListThreads(ctx, repo.ID, true)
+			if err != nil || len(threads) != 1 {
+				t.Fatalf("threads = %+v, %v", threads, err)
+			}
+			comments, err := st.ListComments(ctx, threads[0].ID)
+			if err != nil {
+				t.Fatalf("comments: %v", err)
+			}
+			if len(comments) != 1 || comments[0].Body != "comment-v2" {
+				t.Fatalf("comments = %+v, want higher-sequence snapshot", comments)
+			}
+			assertChildReservation(
+				t,
+				ctx,
+				st,
+				threads[0].ID,
+				store.ThreadChildComments,
+				2,
+			)
+		})
+	}
+}
+
+func TestSyncPartialPRDetailsAreReleaseOrderIndependent(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		newerFirst bool
+	}{
+		{name: "lower sequence persists first"},
+		{name: "higher sequence persists first", newerFirst: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+
+			client := &interleavedPRDetailsGitHub{
+				firstFetched:  make(chan struct{}),
+				secondFetched: make(chan struct{}),
+				releaseFirst:  make(chan struct{}),
+				releaseSecond: make(chan struct{}),
+			}
+			s := New(client, st)
+			s.now = func() time.Time { return time.Date(2026, 7, 12, 1, 0, 0, 0, time.UTC) }
+			runInterleavedSyncs(
+				t,
+				ctx,
+				s,
+				Options{
+					Owner:            "openclaw",
+					Repo:             "gitcrawl",
+					Numbers:          []int{8},
+					IncludePRDetails: true,
+				},
+				client.firstFetched,
+				client.secondFetched,
+				client.releaseFirst,
+				client.releaseSecond,
+				test.newerFirst,
+			)
+
+			thread, detail := assertVersionedPRHydration(t, ctx, st, 2, true)
+			for _, family := range []store.ThreadChildObservationFamily{
+				store.ThreadChildPullRequestDetails,
+				store.ThreadChildPullRequestFiles,
+				store.ThreadChildPullRequestCommits,
+				store.ThreadChildPullRequestChecks,
+				store.ThreadChildWorkflowRuns,
+				store.ThreadChildReviewThreads,
+			} {
+				assertChildReservation(t, ctx, st, thread.ID, family, 2)
+			}
+			if detail.HeadSHA != "head-v2" {
+				t.Fatalf("detail = %+v, want higher-sequence snapshot", detail)
+			}
+		})
+	}
+}
+
+func TestSyncPartialPRDetailsAdvanceIndependentFamilies(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	oldSyncer := New(versionedPRDetailsGitHub{version: 1}, st)
+	oldSyncer.now = func() time.Time { return time.Date(2026, 7, 12, 1, 0, 0, 0, time.UTC) }
+	if _, err := oldSyncer.Sync(ctx, Options{
+		Owner:            "openclaw",
+		Repo:             "gitcrawl",
+		Numbers:          []int{8},
+		IncludePRDetails: true,
+	}); err != nil {
+		t.Fatalf("seed details: %v", err)
+	}
+	thread, detail := assertVersionedPRHydration(t, ctx, st, 1, true)
+	if applied, err := st.ReserveThreadChildObservation(
+		ctx,
+		thread.ID,
+		store.ThreadChildPullRequestFiles,
+		10,
+	); err != nil || !applied {
+		t.Fatalf("reserve newer files = %t, %v", applied, err)
+	}
+	if err := st.UpsertPullRequestCacheFamilies(
+		ctx,
+		detail,
+		[]store.PullRequestFile{{
+			ThreadID:  thread.ID,
+			Path:      "reserved-file.go",
+			RawJSON:   "{}",
+			FetchedAt: "2026-07-12T01:10:00Z",
+		}},
+		nil,
+		nil,
+		nil,
+		store.PullRequestHydrationFamilies{Files: true},
+	); err != nil {
+		t.Fatalf("seed newer files: %v", err)
+	}
+
+	newSyncer := New(versionedPRDetailsGitHub{version: 2}, st)
+	newSyncer.now = func() time.Time { return time.Date(2026, 7, 12, 1, 1, 0, 0, time.UTC) }
+	if _, err := newSyncer.Sync(ctx, Options{
+		Owner:            "openclaw",
+		Repo:             "gitcrawl",
+		Numbers:          []int{8},
+		IncludePRDetails: true,
+	}); err != nil {
+		t.Fatalf("refresh details: %v", err)
+	}
+	thread, detail = assertVersionedPRHydration(t, ctx, st, 2, false)
+	files, err := st.PullRequestFiles(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("files: %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "reserved-file.go" {
+		t.Fatalf("files = %+v, want independently newer file family", files)
+	}
+	if detail.HeadSHA != "head-v2" {
+		t.Fatalf("detail = %+v, want independently advanced detail family", detail)
+	}
+	assertChildReservation(t, ctx, st, thread.ID, store.ThreadChildPullRequestFiles, 10)
+	for _, family := range []store.ThreadChildObservationFamily{
+		store.ThreadChildPullRequestDetails,
+		store.ThreadChildPullRequestCommits,
+		store.ThreadChildPullRequestChecks,
+		store.ThreadChildWorkflowRuns,
+		store.ThreadChildReviewThreads,
+	} {
+		assertChildReservation(t, ctx, st, thread.ID, family, 2)
+	}
+}
+
+func runInterleavedSyncs(
+	t *testing.T,
+	ctx context.Context,
+	s *Syncer,
+	options Options,
+	firstFetched, secondFetched, releaseFirst, releaseSecond chan struct{},
+	newerFirst bool,
+) {
+	t.Helper()
+	type result struct {
+		stats Stats
+		err   error
+	}
+	firstResult := make(chan result, 1)
+	go func() {
+		stats, err := s.Sync(ctx, options)
+		firstResult <- result{stats: stats, err: err}
+	}()
+	awaitSyncSignal(t, firstFetched, "lower-sequence hydration fetch")
+
+	secondResult := make(chan result, 1)
+	go func() {
+		stats, err := s.Sync(ctx, options)
+		secondResult <- result{stats: stats, err: err}
+	}()
+	awaitSyncSignal(t, secondFetched, "higher-sequence hydration fetch")
+
+	if newerFirst {
+		close(releaseSecond)
+		if second := <-secondResult; second.err != nil {
+			t.Fatalf("higher-sequence sync: %v", second.err)
+		}
+		close(releaseFirst)
+		if first := <-firstResult; first.err != nil {
+			t.Fatalf("lower-sequence sync: %v", first.err)
+		}
+		return
+	}
+	close(releaseFirst)
+	if first := <-firstResult; first.err != nil {
+		t.Fatalf("lower-sequence sync: %v", first.err)
+	}
+	close(releaseSecond)
+	if second := <-secondResult; second.err != nil {
+		t.Fatalf("higher-sequence sync: %v", second.err)
+	}
+}
+
+func awaitSyncSignal(t *testing.T, signal <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+	}
+}
+
+func assertChildReservation(
+	t *testing.T,
+	ctx context.Context,
+	st *store.Store,
+	threadID int64,
+	family store.ThreadChildObservationFamily,
+	want int64,
+) {
+	t.Helper()
+	var got int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = ?
+	`, threadID, family).Scan(&got); err != nil {
+		t.Fatalf("read %s reservation: %v", family, err)
+	}
+	if got != want {
+		t.Fatalf("%s reservation = %d, want %d", family, got, want)
+	}
+}
+
+func assertVersionedPRHydration(
+	t *testing.T,
+	ctx context.Context,
+	st *store.Store,
+	version int,
+	checkFiles bool,
+) (store.Thread, store.PullRequestDetail) {
+	t.Helper()
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil || len(threads) != 1 {
+		t.Fatalf("threads = %+v, %v", threads, err)
+	}
+	thread := threads[0]
+	detail, ok, err := st.PullRequestDetailByThread(ctx, thread.ID)
+	if err != nil || !ok {
+		t.Fatalf("detail = %+v, %t, %v", detail, ok, err)
+	}
+	if detail.HeadSHA != fmt.Sprintf("head-v%d", version) {
+		t.Fatalf("detail = %+v, want version %d", detail, version)
+	}
+	if checkFiles {
+		files, err := st.PullRequestFiles(ctx, thread.ID)
+		if err != nil {
+			t.Fatalf("files: %v", err)
+		}
+		if len(files) != 1 || files[0].Path != fmt.Sprintf("file-v%d.go", version) {
+			t.Fatalf("files = %+v, want version %d", files, version)
+		}
+	}
+	commits, err := st.PullRequestCommits(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("commits: %v", err)
+	}
+	if len(commits) != 1 || commits[0].SHA != fmt.Sprintf("commit-v%d", version) {
+		t.Fatalf("commits = %+v, want version %d", commits, version)
+	}
+	checks, err := st.PullRequestChecks(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("checks: %v", err)
+	}
+	if len(checks) != 1 || checks[0].Name != fmt.Sprintf("check-v%d", version) {
+		t.Fatalf("checks = %+v, want version %d", checks, version)
+	}
+	reviewThreads, err := st.PullRequestReviewThreads(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("review threads: %v", err)
+	}
+	if len(reviewThreads) != 1 ||
+		reviewThreads[0].ReviewThreadID != fmt.Sprintf("review-thread-v%d", version) {
+		t.Fatalf("review threads = %+v, want version %d", reviewThreads, version)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: detail.HeadSHA,
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].WorkflowName != fmt.Sprintf("workflow-v%d", version) {
+		t.Fatalf("workflow runs = %+v, want version %d", runs, version)
+	}
+	return thread, detail
+}
+
 func TestSyncDelayedObservationCannotOverwriteNewerHydration(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -1377,7 +2036,13 @@ func TestPullRequestDetailsUseFetchTimestampWhenPersistedLater(t *testing.T) {
 		t.Fatalf("fetch details: %v", err)
 	}
 	s.now = func() time.Time { return mustTime(t, persistTime) }
-	if _, err := s.persistPullRequestDetails(ctx, st, thread, rows); err != nil {
+	if _, err := s.persistPullRequestDetails(ctx, st, thread, rows, store.PullRequestHydrationFamilies{
+		Details:      true,
+		Files:        true,
+		Commits:      true,
+		Checks:       true,
+		WorkflowRuns: true,
+	}); err != nil {
 		t.Fatalf("persist details: %v", err)
 	}
 
