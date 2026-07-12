@@ -89,6 +89,7 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 		where t.repo_id = ?
 			and (? != 0 or (t.state = 'open' and t.closed_at_local is null))
 			and (? is null or t.number = ?)
+			and d.thread_id is not null
 			and julianday(coalesce(nullif(lr.source_updated_at, ''), lr.created_at)) >=
 				julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc

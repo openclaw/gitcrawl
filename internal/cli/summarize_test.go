@@ -208,6 +208,16 @@ func TestSummarizeCommandRecordsPartialAPIResults(t *testing.T) {
 			t.Fatalf("thread %d: %v", number, err)
 		}
 		thread.ID = threadID
+		if _, err := st.UpsertDocument(ctx, store.Document{
+			ThreadID:   threadID,
+			Title:      thread.Title,
+			Body:       thread.Body,
+			RawText:    thread.Title + "\n\n" + thread.Body,
+			DedupeText: thread.Title + " " + thread.Body,
+			UpdatedAt:  thread.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("document %d: %v", number, err)
+		}
 		if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, store.ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z"); err != nil {
 			t.Fatalf("enrichment %d: %v", number, err)
 		}

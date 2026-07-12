@@ -278,3 +278,43 @@ func TestSummaryTasksValidateAndBoundStoredEvidence(t *testing.T) {
 		t.Fatalf("closed upsert error = %v", err)
 	}
 }
+
+func TestListSummaryTasksRequiresFullDocumentEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "10", Number: 10, Kind: "issue", State: "open",
+		Title: "Portable excerpt", Body: "This body is not the full hydrated document.",
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/issues/10",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z", UpdatedAt: "2026-07-12T00:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z"); err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	tasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: repoID, Provider: "openai", Model: "summary-test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("list summary tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("portable body fallback must not replace full-evidence summary: %+v", tasks)
+	}
+}
