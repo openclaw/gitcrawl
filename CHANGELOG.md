@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Select the latest thread revision by lossless RFC3339Nano source time plus a durable pre-fetch observation sequence, so delayed stale hydration cannot hide summaries, embeddings, or archive coverage while legitimate same-clock state reversions remain visible.
+- Order canonical threads and revision evidence by lossless RFC3339Nano source time plus a durable pre-fetch observation sequence, skipping an entire delayed hydration payload before it can overwrite comments, PR details, documents, or evidence. Missing source clocks use the sequence, conflicting malformed clocks fail closed, and pre-v7 portable archives remain readable without mutation.
 
 ## 0.7.1 - 2026-07-09
 

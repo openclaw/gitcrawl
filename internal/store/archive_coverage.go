@@ -366,9 +366,10 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 		return EnrichmentCoverageMetric{}, nil
 	}
 	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
+	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
 	rows, err := s.q().QueryContext(ctx, `
 		select case when tr.id is null then 0 else 1 end,
-			coalesce(nullif(tr.source_updated_at, ''), tr.created_at, ''),
+			coalesce(nullif(tr.source_updated_at, ''), ''),
 			coalesce(tr.created_at, ''),
 			`+threadUpdatedAt+`
 		from threads t
@@ -376,9 +377,7 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 				select latest.id
 					from thread_revisions latest
 					where latest.thread_id = t.id
-					order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
-						latest.observation_sequence desc,
-						latest.id desc
+					order by `+revisionOrder+`
 				limit 1
 			)
 		where t.repo_id = ?
@@ -435,10 +434,11 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 		args = append(args, conditionValue)
 	}
 	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
+	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
 	args = append(args, repoID)
 	rows, err := s.q().QueryContext(ctx, `
 		select case when child.id is null then 0 else 1 end,
-			coalesce(nullif(tr.source_updated_at, ''), tr.created_at, ''),
+			coalesce(nullif(tr.source_updated_at, ''), ''),
 			coalesce(child.created_at, ''),
 			`+threadUpdatedAt+`
 		from threads t
@@ -446,9 +446,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 				select latest.id
 					from thread_revisions latest
 					where latest.thread_id = t.id
-					order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
-						latest.observation_sequence desc,
-						latest.id desc
+					order by `+revisionOrder+`
 				limit 1
 			)
 		left join `+tableName+` child on child.id = (

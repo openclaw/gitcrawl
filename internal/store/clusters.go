@@ -1551,6 +1551,7 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 		}
 	}
 	if s.hasTable(ctx, "thread_key_summaries") && s.hasTable(ctx, "thread_revisions") {
+		revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
 		rows, err := s.db.QueryContext(ctx, `
 			select tr.thread_id, tks.summary_kind, tks.key_text
 			from thread_key_summaries tks
@@ -1561,12 +1562,10 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 					select latest.id
 						from thread_revisions latest
 						where latest.thread_id = tr.thread_id
-						order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
-							latest.observation_sequence desc,
-							latest.id desc
+						order by `+revisionOrder+`
 					limit 1
 				)
-				and gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+				and gitcrawl_timestamp_key(nullif(tr.source_updated_at, '')) >=
 					gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 			order by tr.thread_id, tks.summary_kind, tks.created_at desc
 		`, args...)

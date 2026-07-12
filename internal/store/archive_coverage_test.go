@@ -396,17 +396,18 @@ func seedArchiveCoverageRows(t *testing.T, ctx context.Context, st *Store) (int6
 
 func archiveCoverageThread(repoID int64, number int, kind string) Thread {
 	return Thread{
-		RepoID:        repoID,
-		GitHubID:      fmt.Sprintf("gid-%d", number),
-		Number:        number,
-		Kind:          kind,
-		State:         "open",
-		Title:         "thread",
-		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/gitcrawl/issues/%d", number),
-		LabelsJSON:    "[]",
-		AssigneesJSON: "[]",
-		RawJSON:       "{}",
-		ContentHash:   fmt.Sprintf("hash-%d", number),
-		UpdatedAt:     "2026-07-06T00:00:00Z",
+		RepoID:          repoID,
+		GitHubID:        fmt.Sprintf("gid-%d", number),
+		Number:          number,
+		Kind:            kind,
+		State:           "open",
+		Title:           "thread",
+		HTMLURL:         fmt.Sprintf("https://github.com/openclaw/gitcrawl/issues/%d", number),
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     fmt.Sprintf("hash-%d", number),
+		UpdatedAtGitHub: "2026-07-06T00:00:00Z",
+		UpdatedAt:       "2026-07-06T00:00:00Z",
 	}
 }
