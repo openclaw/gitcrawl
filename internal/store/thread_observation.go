@@ -224,7 +224,7 @@ func (s *Store) ReserveWorkflowRunObservation(
 			return false, nil
 		}
 		if order == 0 {
-			return true, nil
+			return false, nil
 		}
 	}
 	if _, err := s.q().ExecContext(ctx, `

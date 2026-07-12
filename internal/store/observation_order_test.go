@@ -325,7 +325,7 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 		},
 		{
 			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
-			sequence: 3, want: true,
+			sequence: 3, want: false,
 		},
 		{
 			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:01:00Z",
