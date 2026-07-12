@@ -892,7 +892,6 @@ func testSnapshotPublishContract() crawlremote.Contract {
 		Capabilities: []string{
 			gitcrawlSnapshotAtomicCapability,
 			gitcrawlSnapshotCutoverCapability,
-			gitcrawlSnapshotHydrationCapability,
 			gitcrawlSnapshotProvenanceCapability,
 			sqliteBundleGzipUploadCapability,
 		},
@@ -1353,10 +1352,6 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 		{
 			name:              "cutover",
 			missingCapability: gitcrawlSnapshotCutoverCapability,
-		},
-		{
-			name:              "bound snapshot hydration",
-			missingCapability: gitcrawlSnapshotHydrationCapability,
 		},
 	}
 	for _, test := range tests {
