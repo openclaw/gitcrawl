@@ -384,11 +384,23 @@ func TestUpsertThreadRevisionPreservesTransitionsAndDeduplicatesObservations(t *
 }
 
 func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T) {
-	for _, sourceUpdatedAt := range []string{
-		"2026-07-12T12:00:00.000000001Z",
-		"invalid-observation-time",
+	for _, test := range []struct {
+		name                    string
+		initialSourceUpdatedAt  string
+		repeatedSourceUpdatedAt string
+	}{
+		{
+			name:                    "equivalent RFC3339 encodings",
+			initialSourceUpdatedAt:  "2026-07-12T12:00:00.000000001Z",
+			repeatedSourceUpdatedAt: "2026-07-12T13:00:00.000000001+01:00",
+		},
+		{
+			name:                    "identical invalid clock",
+			initialSourceUpdatedAt:  "invalid-observation-time",
+			repeatedSourceUpdatedAt: "invalid-observation-time",
+		},
 	} {
-		t.Run(sourceUpdatedAt, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 			if err != nil {
@@ -407,7 +419,7 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 				RepoID: repoID, GitHubID: "10", Number: 10, Kind: "issue", State: "open",
 				Title: "state A", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/10",
 				LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
-				UpdatedAtGitHub: sourceUpdatedAt, UpdatedAt: sourceUpdatedAt,
+				UpdatedAtGitHub: test.initialSourceUpdatedAt, UpdatedAt: test.initialSourceUpdatedAt,
 			}
 			thread.ID, err = st.UpsertThread(ctx, thread)
 			if err != nil {
@@ -424,6 +436,8 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 				t.Fatalf("current B: %v", err)
 			}
 			thread.Title = "state A"
+			thread.UpdatedAtGitHub = test.repeatedSourceUpdatedAt
+			thread.UpdatedAt = test.repeatedSourceUpdatedAt
 			repeatedA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:00:03Z")
 			if err != nil {
 				t.Fatalf("repeated A: %v", err)

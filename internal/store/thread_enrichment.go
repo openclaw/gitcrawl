@@ -185,15 +185,23 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
 	}
 	var observedID int64
-	observedErr := s.q().QueryRowContext(ctx, `
+	observedSourceUpdatedAt := strings.TrimSpace(revision.SourceUpdatedAt)
+	observedTimestampKey, observedTimestampValid := timestampOrderKey(observedSourceUpdatedAt)
+	observedTimestampCondition := "coalesce(source_updated_at, '') = ?"
+	observedTimestampValue := observedSourceUpdatedAt
+	if observedTimestampValid {
+		observedTimestampCondition = "gitcrawl_timestamp_key(coalesce(source_updated_at, '')) = ?"
+		observedTimestampValue = observedTimestampKey
+	}
+	observedErr := s.q().QueryRowContext(ctx, fmt.Sprintf(`
 		select id
 		from thread_revisions
 		where thread_id = ?
 			and content_hash = ?
-			and coalesce(source_updated_at, '') = ?
+			and %s
 		order by id desc
 		limit 1
-	`, revision.ThreadID, revision.ContentHash, revision.SourceUpdatedAt).Scan(&observedID)
+	`, observedTimestampCondition), revision.ThreadID, revision.ContentHash, observedTimestampValue).Scan(&observedID)
 	if observedErr != nil && observedErr != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read matching thread revision observation: %w", observedErr)
 	}
