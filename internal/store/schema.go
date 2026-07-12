@@ -82,8 +82,7 @@ create table if not exists thread_revisions (
   body_hash text not null,
   labels_hash text not null,
   raw_json_blob_id integer references blobs(id) on delete set null,
-  created_at text not null,
-  unique(thread_id, content_hash)
+  created_at text not null
 );
 
 create table if not exists thread_code_snapshots (

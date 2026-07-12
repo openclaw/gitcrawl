@@ -93,6 +93,23 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 		t.Fatalf("changed result = %+v", third)
 	}
 
+	evidence.ReviewThreads[0].IsResolved = false
+	reverted, err := st.UpsertThreadRevisionAndFingerprint(ctx, evidence, "2026-07-12T00:05:00Z")
+	if err != nil {
+		t.Fatalf("reverted enrichment: %v", err)
+	}
+	if !reverted.RevisionCreated || !reverted.FingerprintUpserted ||
+		reverted.RevisionID == first.RevisionID || reverted.RevisionID == third.RevisionID {
+		t.Fatalf("reverted result = %+v, first = %+v, changed = %+v", reverted, first, third)
+	}
+	repeated, err := st.UpsertThreadRevisionAndFingerprint(ctx, evidence, "2026-07-12T00:06:00Z")
+	if err != nil {
+		t.Fatalf("repeated reverted enrichment: %v", err)
+	}
+	if repeated.RevisionID != reverted.RevisionID || repeated.RevisionCreated || repeated.FingerprintUpserted {
+		t.Fatalf("repeated reverted result = %+v, reverted = %+v", repeated, reverted)
+	}
+
 	var revisions, fingerprints int
 	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_revisions where thread_id = ?`, thread.ID).Scan(&revisions); err != nil {
 		t.Fatalf("revision count: %v", err)
@@ -105,7 +122,7 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 	`, thread.ID, ThreadFingerprintAlgorithmVersion).Scan(&fingerprints); err != nil {
 		t.Fatalf("fingerprint count: %v", err)
 	}
-	if revisions != 2 || fingerprints != 2 {
+	if revisions != 3 || fingerprints != 3 {
 		t.Fatalf("revision/fingerprint counts = %d/%d", revisions, fingerprints)
 	}
 	var slug, algorithm string
@@ -113,7 +130,7 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 		select fingerprint_slug, algorithm_version
 		from thread_fingerprints
 		where thread_revision_id = ?
-	`, third.RevisionID).Scan(&slug, &algorithm); err != nil {
+	`, reverted.RevisionID).Scan(&slug, &algorithm); err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
 	if algorithm != ThreadFingerprintAlgorithmVersion || len(strings.Split(slug, "-")) != 4 {

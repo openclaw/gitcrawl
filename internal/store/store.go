@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 5
+	schemaVersion = 6
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -251,6 +251,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensurePullRequestFilesPositionKey(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureThreadRevisionTransitionHistory(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
@@ -399,6 +402,126 @@ func (s *Store) pullRequestFilesHavePositionKey(ctx context.Context) bool {
 		}
 	}
 	return pk["thread_id"] == 1 && pk["position"] == 2
+}
+
+func (s *Store) ensureThreadRevisionTransitionHistory(ctx context.Context) error {
+	if !s.hasTable(ctx, "thread_revisions") || !s.threadRevisionsHaveUniqueContentHash(ctx) {
+		return nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open thread revision migration connection: %w", err)
+	}
+	defer conn.Close()
+
+	var foreignKeys int
+	if err := conn.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("read foreign key mode: %w", err)
+	}
+	if foreignKeys != 0 {
+		if _, err := conn.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+			return fmt.Errorf("disable foreign keys for thread revision migration: %w", err)
+		}
+		defer conn.ExecContext(context.Background(), `pragma foreign_keys = on`)
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin thread revision transition migration: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`drop table if exists thread_revisions_new`,
+		`create table thread_revisions_new (
+			id integer primary key,
+			thread_id integer not null references threads(id) on delete cascade,
+			source_updated_at text,
+			content_hash text not null,
+			title_hash text not null,
+			body_hash text not null,
+			labels_hash text not null,
+			raw_json_blob_id integer references blobs(id) on delete set null,
+			created_at text not null
+		)`,
+		`insert into thread_revisions_new(
+			id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, raw_json_blob_id, created_at
+		)
+		select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, raw_json_blob_id, created_at
+		from thread_revisions`,
+		`drop table thread_revisions`,
+		`alter table thread_revisions_new rename to thread_revisions`,
+		`create index if not exists idx_thread_revisions_thread_created on thread_revisions(thread_id, created_at)`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate thread revision transitions: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit thread revision transition migration: %w", err)
+	}
+	if foreignKeys != 0 {
+		if _, err := conn.ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
+			return fmt.Errorf("restore foreign keys after thread revision migration: %w", err)
+		}
+	}
+	rows, err := conn.QueryContext(ctx, `pragma foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("check thread revision migration foreign keys: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return fmt.Errorf("thread revision migration introduced foreign key violations")
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read thread revision migration foreign key check: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) threadRevisionsHaveUniqueContentHash(ctx context.Context) bool {
+	rows, err := s.q().QueryContext(ctx, `pragma index_list("thread_revisions")`)
+	if err != nil {
+		return false
+	}
+	var uniqueIndexes []string
+	for rows.Next() {
+		var sequence, unique, partial int
+		var name, origin string
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			_ = rows.Close()
+			return false
+		}
+		if unique != 0 {
+			uniqueIndexes = append(uniqueIndexes, name)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return false
+	}
+	for _, index := range uniqueIndexes {
+		indexRows, err := s.q().QueryContext(ctx, `pragma index_info(`+sqliteIdentifier(index)+`)`)
+		if err != nil {
+			continue
+		}
+		var columns []string
+		for indexRows.Next() {
+			var sequence, columnID int
+			var name sql.NullString
+			if err := indexRows.Scan(&sequence, &columnID, &name); err != nil {
+				_ = indexRows.Close()
+				columns = nil
+				break
+			}
+			columns = append(columns, name.String)
+		}
+		_ = indexRows.Close()
+		if len(columns) == 2 && columns[0] == "thread_id" && columns[1] == "content_hash" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) threadVectorsHaveCompositeKey(ctx context.Context) bool {

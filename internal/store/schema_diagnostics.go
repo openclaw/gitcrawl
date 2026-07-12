@@ -148,6 +148,9 @@ func pendingCompatibilityMigrations(ctx context.Context, st *Store, current int,
 	if st.hasTable(ctx, "thread_vectors") && !st.threadVectorsHaveCompositeKey(ctx) {
 		pending = append(pending, "thread_vectors_composite_key")
 	}
+	if st.hasTable(ctx, "thread_revisions") && st.threadRevisionsHaveUniqueContentHash(ctx) {
+		pending = append(pending, "thread_revisions_transition_history")
+	}
 	if current > 0 && current <= schemaVersion {
 		if !prDetails.DetailsTable {
 			pending = append(pending, "pull_request_details_table")

@@ -139,23 +139,35 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		createdAt = time.Now().UTC().Format(timeLayout)
 	}
 	revision, fingerprint := buildThreadEnrichment(evidence, createdAt)
-	insert, err := s.q().ExecContext(ctx, `
-		insert into thread_revisions(
-			thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at
-		)
-		values(?, ?, ?, ?, ?, ?, ?)
-		on conflict(thread_id, content_hash) do nothing
-	`, revision.ThreadID, nullString(revision.SourceUpdatedAt), revision.ContentHash, revision.TitleHash, revision.BodyHash, revision.LabelsHash, revision.CreatedAt)
-	if err != nil {
-		return ThreadEnrichmentResult{}, fmt.Errorf("insert thread revision: %w", err)
-	}
-	created := rowsAffected(insert) > 0
-	if err := s.q().QueryRowContext(ctx, `
-		select id
+	var latestID int64
+	var latestHash string
+	err := s.q().QueryRowContext(ctx, `
+		select id, content_hash
 		from thread_revisions
-		where thread_id = ? and content_hash = ?
-	`, revision.ThreadID, revision.ContentHash).Scan(&revision.ID); err != nil {
-		return ThreadEnrichmentResult{}, fmt.Errorf("read thread revision: %w", err)
+		where thread_id = ?
+		order by id desc
+		limit 1
+	`, revision.ThreadID).Scan(&latestID, &latestHash)
+	if err != nil && err != sql.ErrNoRows {
+		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
+	}
+	created := err == sql.ErrNoRows || latestHash != revision.ContentHash
+	if created {
+		insert, err := s.q().ExecContext(ctx, `
+			insert into thread_revisions(
+				thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at
+			)
+			values(?, ?, ?, ?, ?, ?, ?)
+		`, revision.ThreadID, nullString(revision.SourceUpdatedAt), revision.ContentHash, revision.TitleHash, revision.BodyHash, revision.LabelsHash, revision.CreatedAt)
+		if err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("insert thread revision: %w", err)
+		}
+		revision.ID, err = insert.LastInsertId()
+		if err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("read inserted thread revision id: %w", err)
+		}
+	} else {
+		revision.ID = latestID
 	}
 	fingerprint.ThreadRevisionID = revision.ID
 

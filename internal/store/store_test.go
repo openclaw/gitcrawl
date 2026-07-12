@@ -153,6 +153,145 @@ func TestOpenMigratesAuthorAssociationFromVersionFour(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesThreadRevisionTransitionHistoryFromVersionFive(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID:        repoID,
+		GitHubID:      "101",
+		Number:        101,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "revision migration",
+		HTMLURL:       "https://github.com/openclaw/gitcrawl/issues/101",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "thread",
+		UpdatedAt:     "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	result, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: Thread{
+		ID:            threadID,
+		RepoID:        repoID,
+		Number:        101,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "revision migration",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		UpdatedAt:     "2026-07-12T00:00:00Z",
+	}}, "2026-07-12T00:01:00Z")
+	if err != nil {
+		t.Fatalf("thread enrichment: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	tx, err := raw.BeginTx(ctx, nil)
+	if err != nil {
+		_ = raw.Close()
+		t.Fatalf("begin legacy schema fixture: %v", err)
+	}
+	for _, stmt := range []string{
+		`create table thread_revisions_legacy (
+			id integer primary key,
+			thread_id integer not null references threads(id) on delete cascade,
+			source_updated_at text,
+			content_hash text not null,
+			title_hash text not null,
+			body_hash text not null,
+			labels_hash text not null,
+			raw_json_blob_id integer references blobs(id) on delete set null,
+			created_at text not null,
+			unique(thread_id, content_hash)
+		)`,
+		`insert into thread_revisions_legacy
+			select * from thread_revisions`,
+		`drop table thread_revisions`,
+		`alter table thread_revisions_legacy rename to thread_revisions`,
+		`pragma user_version = 5`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			_ = tx.Rollback()
+			_ = raw.Close()
+			t.Fatalf("build legacy schema fixture: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		_ = raw.Close()
+		t.Fatalf("commit legacy schema fixture: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	if st.threadRevisionsHaveUniqueContentHash(ctx) {
+		t.Fatal("legacy thread revision uniqueness was not removed")
+	}
+	var version, fingerprints int
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version: got %d want %d", version, schemaVersion)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_fingerprints where thread_revision_id = ?`, result.RevisionID).Scan(&fingerprints); err != nil {
+		t.Fatalf("read preserved fingerprint: %v", err)
+	}
+	if fingerprints != 1 {
+		t.Fatalf("preserved fingerprints = %d, want 1", fingerprints)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(
+			thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, '2026-07-12T00:02:00Z'
+		from thread_revisions
+		where id = ?
+	`, result.RevisionID); err != nil {
+		t.Fatalf("insert repeated content hash after migration: %v", err)
+	}
+	rows, err := st.DB().QueryContext(ctx, `pragma foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign key check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("migration left a foreign key violation")
+	}
+}
+
 func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
@@ -226,7 +365,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_5") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_6") {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -259,7 +398,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 5;
+		pragma user_version = 6;
 	`)
 	if err != nil {
 		_ = db.Close()
@@ -365,7 +504,7 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_5") || !containsString(diag.PendingMigrations, "pull_request_files_position_key") {
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_6") || !containsString(diag.PendingMigrations, "pull_request_files_position_key") {
 		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
 	}
 	if len(diag.NextSteps) == 0 {

@@ -309,7 +309,7 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 			select latest.id
 			from thread_revisions latest
 			where latest.thread_id = t.id
-			order by latest.created_at desc, latest.id desc
+			order by latest.id desc
 			limit 1
 		)
 		where t.repo_id = ?
@@ -368,7 +368,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 			select latest.id
 			from thread_revisions latest
 			where latest.thread_id = t.id
-			order by latest.created_at desc, latest.id desc
+			order by latest.id desc
 			limit 1
 		)
 		left join `+tableName+` child on child.`+revisionColumnName+` = tr.id and `+condition+`
