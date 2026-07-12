@@ -185,24 +185,25 @@ type closedSweepGitHub struct {
 	fakeGitHub
 }
 
-func (closedSweepGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
+func (f closedSweepGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
 	if options.State == "closed" {
 		return []map[string]any{{
-			"id":         1,
-			"number":     7,
-			"state":      "closed",
-			"title":      "download stalls",
-			"body":       "large file download stalls",
-			"html_url":   "https://github.com/openclaw/gitcrawl/issues/7",
-			"created_at": "2026-04-26T00:00:00Z",
-			"updated_at": "2026-04-27T00:00:00Z",
-			"closed_at":  "2026-04-27T00:00:00Z",
-			"labels":     []map[string]any{{"name": "bug"}},
-			"assignees":  []map[string]any{},
-			"user":       map[string]any{"login": "vincentkoc", "type": "User"},
+			"id":           2,
+			"number":       8,
+			"state":        "closed",
+			"title":        "fix sync",
+			"body":         "",
+			"html_url":     "https://github.com/openclaw/gitcrawl/pull/8",
+			"created_at":   "2026-04-26T00:00:00Z",
+			"updated_at":   "2026-04-27T00:00:00Z",
+			"closed_at":    "2026-04-27T00:00:00Z",
+			"labels":       []map[string]any{},
+			"assignees":    []map[string]any{},
+			"user":         map[string]any{"login": "vincentkoc", "type": "User"},
+			"pull_request": map[string]any{"url": "https://api.github.com/repos/openclaw/gitcrawl/pulls/8"},
 		}}, nil
 	}
-	return nil, nil
+	return f.fakeGitHub.ListRepositoryIssues(ctx, owner, repo, options, reporter)
 }
 
 type targetedGitHub struct {
@@ -983,13 +984,12 @@ func TestSyncOpenSinceAppliesClosedOverlapSweep(t *testing.T) {
 	}
 	if _, err := st.UpsertThread(ctx, store.Thread{
 		RepoID:          repoID,
-		GitHubID:        "1",
-		Number:          7,
-		Kind:            "issue",
+		GitHubID:        "2",
+		Number:          8,
+		Kind:            "pull_request",
 		State:           "open",
-		Title:           "download stalls",
-		Body:            "large file download stalls",
-		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/7",
+		Title:           "fix sync",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/pull/8",
 		LabelsJSON:      "[]",
 		AssigneesJSON:   "[]",
 		RawJSON:         "{}",
@@ -1005,18 +1005,36 @@ func TestSyncOpenSinceAppliesClosedOverlapSweep(t *testing.T) {
 
 	s := New(closedSweepGitHub{}, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 27, 1, 0, 0, 0, time.UTC) }
-	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "1h"})
+	stats, err := s.Sync(ctx, Options{
+		Owner:            "openclaw",
+		Repo:             "gitcrawl",
+		Since:            "1h",
+		IncludeComments:  true,
+		IncludePRDetails: true,
+	})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stats.ThreadsClosed != 1 {
 		t.Fatalf("threads closed = %d, want 1", stats.ThreadsClosed)
 	}
+	if stats.ThreadsSynced != 2 || stats.IssuesSynced != 1 || stats.PullRequestsSynced != 1 {
+		t.Fatalf("overlap threads were not included in sync denominators: %#v", stats)
+	}
+	if stats.PRDetailsSynced != 1 || stats.RevisionsCreated != 2 || stats.FingerprintsUpserted != 2 {
+		t.Fatalf("overlap threads were not fully hydrated: %#v", stats)
+	}
 	threads, err := st.ListThreads(ctx, repoID, true)
 	if err != nil {
 		t.Fatalf("threads: %v", err)
 	}
-	if len(threads) != 1 || threads[0].State != "closed" || threads[0].ClosedAtGitHub == "" {
+	var closedPull *store.Thread
+	for index := range threads {
+		if threads[index].Number == 8 {
+			closedPull = &threads[index]
+		}
+	}
+	if len(threads) != 2 || closedPull == nil || closedPull.State != "closed" || closedPull.ClosedAtGitHub == "" {
 		t.Fatalf("thread not closed from overlap sweep: %#v", threads)
 	}
 }

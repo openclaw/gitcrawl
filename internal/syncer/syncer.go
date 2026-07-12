@@ -145,6 +145,16 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 	}
 
+	var closedOverlapRows []map[string]any
+	needsClosedOverlap := len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0
+	if needsClosedOverlap {
+		closedOverlapRows, err = s.fetchClosedOverlapRows(ctx, options, since)
+		if err != nil {
+			return Stats{}, err
+		}
+		rows = mergeIssueRows(rows, closedOverlapRows)
+	}
+
 	payloads := make([]threadSyncPayload, 0, len(rows))
 	for _, row := range rows {
 		payload := threadSyncPayload{row: row}
@@ -173,16 +183,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		payloads = append(payloads, payload)
 	}
-	var closedOverlapRows []map[string]any
-	needsClosedOverlap := len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0
-	if needsClosedOverlap {
-		var err error
-		closedOverlapRows, err = s.fetchClosedOverlapRows(ctx, options, since)
-		if err != nil {
-			return Stats{}, err
-		}
-	}
-
 	stats := Stats{
 		Repository:     options.Owner + "/" + options.Repo,
 		RequestedSince: since,
@@ -213,6 +213,13 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		})
 		if err != nil {
 			return err
+		}
+		if needsClosedOverlap {
+			closed, err := s.applyClosedOverlapRows(ctx, st, repoID, closedOverlapRows, options.Reporter)
+			if err != nil {
+				return err
+			}
+			attempt.ThreadsClosed = closed
 		}
 		for _, payload := range payloads {
 			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
@@ -292,13 +299,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				"thread_state", thread.State,
 			)
 		}
-		if needsClosedOverlap {
-			closed, err := s.applyClosedOverlapRows(ctx, st, repoID, closedOverlapRows, options.Reporter)
-			if err != nil {
-				return err
-			}
-			attempt.ThreadsClosed = closed
-		}
 		attempt.FinishedAt = s.now().Format(time.RFC3339Nano)
 		runStats := stats
 		applySyncPersistStats(&runStats, attempt)
@@ -359,6 +359,27 @@ func uniquePositiveNumbers(numbers []int) []int {
 		out = append(out, number)
 	}
 	return out
+}
+
+func mergeIssueRows(primary, overlap []map[string]any) []map[string]any {
+	if len(overlap) == 0 {
+		return primary
+	}
+	merged := append(make([]map[string]any, 0, len(primary)+len(overlap)), primary...)
+	indexByNumber := make(map[int]int, len(merged))
+	for index, row := range merged {
+		indexByNumber[intValue(row["number"])] = index
+	}
+	for _, row := range overlap {
+		number := intValue(row["number"])
+		if index, ok := indexByNumber[number]; ok {
+			merged[index] = row
+			continue
+		}
+		indexByNumber[number] = len(merged)
+		merged = append(merged, row)
+	}
+	return merged
 }
 
 func syncRunScope(state string, numbers []int) string {
