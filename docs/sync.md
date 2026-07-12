@@ -25,10 +25,16 @@ A sync writes:
 
 - `repositories` — repo metadata
 - `threads` — issues and PRs (titles, bodies, authors, author association, labels, state, timestamps)
-- `thread_revisions` — immutable revisions when canonical thread or review evidence changes
-- `thread_fingerprints` — one deterministic `thread-fingerprint-v2` row for each revision
+- `thread_revisions` — immutable revisions when fully hydrated canonical thread or review evidence changes
+- `thread_fingerprints` — one deterministic `thread-fingerprint-v2` row for each persisted revision
 - `documents` — canonical thread documents (when bodies change)
 - `run_records` — sync run statistics
+
+Revision and fingerprint production fails closed on incomplete evidence. Issues require
+`--include-comments`; pull requests require both `--include-comments` and
+`--include-pr-details` (or `--with pr-details`). Without that hydration, sync still
+updates the thread and document rows but intentionally does not create a revision that
+could appear complete while omitting discussion, review, file, commit, or check evidence.
 
 ## State filters
 
