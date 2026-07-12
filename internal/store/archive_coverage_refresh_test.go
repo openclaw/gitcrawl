@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestArchiveCoverageChildFreshnessUsesRevisionObservation(t *testing.T) {
+func TestArchiveCoverageFreshnessUsesSuccessfulRefreshRuns(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -63,7 +63,7 @@ func TestArchiveCoverageChildFreshnessUsesRevisionObservation(t *testing.T) {
 		t.Fatalf("summary: %v", err)
 	}
 
-	thread.UpdatedAtGitHub = "2026-07-13T00:00:00Z"
+	thread.LastPulledAt = "2026-07-13T00:00:00Z"
 	thread.UpdatedAt = "2026-07-13T00:00:00Z"
 	if _, err := st.UpsertThread(ctx, thread); err != nil {
 		t.Fatalf("refresh thread: %v", err)
@@ -75,6 +75,36 @@ func TestArchiveCoverageChildFreshnessUsesRevisionObservation(t *testing.T) {
 	if refreshed.RevisionCreated || refreshed.RevisionID != enrichment.RevisionID {
 		t.Fatalf("unchanged evidence created a revision: initial=%+v refreshed=%+v", enrichment, refreshed)
 	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID:     repoID,
+		Kind:       "sync",
+		Scope:      "open",
+		Status:     "success",
+		StartedAt:  "2026-07-13T00:00:00Z",
+		FinishedAt: "2026-07-13T00:01:00Z",
+	}); err != nil {
+		t.Fatalf("sync run: %v", err)
+	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID:     repoID,
+		Kind:       "summary",
+		Scope:      "repo",
+		Status:     "success",
+		StartedAt:  "2026-07-13T00:01:00Z",
+		FinishedAt: "2026-07-13T00:02:00Z",
+	}); err != nil {
+		t.Fatalf("summary run: %v", err)
+	}
+	if _, err := st.RecordRun(ctx, RunRecord{
+		RepoID:     repoID,
+		Kind:       "summary",
+		Scope:      "repo",
+		Status:     "error",
+		StartedAt:  "2026-07-13T00:03:00Z",
+		FinishedAt: "2026-07-13T00:04:00Z",
+	}); err != nil {
+		t.Fatalf("failed summary run: %v", err)
+	}
 
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
 	if err != nil {
@@ -83,13 +113,14 @@ func TestArchiveCoverageChildFreshnessUsesRevisionObservation(t *testing.T) {
 	if len(coverage.Rows) != 1 {
 		t.Fatalf("coverage rows = %d", len(coverage.Rows))
 	}
-	for name, metric := range map[string]EnrichmentCoverageMetric{
-		"fingerprints": coverage.Rows[0].Enrichment.Fingerprints,
-		"summaries":    coverage.Rows[0].Enrichment.Summaries,
-	} {
-		if metric.Fresh != 1 || metric.LatestAt != "2026-07-13T00:00:00.000000000Z" {
-			t.Fatalf("%s coverage = %+v", name, metric)
-		}
+	if metric := coverage.Rows[0].Enrichment.Revisions; metric.Fresh != 1 || metric.LatestAt != "2026-07-13T00:01:00.000000000Z" {
+		t.Fatalf("revision coverage = %+v", metric)
+	}
+	if metric := coverage.Rows[0].Enrichment.Fingerprints; metric.Fresh != 1 || metric.LatestAt != "2026-07-13T00:01:00.000000000Z" {
+		t.Fatalf("fingerprint coverage = %+v", metric)
+	}
+	if metric := coverage.Rows[0].Enrichment.Summaries; metric.Fresh != 1 || metric.LatestAt != "2026-07-13T00:02:00.000000000Z" {
+		t.Fatalf("summary coverage = %+v", metric)
 	}
 }
 

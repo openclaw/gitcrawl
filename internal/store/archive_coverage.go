@@ -291,7 +291,44 @@ func (s *Store) archiveEnrichmentCoverage(ctx context.Context, repoID int64) (En
 	if err != nil {
 		return EnrichmentCoverage{}, err
 	}
+	syncObservedAt, ok, err := s.archiveLatestSuccessfulRunAt(ctx, repoID, "sync_runs")
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	if ok {
+		coverage.Revisions.LatestAt = formatArchiveCoverageTimestamp(syncObservedAt)
+		coverage.Fingerprints.LatestAt = formatArchiveCoverageTimestamp(syncObservedAt)
+	}
+	summaryObservedAt, ok, err := s.archiveLatestSuccessfulRunAt(ctx, repoID, "summary_runs")
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
+	if ok {
+		coverage.Summaries.LatestAt = formatArchiveCoverageTimestamp(summaryObservedAt)
+	}
 	return coverage, nil
+}
+
+func (s *Store) archiveLatestSuccessfulRunAt(ctx context.Context, repoID int64, table string) (time.Time, bool, error) {
+	if !s.archiveCoverageHasColumns(ctx, table, "repo_id", "status", "finished_at") {
+		return time.Time{}, false, nil
+	}
+	var value sql.NullString
+	if err := s.q().QueryRowContext(ctx, `
+		select max(finished_at)
+		from `+sqliteIdentifier(table)+`
+		where repo_id = ? and status in ('success', 'completed')
+	`, repoID).Scan(&value); err != nil {
+		return time.Time{}, false, fmt.Errorf("read latest successful %s observation: %w", table, err)
+	}
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, ok := parseArchiveCoverageTimestamp(value.String)
+	if !ok {
+		return time.Time{}, false, fmt.Errorf("latest successful %s observation is invalid: %q", table, value.String)
+	}
+	return parsed, true, nil
 }
 
 func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (EnrichmentCoverageMetric, error) {
