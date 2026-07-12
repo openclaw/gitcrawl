@@ -919,7 +919,7 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 			CoverageComplete: false,
 		},
 	}
-	if !gitcrawlPublisherStatusMatches(status, manifest, false) {
+	if !gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("exact staged snapshot did not match")
 	}
 
@@ -927,7 +927,7 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	sourceMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
 	*sourceMismatch.Snapshot = *status.Snapshot
 	sourceMismatch.Snapshot.SourceSHA256 = strings.Repeat("b", 64)
-	if gitcrawlPublisherStatusMatches(sourceMismatch, manifest, false) {
+	if gitcrawlPublisherStatusMatches(sourceMismatch, manifest) {
 		t.Fatal("source digest mismatch was reused")
 	}
 
@@ -935,39 +935,36 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	schemaMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
 	*schemaMismatch.Snapshot = *status.Snapshot
 	schemaMismatch.Snapshot.SchemaVersion++
-	if gitcrawlPublisherStatusMatches(schemaMismatch, manifest, false) {
+	if gitcrawlPublisherStatusMatches(schemaMismatch, manifest) {
 		t.Fatal("schema mismatch was reused")
 	}
 
 	status.CoverageComplete = false
-	if gitcrawlPublisherStatusMatches(status, manifest, false) {
-		t.Fatal("incomplete publisher status was reused without the escape hatch")
-	}
-	if !gitcrawlPublisherStatusMatches(status, manifest, true) {
-		t.Fatal("allow-incomplete did not resume an exact staged snapshot")
+	if gitcrawlPublisherStatusMatches(status, manifest) {
+		t.Fatal("incomplete publisher status was reused")
 	}
 	status.CoverageComplete = true
 
 	manifest.Capabilities = []string{gitcrawlObservationOrderCapability}
-	if gitcrawlPublisherStatusMatches(status, manifest, false) {
+	if gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("staged snapshot reused without snapshot capability proof")
 	}
 	status.Snapshot.Capabilities = []string{gitcrawlObservationOrderCapability}
-	if !gitcrawlPublisherStatusMatches(status, manifest, false) {
+	if !gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("staged snapshot with requested capability did not match")
 	}
 	status.Snapshot.Capabilities = []string{
 		gitcrawlObservationOrderCapability,
 		"gitcrawl.unrequested-profile.v1",
 	}
-	if gitcrawlPublisherStatusMatches(status, manifest, false) {
+	if gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("snapshot with a broader publication profile was reused")
 	}
 	status.Snapshot.Capabilities = []string{
 		gitcrawlObservationOrderCapability,
 		gitcrawlObservationOrderCapability,
 	}
-	if gitcrawlPublisherStatusMatches(status, manifest, false) {
+	if gitcrawlPublisherStatusMatches(status, manifest) {
 		t.Fatal("snapshot with duplicate publication capabilities was reused")
 	}
 }
@@ -1549,6 +1546,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	publisherStatusRequests := 0
 	readerStatusRequests := 0
 	cutovers := 0
+	publisherCoverageComplete := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
 			contract := testSnapshotPublishContract()
@@ -1590,7 +1588,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				App:              "gitcrawl",
 				Archive:          "gitcrawl/openclaw__openclaw",
 				ActiveSnapshotID: servingSnapshotID,
-				CoverageComplete: stagedSnapshot != nil,
+				CoverageComplete: publisherCoverageComplete,
 				Snapshot:         stagedSnapshot,
 			})
 			return
@@ -1672,6 +1670,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					Capabilities:     slices.Clone(body.Manifest.Capabilities),
 					CoverageComplete: false,
 				}
+				publisherCoverageComplete = true
 			}
 			_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
 				Table:         body.Table,
@@ -1720,8 +1719,9 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		"--json",
 	}
 	stageIngestRequests := 0
+	recoveryIngestRequests := 0
 	originalServingSnapshotID := servingSnapshotID
-	for index, extra := range [][]string{{"--stage-only"}, nil} {
+	for index, extra := range [][]string{{"--stage-only"}, {"--stage-only"}, nil} {
 		app := New()
 		var output bytes.Buffer
 		app.Stdout = &output
@@ -1750,19 +1750,36 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			if servingSnapshotID != originalServingSnapshotID {
 				t.Fatalf("stage-only changed serving snapshot to %q", servingSnapshotID)
 			}
+			publisherCoverageComplete = false
 		}
-		if index == 1 && result.Cutover == nil {
+		if index == 1 {
+			if result.AlreadyStaged {
+				t.Fatal("incomplete publisher status was reused")
+			}
+			if result.Cutover != nil {
+				t.Fatalf("recovery stage-only publish unexpectedly cut over: %#v", result.Cutover)
+			}
+			recoveryIngestRequests = ingestRequests
+			if recoveryIngestRequests <= stageIngestRequests {
+				t.Fatalf(
+					"incomplete publisher status did not resume ingest: before=%d after=%d",
+					stageIngestRequests,
+					recoveryIngestRequests,
+				)
+			}
+		}
+		if index == 2 && result.Cutover == nil {
 			t.Fatalf("default cutover missing: %s", output.String())
 		}
-		if index == 1 && !result.AlreadyStaged {
+		if index == 2 && !result.AlreadyStaged {
 			t.Fatal("default publish did not report the staged candidate reuse")
 		}
 	}
-	if ingestRequests != stageIngestRequests {
+	if ingestRequests != recoveryIngestRequests {
 		t.Fatalf(
-			"ingest requests = %d after resume, want stage-only count %d",
+			"ingest requests = %d after complete resume, want recovery count %d",
 			ingestRequests,
-			stageIngestRequests,
+			recoveryIngestRequests,
 		)
 	}
 	if cutovers != 1 {
@@ -1771,8 +1788,8 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	if servingSnapshotID != snapshotID {
 		t.Fatalf("serving snapshot = %q, want staged snapshot %q", servingSnapshotID, snapshotID)
 	}
-	if publisherStatusRequests != 2 {
-		t.Fatalf("publisher status requests = %d, want 2", publisherStatusRequests)
+	if publisherStatusRequests != 3 {
+		t.Fatalf("publisher status requests = %d, want 3", publisherStatusRequests)
 	}
 	if readerStatusRequests != 0 {
 		t.Fatalf("reader status requests = %d, publisher-only flow must not require reader role", readerStatusRequests)

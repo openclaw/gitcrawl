@@ -28,13 +28,12 @@ type gitcrawlCloudDataset struct {
 }
 
 type gitcrawlCloudSnapshot struct {
-	ID                       string
-	SourceSyncAt             string
-	DatasetGeneratedAt       string
-	Capabilities             []string
-	Datasets                 []gitcrawlCloudDataset
-	Hydration                crawlstore.EnrichmentCoverage
-	AllowsIncompleteCoverage bool
+	ID                 string
+	SourceSyncAt       string
+	DatasetGeneratedAt string
+	Capabilities       []string
+	Datasets           []gitcrawlCloudDataset
+	Hydration          crawlstore.EnrichmentCoverage
 }
 
 func buildGitcrawlCloudSnapshot(
@@ -75,13 +74,12 @@ func buildGitcrawlCloudSnapshot(
 		)
 	}
 	return gitcrawlCloudSnapshot{
-		ID:                       snapshotID,
-		SourceSyncAt:             sourceSyncAt,
-		DatasetGeneratedAt:       time.Now().UTC().Format(time.RFC3339Nano),
-		Capabilities:             capabilities,
-		Datasets:                 datasets,
-		Hydration:                hydration,
-		AllowsIncompleteCoverage: len(missing) > 0 && allowIncomplete,
+		ID:                 snapshotID,
+		SourceSyncAt:       sourceSyncAt,
+		DatasetGeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Capabilities:       capabilities,
+		Datasets:           datasets,
+		Hydration:          hydration,
 	}, nil
 }
 

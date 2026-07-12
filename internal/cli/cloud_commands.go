@@ -153,11 +153,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	alreadyStaged := false
 	status, statusErr := client.PublishStatus(ctx, "gitcrawl", archiveID)
 	if statusErr == nil {
-		alreadyStaged = gitcrawlPublisherStatusMatches(
-			status,
-			manifest,
-			snapshot.AllowsIncompleteCoverage,
-		)
+		alreadyStaged = gitcrawlPublisherStatusMatches(status, manifest)
 	} else if !remoteNotFound(statusErr) {
 		return statusErr
 	}
@@ -650,7 +646,6 @@ func equalUniqueStringSet(left, right []string) bool {
 func gitcrawlPublisherStatusMatches(
 	status crawlremote.PublisherStatus,
 	manifest crawlremote.IngestManifest,
-	allowIncomplete bool,
 ) bool {
 	snapshot := status.Snapshot
 	if status.App != manifest.App ||
@@ -663,7 +658,7 @@ func gitcrawlPublisherStatusMatches(
 		snapshot.SchemaHash != manifest.SchemaHash {
 		return false
 	}
-	if !status.CoverageComplete && !allowIncomplete {
+	if !status.CoverageComplete {
 		return false
 	}
 	if !equalUniqueStringSet(snapshot.Capabilities, manifest.Capabilities) {
