@@ -306,7 +306,9 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			snapshot,
 			manifest,
 			publicationCapabilities,
+			"",
 		)
+		expectedCutoverAt := ""
 		if !alreadyCutOver {
 			result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
 			if err != nil {
@@ -316,6 +318,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				return fmt.Errorf("validate cloud snapshot cutover: %w", err)
 			}
 			cutoverResult = &result
+			expectedCutoverAt = result.CutoverAt
 		}
 		if err := verifyGitcrawlSnapshotPublication(
 			ctx,
@@ -327,6 +330,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			snapshot,
 			manifest,
 			publicationCapabilities,
+			expectedCutoverAt,
 			sqliteSourceSize,
 		); err != nil {
 			return fmt.Errorf("verify published cloud snapshot: %w", err)
@@ -1314,9 +1318,12 @@ func gitcrawlReaderStatusMatches(
 	snapshot gitcrawlCloudSnapshot,
 	manifest crawlremote.IngestManifest,
 	publicationCapabilities []string,
+	expectedCutoverAt string,
 ) bool {
 	if status.App != manifest.App ||
 		status.Archive != manifest.Archive ||
+		status.Mode != "cloud" ||
+		status.SnapshotMode != "snapshot" ||
 		status.ActiveSnapshotID != snapshot.ID ||
 		status.SchemaName != manifest.SchemaName ||
 		status.SchemaVersion != manifest.SchemaVersion ||
@@ -1337,7 +1344,28 @@ func gitcrawlReaderStatusMatches(
 		status.Snapshot.DatasetGeneratedAt != snapshot.DatasetGeneratedAt {
 		return false
 	}
-	return gitcrawlDatasetCoverageMatches(status.Datasets, snapshot)
+	return gitcrawlReaderCutoverMatches(status, expectedCutoverAt) &&
+		gitcrawlDatasetCoverageMatches(status.Datasets, snapshot)
+}
+
+func gitcrawlReaderCutoverMatches(status crawlremote.Status, expectedCutoverAt string) bool {
+	if status.Snapshot == nil {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339Nano, status.SnapshotCutoverAt); err != nil {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339Nano, status.Snapshot.CutoverAt); err != nil ||
+		status.SnapshotCutoverAt != status.Snapshot.CutoverAt {
+		return false
+	}
+	if expectedCutoverAt == "" {
+		return true
+	}
+	if _, err := time.Parse(time.RFC3339Nano, expectedCutoverAt); err != nil {
+		return false
+	}
+	return status.SnapshotCutoverAt == expectedCutoverAt
 }
 
 func validateGitcrawlCutoverResult(
@@ -1366,6 +1394,7 @@ func verifyGitcrawlReaderProjection(
 	snapshot gitcrawlCloudSnapshot,
 	manifest crawlremote.IngestManifest,
 	publicationCapabilities []string,
+	expectedCutoverAt string,
 ) error {
 	return verifyGitcrawlReaderProjectionWithRetry(
 		ctx,
@@ -1374,6 +1403,7 @@ func verifyGitcrawlReaderProjection(
 		snapshot,
 		manifest,
 		publicationCapabilities,
+		expectedCutoverAt,
 		gitcrawlCloudPostCutoverStatusAttempts,
 		gitcrawlCloudPostCutoverStatusRetryDelay,
 	)
@@ -1386,6 +1416,7 @@ func verifyGitcrawlReaderProjectionWithRetry(
 	snapshot gitcrawlCloudSnapshot,
 	manifest crawlremote.IngestManifest,
 	publicationCapabilities []string,
+	expectedCutoverAt string,
 	attempts int,
 	retryDelay time.Duration,
 ) error {
@@ -1400,6 +1431,7 @@ func verifyGitcrawlReaderProjectionWithRetry(
 			snapshot,
 			manifest,
 			publicationCapabilities,
+			expectedCutoverAt,
 		) {
 			return nil
 		}
@@ -1469,6 +1501,7 @@ func verifyGitcrawlSnapshotPublication(
 	snapshot gitcrawlCloudSnapshot,
 	manifest crawlremote.IngestManifest,
 	publicationCapabilities []string,
+	expectedCutoverAt string,
 	sourceSize int64,
 ) error {
 	if err := verifyGitcrawlReaderProjection(
@@ -1478,6 +1511,7 @@ func verifyGitcrawlSnapshotPublication(
 		snapshot,
 		manifest,
 		publicationCapabilities,
+		expectedCutoverAt,
 	); err != nil {
 		return err
 	}

@@ -1241,6 +1241,9 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 				Archive: "gitcrawl/openclaw__openclaw",
 			}
 			if sawCutover && publishedSnapshot != nil {
+				status.Mode = "cloud"
+				status.SnapshotMode = "snapshot"
+				status.SnapshotCutoverAt = "2026-07-12T09:00:00Z"
 				status.SchemaName = publishedSnapshot.SchemaName
 				status.SchemaVersion = publishedSnapshot.SchemaVersion
 				status.SchemaHash = publishedSnapshot.SchemaHash
@@ -1250,7 +1253,9 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 				status.DatasetGeneratedAt = publishedSnapshot.DatasetGeneratedAt
 				status.CoverageComplete = true
 				status.Datasets = slices.Clone(publishedDatasets)
-				status.Snapshot = publishedSnapshot
+				snapshot := *publishedSnapshot
+				snapshot.CutoverAt = status.SnapshotCutoverAt
+				status.Snapshot = &snapshot
 			}
 			_ = json.NewEncoder(w).Encode(status)
 			return
@@ -1816,6 +1821,9 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			if servingSnapshotID == snapshotID &&
 				readerProjectionExact &&
 				stagedSnapshot != nil {
+				status.Mode = "cloud"
+				status.SnapshotMode = "snapshot"
+				status.SnapshotCutoverAt = "2026-07-12T11:00:00Z"
 				status.SchemaName = stagedSnapshot.SchemaName
 				status.SchemaVersion = stagedSnapshot.SchemaVersion
 				status.SchemaHash = stagedSnapshot.SchemaHash
@@ -1824,7 +1832,9 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				status.DatasetGeneratedAt = stagedSnapshot.DatasetGeneratedAt
 				status.CoverageComplete = true
 				status.Datasets = slices.Clone(stagedDatasets)
-				status.Snapshot = stagedSnapshot
+				snapshot := *stagedSnapshot
+				snapshot.CutoverAt = status.SnapshotCutoverAt
+				status.Snapshot = &snapshot
 			}
 			_ = json.NewEncoder(w).Encode(status)
 			return

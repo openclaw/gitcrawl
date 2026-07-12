@@ -441,6 +441,254 @@ func TestIngestBatchingRejectsSingleOversizedRowBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestIngestBatchingMatchesCrawlkitEscapingAtByteBoundary(t *testing.T) {
+	manifest := crawlremote.IngestManifest{
+		App:           "gitcrawl",
+		Archive:       "gitcrawl/openclaw__gitcrawl",
+		SchemaName:    gitcrawlCloudSchemaName,
+		SchemaVersion: gitcrawlCloudSchemaVersion,
+		SchemaHash:    gitcrawlCloudSchemaHash,
+		SnapshotID:    strings.Repeat("a", 64),
+		SourceSHA256:  strings.Repeat("a", 64),
+	}
+	columns := []string{"value"}
+	var bodies [][]byte
+	var requests []crawlremote.IngestRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if int64(len(body)) > gitcrawlCloudIngestRequestMaxBytes {
+			http.Error(w, "encoded request exceeded byte budget", http.StatusRequestEntityTooLarge)
+			return
+		}
+		var request crawlremote.IngestRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		bodies = append(bodies, body)
+		requests = append(requests, request)
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+			Table:         request.Table,
+			SnapshotID:    request.Manifest.SnapshotID,
+			MutationToken: fmt.Sprintf("mutation-%d", len(requests)),
+			RowsAccepted:  int64(len(request.Rows)),
+			Complete:      request.Final,
+		})
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("publisher-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+
+	fitRows, oversizedRows := escapedIngestBoundaryValues(
+		t,
+		manifest,
+		"escaped_rows",
+		columns,
+		true,
+	)
+	if _, err := sendSnapshotIngestRows(
+		context.Background(),
+		client,
+		manifest.App,
+		manifest.Archive,
+		manifest,
+		"escaped_rows",
+		columns,
+		[][]any{{fitRows}},
+		"",
+		true,
+	); err != nil {
+		t.Fatalf("send escaped in-memory boundary row: %v", err)
+	}
+	assertCrawlkitWireSizeParity(t, requests[0], bodies[0])
+	assertEscapedIngestWireFragments(t, bodies[0])
+	requestCount := len(requests)
+	if _, err := sendSnapshotIngestRows(
+		context.Background(),
+		client,
+		manifest.App,
+		manifest.Archive,
+		manifest,
+		"escaped_rows",
+		columns,
+		[][]any{{oversizedRows}},
+		"",
+		true,
+	); err == nil || !strings.Contains(err.Error(), "encoded request") {
+		t.Fatalf("escaped in-memory oversized row error = %v", err)
+	}
+	if len(requests) != requestCount {
+		t.Fatalf("escaped in-memory oversized row sent %d requests", len(requests)-requestCount)
+	}
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open escaped stream database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`create table rows(value text not null)`); err != nil {
+		t.Fatalf("create escaped stream rows: %v", err)
+	}
+	fitStream, oversizedStream := escapedIngestBoundaryValues(
+		t,
+		manifest,
+		"escaped_stream",
+		columns,
+		false,
+	)
+	if _, err := db.Exec(`insert into rows(value) values(?)`, fitStream); err != nil {
+		t.Fatalf("seed escaped stream boundary row: %v", err)
+	}
+	dataset := gitcrawlCloudDataset{
+		Name:     "escaped_stream",
+		Columns:  columns,
+		Query:    `select value from rows`,
+		RowCount: 1,
+	}
+	if _, err := sendSnapshotIngestDataset(
+		context.Background(),
+		db,
+		client,
+		manifest.App,
+		manifest.Archive,
+		manifest,
+		dataset,
+		"",
+	); err != nil {
+		t.Fatalf("send escaped stream boundary row: %v", err)
+	}
+	assertCrawlkitWireSizeParity(t, requests[requestCount], bodies[requestCount])
+	assertEscapedIngestWireFragments(t, bodies[requestCount])
+	requestCount = len(requests)
+	if _, err := db.Exec(`update rows set value = ?`, oversizedStream); err != nil {
+		t.Fatalf("seed escaped stream oversized row: %v", err)
+	}
+	if _, err := sendSnapshotIngestDataset(
+		context.Background(),
+		db,
+		client,
+		manifest.App,
+		manifest.Archive,
+		manifest,
+		dataset,
+		"",
+	); err == nil || !strings.Contains(err.Error(), "encoded ingest request") {
+		t.Fatalf("escaped stream oversized row error = %v", err)
+	}
+	if len(requests) != requestCount {
+		t.Fatalf("escaped stream oversized row sent %d requests", len(requests)-requestCount)
+	}
+}
+
+func escapedIngestBoundaryValues(
+	t *testing.T,
+	manifest crawlremote.IngestManifest,
+	table string,
+	columns []string,
+	final bool,
+) (fit string, oversized string) {
+	t.Helper()
+	const pattern = "\"\\\x00\b\f\n\r\t<>&\u2028\u2029\u00e9\u65e5\u672c\u8a9e\U0001F600"
+	fits := func(repeats int) bool {
+		t.Helper()
+		sizer, err := newGitcrawlIngestBatchSizer(
+			manifest.App,
+			manifest.Archive,
+			manifest,
+			table,
+			columns,
+			"",
+			"",
+		)
+		if err != nil {
+			t.Fatalf("create escaped ingest batch sizer: %v", err)
+		}
+		ok, _, err := sizer.add([]any{strings.Repeat(pattern, repeats)}, final)
+		if err != nil {
+			t.Fatalf("size escaped ingest row: %v", err)
+		}
+		return ok
+	}
+	low, high := 0, 1
+	for fits(high) {
+		low = high
+		high *= 2
+	}
+	for low+1 < high {
+		middle := low + (high-low)/2
+		if fits(middle) {
+			low = middle
+		} else {
+			high = middle
+		}
+	}
+	return strings.Repeat(pattern, low), strings.Repeat(pattern, high)
+}
+
+func assertCrawlkitWireSizeParity(
+	t *testing.T,
+	request crawlremote.IngestRequest,
+	body []byte,
+) {
+	t.Helper()
+	expected, err := encodedGitcrawlIngestRequestBytes(request)
+	if err != nil {
+		t.Fatalf("size CrawlKit ingest request: %v", err)
+	}
+	if int64(len(body)) != expected {
+		t.Fatalf("CrawlKit wire bytes = %d, batch sizer = %d", len(body), expected)
+	}
+	if int64(len(body)) > gitcrawlCloudIngestRequestMaxBytes {
+		t.Fatalf(
+			"CrawlKit wire bytes = %d, limit %d",
+			len(body),
+			gitcrawlCloudIngestRequestMaxBytes,
+		)
+	}
+}
+
+func assertEscapedIngestWireFragments(t *testing.T, body []byte) {
+	t.Helper()
+	for _, fragment := range []string{
+		`\"`,
+		`\\`,
+		`\u0000`,
+		`\b`,
+		`\f`,
+		`\n`,
+		`\r`,
+		`\t`,
+		`\u003c`,
+		`\u003e`,
+		`\u0026`,
+		`\u2028`,
+		`\u2029`,
+	} {
+		if !bytes.Contains(body, []byte(fragment)) {
+			t.Fatalf("CrawlKit wire body is missing escaped fragment %q", fragment)
+		}
+	}
+	for _, value := range []string{
+		"\u00e9",
+		"\u65e5\u672c\u8a9e",
+		"\U0001F600",
+	} {
+		if !bytes.Contains(body, []byte(value)) {
+			t.Fatalf("CrawlKit wire body is missing UTF-8 value %q", value)
+		}
+	}
+}
+
 func TestCompleteGitcrawlSnapshotStagingRequiresExactAcknowledgement(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
 	snapshot := gitcrawlCloudSnapshot{
@@ -638,6 +886,7 @@ func TestValidateGitcrawlSQLiteBundleUploadRequiresFinalSnapshotDigest(t *testin
 
 func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
+	const cutoverAt = "2026-07-12T12:02:00.123456789Z"
 	snapshot := gitcrawlCloudSnapshot{
 		ID:                 snapshotID,
 		SourceSyncAt:       "2026-07-12T12:00:00Z",
@@ -656,10 +905,13 @@ func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 	status := crawlremote.Status{
 		App:                manifest.App,
 		Archive:            manifest.Archive,
+		Mode:               "cloud",
 		SchemaName:         manifest.SchemaName,
 		SchemaVersion:      manifest.SchemaVersion,
 		SchemaHash:         manifest.SchemaHash,
 		Capabilities:       capabilities,
+		SnapshotMode:       "snapshot",
+		SnapshotCutoverAt:  cutoverAt,
 		ActiveSnapshotID:   snapshotID,
 		SourceSyncAt:       snapshot.SourceSyncAt,
 		DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
@@ -684,25 +936,151 @@ func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 			SourceSyncAt:       snapshot.SourceSyncAt,
 			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
 			CoverageComplete:   true,
+			CutoverAt:          cutoverAt,
 		},
 	}
-	if !gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+	if !gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
 		t.Fatal("complete serving snapshot did not match")
 	}
 
 	status.CoverageComplete = false
-	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
 		t.Fatal("top-level incomplete reader status matched")
 	}
 	status.CoverageComplete = true
 	status.Snapshot.CoverageComplete = false
-	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
 		t.Fatal("nested incomplete reader status matched")
 	}
 	status.Snapshot.CoverageComplete = true
 	status.Datasets[0].CoveredCount = 0
-	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities) {
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
 		t.Fatal("reader dataset count drift matched")
+	}
+}
+
+func TestGitcrawlReaderStatusMatchesRequiresCutoverAttestation(t *testing.T) {
+	snapshotID := strings.Repeat("a", 64)
+	const cutoverAt = "2026-07-12T12:02:00.123456789Z"
+	snapshot := gitcrawlCloudSnapshot{
+		ID:                 snapshotID,
+		SourceSyncAt:       "2026-07-12T12:00:00Z",
+		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
+	}
+	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__gitcrawl", snapshot)
+	capabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
+	valid := crawlremote.Status{
+		App:                manifest.App,
+		Archive:            manifest.Archive,
+		Mode:               "cloud",
+		SchemaName:         manifest.SchemaName,
+		SchemaVersion:      manifest.SchemaVersion,
+		SchemaHash:         manifest.SchemaHash,
+		Capabilities:       capabilities,
+		SnapshotMode:       "snapshot",
+		SnapshotCutoverAt:  cutoverAt,
+		ActiveSnapshotID:   snapshotID,
+		SourceSyncAt:       snapshot.SourceSyncAt,
+		DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+		CoverageComplete:   true,
+		Snapshot: &crawlremote.ArchiveSnapshot{
+			ID:                 snapshotID,
+			SourceSHA256:       snapshotID,
+			SchemaName:         manifest.SchemaName,
+			SchemaVersion:      manifest.SchemaVersion,
+			SchemaHash:         manifest.SchemaHash,
+			Capabilities:       capabilities,
+			SourceSyncAt:       snapshot.SourceSyncAt,
+			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+			CoverageComplete:   true,
+			CutoverAt:          cutoverAt,
+		},
+	}
+
+	for _, test := range []struct {
+		name              string
+		expectedCutoverAt string
+		mutate            func(*crawlremote.Status)
+	}{
+		{name: "resumed cutover", expectedCutoverAt: ""},
+		{name: "fresh cutover", expectedCutoverAt: cutoverAt},
+		{
+			name: "missing cloud mode",
+			mutate: func(status *crawlremote.Status) {
+				status.Mode = ""
+			},
+		},
+		{
+			name: "missing snapshot mode",
+			mutate: func(status *crawlremote.Status) {
+				status.SnapshotMode = ""
+			},
+		},
+		{
+			name: "legacy snapshot mode",
+			mutate: func(status *crawlremote.Status) {
+				status.SnapshotMode = "legacy"
+			},
+		},
+		{
+			name: "missing top-level cutover",
+			mutate: func(status *crawlremote.Status) {
+				status.SnapshotCutoverAt = ""
+			},
+		},
+		{
+			name: "missing nested cutover",
+			mutate: func(status *crawlremote.Status) {
+				status.Snapshot.CutoverAt = ""
+			},
+		},
+		{
+			name: "invalid top-level cutover",
+			mutate: func(status *crawlremote.Status) {
+				status.SnapshotCutoverAt = "later"
+			},
+		},
+		{
+			name: "inconsistent nested cutover",
+			mutate: func(status *crawlremote.Status) {
+				status.Snapshot.CutoverAt = "2026-07-12T12:02:01Z"
+			},
+		},
+		{
+			name: "equivalent nested cutover encoding",
+			mutate: func(status *crawlremote.Status) {
+				status.Snapshot.CutoverAt = "2026-07-12T12:02:00.123456789+00:00"
+			},
+		},
+		{
+			name:              "fresh acknowledgement mismatch",
+			expectedCutoverAt: "2026-07-12T12:02:01Z",
+		},
+		{
+			name:              "equivalent acknowledgement encoding",
+			expectedCutoverAt: "2026-07-12T12:02:00.123456789+00:00",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status := valid
+			snapshotEnvelope := *valid.Snapshot
+			status.Snapshot = &snapshotEnvelope
+			if test.mutate != nil {
+				test.mutate(&status)
+			}
+			matched := gitcrawlReaderStatusMatches(
+				status,
+				snapshot,
+				manifest,
+				capabilities,
+				test.expectedCutoverAt,
+			)
+			want := test.mutate == nil &&
+				(test.expectedCutoverAt == "" || test.expectedCutoverAt == cutoverAt)
+			if matched != want {
+				t.Fatalf("cutover status match = %v, want %v", matched, want)
+			}
+		})
 	}
 }
 
@@ -771,6 +1149,7 @@ func TestValidateGitcrawlCutoverResultRequiresExactAcknowledgement(t *testing.T)
 
 func TestVerifyGitcrawlReaderProjectionUsesBoundedExactRetries(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
+	const cutoverAt = "2026-07-12T12:02:00Z"
 	snapshot := gitcrawlCloudSnapshot{
 		ID:                 snapshotID,
 		SourceSyncAt:       "2026-07-12T12:00:00Z",
@@ -789,10 +1168,13 @@ func TestVerifyGitcrawlReaderProjectionUsesBoundedExactRetries(t *testing.T) {
 	exactStatus := crawlremote.Status{
 		App:                manifest.App,
 		Archive:            manifest.Archive,
+		Mode:               "cloud",
 		SchemaName:         manifest.SchemaName,
 		SchemaVersion:      manifest.SchemaVersion,
 		SchemaHash:         manifest.SchemaHash,
 		Capabilities:       capabilities,
+		SnapshotMode:       "snapshot",
+		SnapshotCutoverAt:  cutoverAt,
 		ActiveSnapshotID:   snapshot.ID,
 		SourceSyncAt:       snapshot.SourceSyncAt,
 		DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
@@ -817,6 +1199,7 @@ func TestVerifyGitcrawlReaderProjectionUsesBoundedExactRetries(t *testing.T) {
 			SourceSyncAt:       snapshot.SourceSyncAt,
 			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
 			CoverageComplete:   true,
+			CutoverAt:          cutoverAt,
 		},
 	}
 
@@ -863,6 +1246,7 @@ func TestVerifyGitcrawlReaderProjectionUsesBoundedExactRetries(t *testing.T) {
 				snapshot,
 				manifest,
 				capabilities,
+				cutoverAt,
 				3,
 				0,
 			)
@@ -985,6 +1369,7 @@ func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t 
 func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t *testing.T) {
 	source := []byte("SQLite format 3\x00bound source")
 	snapshotID := fmt.Sprintf("%x", sha256.Sum256(source))
+	const cutoverAt = "2026-07-12T12:02:00Z"
 	snapshot := gitcrawlCloudSnapshot{
 		ID:                 snapshotID,
 		SourceSyncAt:       "2026-07-12T12:00:00Z",
@@ -1027,10 +1412,13 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 					_ = json.NewEncoder(w).Encode(crawlremote.Status{
 						App:                manifest.App,
 						Archive:            manifest.Archive,
+						Mode:               "cloud",
 						SchemaName:         manifest.SchemaName,
 						SchemaVersion:      manifest.SchemaVersion,
 						SchemaHash:         manifest.SchemaHash,
 						Capabilities:       publicationCapabilities,
+						SnapshotMode:       "snapshot",
+						SnapshotCutoverAt:  cutoverAt,
 						ActiveSnapshotID:   snapshot.ID,
 						SourceSyncAt:       snapshot.SourceSyncAt,
 						DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
@@ -1045,6 +1433,7 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 							SchemaHash:         manifest.SchemaHash,
 							Capabilities:       publicationCapabilities,
 							CoverageComplete:   true,
+							CutoverAt:          cutoverAt,
 						},
 					})
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status"):
@@ -1111,6 +1500,7 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 				snapshot,
 				manifest,
 				publicationCapabilities,
+				cutoverAt,
 				int64(len(source)),
 			)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
