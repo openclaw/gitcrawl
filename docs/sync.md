@@ -35,6 +35,9 @@ Revision and fingerprint production fails closed on incomplete evidence. Issues 
 `--include-pr-details` (or `--with pr-details`). Without that hydration, sync still
 updates the thread and document rows but intentionally does not create a revision that
 could appear complete while omitting discussion, review, file, commit, or check evidence.
+Pull request revisions also track draft state, review decisions, workflow runs, and check
+transitions, so those changes invalidate downstream summaries and review evidence even
+when the title and body are unchanged.
 
 ## State filters
 

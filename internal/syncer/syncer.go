@@ -63,6 +63,7 @@ type Stats struct {
 	PRCommitsSynced      int    `json:"pr_commits_synced"`
 	PRChecksSynced       int    `json:"pr_checks_synced"`
 	WorkflowRunsSynced   int    `json:"workflow_runs_synced"`
+	EvidenceObserved     int    `json:"evidence_observed"`
 	RevisionsCreated     int    `json:"revisions_created"`
 	FingerprintsUpserted int    `json:"fingerprints_upserted"`
 	ThreadsClosed        int    `json:"threads_closed"`
@@ -85,6 +86,7 @@ type syncPersistStats struct {
 	PRCommitsSynced      int
 	PRChecksSynced       int
 	WorkflowRunsSynced   int
+	EvidenceObserved     int
 	RevisionsCreated     int
 	FingerprintsUpserted int
 	ThreadsClosed        int
@@ -223,6 +225,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		for _, payload := range payloads {
 			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
+			if payload.hasPullDetails {
+				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
+			}
 			threadID, err := st.UpsertThread(ctx, thread)
 			if err != nil {
 				return err
@@ -276,6 +281,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				return err
 			}
 			if hasFreshThreadEvidence(options, thread) {
+				attempt.EvidenceObserved++
 				enrichment, err := persistThreadEnrichment(ctx, st, thread, comments, pullFiles, pullCommits, s.now().Format(time.RFC3339Nano))
 				if err != nil {
 					return err
@@ -336,6 +342,7 @@ func applySyncPersistStats(stats *Stats, persisted syncPersistStats) {
 	stats.PRCommitsSynced = persisted.PRCommitsSynced
 	stats.PRChecksSynced = persisted.PRChecksSynced
 	stats.WorkflowRunsSynced = persisted.WorkflowRunsSynced
+	stats.EvidenceObserved = persisted.EvidenceObserved
 	stats.RevisionsCreated = persisted.RevisionsCreated
 	stats.FingerprintsUpserted = persisted.FingerprintsUpserted
 	stats.ThreadsClosed = persisted.ThreadsClosed
@@ -558,6 +565,23 @@ func persistThreadEnrichment(
 		if err != nil {
 			return store.ThreadEnrichmentResult{}, err
 		}
+		evidence.Checks, err = st.PullRequestChecks(ctx, thread.ID)
+		if err != nil {
+			return store.ThreadEnrichmentResult{}, err
+		}
+		headSHA := ""
+		if evidence.Detail != nil {
+			headSHA = evidence.Detail.HeadSHA
+		}
+		if headSHA != "" {
+			evidence.WorkflowRuns, err = st.ListWorkflowRuns(ctx, thread.RepoID, store.WorkflowRunListOptions{
+				HeadSHA: headSHA,
+				Limit:   100,
+			})
+			if err != nil {
+				return store.ThreadEnrichmentResult{}, err
+			}
+		}
 	}
 	return st.UpsertThreadRevisionAndFingerprint(ctx, evidence, createdAt)
 }
@@ -681,6 +705,7 @@ func mapComment(threadID int64, kind string, row map[string]any) store.Comment {
 		AuthorType:      authorType,
 		Body:            stringValue(row["body"]),
 		IsBot:           isBot(authorLogin, authorType),
+		ReviewState:     stringValue(row["state"]),
 		RawJSON:         mustJSON(row),
 		CreatedAtGitHub: stringValue(row["created_at"]),
 		UpdatedAtGitHub: stringValue(row["updated_at"]),

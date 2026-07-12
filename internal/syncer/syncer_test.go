@@ -76,6 +76,7 @@ func (fakeGitHub) GetPull(ctx context.Context, owner, repo string, number int, r
 		"additions":       12,
 		"deletions":       3,
 		"changed_files":   2,
+		"draft":           true,
 	}, nil
 }
 
@@ -445,7 +446,7 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	if stats.ThreadsSynced != 2 || stats.IssuesSynced != 1 || stats.PullRequestsSynced != 1 {
 		t.Fatalf("unexpected stats: %#v", stats)
 	}
-	if stats.RevisionsCreated != 2 || stats.FingerprintsUpserted != 2 {
+	if stats.EvidenceObserved != 2 || stats.RevisionsCreated != 2 || stats.FingerprintsUpserted != 2 {
 		t.Fatalf("enrichment stats: %#v", stats)
 	}
 	if stats.CommentsSynced != 1 {
@@ -468,6 +469,9 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 	if threads[1].Kind != "pull_request" {
 		t.Fatalf("second thread kind: %s", threads[1].Kind)
+	}
+	if !threads[1].IsDraft {
+		t.Fatal("pull request draft state was not persisted from pull detail")
 	}
 	if threads[0].AuthorAssociation != "CONTRIBUTOR" || threads[1].AuthorAssociation != "MEMBER" {
 		t.Fatalf("author associations: %+v", threads)
@@ -669,7 +673,7 @@ func TestSyncHydratesPullReviewComments(t *testing.T) {
 	}
 	var foundBodylessReview bool
 	for _, comment := range comments {
-		if comment.CommentType == "pull_review" && comment.GitHubID == "81" && comment.Body == "" {
+		if comment.CommentType == "pull_review" && comment.GitHubID == "81" && comment.Body == "" && comment.ReviewState == "APPROVED" {
 			foundBodylessReview = true
 		}
 	}

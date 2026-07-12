@@ -53,6 +53,8 @@ type ThreadEvidence struct {
 	Detail        *PullRequestDetail
 	Files         []PullRequestFile
 	Commits       []PullRequestCommit
+	Checks        []PullRequestCheck
+	WorkflowRuns  []WorkflowRun
 	ReviewThreads []PullRequestReviewThread
 }
 
@@ -79,6 +81,8 @@ type canonicalThreadEvidence struct {
 	Comments          []canonicalComment      `json:"comments,omitempty"`
 	Files             []canonicalChangedFile  `json:"files,omitempty"`
 	Commits           []canonicalCommit       `json:"commits,omitempty"`
+	Checks            []canonicalCheck        `json:"checks,omitempty"`
+	WorkflowRuns      []canonicalWorkflowRun  `json:"workflow_runs,omitempty"`
 	ReviewThreads     []canonicalReviewThread `json:"review_threads,omitempty"`
 }
 
@@ -89,6 +93,7 @@ type canonicalComment struct {
 	AuthorType      string `json:"author_type,omitempty"`
 	Body            string `json:"body"`
 	IsBot           bool   `json:"is_bot"`
+	ReviewState     string `json:"review_state,omitempty"`
 	CreatedAtGitHub string `json:"created_at_gh,omitempty"`
 	UpdatedAtGitHub string `json:"updated_at_gh,omitempty"`
 }
@@ -103,6 +108,25 @@ type canonicalChangedFile struct {
 type canonicalCommit struct {
 	SHA     string `json:"sha"`
 	Subject string `json:"subject,omitempty"`
+}
+
+type canonicalCheck struct {
+	Name         string `json:"name"`
+	Status       string `json:"status,omitempty"`
+	Conclusion   string `json:"conclusion,omitempty"`
+	WorkflowName string `json:"workflow_name,omitempty"`
+	DetailsURL   string `json:"details_url,omitempty"`
+}
+
+type canonicalWorkflowRun struct {
+	RunID        string `json:"run_id"`
+	RunNumber    int    `json:"run_number,omitempty"`
+	HeadSHA      string `json:"head_sha,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Conclusion   string `json:"conclusion,omitempty"`
+	WorkflowName string `json:"workflow_name,omitempty"`
+	Event        string `json:"event,omitempty"`
+	HTMLURL      string `json:"html_url,omitempty"`
 }
 
 type canonicalReviewThread struct {
@@ -227,9 +251,11 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 	comments := canonicalComments(evidence.Comments)
 	files := canonicalChangedFiles(evidence.Files)
 	commits := canonicalCommits(evidence.Commits)
+	checks := canonicalChecks(evidence.Checks)
+	workflowRuns := canonicalWorkflowRuns(evidence.WorkflowRuns)
 	reviewThreads := canonicalReviewThreads(evidence.ReviewThreads)
 	canonical := canonicalThreadEvidence{
-		Version:           "thread-review-evidence-v1",
+		Version:           "thread-review-evidence-v2",
 		Kind:              thread.Kind,
 		State:             thread.State,
 		Title:             thread.Title,
@@ -243,6 +269,8 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 		Comments:          comments,
 		Files:             files,
 		Commits:           commits,
+		Checks:            checks,
+		WorkflowRuns:      workflowRuns,
 		ReviewThreads:     reviewThreads,
 	}
 	sourceUpdatedAt := firstNonEmptyString(thread.UpdatedAtGitHub, thread.UpdatedAt)
@@ -256,6 +284,12 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 	}
 	for _, comment := range evidence.Comments {
 		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, comment.UpdatedAtGitHub, comment.CreatedAtGitHub)
+	}
+	for _, check := range evidence.Checks {
+		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, check.CompletedAt, check.StartedAt, check.FetchedAt)
+	}
+	for _, run := range evidence.WorkflowRuns {
+		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, run.UpdatedAtGH, run.CreatedAtGH, run.FetchedAt)
 	}
 	labelsJSON := mustStableJSON(labels)
 	contentHash := StableHash(mustStableJSON(canonical))
@@ -353,6 +387,7 @@ func canonicalComments(comments []Comment) []canonicalComment {
 			AuthorType:      strings.TrimSpace(comment.AuthorType),
 			Body:            comment.Body,
 			IsBot:           comment.IsBot,
+			ReviewState:     strings.TrimSpace(comment.ReviewState),
 			CreatedAtGitHub: comment.CreatedAtGitHub,
 			UpdatedAtGitHub: comment.UpdatedAtGitHub,
 		})
@@ -361,6 +396,56 @@ func canonicalComments(comments []Comment) []canonicalComment {
 		left := out[i].CommentType + "\x00" + out[i].GitHubID
 		right := out[j].CommentType + "\x00" + out[j].GitHubID
 		return left < right
+	})
+	return out
+}
+
+func canonicalChecks(checks []PullRequestCheck) []canonicalCheck {
+	out := make([]canonicalCheck, 0, len(checks))
+	for _, check := range checks {
+		name := strings.TrimSpace(check.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, canonicalCheck{
+			Name:         name,
+			Status:       strings.TrimSpace(check.Status),
+			Conclusion:   strings.TrimSpace(check.Conclusion),
+			WorkflowName: strings.TrimSpace(check.WorkflowName),
+			DetailsURL:   strings.TrimSpace(check.DetailsURL),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left := out[i].Name + "\x00" + out[i].WorkflowName + "\x00" + out[i].DetailsURL
+		right := out[j].Name + "\x00" + out[j].WorkflowName + "\x00" + out[j].DetailsURL
+		return left < right
+	})
+	return out
+}
+
+func canonicalWorkflowRuns(runs []WorkflowRun) []canonicalWorkflowRun {
+	out := make([]canonicalWorkflowRun, 0, len(runs))
+	for _, run := range runs {
+		runID := strings.TrimSpace(run.RunID)
+		if runID == "" {
+			continue
+		}
+		out = append(out, canonicalWorkflowRun{
+			RunID:        runID,
+			RunNumber:    run.RunNumber,
+			HeadSHA:      strings.TrimSpace(run.HeadSHA),
+			Status:       strings.TrimSpace(run.Status),
+			Conclusion:   strings.TrimSpace(run.Conclusion),
+			WorkflowName: strings.TrimSpace(run.WorkflowName),
+			Event:        strings.TrimSpace(run.Event),
+			HTMLURL:      strings.TrimSpace(run.HTMLURL),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RunNumber != out[j].RunNumber {
+			return out[i].RunNumber < out[j].RunNumber
+		}
+		return out[i].RunID < out[j].RunID
 	})
 	return out
 }

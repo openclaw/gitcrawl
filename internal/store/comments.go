@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/openclaw/gitcrawl/internal/store/storedb"
@@ -16,6 +17,7 @@ type Comment struct {
 	AuthorType      string `json:"author_type,omitempty"`
 	Body            string `json:"body"`
 	IsBot           bool   `json:"is_bot"`
+	ReviewState     string `json:"review_state,omitempty"`
 	RawJSON         string `json:"-"`
 	CreatedAtGitHub string `json:"created_at_gh,omitempty"`
 	UpdatedAtGitHub string `json:"updated_at_gh,omitempty"`
@@ -66,10 +68,21 @@ func (s *Store) ListComments(ctx context.Context, threadID int64) ([]Comment, er
 			AuthorType:      stringValue(row.AuthorType),
 			Body:            row.Body,
 			IsBot:           int64Bool(row.IsBot),
+			ReviewState:     reviewStateFromRawJSON(row.RawJson),
 			RawJSON:         row.RawJson,
 			CreatedAtGitHub: stringValue(row.CreatedAtGh),
 			UpdatedAtGitHub: stringValue(row.UpdatedAtGh),
 		})
 	}
 	return comments, nil
+}
+
+func reviewStateFromRawJSON(raw string) string {
+	var value struct {
+		State string `json:"state"`
+	}
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return ""
+	}
+	return value.State
 }

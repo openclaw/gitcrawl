@@ -300,3 +300,51 @@ func TestLatestTimestampComparesRFC3339Instants(t *testing.T) {
 		})
 	}
 }
+
+func TestThreadRevisionTracksPullRequestDecisionState(t *testing.T) {
+	evidence := ThreadEvidence{
+		Thread: Thread{
+			ID: 1, RepoID: 1, Number: 42, Kind: "pull_request", State: "open",
+			Title: "track decision state", LabelsJSON: "[]", AssigneesJSON: "[]",
+			UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		},
+		Detail: &PullRequestDetail{ThreadID: 1, RepoID: 1, Number: 42, HeadSHA: "head"},
+		Comments: []Comment{{
+			GitHubID: "review-1", CommentType: "pull_review", ReviewState: "APPROVED",
+		}},
+		Checks: []PullRequestCheck{{
+			Name: "test", Status: "in_progress", FetchedAt: "2026-07-12T00:01:00Z",
+		}},
+		WorkflowRuns: []WorkflowRun{{
+			RunID: "99", RunNumber: 7, HeadSHA: "head", Status: "in_progress", WorkflowName: "CI",
+			UpdatedAtGH: "2026-07-12T00:01:00Z",
+		}},
+	}
+	hash := func(value ThreadEvidence) string {
+		revision, _ := buildThreadEnrichment(value, "2026-07-12T00:02:00Z")
+		return revision.ContentHash
+	}
+	baseHash := hash(evidence)
+
+	evidence.Thread.IsDraft = true
+	draftHash := hash(evidence)
+	if draftHash == baseHash {
+		t.Fatal("draft transition did not change canonical evidence")
+	}
+	evidence.Comments[0].ReviewState = "CHANGES_REQUESTED"
+	reviewHash := hash(evidence)
+	if reviewHash == draftHash {
+		t.Fatal("review decision transition did not change canonical evidence")
+	}
+	evidence.Checks[0].Status = "completed"
+	evidence.Checks[0].Conclusion = "failure"
+	checkHash := hash(evidence)
+	if checkHash == reviewHash {
+		t.Fatal("check transition did not change canonical evidence")
+	}
+	evidence.WorkflowRuns[0].Status = "completed"
+	evidence.WorkflowRuns[0].Conclusion = "failure"
+	if hash(evidence) == checkHash {
+		t.Fatal("workflow run transition did not change canonical evidence")
+	}
+}
