@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,8 +22,10 @@ import (
 )
 
 const (
-	gitcrawlCloudBatchSize             = 250
-	gitcrawlCloudSQLiteBundleChunkSize = int64(64 * 1024 * 1024)
+	gitcrawlCloudBatchSize               = 250
+	gitcrawlCloudSQLiteBundleChunkSize   = int64(64 * 1024 * 1024)
+	gitcrawlCloudPublishPreflightTimeout = 30 * time.Second
+	gitcrawlCloudHydrationTimeout        = 10 * time.Minute
 
 	gitcrawlSnapshotAtomicCapability     = "gitcrawl.snapshot.atomic"
 	gitcrawlSnapshotCutoverCapability    = "gitcrawl.snapshot.cutover"
@@ -151,7 +154,10 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	); err != nil {
 		return err
 	}
-	sqliteBundle, err := uploadSQLiteSnapshotArchive(
+	if err := requireGitcrawlCloudPublishRoles(ctx, client); err != nil {
+		return err
+	}
+	sqliteBundle, sqliteSourceSize, err := uploadSQLiteSnapshotArchive(
 		ctx,
 		client,
 		"gitcrawl",
@@ -233,6 +239,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			snapshot,
 			manifest,
 			publicationCapabilities,
+			sqliteSourceSize,
 		); err != nil {
 			return fmt.Errorf("verify published cloud snapshot: %w", err)
 		}
@@ -473,7 +480,8 @@ func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, a
 		return nil, err
 	}
 	defer cleanup()
-	return uploadSQLiteSnapshotArchive(ctx, client, app, archive, snapshotPath, counts)
+	bundle, _, err := uploadSQLiteSnapshotArchive(ctx, client, app, archive, snapshotPath, counts)
+	return bundle, err
 }
 
 func uploadSQLiteSnapshotArchive(
@@ -481,7 +489,7 @@ func uploadSQLiteSnapshotArchive(
 	client *crawlremote.Client,
 	app, archive, snapshotPath string,
 	counts map[string]int64,
-) (*crawlremote.SQLiteBundle, error) {
+) (*crawlremote.SQLiteBundle, int64, error) {
 	bundle, err := crawlremote.BuildSnapshotGzipSQLiteBundle(ctx, crawlremote.SQLiteBundleBuildOptions{
 		App:        app,
 		Archive:    archive,
@@ -491,14 +499,18 @@ func uploadSQLiteSnapshotArchive(
 		Privacy:    gitcrawlCloudSQLiteBundlePrivacy(),
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer bundle.Cleanup()
+	sourceSize := bundle.Manifest.Object.Size
+	if sourceSize <= 0 {
+		return nil, 0, fmt.Errorf("SQLite bundle manifest has invalid source size %d", sourceSize)
+	}
 	result, err := client.UploadSQLiteBundleFiles(ctx, app, archive, bundle.Manifest, bundle.Parts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return result.Bundle, nil
+	return result.Bundle, sourceSize, nil
 }
 
 func remoteNotFound(err error) bool {
@@ -551,6 +563,11 @@ func requireGitcrawlSnapshotPublishContract(
 		}
 	}
 	requiredRoutes := []crawlremote.RouteSpec{
+		{
+			Method: http.MethodGet,
+			Path:   "/v1/whoami",
+			Auth:   crawlremote.AuthReader,
+		},
 		{
 			Method: http.MethodGet,
 			Path:   "/v1/apps/:app/archives/:archive/publish-status",
@@ -664,6 +681,28 @@ func requireGitcrawlSnapshotPublishContract(
 	return nil
 }
 
+func requireGitcrawlCloudPublishRoles(ctx context.Context, client *crawlremote.Client) error {
+	preflightCtx, cancel := context.WithTimeout(ctx, gitcrawlCloudPublishPreflightTimeout)
+	defer cancel()
+	identity, err := client.Whoami(preflightCtx)
+	if err != nil {
+		return fmt.Errorf("read remote identity before snapshot publication: %w", err)
+	}
+	missing := make([]string, 0, 2)
+	for _, role := range []string{crawlremote.AuthPublisher, crawlremote.AuthReader} {
+		if !slices.Contains(identity.Roles, role) {
+			missing = append(missing, role)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf(
+			"remote token must have publisher and reader roles before snapshot publication; missing %s",
+			strings.Join(missing, ", "),
+		)
+	}
+	return nil
+}
+
 func equalUniqueStringSet(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -719,7 +758,8 @@ func gitcrawlPublisherStatusMatches(
 		strings.TrimSpace(snapshot.DatasetGeneratedAt) == "" {
 		return false
 	}
-	if !status.CoverageComplete {
+	if status.CoverageComplete != snapshot.CoverageComplete ||
+		!status.CoverageComplete {
 		return false
 	}
 	if !equalUniqueStringSet(snapshot.Capabilities, publicationCapabilities) {
@@ -737,6 +777,7 @@ func verifyGitcrawlSnapshotPublication(
 	snapshot gitcrawlCloudSnapshot,
 	manifest crawlremote.IngestManifest,
 	publicationCapabilities []string,
+	sourceSize int64,
 ) error {
 	status, err := client.PublishStatus(ctx, "gitcrawl", archive)
 	if err != nil {
@@ -758,7 +799,9 @@ func verifyGitcrawlSnapshotPublication(
 		"/v1/apps/" + url.PathEscape("gitcrawl") +
 		"/archives/" + url.PathEscape(archive) +
 		"/sqlite"
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, sqliteURL, nil)
+	hydrationCtx, cancel := context.WithTimeout(ctx, gitcrawlCloudHydrationTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(hydrationCtx, http.MethodGet, sqliteURL, nil)
 	if err != nil {
 		return fmt.Errorf("build snapshot hydration request: %w", err)
 	}
@@ -778,24 +821,74 @@ func verifyGitcrawlSnapshotPublication(
 			strings.TrimSpace(string(body)),
 		)
 	}
-	if advertised := strings.TrimSpace(response.Header.Get("x-crawl-content-sha256")); advertised != "" &&
-		!strings.EqualFold(advertised, snapshot.ID) {
+	return verifyGitcrawlSQLiteHydration(response, snapshot.ID, sourceSize)
+}
+
+func verifyGitcrawlSQLiteHydration(
+	response *http.Response,
+	expectedDigest string,
+	expectedSize int64,
+) error {
+	advertised := strings.TrimSpace(response.Header.Get("x-crawl-content-sha256"))
+	if advertised == "" {
+		return fmt.Errorf("downloaded SQLite snapshot is missing x-crawl-content-sha256")
+	}
+	if !strings.EqualFold(advertised, expectedDigest) {
 		return fmt.Errorf(
 			"downloaded SQLite snapshot advertises digest %s, want %s",
 			advertised,
-			snapshot.ID,
+			expectedDigest,
+		)
+	}
+	if expectedSize <= 0 {
+		return fmt.Errorf("uploaded SQLite manifest source size must be positive, got %d", expectedSize)
+	}
+	contentLength := response.ContentLength
+	if contentLength <= 0 {
+		header := strings.TrimSpace(response.Header.Get("content-length"))
+		if header == "" {
+			return fmt.Errorf("downloaded SQLite snapshot is missing a positive Content-Length")
+		}
+		parsed, err := strconv.ParseInt(header, 10, 64)
+		if err != nil || parsed <= 0 {
+			return fmt.Errorf("downloaded SQLite snapshot has invalid Content-Length %q", header)
+		}
+		contentLength = parsed
+	}
+	if contentLength != expectedSize {
+		return fmt.Errorf(
+			"downloaded SQLite snapshot Content-Length %d does not match uploaded source size %d",
+			contentLength,
+			expectedSize,
 		)
 	}
 	hash := sha256.New()
-	if _, err := io.Copy(hash, response.Body); err != nil {
-		return fmt.Errorf("hash downloaded SQLite snapshot: %w", err)
+	written, err := io.CopyN(hash, response.Body, expectedSize)
+	if err != nil {
+		return fmt.Errorf(
+			"downloaded SQLite snapshot truncated after %d of %d bytes: %w",
+			written,
+			expectedSize,
+			err,
+		)
+	}
+	var extra [1]byte
+	n, err := response.Body.Read(extra[:])
+	if n > 0 {
+		return fmt.Errorf(
+			"downloaded SQLite snapshot exceeds Content-Length %d",
+			expectedSize,
+		)
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("check downloaded SQLite snapshot boundary: %w", err)
 	}
 	actual := fmt.Sprintf("%x", hash.Sum(nil))
-	if actual != snapshot.ID {
+	if actual != expectedDigest {
 		return fmt.Errorf(
 			"downloaded SQLite snapshot digest %s does not match source %s",
 			actual,
-			snapshot.ID,
+			expectedDigest,
 		)
 	}
 	return nil
