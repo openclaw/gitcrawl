@@ -4939,7 +4939,9 @@ func TestClusterCommandPersistsDurableClusters(t *testing.T) {
 	if err := run.Run(ctx, []string{"--config", configPath, "cluster", "openclaw/openclaw", "--threshold", "0.90", "--limit", "2", "--json"}); err != nil {
 		t.Fatalf("explicit partial model migration cluster: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"complete": false`) || !strings.Contains(stdout.String(), `"missing": 1`) {
+	if !strings.Contains(stdout.String(), `"complete": false`) ||
+		!strings.Contains(stdout.String(), `"partial": true`) ||
+		!strings.Contains(stdout.String(), `"missing": 1`) {
 		t.Fatalf("partial cluster coverage output = %q", stdout.String())
 	}
 

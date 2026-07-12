@@ -1123,7 +1123,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		vectors = vectors[:limit]
 	}
 	coverage.Processed = len(vectors)
-	coverage.Partial = len(vectors) < availableFresh
+	coverage.Partial = (coverage.Supported && !coverage.Complete) || len(vectors) < availableFresh
 	if coverage.Partial {
 		coverage.Complete = false
 	}
