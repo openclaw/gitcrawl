@@ -305,6 +305,37 @@ func TestArchiveCoveragePRFilesRequireCurrentObservation(t *testing.T) {
 		t.Fatalf("newer accepted evidence = %+v, %v", accepted, err)
 	}
 	assertMetric(1, 0, 0, 1, false)
+
+	if applied, err := st.ReserveThreadChildObservation(
+		ctx,
+		thread.ID,
+		ThreadChildPullRequestFiles,
+		thread.UpdatedAtGitHub,
+		2,
+	); err != nil || !applied {
+		t.Fatalf("reserve current PR file observation = %t, %v", applied, err)
+	}
+	if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{
+		ThreadID:     thread.ID,
+		RepoID:       repoID,
+		Number:       thread.Number,
+		ChangedFiles: 1,
+		RawJSON:      "{}",
+		FetchedAt:    "2026-07-12T12:02:00Z",
+		UpdatedAt:    "2026-07-12T12:02:00Z",
+	}, []PullRequestFile{{
+		ThreadID:  thread.ID,
+		Position:  0,
+		Path:      "README.md",
+		RawJSON:   "{}",
+		FetchedAt: "2026-07-12T12:02:00Z",
+	}}, nil, nil, nil, PullRequestHydrationFamilies{
+		Details: true,
+		Files:   true,
+	}); err != nil {
+		t.Fatalf("persist ordered PR file evidence: %v", err)
+	}
+	assertMetric(1, 1, 0, 0, true)
 }
 
 func TestArchiveCoveragePRFilesUsesLegacySnapshotProof(t *testing.T) {
