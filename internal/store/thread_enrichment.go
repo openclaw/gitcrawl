@@ -200,8 +200,7 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 
 	created := false
 	switch {
-	case observedErr == nil &&
-		(observedID == latestID || timestampBefore(revision.SourceUpdatedAt, latestSourceUpdatedAt)):
+	case observedErr == nil:
 		revision.ID = observedID
 		if _, err := s.q().ExecContext(ctx, `
 			update thread_revisions
@@ -757,10 +756,4 @@ func latestTimestamp(values ...string) string {
 		return latestRaw
 	}
 	return fallback
-}
-
-func timestampBefore(left, right string) bool {
-	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
-	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
-	return leftErr == nil && rightErr == nil && leftTime.Before(rightTime)
 }
