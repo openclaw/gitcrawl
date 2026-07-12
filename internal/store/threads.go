@@ -129,7 +129,13 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 	if options.IncompleteEvidence {
 		storedObservationSequence = -storedObservationSequence
 		if samePayload {
-			storedObservationSequence = existing.observationSequence
+			storedObservationSequence = max(
+				options.ObservationSequence,
+				observationSequenceOrderValue(existing.observationSequence),
+			)
+			if existing.observationSequence < 0 {
+				storedObservationSequence = -storedObservationSequence
+			}
 		}
 	}
 	if exists && samePayload && !options.IncompleteEvidence && existing.observationSequence < 0 {

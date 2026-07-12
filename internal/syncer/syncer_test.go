@@ -21,8 +21,9 @@ type fakeGitHub struct{}
 
 type observationProbeGitHub struct {
 	fakeGitHub
-	store    *store.Store
-	sequence int64
+	store         *store.Store
+	sequence      int64
+	childSequence int64
 }
 
 func (f *observationProbeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.Reporter) (map[string]any, error) {
@@ -33,10 +34,23 @@ func (f *observationProbeGitHub) GetRepo(ctx context.Context, owner, repo string
 	`).Scan(&f.sequence); err != nil {
 		return nil, err
 	}
-	if f.sequence <= 0 {
-		return nil, errors.New("thread observation sequence was not allocated before fetch")
-	}
 	return f.fakeGitHub.GetRepo(ctx, owner, repo, reporter)
+}
+
+func (f *observationProbeGitHub) ListIssueComments(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	if err := f.store.DB().QueryRowContext(ctx, `
+		select value
+		from thread_observation_sequence
+		where id = 1
+	`).Scan(&f.childSequence); err != nil {
+		return nil, err
+	}
+	return f.fakeGitHub.ListIssueComments(ctx, owner, repo, number, reporter)
 }
 
 type mutableCommentGitHub struct {
@@ -100,6 +114,43 @@ type sameHeadWorkflowGitHub struct {
 	version int
 	fetched chan struct{}
 	release chan struct{}
+}
+
+type delayedVersionedPRGitHub struct {
+	versionedPRDetailsGitHub
+	fetched chan struct{}
+	release chan struct{}
+}
+
+func (f delayedVersionedPRGitHub) GetIssue(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) (map[string]any, error) {
+	if f.fetched != nil {
+		close(f.fetched)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.release:
+		}
+	}
+	return map[string]any{
+		"id":                 2,
+		"number":             number,
+		"state":              "open",
+		"title":              fmt.Sprintf("parent-v%d", f.version),
+		"body":               fmt.Sprintf("parent body v%d", f.version),
+		"html_url":           fmt.Sprintf("https://github.com/openclaw/gitcrawl/pull/%d", number),
+		"created_at":         "2026-07-12T00:00:00Z",
+		"updated_at":         fmt.Sprintf("2026-07-12T00:00:0%dZ", f.version),
+		"labels":             []map[string]any{},
+		"assignees":          []map[string]any{},
+		"user":               map[string]any{"login": "alice", "type": "User"},
+		"author_association": "MEMBER",
+		"pull_request":       map[string]any{"url": fmt.Sprintf("https://api.github.com/repos/openclaw/gitcrawl/pulls/%d", number)},
+	}, nil
 }
 
 func (f *interleavedEvidenceGitHub) ListIssueComments(
@@ -531,7 +582,7 @@ func (f *delayedObservationGitHub) ListRepositoryIssues(
 		"body":               state + " body",
 		"html_url":           "https://github.com/openclaw/gitcrawl/issues/7",
 		"created_at":         "2026-07-12T00:00:00Z",
-		"updated_at":         "2026-07-12T00:00:00Z",
+		"updated_at":         fmt.Sprintf("2026-07-12T00:00:0%dZ", call),
 		"labels":             []map[string]any{},
 		"assignees":          []map[string]any{},
 		"user":               map[string]any{"login": "vincentkoc", "type": "User"},
@@ -1118,7 +1169,7 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 }
 
-func TestSyncAllocatesObservationSequenceBeforeFetching(t *testing.T) {
+func TestSyncAllocatesObservationSequenceAfterParentFetch(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -1136,8 +1187,22 @@ func TestSyncAllocatesObservationSequenceBeforeFetching(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if client.sequence <= 0 {
-		t.Fatal("GitHub fetch did not observe an allocated sequence")
+	if client.sequence != 0 {
+		t.Fatalf("repository fetch observed sequence %d, want allocation deferred until parent observation", client.sequence)
+	}
+	if client.childSequence != 1 {
+		t.Fatalf("child fetch observed sequence %d, want parent generation 1", client.childSequence)
+	}
+	var allocatedSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select value
+		from thread_observation_sequence
+		where id = 1
+	`).Scan(&allocatedSequence); err != nil {
+		t.Fatalf("read allocated observation sequence: %v", err)
+	}
+	if allocatedSequence != 1 {
+		t.Fatalf("allocated observation sequence = %d, want 1", allocatedSequence)
 	}
 	var revisionSequences int
 	if err := st.DB().QueryRowContext(ctx, `
@@ -1148,6 +1213,89 @@ func TestSyncAllocatesObservationSequenceBeforeFetching(t *testing.T) {
 	}
 	if revisionSequences != 1 {
 		t.Fatalf("revision observation sequence count = %d, want 1", revisionSequences)
+	}
+}
+
+func TestSyncDelayedNewerParentUsesSameGenerationForAllChildren(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	slowFetched := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	slow := New(delayedVersionedPRGitHub{
+		versionedPRDetailsGitHub: versionedPRDetailsGitHub{version: 2},
+		fetched:                  slowFetched,
+		release:                  releaseSlow,
+	}, st)
+	fast := New(delayedVersionedPRGitHub{
+		versionedPRDetailsGitHub: versionedPRDetailsGitHub{version: 1},
+	}, st)
+	now := func() time.Time { return time.Date(2026, 7, 12, 0, 1, 0, 0, time.UTC) }
+	slow.now = now
+	fast.now = now
+	options := Options{
+		Owner:            "openclaw",
+		Repo:             "gitcrawl",
+		Numbers:          []int{8},
+		IncludeComments:  true,
+		IncludePRDetails: true,
+	}
+	type syncResult struct {
+		stats Stats
+		err   error
+	}
+	slowResult := make(chan syncResult, 1)
+	go func() {
+		stats, err := slow.Sync(ctx, options)
+		slowResult <- syncResult{stats: stats, err: err}
+	}()
+	awaitSyncSignal(t, slowFetched, "delayed newer parent fetch")
+
+	fastStats, err := fast.Sync(ctx, options)
+	if err != nil {
+		t.Fatalf("fast older-source sync: %v", err)
+	}
+	if fastStats.PRDetailsSynced != 1 {
+		t.Fatalf("fast older-source stats = %#v", fastStats)
+	}
+	close(releaseSlow)
+	slowCompleted := <-slowResult
+	if slowCompleted.err != nil {
+		t.Fatalf("delayed newer-source sync: %v", slowCompleted.err)
+	}
+	if slowCompleted.stats.PRDetailsSynced != 1 {
+		t.Fatalf("delayed newer-source stats = %#v", slowCompleted.stats)
+	}
+
+	thread, detail := assertVersionedPRHydration(t, ctx, st, 2, true)
+	if thread.Title != "parent-v2" {
+		t.Fatalf("parent title = %q, want parent-v2", thread.Title)
+	}
+	for _, family := range []store.ThreadChildObservationFamily{
+		store.ThreadChildComments,
+		store.ThreadChildPullRequestDetails,
+		store.ThreadChildPullRequestFiles,
+		store.ThreadChildPullRequestCommits,
+		store.ThreadChildPullRequestChecks,
+		store.ThreadChildReviewThreads,
+	} {
+		assertChildReservation(t, ctx, st, thread.ID, family, 2)
+	}
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
+	var parentSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from threads
+		where id = ?
+	`, thread.ID).Scan(&parentSequence); err != nil {
+		t.Fatalf("read parent observation sequence: %v", err)
+	}
+	if parentSequence != 2 {
+		t.Fatalf("parent observation sequence = %d, want child generation 2", parentSequence)
 	}
 }
 
@@ -1305,13 +1453,13 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 	}
 }
 
-func TestSyncPartialPRCommentsAreReleaseOrderIndependent(t *testing.T) {
+func TestSyncPartialPRCommentsUseParentObservationGeneration(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		newerFirst bool
+		name                string
+		secondPersistsFirst bool
 	}{
-		{name: "lower sequence persists first"},
-		{name: "higher sequence persists first", newerFirst: true},
+		{name: "first child snapshot persists first"},
+		{name: "second child snapshot persists first", secondPersistsFirst: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -1343,7 +1491,7 @@ func TestSyncPartialPRCommentsAreReleaseOrderIndependent(t *testing.T) {
 				client.secondFetched,
 				client.releaseFirst,
 				client.releaseSecond,
-				test.newerFirst,
+				test.secondPersistsFirst,
 			)
 
 			repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
@@ -1358,8 +1506,9 @@ func TestSyncPartialPRCommentsAreReleaseOrderIndependent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("comments: %v", err)
 			}
-			if len(comments) != 1 || comments[0].Body != "comment-v2" {
-				t.Fatalf("comments = %+v, want higher-sequence snapshot", comments)
+			wantBody := "comment-v2"
+			if len(comments) != 1 || comments[0].Body != wantBody {
+				t.Fatalf("comments = %+v, want %s from parent generation 2", comments, wantBody)
 			}
 			assertChildReservation(
 				t,
@@ -1373,13 +1522,13 @@ func TestSyncPartialPRCommentsAreReleaseOrderIndependent(t *testing.T) {
 	}
 }
 
-func TestSyncPartialPRDetailsAreReleaseOrderIndependent(t *testing.T) {
+func TestSyncPartialPRDetailsUseParentObservationGeneration(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		newerFirst bool
+		name                string
+		secondPersistsFirst bool
 	}{
-		{name: "lower sequence persists first"},
-		{name: "higher sequence persists first", newerFirst: true},
+		{name: "first child snapshot persists first"},
+		{name: "second child snapshot persists first", secondPersistsFirst: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -1411,7 +1560,7 @@ func TestSyncPartialPRDetailsAreReleaseOrderIndependent(t *testing.T) {
 				client.secondFetched,
 				client.releaseFirst,
 				client.releaseSecond,
-				test.newerFirst,
+				test.secondPersistsFirst,
 			)
 
 			thread, detail := assertVersionedPRHydration(t, ctx, st, 2, true)
@@ -1425,8 +1574,9 @@ func TestSyncPartialPRDetailsAreReleaseOrderIndependent(t *testing.T) {
 				assertChildReservation(t, ctx, st, thread.ID, family, 2)
 			}
 			assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
-			if detail.HeadSHA != "head-v2" {
-				t.Fatalf("detail = %+v, want higher-sequence snapshot", detail)
+			wantHead := "head-v2"
+			if detail.HeadSHA != wantHead {
+				t.Fatalf("detail = %+v, want %s from parent generation 2", detail, wantHead)
 			}
 		})
 	}
@@ -1610,7 +1760,7 @@ func runInterleavedSyncs(
 	s *Syncer,
 	options Options,
 	firstFetched, secondFetched, releaseFirst, releaseSecond chan struct{},
-	newerFirst bool,
+	secondPersistsFirst bool,
 ) {
 	t.Helper()
 	type result struct {
@@ -1631,7 +1781,7 @@ func runInterleavedSyncs(
 	}()
 	awaitSyncSignal(t, secondFetched, "higher-sequence hydration fetch")
 
-	if newerFirst {
+	if secondPersistsFirst {
 		close(releaseSecond)
 		if second := <-secondResult; second.err != nil {
 			t.Fatalf("higher-sequence sync: %v", second.err)

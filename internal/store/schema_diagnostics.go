@@ -10,21 +10,22 @@ import (
 )
 
 type SchemaDiagnostics struct {
-	Path                    string                    `json:"path"`
-	Exists                  bool                      `json:"exists"`
-	CurrentVersion          int                       `json:"current_version"`
-	SupportedVersion        int                       `json:"supported_version"`
-	State                   string                    `json:"state"`
-	Current                 bool                      `json:"current"`
-	PendingMigration        bool                      `json:"pending_migration"`
-	Legacy                  bool                      `json:"legacy"`
-	Newer                   bool                      `json:"newer"`
-	ChildReservations       bool                      `json:"child_observation_reservations"`
-	WorkflowRunReservations bool                      `json:"workflow_run_observation_reservations"`
-	PendingMigrations       []string                  `json:"pending_migrations"`
-	PRDetails               PRDetailSchemaDiagnostics `json:"pr_details"`
-	NextSteps               []string                  `json:"next_steps,omitempty"`
-	Error                   string                    `json:"error,omitempty"`
+	Path                     string                    `json:"path"`
+	Exists                   bool                      `json:"exists"`
+	CurrentVersion           int                       `json:"current_version"`
+	SupportedVersion         int                       `json:"supported_version"`
+	State                    string                    `json:"state"`
+	Current                  bool                      `json:"current"`
+	PendingMigration         bool                      `json:"pending_migration"`
+	Legacy                   bool                      `json:"legacy"`
+	Newer                    bool                      `json:"newer"`
+	ChildReservations        bool                      `json:"child_observation_reservations"`
+	ChildReservationsCurrent bool                      `json:"child_observation_reservations_current"`
+	WorkflowRunReservations  bool                      `json:"workflow_run_observation_reservations"`
+	PendingMigrations        []string                  `json:"pending_migrations"`
+	PRDetails                PRDetailSchemaDiagnostics `json:"pr_details"`
+	NextSteps                []string                  `json:"next_steps,omitempty"`
+	Error                    string                    `json:"error,omitempty"`
 }
 
 type PRDetailSchemaDiagnostics struct {
@@ -81,6 +82,8 @@ func InspectSchema(ctx context.Context, path string) SchemaDiagnostics {
 	diag.CurrentVersion = current
 	diag.PRDetails = inspectPRDetailSchema(ctx, st)
 	diag.ChildReservations = st.hasTable(ctx, "thread_child_observation_reservations")
+	diag.ChildReservationsCurrent = diag.ChildReservations &&
+		st.threadChildObservationReservationsHaveCurrentShape(ctx)
 	diag.WorkflowRunReservations = st.hasTable(ctx, "workflow_run_observation_reservations")
 	diag.PendingMigrations = pendingCompatibilityMigrations(ctx, st, current, diag.PRDetails)
 	if diag.PendingMigrations == nil {
@@ -171,6 +174,8 @@ func pendingCompatibilityMigrations(ctx context.Context, st *Store, current int,
 	}
 	if current > 0 && !st.hasTable(ctx, "thread_child_observation_reservations") {
 		pending = append(pending, "thread_child_observation_reservations_table")
+	} else if current > 0 && !st.threadChildObservationReservationsHaveCurrentShape(ctx) {
+		pending = append(pending, "thread_child_observation_reservations_shape")
 	}
 	if current > 0 && !st.hasTable(ctx, "workflow_run_observation_reservations") {
 		pending = append(pending, "workflow_run_observation_reservations_table")

@@ -122,10 +122,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
-	if err != nil {
-		return Stats{}, err
-	}
 	repoRaw, err := s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
 	if err != nil {
 		return Stats{}, err
@@ -167,6 +163,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		closedOverlapNumbers[intValue(row["number"])] = struct{}{}
 	}
 
+	// Bind every child snapshot to the generation of the parent rows just observed.
+	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
+	if err != nil {
+		return Stats{}, err
+	}
 	payloads := make([]threadSyncPayload, 0, len(rows))
 	for _, row := range rows {
 		payload := threadSyncPayload{row: row}

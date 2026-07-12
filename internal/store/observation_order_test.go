@@ -468,8 +468,8 @@ func TestUpsertThreadObservationTracksIncompleteEvidenceGeneration(t *testing.T)
 	if err != nil || !repeated.Applied {
 		t.Fatalf("repeated incomplete observation = %+v, %v", repeated, err)
 	}
-	if sequence := readSequence(); sequence != 1 {
-		t.Fatalf("repeated incomplete sequence = %d, want 1", sequence)
+	if sequence := readSequence(); sequence != 3 {
+		t.Fatalf("repeated incomplete sequence = %d, want 3", sequence)
 	}
 
 	thread.Title = "metadata update"
@@ -530,6 +530,82 @@ func TestUpsertThreadObservationTracksIncompleteEvidenceGeneration(t *testing.T)
 	}
 	if sequence := readSequence(); sequence != -5 {
 		t.Fatalf("sequence after delayed hydration = %d, want -5", sequence)
+	}
+}
+
+func TestUpsertThreadObservationRejectsDelayedIntermediateParentAfterIncompleteReplay(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
+		Title: "canonical", Body: "canonical body",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/1",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         `{"state":"canonical"}`,
+		ContentHash:     "canonical",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:01:00Z",
+	}
+	initial, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil || !initial.Applied || !initial.EvidenceApplied {
+		t.Fatalf("initial complete observation = %+v, %v", initial, err)
+	}
+	replayed, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 3,
+	})
+	if err != nil || !replayed.Applied || replayed.ObservationSequence != 3 ||
+		replayed.EvidenceApplied {
+		t.Fatalf("same-payload incomplete replay = %+v, %v", replayed, err)
+	}
+
+	delayed := thread
+	delayed.Title = "delayed conflict"
+	delayed.Body = "must not replace canonical"
+	delayed.RawJSON = `{"state":"delayed-conflict"}`
+	delayed.ContentHash = "delayed-conflict"
+	conflict, err := st.UpsertThreadObservation(ctx, delayed, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 2,
+	})
+	if err != nil {
+		t.Fatalf("delayed intermediate conflict: %v", err)
+	}
+	if conflict.Applied || conflict.EvidenceApplied || conflict.ObservationSequence != 3 {
+		t.Fatalf("delayed intermediate conflict = %+v, want rejected below parent high-water 3", conflict)
+	}
+
+	var title string
+	var parentSequence, evidenceSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select title, observation_sequence, evidence_observation_sequence
+		from threads
+		where id = ?
+	`, initial.ID).Scan(&title, &parentSequence, &evidenceSequence); err != nil {
+		t.Fatalf("read canonical parent: %v", err)
+	}
+	if title != "canonical" || parentSequence != 3 || evidenceSequence != 1 {
+		t.Fatalf(
+			"canonical parent = title %q, parent %d, evidence %d; want canonical/3/1",
+			title,
+			parentSequence,
+			evidenceSequence,
+		)
 	}
 }
 
