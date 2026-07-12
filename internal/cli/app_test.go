@@ -694,7 +694,7 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("CRAWL_REMOTE_TOKEN", "test-token")
 
-	var sawQuery bool
+	var queryArgSets [][]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("authorization"); got != "Bearer test-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
@@ -723,7 +723,12 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 				http.Error(w, "unexpected query", http.StatusBadRequest)
 				return
 			}
-			sawQuery = true
+			argNames := make([]string, 0, len(req.Args))
+			for name := range req.Args {
+				argNames = append(argNames, name)
+			}
+			sort.Strings(argNames)
+			queryArgSets = append(queryArgSets, argNames)
 			_ = json.NewEncoder(w).Encode(crawlremote.QueryResult{
 				Values: []map[string]any{{
 					"thread_id":    10,
@@ -790,8 +795,10 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 	if err := searchApp.Run(ctx, []string{"--config", configPath, "--json", "search", "openclaw/openclaw", "--query", "remote"}); err != nil {
 		t.Fatalf("remote search: %v", err)
 	}
-	if !sawQuery || !strings.Contains(searchOut.String(), `"remote search"`) {
-		t.Fatalf("remote search did not use worker query: saw=%v out=%s", sawQuery, searchOut.String())
+	if len(queryArgSets) != 1 ||
+		!slices.Equal(queryArgSets[0], []string{"limit", "mode", "owner", "query", "repo"}) ||
+		!strings.Contains(searchOut.String(), `"remote search"`) {
+		t.Fatalf("remote search query args=%v out=%s", queryArgSets, searchOut.String())
 	}
 	ghSearchApp := New()
 	var ghSearchOut bytes.Buffer
@@ -801,6 +808,10 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 	}
 	if !strings.Contains(ghSearchOut.String(), `"number": 42`) || !strings.Contains(ghSearchOut.String(), `"url": "https://github.com/openclaw/openclaw/issues/42"`) {
 		t.Fatalf("remote gh search output = %s", ghSearchOut.String())
+	}
+	if len(queryArgSets) != 2 ||
+		!slices.Equal(queryArgSets[1], []string{"kind", "limit", "owner", "query", "repo", "state"}) {
+		t.Fatalf("remote gh search query args=%v", queryArgSets)
 	}
 	doctorApp := New()
 	var doctorOut bytes.Buffer
@@ -829,8 +840,15 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 func testSnapshotPublishContract() crawlremote.Contract {
 	contract := crawlremote.BaseContract()
 	contract.Apps = []crawlremote.AppSpec{{
-		App:     "gitcrawl",
-		Queries: gitcrawlCloudReaderQuerySpecs(),
+		App: "gitcrawl",
+		Queries: []crawlremote.QuerySpec{
+			{Name: "gitcrawl.threads.search", Args: []string{"owner", "repo", "query", "kind", "state", "mode", "limit"}},
+			{Name: "gitcrawl.clusters.related", Args: []string{"owner", "repo", "number"}},
+			{Name: "gitcrawl.clusters.list", Args: []string{"owner", "repo", "status", "min_size"}},
+			{Name: "gitcrawl.clusters.members", Args: []string{"owner", "repo", "cluster_id"}},
+			{Name: "gitcrawl.pull_requests.review_context", Args: []string{"owner", "repo", "number"}},
+			{Name: "gitcrawl.coverage", Args: []string{"dataset"}},
+		},
 		IngestTables: []crawlremote.IngestTableSpec{
 			{Name: "repositories", Columns: gitcrawlRepositoryColumns},
 			{Name: "threads", Columns: gitcrawlThreadColumns},

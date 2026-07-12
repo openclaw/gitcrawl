@@ -36,7 +36,7 @@ var gitcrawlCloudCoverageColumns = []string{
 
 func gitcrawlCloudReaderQuerySpecs() []crawlremote.QuerySpec {
 	return []crawlremote.QuerySpec{
-		{Name: "gitcrawl.threads.search", Args: []string{"owner", "repo", "query", "kind", "state"}},
+		{Name: "gitcrawl.threads.search", Args: []string{"owner", "repo", "query", "kind", "state", "mode", "limit"}},
 		{Name: "gitcrawl.clusters.related", Args: []string{"owner", "repo", "number"}},
 		{Name: "gitcrawl.clusters.list", Args: []string{"owner", "repo", "status", "min_size"}},
 		{Name: "gitcrawl.clusters.members", Args: []string{"owner", "repo", "cluster_id"}},
