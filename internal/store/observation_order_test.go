@@ -193,6 +193,137 @@ func TestUpsertThreadObservationIsIdempotentButRejectsTiedConflicts(t *testing.T
 	}
 }
 
+func TestUpsertThreadObservationPreservesEvidenceGenerationForIncompletePayloads(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
+		Title: "hydrated", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: `{"state":"hydrated"}`,
+		ContentHash: "hydrated", UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt: "2026-07-12T00:01:00Z",
+	}
+	initial, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{ObservationSequence: 1})
+	if err != nil || !initial.Applied {
+		t.Fatalf("initial observation = %+v, %v", initial, err)
+	}
+	readSequence := func() int64 {
+		t.Helper()
+		var sequence int64
+		if err := st.DB().QueryRowContext(ctx, `
+			select observation_sequence
+			from threads
+			where id = ?
+		`, initial.ID).Scan(&sequence); err != nil {
+			t.Fatalf("read observation sequence: %v", err)
+		}
+		return sequence
+	}
+
+	repeated, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		PreserveObservationSequence: true,
+		ObservationSequence:         3,
+	})
+	if err != nil || !repeated.Applied {
+		t.Fatalf("repeated incomplete observation = %+v, %v", repeated, err)
+	}
+	if sequence := readSequence(); sequence != 1 {
+		t.Fatalf("repeated incomplete sequence = %d, want 1", sequence)
+	}
+
+	thread.Title = "metadata update"
+	thread.RawJSON = `{"state":"metadata-update"}`
+	thread.ContentHash = "metadata-update"
+	thread.UpdatedAtGitHub = "2026-07-12T00:00:01Z"
+	updated, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		PreserveObservationSequence: true,
+		ObservationSequence:         4,
+	})
+	if err != nil || !updated.Applied {
+		t.Fatalf("newer incomplete observation = %+v, %v", updated, err)
+	}
+	if sequence := readSequence(); sequence != 1 {
+		t.Fatalf("newer incomplete sequence = %d, want 1", sequence)
+	}
+
+	hydrated, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	})
+	if err != nil || !hydrated.Applied {
+		t.Fatalf("same-source hydration = %+v, %v", hydrated, err)
+	}
+	if sequence := readSequence(); sequence != 2 {
+		t.Fatalf("same-source hydration sequence = %d, want 2", sequence)
+	}
+
+	thread.Title = "same-clock conflict"
+	thread.RawJSON = `{"state":"same-clock-conflict"}`
+	thread.ContentHash = "same-clock-conflict"
+	conflict, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		PreserveObservationSequence: true,
+		ObservationSequence:         5,
+	})
+	if err != nil || !conflict.Applied {
+		t.Fatalf("same-clock incomplete conflict = %+v, %v", conflict, err)
+	}
+	if sequence := readSequence(); sequence != 5 {
+		t.Fatalf("same-clock conflict sequence = %d, want 5", sequence)
+	}
+}
+
+func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	result, err := st.UpsertThreadObservation(ctx, Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
+		Title: "metadata", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: `{}`,
+		ContentHash: "metadata", UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt: "2026-07-12T00:01:00Z",
+	}, UpsertThreadOptions{
+		PreserveObservationSequence: true,
+		ObservationSequence:         7,
+	})
+	if err != nil || !result.Applied {
+		t.Fatalf("incomplete observation = %+v, %v", result, err)
+	}
+	var sequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from threads
+		where id = ?
+	`, result.ID).Scan(&sequence); err != nil {
+		t.Fatalf("read observation sequence: %v", err)
+	}
+	if sequence != 0 {
+		t.Fatalf("new incomplete sequence = %d, want 0", sequence)
+	}
+}
+
 func TestUpsertThreadObservationUsesSequenceWithoutSourceTimestamp(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

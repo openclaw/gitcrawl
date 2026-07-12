@@ -851,8 +851,25 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		t.Fatalf("repo: %v", err)
 	}
 	assertDocumentFTSCount(t, st, "same", 1)
-	client.updatedAt = "2026-04-27T00:00:00Z"
 	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
+	if err != nil {
+		t.Fatalf("same-source metadata sync: %v", err)
+	}
+	if !stats.MetadataOnly || stats.ThreadsSynced != 2 || stats.ThreadsSkippedStale != 0 {
+		t.Fatalf("same-source metadata stats = %#v", stats)
+	}
+	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("same-source archive coverage: %v", err)
+	}
+	if len(coverage.Rows) != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Fresh != 2 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Fresh != 2 {
+		t.Fatalf("same-source metadata coverage = %+v", coverage.Rows)
+	}
+
+	client.updatedAt = "2026-04-27T00:00:00Z"
+	stats, err = s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"})
 	if err != nil {
 		t.Fatalf("metadata sync: %v", err)
 	}
@@ -867,7 +884,7 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		t.Fatalf("metadata sync erased known draft state: %+v", threads)
 	}
 	assertDocumentFTSCount(t, st, "same", 1)
-	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
+	coverage, err = st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
 	if err != nil {
 		t.Fatalf("archive coverage: %v", err)
 	}

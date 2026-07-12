@@ -383,6 +383,136 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	}
 }
 
+func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID:        repoID,
+		GitHubID:      "101",
+		Number:        101,
+		Kind:          "issue",
+		State:         "open",
+		Title:         "clockless migration",
+		HTMLURL:       "https://github.com/openclaw/gitcrawl/issues/101",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "clockless",
+		UpdatedAt:     "2026-07-12T00:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(
+		ctx,
+		ThreadEvidence{Thread: thread},
+		"2026-07-12T00:01:00Z",
+	)
+	if err != nil {
+		t.Fatalf("thread enrichment: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set updated_at = '2026-07-12T00:02:00Z'
+		where id = ?
+	`, thread.ID); err != nil {
+		t.Fatalf("advance thread after revision: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	for _, stmt := range []string{
+		`create table thread_revisions_legacy (
+			id integer primary key,
+			thread_id integer not null references threads(id) on delete cascade,
+			source_updated_at text,
+			content_hash text not null,
+			title_hash text not null,
+			body_hash text not null,
+			labels_hash text not null,
+			created_at text not null,
+			unique(thread_id, content_hash)
+		)`,
+		`insert into thread_revisions_legacy(
+			id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, created_at
+		)
+		select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, created_at
+		from thread_revisions`,
+		`drop table thread_revisions`,
+		`alter table thread_revisions_legacy rename to thread_revisions`,
+		`alter table threads drop column observation_sequence`,
+		`drop table thread_observation_sequence`,
+		`pragma user_version = 4`,
+	} {
+		if _, err := raw.ExecContext(ctx, stmt); err != nil {
+			_ = raw.Close()
+			t.Fatalf("build stale legacy fixture: %v", err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var revisionSequence, threadSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_revisions
+		where id = ?
+	`, enrichment.RevisionID).Scan(&revisionSequence); err != nil {
+		t.Fatalf("read migrated revision sequence: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from threads
+		where id = ?
+	`, thread.ID).Scan(&threadSequence); err != nil {
+		t.Fatalf("read migrated thread sequence: %v", err)
+	}
+	if threadSequence != revisionSequence+1 {
+		t.Fatalf(
+			"migrated stale sequence = %d, want revision sequence %d + 1",
+			threadSequence,
+			revisionSequence,
+		)
+	}
+	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("archive coverage after migration: %v", err)
+	}
+	if len(coverage.Rows) != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Stale != 1 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Stale != 1 {
+		t.Fatalf("migrated stale enrichment coverage = %+v", coverage.Rows)
+	}
+}
+
 func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")

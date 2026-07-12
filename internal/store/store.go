@@ -281,12 +281,33 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `
+		with latest_revisions as (
+			select
+				tr.thread_id,
+				tr.observation_sequence,
+				coalesce(nullif(tr.source_updated_at, ''), tr.created_at) as observed_at,
+				row_number() over (
+					partition by tr.thread_id
+					order by
+						gitcrawl_timestamp_key(nullif(tr.source_updated_at, '')) desc,
+						tr.observation_sequence desc,
+						tr.id desc
+				) as revision_rank
+			from thread_revisions tr
+		)
 		update threads
 		set observation_sequence = coalesce(
 			(
-				select max(tr.observation_sequence)
-				from thread_revisions tr
-				where tr.thread_id = threads.id
+				select case
+					when julianday(lr.observed_at) >= julianday(
+						coalesce(nullif(threads.updated_at_gh, ''), threads.updated_at)
+					)
+					then lr.observation_sequence
+					else lr.observation_sequence + 1
+				end
+				from latest_revisions lr
+				where lr.thread_id = threads.id
+					and lr.revision_rank = 1
 			),
 			id
 		)

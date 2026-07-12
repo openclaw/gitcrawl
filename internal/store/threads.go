@@ -40,8 +40,9 @@ type Thread struct {
 }
 
 type UpsertThreadOptions struct {
-	PreserveDraft       bool
-	ObservationSequence int64
+	PreserveDraft               bool
+	PreserveObservationSequence bool
+	ObservationSequence         int64
 }
 
 type UpsertThreadResult struct {
@@ -108,6 +109,26 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		return UpsertThreadResult{}, fmt.Errorf("read current thread observation: %w", err)
 	}
 	exists := err == nil
+	expectedDraft := int64(boolInt(thread.IsDraft))
+	if exists && options.PreserveDraft {
+		expectedDraft = existing.isDraft
+	}
+	samePayload := exists &&
+		existing.rawJSON == thread.RawJSON &&
+		existing.contentHash == thread.ContentHash &&
+		existing.state == thread.State &&
+		existing.isDraft == expectedDraft
+	if options.PreserveObservationSequence {
+		if !exists {
+			options.ObservationSequence = 0
+		} else {
+			incomingKey, incomingValid := timestampOrderKey(thread.UpdatedAtGitHub)
+			currentKey, currentValid := timestampOrderKey(existing.sourceUpdatedAt)
+			if samePayload || (incomingValid && (!currentValid || incomingKey > currentKey)) {
+				options.ObservationSequence = existing.observationSequence
+			}
+		}
+	}
 	if exists {
 		order, err := compareObservationOrder(
 			observationOrder{
@@ -130,24 +151,20 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 			}, nil
 		}
 		if order == 0 {
-			expectedDraft := int64(boolInt(thread.IsDraft))
-			if options.PreserveDraft {
-				expectedDraft = existing.isDraft
+			if samePayload {
+				if !options.PreserveObservationSequence {
+					return UpsertThreadResult{
+						ID:            existing.id,
+						Applied:       false,
+						PreviousState: existing.state,
+					}, nil
+				}
+			} else {
+				return UpsertThreadResult{}, fmt.Errorf(
+					"conflicting thread observations share sequence %d",
+					options.ObservationSequence,
+				)
 			}
-			if existing.rawJSON == thread.RawJSON &&
-				existing.contentHash == thread.ContentHash &&
-				existing.state == thread.State &&
-				existing.isDraft == expectedDraft {
-				return UpsertThreadResult{
-					ID:            existing.id,
-					Applied:       false,
-					PreviousState: existing.state,
-				}, nil
-			}
-			return UpsertThreadResult{}, fmt.Errorf(
-				"conflicting thread observations share sequence %d",
-				options.ObservationSequence,
-			)
 		}
 	}
 	params := storedb.UpsertThreadParams{

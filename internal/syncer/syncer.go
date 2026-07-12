@@ -233,8 +233,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
 			}
 			upsert, err := st.UpsertThreadObservation(ctx, thread, store.UpsertThreadOptions{
-				PreserveDraft:       thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
-				ObservationSequence: observationSequence,
+				PreserveDraft:               thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
+				PreserveObservationSequence: !hasFreshThreadEvidence(options, thread),
+				ObservationSequence:         observationSequence,
 			})
 			if err != nil {
 				return err
