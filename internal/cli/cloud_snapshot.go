@@ -21,10 +21,14 @@ const (
 )
 
 type gitcrawlCloudDataset struct {
-	Name        string
-	Columns     []string
-	Rows        [][]any
-	MaxSourceAt string
+	Name          string
+	Columns       []string
+	Query         string
+	RowCount      int64
+	EligibleCount int64
+	CoveredCount  int64
+	MaxSourceAt   string
+	Complete      bool
 }
 
 type gitcrawlCloudSnapshot struct {
@@ -55,16 +59,21 @@ func buildGitcrawlCloudSnapshot(
 	if err != nil {
 		return gitcrawlCloudSnapshot{}, err
 	}
-	datasets, err := loadGitcrawlCloudDatasets(ctx, db, slices.Contains(capabilities, gitcrawlObservationOrderCapability))
-	if err != nil {
-		return gitcrawlCloudSnapshot{}, err
-	}
-	if len(datasets) == 0 || len(datasets[0].Rows) == 0 {
-		return gitcrawlCloudSnapshot{}, fmt.Errorf("cloud snapshot has no repositories")
-	}
 	hydration, err := gitcrawlCloudHydration(ctx, snapshotPath)
 	if err != nil {
 		return gitcrawlCloudSnapshot{}, err
+	}
+	datasets, err := loadGitcrawlCloudDatasets(
+		ctx,
+		db,
+		slices.Contains(capabilities, gitcrawlObservationOrderCapability),
+		hydration,
+	)
+	if err != nil {
+		return gitcrawlCloudSnapshot{}, err
+	}
+	if len(datasets) == 0 || datasets[0].RowCount == 0 {
+		return gitcrawlCloudSnapshot{}, fmt.Errorf("cloud snapshot has no repositories")
 	}
 	missing := incompleteGitcrawlCloudHydration(hydration)
 	if len(missing) > 0 && !allowIncomplete {
@@ -99,7 +108,12 @@ func gitcrawlCloudManifest(archive string, snapshot gitcrawlCloudSnapshot) crawl
 	}
 }
 
-func loadGitcrawlCloudDatasets(ctx context.Context, db *sql.DB, observationOrder bool) ([]gitcrawlCloudDataset, error) {
+func loadGitcrawlCloudDatasets(
+	ctx context.Context,
+	db *sql.DB,
+	observationOrder bool,
+	hydration crawlstore.EnrichmentCoverage,
+) ([]gitcrawlCloudDataset, error) {
 	threadColumns := append([]string(nil), gitcrawlThreadColumns...)
 	threadQuery, err := gitcrawlThreadExportSQL(ctx, db)
 	if err != nil {
@@ -244,20 +258,33 @@ order by thread_id, position`,
 
 	datasets := make([]gitcrawlCloudDataset, 0, len(specs))
 	for _, spec := range specs {
-		rows, err := publishRows(ctx, db, spec.query, func(values []any) []any { return values })
-		if err != nil {
-			return nil, fmt.Errorf("export cloud dataset %s: %w", spec.name, err)
+		var rowCount int64
+		if err := db.QueryRowContext(
+			ctx,
+			"select count(*) from ("+spec.query+")",
+		).Scan(&rowCount); err != nil {
+			return nil, fmt.Errorf("count cloud dataset %s: %w", spec.name, err)
 		}
 		maxSourceAt, err := latestRFC3339QueryValue(ctx, db, spec.sourceAtQuery)
 		if err != nil {
 			return nil, fmt.Errorf("read cloud dataset %s freshness: %w", spec.name, err)
 		}
-		datasets = append(datasets, gitcrawlCloudDataset{
-			Name:        spec.name,
-			Columns:     spec.columns,
-			Rows:        rows,
-			MaxSourceAt: maxSourceAt,
-		})
+		dataset := gitcrawlCloudDataset{
+			Name:          spec.name,
+			Columns:       spec.columns,
+			Query:         spec.query,
+			RowCount:      rowCount,
+			EligibleCount: rowCount,
+			CoveredCount:  rowCount,
+			MaxSourceAt:   maxSourceAt,
+			Complete:      true,
+		}
+		if observationOrder && spec.name == "thread_revisions" {
+			dataset.EligibleCount = int64(hydration.Revisions.Eligible)
+			dataset.CoveredCount = int64(hydration.Revisions.Fresh)
+			dataset.Complete = hydration.Revisions.Supported && hydration.Revisions.Complete
+		}
+		datasets = append(datasets, dataset)
 	}
 	return datasets, nil
 }
@@ -283,21 +310,84 @@ func gitcrawlCloudCapabilities(ctx context.Context, db *sql.DB, observationOrder
 }
 
 func gitcrawlCloudSourceSyncAt(ctx context.Context, db *sql.DB) (string, error) {
-	sourceSyncAt, err := latestRFC3339QueryValue(ctx, db, `
-select value
-from (
-  select coalesce(finished_at, started_at, '') as value
-  from sync_runs
-  where status in ('success', 'completed')
-  union all
-  select coalesce(nullif(updated_at_gh, ''), updated_at, '') from threads
-  union all
-  select coalesce(updated_at, '') from repositories
-)`)
-	if err != nil {
-		return "", fmt.Errorf("read cloud snapshot source sync time: %w", err)
+	queries := make([]string, 0, 4)
+	if ok, err := sqliteTableHasColumns(
+		ctx,
+		db,
+		"sync_runs",
+		"status",
+		"started_at",
+		"finished_at",
+	); err != nil {
+		return "", err
+	} else if ok {
+		queries = append(queries, `
+select coalesce(finished_at, started_at, '')
+from sync_runs
+where status in ('success', 'completed')`)
 	}
-	return sourceSyncAt, nil
+	if ok, err := sqliteTableHasColumns(ctx, db, "portable_metadata", "key", "value"); err != nil {
+		return "", err
+	} else if ok {
+		queries = append(queries, `
+select value
+from portable_metadata
+where key = 'exported_at'`)
+	}
+	if ok, err := sqliteTableHasColumns(ctx, db, "threads", "updated_at"); err != nil {
+		return "", err
+	} else if ok {
+		hasGitHubUpdatedAt, err := sqliteColumnExists(ctx, db, "threads", "updated_at_gh")
+		if err != nil {
+			return "", err
+		}
+		if hasGitHubUpdatedAt {
+			queries = append(queries, `select coalesce(nullif(updated_at_gh, ''), updated_at, '') from threads`)
+		} else {
+			queries = append(queries, `select coalesce(updated_at, '') from threads`)
+		}
+	}
+	if ok, err := sqliteTableHasColumns(ctx, db, "repositories", "updated_at"); err != nil {
+		return "", err
+	} else if ok {
+		queries = append(queries, `select coalesce(updated_at, '') from repositories`)
+	}
+
+	var latest time.Time
+	for _, query := range queries {
+		value, err := latestRFC3339QueryValue(ctx, db, query)
+		if err != nil {
+			return "", fmt.Errorf("read cloud snapshot source sync time: %w", err)
+		}
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return "", fmt.Errorf("parse normalized cloud snapshot source sync time %q: %w", value, err)
+		}
+		if latest.IsZero() || parsed.After(latest) {
+			latest = parsed
+		}
+	}
+	if latest.IsZero() {
+		return "", nil
+	}
+	return latest.UTC().Format(time.RFC3339Nano), nil
+}
+
+func sqliteTableHasColumns(ctx context.Context, db *sql.DB, table string, columns ...string) (bool, error) {
+	exists, err := sqliteTableExists(ctx, db, table)
+	if err != nil || !exists {
+		return false, err
+	}
+	for _, column := range columns {
+		exists, err := sqliteColumnExists(ctx, db, table, column)
+		if err != nil || !exists {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func latestRFC3339QueryValue(ctx context.Context, db *sql.DB, query string) (string, error) {
@@ -377,15 +467,14 @@ func incompleteGitcrawlCloudHydration(coverage crawlstore.EnrichmentCoverage) []
 func gitcrawlCloudCoverageRows(snapshot gitcrawlCloudSnapshot, mutationToken string) [][]any {
 	rows := make([][]any, 0, len(snapshot.Datasets))
 	for _, dataset := range snapshot.Datasets {
-		count := int64(len(dataset.Rows))
 		rows = append(rows, []any{
 			dataset.Name,
-			count,
-			count,
-			count,
+			dataset.RowCount,
+			dataset.EligibleCount,
+			dataset.CoveredCount,
 			dataset.MaxSourceAt,
 			snapshot.DatasetGeneratedAt,
-			true,
+			dataset.Complete,
 			mutationToken,
 		})
 	}
@@ -395,7 +484,7 @@ func gitcrawlCloudCoverageRows(snapshot gitcrawlCloudSnapshot, mutationToken str
 func gitcrawlCloudDatasetCounts(snapshot gitcrawlCloudSnapshot) map[string]int64 {
 	counts := make(map[string]int64, len(snapshot.Datasets))
 	for _, dataset := range snapshot.Datasets {
-		counts[dataset.Name] = int64(len(dataset.Rows))
+		counts[dataset.Name] = dataset.RowCount
 	}
 	return counts
 }
