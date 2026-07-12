@@ -17,7 +17,6 @@ const (
 	ThreadChildPullRequestFiles   ThreadChildObservationFamily = "pull_request_files"
 	ThreadChildPullRequestCommits ThreadChildObservationFamily = "pull_request_commits"
 	ThreadChildPullRequestChecks  ThreadChildObservationFamily = "pull_request_checks"
-	ThreadChildWorkflowRuns       ThreadChildObservationFamily = "workflow_runs"
 	ThreadChildReviewThreads      ThreadChildObservationFamily = "pull_request_review_threads"
 )
 
@@ -27,7 +26,6 @@ var threadChildObservationFamilies = []ThreadChildObservationFamily{
 	ThreadChildPullRequestFiles,
 	ThreadChildPullRequestCommits,
 	ThreadChildPullRequestChecks,
-	ThreadChildWorkflowRuns,
 	ThreadChildReviewThreads,
 }
 
@@ -91,4 +89,34 @@ func validThreadChildObservationFamily(family ThreadChildObservationFamily) bool
 		}
 	}
 	return false
+}
+
+func (s *Store) ReserveWorkflowRunObservation(
+	ctx context.Context,
+	repoID int64,
+	headSHA string,
+	sequence int64,
+) (bool, error) {
+	if repoID <= 0 {
+		return false, fmt.Errorf("repository id must be positive")
+	}
+	headSHA = strings.TrimSpace(headSHA)
+	if headSHA == "" {
+		return false, fmt.Errorf("head SHA must not be empty")
+	}
+	if sequence <= 0 {
+		return false, fmt.Errorf("observation sequence must be positive")
+	}
+	updated, err := s.qsql().ReserveWorkflowRunObservation(
+		ctx,
+		storedb.ReserveWorkflowRunObservationParams{
+			RepoID:              repoID,
+			HeadSha:             headSHA,
+			ObservationSequence: sequence,
+		},
+	)
+	if err != nil {
+		return false, fmt.Errorf("reserve workflow run observation for %s: %w", headSHA, err)
+	}
+	return updated > 0, nil
 }

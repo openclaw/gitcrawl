@@ -138,6 +138,17 @@ on conflict(thread_id, family) do update set
   observation_sequence=excluded.observation_sequence
 where thread_child_observation_reservations.observation_sequence < excluded.observation_sequence;
 
+-- name: ReserveWorkflowRunObservation :execrows
+insert into workflow_run_observation_reservations(
+  repo_id, head_sha, observation_sequence
+)
+values(
+  sqlc.arg(repo_id), sqlc.arg(head_sha), sqlc.arg(observation_sequence)
+)
+on conflict(repo_id, head_sha) do update set
+  observation_sequence=excluded.observation_sequence
+where workflow_run_observation_reservations.observation_sequence <= excluded.observation_sequence;
+
 -- name: MarkOpenThreadClosedFromGitHub :execrows
 update threads
 set github_id = sqlc.arg(github_id),

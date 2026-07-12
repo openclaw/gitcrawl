@@ -1237,6 +1237,32 @@ func (q *Queries) ReserveThreadEvidenceObservation(ctx context.Context, arg Rese
 	return result.RowsAffected()
 }
 
+const reserveWorkflowRunObservation = `-- name: ReserveWorkflowRunObservation :execrows
+insert into workflow_run_observation_reservations(
+  repo_id, head_sha, observation_sequence
+)
+values(
+  ?1, ?2, ?3
+)
+on conflict(repo_id, head_sha) do update set
+  observation_sequence=excluded.observation_sequence
+where workflow_run_observation_reservations.observation_sequence <= excluded.observation_sequence
+`
+
+type ReserveWorkflowRunObservationParams struct {
+	RepoID              int64  `json:"repo_id"`
+	HeadSha             string `json:"head_sha"`
+	ObservationSequence int64  `json:"observation_sequence"`
+}
+
+func (q *Queries) ReserveWorkflowRunObservation(ctx context.Context, arg ReserveWorkflowRunObservationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reserveWorkflowRunObservation, arg.RepoID, arg.HeadSha, arg.ObservationSequence)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertComment = `-- name: UpsertComment :one
 insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh)
 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)

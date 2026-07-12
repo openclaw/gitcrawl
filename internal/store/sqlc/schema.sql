@@ -82,11 +82,17 @@ create table thread_child_observation_reservations (
     'pull_request_files',
     'pull_request_commits',
     'pull_request_checks',
-    'workflow_runs',
     'pull_request_review_threads'
   )),
   observation_sequence integer not null check (observation_sequence > 0),
   primary key(thread_id, family)
+);
+
+create table workflow_run_observation_reservations (
+  repo_id integer not null references repositories(id) on delete cascade,
+  head_sha text not null check (trim(head_sha) <> ''),
+  observation_sequence integer not null check (observation_sequence > 0),
+  primary key(repo_id, head_sha)
 );
 
 create table thread_revisions (

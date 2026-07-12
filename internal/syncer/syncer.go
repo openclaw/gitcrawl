@@ -255,6 +255,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			evidenceApplied := completeEvidence && upsert.EvidenceApplied
 			childWritesAllowed := !completeEvidence || evidenceApplied
 			childReservations := make(map[store.ThreadChildObservationFamily]bool)
+			workflowRunsReserved := false
 			reserveChild := func(family store.ThreadChildObservationFamily) error {
 				if !childWritesAllowed {
 					return nil
@@ -282,11 +283,24 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					store.ThreadChildPullRequestFiles,
 					store.ThreadChildPullRequestCommits,
 					store.ThreadChildPullRequestChecks,
-					store.ThreadChildWorkflowRuns,
 					store.ThreadChildReviewThreads,
 				} {
 					if err := reserveChild(family); err != nil {
 						return err
+					}
+				}
+				if childWritesAllowed && payload.hasPullDetails {
+					headSHA := nestedString(payload.pullDetails.pull, "head", "sha")
+					if headSHA != "" {
+						workflowRunsReserved, err = st.ReserveWorkflowRunObservation(
+							ctx,
+							thread.RepoID,
+							headSHA,
+							observationSequence,
+						)
+						if err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -330,7 +344,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 							Files:        childReservations[store.ThreadChildPullRequestFiles],
 							Commits:      childReservations[store.ThreadChildPullRequestCommits],
 							Checks:       childReservations[store.ThreadChildPullRequestChecks],
-							WorkflowRuns: childReservations[store.ThreadChildWorkflowRuns],
+							WorkflowRuns: workflowRunsReserved,
 						},
 					)
 					if err != nil {

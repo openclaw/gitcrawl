@@ -94,6 +94,14 @@ type versionedPRDetailsGitHub struct {
 	version int
 }
 
+type sameHeadWorkflowGitHub struct {
+	fakeGitHub
+	number  int
+	version int
+	fetched chan struct{}
+	release chan struct{}
+}
+
 func (f *interleavedEvidenceGitHub) ListIssueComments(
 	ctx context.Context,
 	owner, repo string,
@@ -306,6 +314,89 @@ func (f versionedPRDetailsGitHub) ListPullReviewThreads(
 	reporter gh.Reporter,
 ) ([]map[string]any, error) {
 	return pullReviewThreadRows(f.version), nil
+}
+
+func (f sameHeadWorkflowGitHub) GetIssue(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) (map[string]any, error) {
+	return map[string]any{
+		"id":                 1000 + f.number,
+		"number":             f.number,
+		"state":              "open",
+		"title":              fmt.Sprintf("shared head PR %d", f.number),
+		"body":               "",
+		"html_url":           fmt.Sprintf("https://github.com/openclaw/gitcrawl/pull/%d", f.number),
+		"created_at":         "2026-07-12T00:00:00Z",
+		"updated_at":         "2026-07-12T00:00:00Z",
+		"labels":             []map[string]any{},
+		"assignees":          []map[string]any{},
+		"user":               map[string]any{"login": "alice", "type": "User"},
+		"author_association": "MEMBER",
+		"pull_request":       map[string]any{"url": fmt.Sprintf("https://api.github.com/repos/openclaw/gitcrawl/pulls/%d", f.number)},
+	}, nil
+}
+
+func (f sameHeadWorkflowGitHub) GetPull(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) (map[string]any, error) {
+	return map[string]any{
+		"number": number,
+		"head": map[string]any{
+			"sha":  "shared-head",
+			"ref":  "shared-branch",
+			"repo": map[string]any{"full_name": "openclaw/gitcrawl"},
+		},
+		"base":            map[string]any{"sha": "base-sha"},
+		"mergeable_state": "clean",
+		"draft":           false,
+	}, nil
+}
+
+func (f sameHeadWorkflowGitHub) ListWorkflowRuns(
+	ctx context.Context,
+	owner, repo string,
+	options gh.ListWorkflowRunsOptions,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	rows := []map[string]any{{
+		"id":          900,
+		"run_number":  1,
+		"head_branch": "shared-branch",
+		"head_sha":    options.HeadSHA,
+		"status":      "queued",
+		"name":        "old CI",
+		"event":       "pull_request",
+	}}
+	if f.version == 2 {
+		rows[0]["status"] = "completed"
+		rows[0]["conclusion"] = "success"
+		rows[0]["name"] = "new CI"
+		rows = append(rows, map[string]any{
+			"id":          901,
+			"run_number":  2,
+			"head_branch": "shared-branch",
+			"head_sha":    options.HeadSHA,
+			"status":      "completed",
+			"conclusion":  "success",
+			"name":        "new lint",
+			"event":       "pull_request",
+		})
+	}
+	if f.fetched != nil {
+		close(f.fetched)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.release:
+		}
+	}
+	return rows, nil
 }
 
 func interleavedSignals(
@@ -1329,11 +1420,11 @@ func TestSyncPartialPRDetailsAreReleaseOrderIndependent(t *testing.T) {
 				store.ThreadChildPullRequestFiles,
 				store.ThreadChildPullRequestCommits,
 				store.ThreadChildPullRequestChecks,
-				store.ThreadChildWorkflowRuns,
 				store.ThreadChildReviewThreads,
 			} {
 				assertChildReservation(t, ctx, st, thread.ID, family, 2)
 			}
+			assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
 			if detail.HeadSHA != "head-v2" {
 				t.Fatalf("detail = %+v, want higher-sequence snapshot", detail)
 			}
@@ -1411,10 +1502,105 @@ func TestSyncPartialPRDetailsAdvanceIndependentFamilies(t *testing.T) {
 		store.ThreadChildPullRequestDetails,
 		store.ThreadChildPullRequestCommits,
 		store.ThreadChildPullRequestChecks,
-		store.ThreadChildWorkflowRuns,
 		store.ThreadChildReviewThreads,
 	} {
 		assertChildReservation(t, ctx, st, thread.ID, family, 2)
+	}
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, "head-v1", 1)
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
+}
+
+func TestSyncWorkflowRunsSharedHeadRejectsOlderPRSnapshot(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	oldFetched := make(chan struct{})
+	releaseOld := make(chan struct{})
+	oldSyncer := New(sameHeadWorkflowGitHub{
+		number:  8,
+		version: 1,
+		fetched: oldFetched,
+		release: releaseOld,
+	}, st)
+	oldSyncer.now = func() time.Time { return time.Date(2026, 7, 12, 1, 0, 0, 0, time.UTC) }
+	type result struct {
+		stats Stats
+		err   error
+	}
+	oldResult := make(chan result, 1)
+	go func() {
+		stats, err := oldSyncer.Sync(ctx, Options{
+			Owner:            "openclaw",
+			Repo:             "gitcrawl",
+			Numbers:          []int{8},
+			IncludePRDetails: true,
+		})
+		oldResult <- result{stats: stats, err: err}
+	}()
+	awaitSyncSignal(t, oldFetched, "older PR workflow snapshot")
+
+	newSyncer := New(sameHeadWorkflowGitHub{number: 9, version: 2}, st)
+	newSyncer.now = func() time.Time { return time.Date(2026, 7, 12, 1, 1, 0, 0, time.UTC) }
+	newStats, err := newSyncer.Sync(ctx, Options{
+		Owner:            "openclaw",
+		Repo:             "gitcrawl",
+		Numbers:          []int{9},
+		IncludePRDetails: true,
+	})
+	if err != nil {
+		t.Fatalf("newer PR sync: %v", err)
+	}
+	if newStats.PRDetailsSynced != 1 || newStats.WorkflowRunsSynced != 2 {
+		t.Fatalf("newer PR stats = %#v", newStats)
+	}
+
+	close(releaseOld)
+	old := <-oldResult
+	if old.err != nil {
+		t.Fatalf("older PR sync: %v", old.err)
+	}
+	if old.stats.PRDetailsSynced != 1 || old.stats.WorkflowRunsSynced != 0 {
+		t.Fatalf("older PR stats = %#v", old.stats)
+	}
+
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: "shared-head",
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("workflow runs = %+v, want newer two-run snapshot", runs)
+	}
+	runsByID := make(map[string]store.WorkflowRun, len(runs))
+	for _, run := range runs {
+		runsByID[run.RunID] = run
+	}
+	if runsByID["900"].WorkflowName != "new CI" ||
+		runsByID["900"].Status != "completed" ||
+		runsByID["901"].WorkflowName != "new lint" {
+		t.Fatalf("workflow runs = %+v, older PR overwrote newer snapshot", runs)
+	}
+	assertWorkflowRunReservation(t, ctx, st, repo.ID, "shared-head", 2)
+	var legacyReservations int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_child_observation_reservations
+		where family = 'workflow_runs'
+	`).Scan(&legacyReservations); err != nil {
+		t.Fatalf("legacy workflow reservations: %v", err)
+	}
+	if legacyReservations != 0 {
+		t.Fatalf("legacy workflow reservations = %d, want none", legacyReservations)
 	}
 }
 
@@ -1494,6 +1680,28 @@ func assertChildReservation(
 	}
 	if got != want {
 		t.Fatalf("%s reservation = %d, want %d", family, got, want)
+	}
+}
+
+func assertWorkflowRunReservation(
+	t *testing.T,
+	ctx context.Context,
+	st *store.Store,
+	repoID int64,
+	headSHA string,
+	want int64,
+) {
+	t.Helper()
+	var got int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = ?
+	`, repoID, headSHA).Scan(&got); err != nil {
+		t.Fatalf("read workflow reservation for %s: %v", headSHA, err)
+	}
+	if got != want {
+		t.Fatalf("workflow reservation for %s = %d, want %d", headSHA, got, want)
 	}
 }
 
@@ -1771,8 +1979,10 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		t.Fatalf("archive coverage: %v", err)
 	}
 	if len(coverage.Rows) != 1 ||
-		coverage.Rows[0].Enrichment.Revisions.Stale != 2 ||
-		coverage.Rows[0].Enrichment.Fingerprints.Stale != 2 {
+		coverage.Rows[0].Enrichment.Revisions.Fresh != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Stale != 1 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Fresh != 1 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Stale != 1 {
 		t.Fatalf("metadata-only enrichment coverage = %+v", coverage)
 	}
 }

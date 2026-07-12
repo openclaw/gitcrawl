@@ -347,3 +347,9 @@ type ThreadVector struct {
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
 }
+
+type WorkflowRunObservationReservation struct {
+	RepoID              int64  `json:"repo_id"`
+	HeadSha             string `json:"head_sha"`
+	ObservationSequence int64  `json:"observation_sequence"`
+}

@@ -745,6 +745,20 @@ func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 	if err != nil || !upsert.EvidenceApplied {
 		t.Fatalf("thread observation = %+v, %v", upsert, err)
 	}
+	if err := st.UpsertPullRequestCacheFamilies(
+		ctx,
+		PullRequestDetail{
+			ThreadID: upsert.ID, RepoID: repoID, Number: 104, HeadSHA: "v9-head",
+			RawJSON: "{}", FetchedAt: "2026-07-12T00:00:00Z", UpdatedAt: "2026-07-12T00:00:00Z",
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		PullRequestHydrationFamilies{Details: true},
+	); err != nil {
+		t.Fatalf("pull request detail: %v", err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
@@ -755,6 +769,7 @@ func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 	}
 	if _, err := raw.ExecContext(ctx, `
 		drop table thread_child_observation_reservations;
+		drop table workflow_run_observation_reservations;
 		pragma user_version = 9;
 	`); err != nil {
 		_ = raw.Close()
@@ -769,7 +784,7 @@ func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 		t.Fatalf("reopen migrated store: %v", err)
 	}
 	defer st.Close()
-	var count, minimum, maximum int64
+	var count, minimum, maximum, workflowSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select count(*), min(observation_sequence), max(observation_sequence)
 		from thread_child_observation_reservations
@@ -777,13 +792,128 @@ func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 	`, upsert.ID).Scan(&count, &minimum, &maximum); err != nil {
 		t.Fatalf("read migrated reservations: %v", err)
 	}
-	if count != 7 || minimum != 7 || maximum != 7 {
+	if count != 6 || minimum != 7 || maximum != 7 {
 		t.Fatalf(
-			"migrated reservations = count %d, min %d, max %d; want seven families at 7",
+			"migrated reservations = count %d, min %d, max %d; want six families at 7",
 			count,
 			minimum,
 			maximum,
 		)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'v9-head'
+	`, repoID).Scan(&workflowSequence); err != nil {
+		t.Fatalf("read migrated workflow reservation: %v", err)
+	}
+	if workflowSequence != 7 {
+		t.Fatalf("migrated workflow reservation = %d, want 7", workflowSequence)
+	}
+}
+
+func TestMigrationBackfillsLegacyV10WorkflowRunReservation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	upsert, err := st.UpsertThreadObservation(ctx, Thread{
+		RepoID: repoID, GitHubID: "105", Number: 105, Kind: "pull_request", State: "open",
+		Title: "v10 workflow fence", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/105",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "v10-workflow",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}, UpsertThreadOptions{ObservationSequence: 7})
+	if err != nil {
+		t.Fatalf("thread observation: %v", err)
+	}
+	if err := st.UpsertPullRequestCacheFamilies(
+		ctx,
+		PullRequestDetail{
+			ThreadID: upsert.ID, RepoID: repoID, Number: 105, HeadSHA: "shared-v10-head",
+			RawJSON: "{}", FetchedAt: "2026-07-12T00:00:00Z", UpdatedAt: "2026-07-12T00:00:00Z",
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		PullRequestHydrationFamilies{Details: true},
+	); err != nil {
+		t.Fatalf("pull request detail: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		drop table thread_child_observation_reservations;
+		create table thread_child_observation_reservations (
+			thread_id integer not null references threads(id) on delete cascade,
+			family text not null check (family in (
+				'comments',
+				'pull_request_details',
+				'pull_request_files',
+				'pull_request_commits',
+				'pull_request_checks',
+				'workflow_runs',
+				'pull_request_review_threads'
+			)),
+			observation_sequence integer not null check (observation_sequence > 0),
+			primary key(thread_id, family)
+		);
+		insert into thread_child_observation_reservations(
+			thread_id, family, observation_sequence
+		)
+		values(?, 'workflow_runs', 10);
+		drop table workflow_run_observation_reservations;
+		pragma user_version = 10;
+	`, upsert.ID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("prepare legacy v10 migration: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var workflowSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'shared-v10-head'
+	`, repoID).Scan(&workflowSequence); err != nil {
+		t.Fatalf("read migrated workflow reservation: %v", err)
+	}
+	if workflowSequence != 10 {
+		t.Fatalf("migrated workflow reservation = %d, want legacy high-water mark 10", workflowSequence)
+	}
+	var legacyReservations int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_child_observation_reservations
+		where family = 'workflow_runs'
+	`).Scan(&legacyReservations); err != nil {
+		t.Fatalf("read legacy workflow reservations: %v", err)
+	}
+	if legacyReservations != 0 {
+		t.Fatalf("legacy workflow reservations = %d, want migrated rows removed", legacyReservations)
 	}
 }
 
@@ -812,8 +942,8 @@ func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	if diag.PRDetails.State != "supported" || !diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want supported", diag.PRDetails)
 	}
-	if !diag.ChildReservations {
-		t.Fatalf("child reservation diagnostics = %#v, want supported", diag)
+	if !diag.ChildReservations || !diag.WorkflowRunReservations {
+		t.Fatalf("reservation diagnostics = %#v, want supported", diag)
 	}
 	after, err := os.ReadFile(dbPath)
 	if err != nil {
@@ -925,6 +1055,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 		"threads_observation_sequence",
 		"threads_evidence_observation_sequence",
 		"thread_child_observation_reservations_table",
+		"workflow_run_observation_reservations_table",
 		"thread_vectors_composite_key",
 		"pull_request_files_table",
 	} {
@@ -1007,7 +1138,8 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	}
 	if !containsString(diag.PendingMigrations, "schema_version_3_to_10") ||
 		!containsString(diag.PendingMigrations, "pull_request_files_position_key") ||
-		!containsString(diag.PendingMigrations, "thread_child_observation_reservations_table") {
+		!containsString(diag.PendingMigrations, "thread_child_observation_reservations_table") ||
+		!containsString(diag.PendingMigrations, "workflow_run_observation_reservations_table") {
 		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
 	}
 	if len(diag.NextSteps) == 0 {
@@ -1129,6 +1261,7 @@ func seedLegacyPullRequestFilesSchema(t *testing.T, ctx context.Context, dbPath 
 		drop table pull_request_files_current;
 		create index if not exists idx_pull_request_files_path on pull_request_files(path);
 		drop table thread_child_observation_reservations;
+		drop table workflow_run_observation_reservations;
 		pragma user_version = 3;
 	`)
 	if err != nil {

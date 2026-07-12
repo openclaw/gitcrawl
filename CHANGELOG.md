@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Order canonical thread state and each hydrated child family with durable pre-fetch generations, preventing delayed metadata, comments, PR details, checks, revisions, or fingerprints from overwriting newer snapshots while preserving legacy read-only archives.
+- Order canonical thread state and hydrated child snapshots with durable pre-fetch generations, including repository/head-SHA workflow-run fencing, so delayed metadata or hydration cannot overwrite newer snapshots and accepted complete evidence remains visible while preserving legacy read-only archives.
 
 ## 0.7.1 - 2026-07-09
 

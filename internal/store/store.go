@@ -241,6 +241,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	hadEvidenceObservationSequence := s.hasColumn(ctx, "threads", "evidence_observation_sequence")
 	hadChildObservationReservations := s.hasTable(ctx, "thread_child_observation_reservations")
+	hadWorkflowRunObservationReservations := s.hasTable(ctx, "workflow_run_observation_reservations")
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
@@ -259,6 +260,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if current < 10 || !hadChildObservationReservations {
 		if err := s.ensureThreadChildObservationReservations(ctx); err != nil {
+			return err
+		}
+	}
+	if current < 10 || !hadWorkflowRunObservationReservations {
+		if err := s.ensureWorkflowRunObservationReservations(ctx); err != nil {
 			return err
 		}
 	}
@@ -362,7 +368,6 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 			union all select 'pull_request_files'
 			union all select 'pull_request_commits'
 			union all select 'pull_request_checks'
-			union all select 'workflow_runs'
 			union all select 'pull_request_review_threads'
 		) as families
 		where threads.kind = 'pull_request'
@@ -374,6 +379,52 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 			)
 	`); err != nil {
 		return fmt.Errorf("backfill pull request observation reservations: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		with candidates(repo_id, head_sha, observation_sequence) as (
+			select
+				pull_request_details.repo_id,
+				trim(pull_request_details.head_sha),
+				threads.evidence_observation_sequence
+			from pull_request_details
+			join threads on threads.id = pull_request_details.thread_id
+			where trim(coalesce(pull_request_details.head_sha, '')) <> ''
+				and threads.evidence_observation_sequence > 0
+			union all
+			select
+				pull_request_details.repo_id,
+				trim(pull_request_details.head_sha),
+				thread_child_observation_reservations.observation_sequence
+			from pull_request_details
+			join thread_child_observation_reservations
+				on thread_child_observation_reservations.thread_id = pull_request_details.thread_id
+				and thread_child_observation_reservations.family = 'workflow_runs'
+			where trim(coalesce(pull_request_details.head_sha, '')) <> ''
+				and thread_child_observation_reservations.observation_sequence > 0
+		)
+		insert into workflow_run_observation_reservations(
+			repo_id, head_sha, observation_sequence
+		)
+		select repo_id, head_sha, max(observation_sequence)
+		from candidates
+		group by repo_id, head_sha
+		on conflict(repo_id, head_sha) do update set
+			observation_sequence = max(
+				workflow_run_observation_reservations.observation_sequence,
+				excluded.observation_sequence
+			)
+	`); err != nil {
+		return fmt.Errorf("backfill workflow run observation reservations: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		delete from thread_child_observation_reservations
+		where family = 'workflow_runs'
+	`); err != nil {
+		return fmt.Errorf("remove legacy thread workflow run reservations: %w", err)
 	}
 	return nil
 }

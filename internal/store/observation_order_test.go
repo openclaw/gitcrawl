@@ -245,6 +245,86 @@ func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	for _, reservation := range []struct {
+		headSHA  string
+		sequence int64
+		want     bool
+	}{
+		{headSHA: "shared-head", sequence: 3, want: true},
+		{headSHA: "shared-head", sequence: 2, want: false},
+		{headSHA: "shared-head", sequence: 3, want: true},
+		{headSHA: "other-head", sequence: 1, want: true},
+	} {
+		applied, err := st.ReserveWorkflowRunObservation(
+			ctx,
+			repoID,
+			reservation.headSHA,
+			reservation.sequence,
+		)
+		if err != nil || applied != reservation.want {
+			t.Fatalf(
+				"reserve %s at %d = %t, %v; want %t",
+				reservation.headSHA,
+				reservation.sequence,
+				applied,
+				err,
+				reservation.want,
+			)
+		}
+	}
+	var sharedSequence, otherSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'shared-head'
+	`, repoID).Scan(&sharedSequence); err != nil {
+		t.Fatalf("shared reservation: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'other-head'
+	`, repoID).Scan(&otherSequence); err != nil {
+		t.Fatalf("other reservation: %v", err)
+	}
+	if sharedSequence != 3 || otherSequence != 1 {
+		t.Fatalf("reservations = shared %d, other %d", sharedSequence, otherSequence)
+	}
+	for _, invalid := range []struct {
+		repoID   int64
+		headSHA  string
+		sequence int64
+	}{
+		{repoID: 0, headSHA: "head", sequence: 1},
+		{repoID: repoID, headSHA: " ", sequence: 1},
+		{repoID: repoID, headSHA: "head", sequence: 0},
+	} {
+		if _, err := st.ReserveWorkflowRunObservation(
+			ctx,
+			invalid.repoID,
+			invalid.headSHA,
+			invalid.sequence,
+		); err == nil {
+			t.Fatalf("invalid reservation %+v succeeded", invalid)
+		}
+	}
+}
+
 func TestUpsertThreadObservationRejectsDelayedCanonicalOverwrite(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
