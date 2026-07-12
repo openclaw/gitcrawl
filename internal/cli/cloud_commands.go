@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,7 @@ const (
 
 	gitcrawlSnapshotAtomicCapability     = "gitcrawl.snapshot.atomic"
 	gitcrawlSnapshotCutoverCapability    = "gitcrawl.snapshot.cutover"
+	gitcrawlSnapshotHydrationCapability  = "gitcrawl.snapshot.hydration.v1"
 	gitcrawlSnapshotProvenanceCapability = "gitcrawl.snapshot.provenance.v1"
 	sqliteBundleGzipUploadCapability     = "sqlite.bundle.gzip.upload"
 )
@@ -109,9 +111,12 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		Archive:  archiveID,
 		TokenEnv: firstNonEmpty(*tokenEnv, cfg.Remote.TokenEnv, crawlremote.DefaultTokenEnv),
 	}
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	tokenProvider := crawlremote.EnvTokenProvider{Name: remoteCfg.TokenEnv}
 	client, err := crawlremote.NewClientFromConfig(remoteCfg, crawlremote.Options{
-		UserAgent:  "gitcrawl/" + version,
-		HTTPClient: &http.Client{Timeout: 10 * time.Minute},
+		UserAgent:     "gitcrawl/" + version,
+		HTTPClient:    httpClient,
+		TokenProvider: tokenProvider,
 	})
 	if err != nil {
 		return err
@@ -219,6 +224,19 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			return fmt.Errorf("cut over cloud snapshot: %w", err)
 		}
 		cutoverResult = &result
+		if err := verifyGitcrawlSnapshotPublication(
+			ctx,
+			client,
+			httpClient,
+			tokenProvider,
+			endpoint,
+			archiveID,
+			snapshot,
+			manifest,
+			publicationCapabilities,
+		); err != nil {
+			return fmt.Errorf("verify published cloud snapshot: %w", err)
+		}
 	}
 	sqliteBundlePrivacy := gitcrawlCloudSQLiteBundlePrivacy()
 	return a.writeOutput("cloud publish", map[string]any{
@@ -523,6 +541,7 @@ func requireGitcrawlSnapshotPublishContract(
 		requiredCapabilities = append(
 			requiredCapabilities,
 			gitcrawlSnapshotCutoverCapability,
+			gitcrawlSnapshotHydrationCapability,
 		)
 	}
 	for _, capability := range requiredCapabilities {
@@ -556,11 +575,19 @@ func requireGitcrawlSnapshotPublishContract(
 		},
 	}
 	if cutover {
-		requiredRoutes = append(requiredRoutes, crawlremote.RouteSpec{
-			Method: http.MethodPost,
-			Path:   "/v1/apps/:app/archives/:archive/cutover",
-			Auth:   crawlremote.AuthPublisher,
-		})
+		requiredRoutes = append(
+			requiredRoutes,
+			crawlremote.RouteSpec{
+				Method: http.MethodPost,
+				Path:   "/v1/apps/:app/archives/:archive/cutover",
+				Auth:   crawlremote.AuthPublisher,
+			},
+			crawlremote.RouteSpec{
+				Method: http.MethodGet,
+				Path:   "/v1/apps/:app/archives/:archive/sqlite",
+				Auth:   crawlremote.AuthReader,
+			},
+		)
 	}
 	for _, required := range requiredRoutes {
 		if !slices.ContainsFunc(contract.Routes, func(route crawlremote.RouteSpec) bool {
@@ -701,6 +728,79 @@ func gitcrawlPublisherStatusMatches(
 		return false
 	}
 	return true
+}
+
+func verifyGitcrawlSnapshotPublication(
+	ctx context.Context,
+	client *crawlremote.Client,
+	httpClient *http.Client,
+	tokenProvider crawlremote.TokenProvider,
+	endpoint, archive string,
+	snapshot gitcrawlCloudSnapshot,
+	manifest crawlremote.IngestManifest,
+	publicationCapabilities []string,
+) error {
+	status, err := client.PublishStatus(ctx, "gitcrawl", archive)
+	if err != nil {
+		return fmt.Errorf("read post-cutover publisher status: %w", err)
+	}
+	if !gitcrawlPublisherStatusMatches(status, manifest, publicationCapabilities) ||
+		status.Snapshot.DatasetGeneratedAt != snapshot.DatasetGeneratedAt {
+		return fmt.Errorf(
+			"post-cutover publisher status does not match snapshot %s digest, profile, generation, and coverage",
+			snapshot.ID,
+		)
+	}
+
+	token, err := tokenProvider.Token(ctx)
+	if err != nil {
+		return fmt.Errorf("read remote token for snapshot hydration: %w", err)
+	}
+	sqliteURL := strings.TrimRight(endpoint, "/") +
+		"/v1/apps/" + url.PathEscape("gitcrawl") +
+		"/archives/" + url.PathEscape(archive) +
+		"/sqlite"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, sqliteURL, nil)
+	if err != nil {
+		return fmt.Errorf("build snapshot hydration request: %w", err)
+	}
+	request.Header.Set("accept", "application/vnd.sqlite3, application/octet-stream")
+	request.Header.Set("authorization", "Bearer "+token)
+	request.Header.Set("user-agent", "gitcrawl/"+version)
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("download bound SQLite snapshot: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		return fmt.Errorf(
+			"download bound SQLite snapshot: status=%d body=%s",
+			response.StatusCode,
+			strings.TrimSpace(string(body)),
+		)
+	}
+	if advertised := strings.TrimSpace(response.Header.Get("x-crawl-content-sha256")); advertised != "" &&
+		!strings.EqualFold(advertised, snapshot.ID) {
+		return fmt.Errorf(
+			"downloaded SQLite snapshot advertises digest %s, want %s",
+			advertised,
+			snapshot.ID,
+		)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, response.Body); err != nil {
+		return fmt.Errorf("hash downloaded SQLite snapshot: %w", err)
+	}
+	actual := fmt.Sprintf("%x", hash.Sum(nil))
+	if actual != snapshot.ID {
+		return fmt.Errorf(
+			"downloaded SQLite snapshot digest %s does not match source %s",
+			actual,
+			snapshot.ID,
+		)
+	}
+	return nil
 }
 
 func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {

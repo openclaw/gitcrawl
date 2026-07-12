@@ -839,6 +839,11 @@ func TestRemoteCloudModeDoesNotCreateLocalDB(t *testing.T) {
 
 func testSnapshotPublishContract() crawlremote.Contract {
 	contract := crawlremote.BaseContract()
+	contract.Routes = append(contract.Routes, crawlremote.RouteSpec{
+		Method: http.MethodGet,
+		Path:   "/v1/apps/:app/archives/:archive/sqlite",
+		Auth:   crawlremote.AuthReader,
+	})
 	contract.Apps = []crawlremote.AppSpec{{
 		App: "gitcrawl",
 		Queries: []crawlremote.QuerySpec{
@@ -887,6 +892,7 @@ func testSnapshotPublishContract() crawlremote.Contract {
 		Capabilities: []string{
 			gitcrawlSnapshotAtomicCapability,
 			gitcrawlSnapshotCutoverCapability,
+			gitcrawlSnapshotHydrationCapability,
 			gitcrawlSnapshotProvenanceCapability,
 			sqliteBundleGzipUploadCapability,
 		},
@@ -1015,7 +1021,10 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	var sawSQLitePart bool
 	var sawSQLiteManifest bool
 	var sawCutover bool
+	var sawSQLiteRead bool
 	var snapshotID string
+	var sqliteImage []byte
+	var publishedSnapshot *crawlremote.ArchiveSnapshot
 	mutationCounter := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
@@ -1073,6 +1082,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 					http.Error(w, "bundle did not contain sqlite", http.StatusBadRequest)
 					return
 				}
+				sqliteImage = decompressed
 				_ = json.NewEncoder(w).Encode(crawlremote.SQLiteUploadResult{
 					App:      "gitcrawl",
 					Archive:  "gitcrawl/openclaw__openclaw",
@@ -1123,7 +1133,17 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status") {
-			http.NotFound(w, r)
+			if publishedSnapshot == nil {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
+				App:              "gitcrawl",
+				Archive:          "gitcrawl/openclaw__openclaw",
+				ActiveSnapshotID: snapshotID,
+				CoverageComplete: true,
+				Snapshot:         publishedSnapshot,
+			})
 			return
 		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/cutover") {
@@ -1141,6 +1161,17 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 				SnapshotMode: "snapshot",
 				CutoverAt:    "2026-07-12T09:00:00Z",
 			})
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite") {
+			if !sawCutover || len(sqliteImage) == 0 {
+				http.Error(w, "bound snapshot unavailable", http.StatusConflict)
+				return
+			}
+			sawSQLiteRead = true
+			w.Header().Set("content-type", "application/vnd.sqlite3")
+			w.Header().Set("x-crawl-content-sha256", snapshotID)
+			_, _ = w.Write(sqliteImage)
 			return
 		}
 		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/ingest" {
@@ -1169,6 +1200,19 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 					http.Error(w, "coverage token mismatch", http.StatusBadRequest)
 					return
 				}
+			}
+			publishedSnapshot = &crawlremote.ArchiveSnapshot{
+				ID:            body.Manifest.SnapshotID,
+				SourceSHA256:  body.Manifest.SourceSHA256,
+				SchemaName:    body.Manifest.SchemaName,
+				SchemaVersion: body.Manifest.SchemaVersion,
+				SchemaHash:    body.Manifest.SchemaHash,
+				Capabilities: gitcrawlCloudPublicationCapabilities(
+					body.Manifest.Capabilities,
+				),
+				SourceSyncAt:       body.Manifest.SourceSyncAt,
+				DatasetGeneratedAt: fmt.Sprint(body.Rows[0][5]),
+				CoverageComplete:   true,
 			}
 		}
 		seenTables[body.Table] = body
@@ -1223,6 +1267,9 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	}
 	if !sawCutover {
 		t.Fatal("cloud publish did not cut over the activated snapshot")
+	}
+	if !sawSQLiteRead {
+		t.Fatal("cloud publish did not verify the readable bound SQLite snapshot")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
@@ -1306,6 +1353,10 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 		{
 			name:              "cutover",
 			missingCapability: gitcrawlSnapshotCutoverCapability,
+		},
+		{
+			name:              "bound snapshot hydration",
+			missingCapability: gitcrawlSnapshotHydrationCapability,
 		},
 	}
 	for _, test := range tests {
@@ -1440,6 +1491,32 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 			},
 		},
 		{
+			name: "missing SQLite hydration route",
+			want: "GET /v1/apps/:app/archives/:archive/sqlite",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Routes = slices.DeleteFunc(
+					contract.Routes,
+					func(route crawlremote.RouteSpec) bool {
+						return route.Method == http.MethodGet &&
+							route.Path == "/v1/apps/:app/archives/:archive/sqlite"
+					},
+				)
+			},
+		},
+		{
+			name: "SQLite hydration route with publisher auth",
+			want: "GET /v1/apps/:app/archives/:archive/sqlite",
+			mutate: func(contract *crawlremote.Contract) {
+				for index := range contract.Routes {
+					route := &contract.Routes[index]
+					if route.Method == http.MethodGet &&
+						route.Path == "/v1/apps/:app/archives/:archive/sqlite" {
+						route.Auth = crawlremote.AuthPublisher
+					}
+				}
+			},
+		},
+		{
 			name: "zero reader queries",
 			want: "required reader query gitcrawl.threads.search",
 			mutate: func(contract *crawlremote.Contract) {
@@ -1556,9 +1633,11 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	var snapshotID string
 	var stagedSnapshot *crawlremote.ArchiveSnapshot
 	servingSnapshotID := strings.Repeat("f", 64)
+	var sqliteImage []byte
 	ingestRequests := 0
 	publisherStatusRequests := 0
 	readerStatusRequests := 0
+	sqliteReadRequests := 0
 	cutovers := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
@@ -1595,6 +1674,17 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite") {
+			sqliteReadRequests++
+			if servingSnapshotID != snapshotID || len(sqliteImage) == 0 {
+				http.Error(w, "bound snapshot unavailable", http.StatusConflict)
+				return
+			}
+			w.Header().Set("content-type", "application/vnd.sqlite3")
+			w.Header().Set("x-crawl-content-sha256", snapshotID)
+			_, _ = w.Write(sqliteImage)
+			return
+		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status") {
 			publisherStatusRequests++
 			activeSnapshotID := ""
@@ -1619,6 +1709,24 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				partIndex, err := strconv.Atoi(r.Header.Get("x-crawl-bundle-part-index"))
 				if len(snapshotID) != 64 || len(partSHA) != 64 || err != nil {
 					http.Error(w, "invalid bundle part", http.StatusBadRequest)
+					return
+				}
+				compressed, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				reader, err := gzip.NewReader(bytes.NewReader(compressed))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				sqliteImage, err = io.ReadAll(reader)
+				if closeErr := reader.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
 				_ = json.NewEncoder(w).Encode(crawlremote.SQLiteUploadResult{
@@ -1815,11 +1923,14 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	if servingSnapshotID != snapshotID {
 		t.Fatalf("serving snapshot = %q, want staged snapshot %q", servingSnapshotID, snapshotID)
 	}
-	if publisherStatusRequests != 2 {
-		t.Fatalf("publisher status requests = %d, want 2", publisherStatusRequests)
+	if publisherStatusRequests != 3 {
+		t.Fatalf("publisher status requests = %d, want 3", publisherStatusRequests)
 	}
 	if readerStatusRequests != 0 {
-		t.Fatalf("reader status requests = %d, publisher-only flow must not require reader role", readerStatusRequests)
+		t.Fatalf("reader status requests = %d, post-cutover verification should use publisher status", readerStatusRequests)
+	}
+	if sqliteReadRequests != 1 {
+		t.Fatalf("SQLite read requests = %d, want 1 post-cutover hydration proof", sqliteReadRequests)
 	}
 }
 
