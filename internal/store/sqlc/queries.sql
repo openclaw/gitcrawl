@@ -190,6 +190,23 @@ left join thread_vectors tv on tv.thread_id = t.id and tv.basis = sqlc.arg(basis
 where t.repo_id = sqlc.arg(repo_id)
   and (sqlc.arg(include_closed) != 0 or (t.state = 'open' and t.closed_at_local is null))
   and (sqlc.narg(number) is null or t.number = sqlc.narg(number))
+  and (
+    sqlc.arg(basis) != 'llm_key_summary'
+    or exists (
+      select 1
+      from thread_key_summaries eligible_summary
+      join thread_revisions eligible_revision on eligible_revision.id = eligible_summary.thread_revision_id
+      where eligible_revision.thread_id = t.id
+        and eligible_revision.id = (
+          select max(latest.id)
+          from thread_revisions latest
+          where latest.thread_id = t.id
+        )
+        and julianday(coalesce(nullif(eligible_revision.source_updated_at, ''), eligible_revision.created_at)) >=
+          julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
+        and eligible_summary.summary_kind = 'llm_key_summary'
+    )
+  )
 order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
 limit case when sqlc.arg(row_limit) <= 0 then -1 else sqlc.arg(row_limit) end;
 

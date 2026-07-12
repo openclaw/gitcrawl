@@ -152,6 +152,67 @@ func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {
 	}
 }
 
+func TestListEmbeddingTasksAppliesSummaryLimitAfterEligibility(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	var oldestRevisionID int64
+	for _, number := range []int{1, 2, 3} {
+		updatedAt := fmt.Sprintf("2026-07-12T00:0%d:00Z", number)
+		thread := Thread{
+			RepoID: repoID, GitHubID: fmt.Sprintf("%d", number), Number: number, Kind: "issue", State: "open",
+			Title: fmt.Sprintf("Issue %d", number), Body: "body",
+			HTMLURL:    fmt.Sprintf("https://github.com/openclaw/gitcrawl/issues/%d", number),
+			LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: fmt.Sprintf("thread-%d", number),
+			UpdatedAtGitHub: updatedAt, UpdatedAt: updatedAt,
+		}
+		thread.ID, err = st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("thread %d: %v", number, err)
+		}
+		enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, updatedAt)
+		if err != nil {
+			t.Fatalf("enrichment %d: %v", number, err)
+		}
+		if number == 1 {
+			oldestRevisionID = enrichment.RevisionID
+		}
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: oldestRevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "openai",
+		Model:            "summary-test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "Only the oldest thread is currently eligible.",
+		CreatedAt:        "2026-07-12T00:04:00Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID, Basis: "llm_key_summary", Model: "embedding-test", Limit: 1, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("embedding tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Number != 1 {
+		t.Fatalf("eligible task was starved by newer unsummarized threads: %+v", tasks)
+	}
+}
+
 func TestEmbeddingTextForBasisCapsLongInputs(t *testing.T) {
 	body := strings.Repeat("x", MaxEmbeddingTextRunes+500)
 	text, meta, err := embeddingTextForBasisWithMeta("title_original", "oversized issue", body, "", "", "")
