@@ -376,7 +376,7 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 				select latest.id
 				from thread_revisions latest
 				where latest.thread_id = t.id
-				order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+				order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
 					latest.id desc
 				limit 1
 			)
@@ -445,7 +445,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 				select latest.id
 				from thread_revisions latest
 				where latest.thread_id = t.id
-				order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+				order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
 					latest.id desc
 				limit 1
 			)

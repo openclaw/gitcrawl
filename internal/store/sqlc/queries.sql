@@ -211,12 +211,12 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
         select latest.id
         from thread_revisions latest
         where latest.thread_id = t.id
-        order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+        order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
           latest.id desc
         limit 1
       )
-      and julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
-        julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
+      and gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+        gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
       and tks.summary_kind = 'llm_key_summary'
     order by tks.created_at desc, tks.id desc
     limit 1
@@ -239,12 +239,12 @@ where t.repo_id = sqlc.arg(repo_id)
           select latest.id
           from thread_revisions latest
           where latest.thread_id = t.id
-          order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+          order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
             latest.id desc
           limit 1
         )
-        and julianday(coalesce(nullif(eligible_revision.source_updated_at, ''), eligible_revision.created_at)) >=
-          julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
+        and gitcrawl_timestamp_key(coalesce(nullif(eligible_revision.source_updated_at, ''), eligible_revision.created_at)) >=
+          gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
         and eligible_summary.summary_kind = 'llm_key_summary'
     )
   )

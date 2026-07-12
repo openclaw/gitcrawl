@@ -72,7 +72,7 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 				select tr.*,
 					row_number() over (
 						partition by tr.thread_id
-						order by julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) desc,
+						order by gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) desc,
 							tr.id desc
 					) as observation_rank
 				from thread_revisions tr
@@ -108,8 +108,8 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			and b.storage_kind = 'inline'
 			and b.compression = 'none'
 			and nullif(b.inline_text, '') is not null
-			and julianday(coalesce(nullif(lr.source_updated_at, ''), lr.created_at)) >=
-				julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
+			and gitcrawl_timestamp_key(coalesce(nullif(lr.source_updated_at, ''), lr.created_at)) >=
+				gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
 	`, summaryKind, promptVersion, provider, model, options.RepoID, boolInt(options.IncludeClosed), number, number)
 	if err != nil {

@@ -178,7 +178,7 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 		select id, content_hash, coalesce(source_updated_at, '')
 		from thread_revisions
 		where thread_id = ?
-		order by julianday(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
+		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
 		limit 1
 	`, revision.ThreadID).Scan(&latestID, &latestHash, &latestSourceUpdatedAt)
 	if err != nil && err != sql.ErrNoRows {

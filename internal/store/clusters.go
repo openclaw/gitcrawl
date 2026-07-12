@@ -1561,12 +1561,12 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 					select latest.id
 					from thread_revisions latest
 					where latest.thread_id = tr.thread_id
-					order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+					order by gitcrawl_timestamp_key(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
 						latest.id desc
 					limit 1
 				)
-				and julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
-					julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
+				and gitcrawl_timestamp_key(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+					gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 			order by tr.thread_id, tks.summary_kind, tks.created_at desc
 		`, args...)
 		if err != nil {
