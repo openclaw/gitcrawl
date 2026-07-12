@@ -2,8 +2,6 @@
 
 ## 0.7.2 - Unreleased
 
-- Order canonical thread state, accepted evidence, hydrated child snapshots, and repository/head-SHA workflow runs by GitHub source revision before durable pre-fetch generation, so delayed newer fetches replace older snapshots without allowing late stale hydration to overwrite them. Validate workflow snapshots member by member, bind exact deletion checks to commit-time state, consolidate same-generation sibling observations so verified deletions cannot be resurrected, merge equal observations without dropping live runs, preserve legacy read-only archives, and repair observation migrations without synthesizing source/sequence pairs that never existed.
-
 ## 0.7.1 - 2026-07-09
 
 - Add local, fail-closed packaging and independent verification for official macOS archives signed as `org.openclaw.gitcrawl` by `Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)`, while keeping CI and cross-platform snapshots credential-free and non-publishing.
