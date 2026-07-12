@@ -164,11 +164,6 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		closedOverlapNumbers[intValue(row["number"])] = struct{}{}
 	}
 
-	// Bind every child snapshot to the generation of the parent rows just observed.
-	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
-	if err != nil {
-		return Stats{}, err
-	}
 	payloads := make([]threadSyncPayload, 0, len(rows))
 	workflowObservationOrder := 0
 	for _, row := range rows {
@@ -202,6 +197,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 	if err := s.consolidateWorkflowSnapshots(ctx, options, payloads); err != nil {
 		return Stats{}, err
+	}
+	// Order replace-all child snapshots when their complete observations are available.
+	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
+	if err != nil {
+		return Stats{}, err
+	}
+	for index := range payloads {
+		if payloads[index].hasPullDetails &&
+			payloads[index].pullDetails.workflowSnapshotFresh {
+			payloads[index].pullDetails.workflowObservationSequence = observationSequence
+		}
 	}
 	if s.beforePersist != nil {
 		s.beforePersist()

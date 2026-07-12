@@ -125,6 +125,7 @@ type sameSyncSharedHeadGitHub struct {
 	lookupCalls      int
 	subsetFirst      bool
 	verifiedDeletion bool
+	exactStatus      string
 }
 
 type blockedWorkflowDeletionGitHub struct {
@@ -707,11 +708,17 @@ func (f *sameSyncSharedHeadGitHub) GetWorkflowRun(
 			Status: 404,
 		}
 	}
-	return map[string]any{
+	exact := map[string]any{
 		"id":         runID,
 		"created_at": "2026-07-12T00:00:00Z",
 		"updated_at": "2026-07-12T00:02:00Z",
-	}, nil
+	}
+	if f.exactStatus != "" {
+		exact["status"] = f.exactStatus
+		exact["conclusion"] = "success"
+		exact["updated_at"] = "2026-07-12T00:03:00Z"
+	}
+	return exact, nil
 }
 
 func interleavedSignals(
@@ -1437,7 +1444,7 @@ func TestSyncPersistsIssuesAndPullRequests(t *testing.T) {
 	}
 }
 
-func TestSyncAllocatesObservationSequenceAfterParentFetch(t *testing.T) {
+func TestSyncAllocatesObservationSequenceAfterChildFetch(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -1458,8 +1465,8 @@ func TestSyncAllocatesObservationSequenceAfterParentFetch(t *testing.T) {
 	if client.sequence != 0 {
 		t.Fatalf("repository fetch observed sequence %d, want allocation deferred until parent observation", client.sequence)
 	}
-	if client.childSequence != 1 {
-		t.Fatalf("child fetch observed sequence %d, want parent generation 1", client.childSequence)
+	if client.childSequence != 0 {
+		t.Fatalf("child fetch observed sequence %d, want allocation after child observation", client.childSequence)
 	}
 	var allocatedSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
@@ -1551,9 +1558,9 @@ func TestSyncDelayedNewerParentUsesGenerationForThreadChildren(t *testing.T) {
 		store.ThreadChildPullRequestChecks,
 		store.ThreadChildReviewThreads,
 	} {
-		assertChildReservation(t, ctx, st, thread.ID, family, 1)
+		assertChildReservation(t, ctx, st, thread.ID, family, 2)
 	}
-	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 4)
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
 	var parentSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select observation_sequence
@@ -1562,8 +1569,8 @@ func TestSyncDelayedNewerParentUsesGenerationForThreadChildren(t *testing.T) {
 	`, thread.ID).Scan(&parentSequence); err != nil {
 		t.Fatalf("read parent observation sequence: %v", err)
 	}
-	if parentSequence != 1 {
-		t.Fatalf("parent observation sequence = %d, want newer source generation 1", parentSequence)
+	if parentSequence != 2 {
+		t.Fatalf("parent observation sequence = %d, want completed generation 2", parentSequence)
 	}
 }
 
@@ -1644,9 +1651,9 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 	if first.err != nil {
 		t.Fatalf("sequence two sync: %v", first.err)
 	}
-	if first.stats.ThreadsSynced != 0 || first.stats.ThreadsSkippedStale != 1 ||
-		first.stats.CommentsSynced != 0 || first.stats.EvidenceObserved != 0 ||
-		first.stats.RevisionsCreated != 0 || first.stats.FingerprintsUpserted != 0 {
+	if first.stats.ThreadsSynced != 1 || first.stats.ThreadsSkippedStale != 0 ||
+		first.stats.CommentsSynced != 1 || first.stats.EvidenceObserved != 1 ||
+		first.stats.RevisionsCreated != 1 || first.stats.FingerprintsUpserted != 1 {
 		t.Fatalf("sequence two stats = %#v", first.stats)
 	}
 
@@ -1678,8 +1685,8 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 	if err != nil {
 		t.Fatalf("comments: %v", err)
 	}
-	if parentSequence != 4 || evidenceSequence != 3 || latestRevisionSequence != 3 || revisions != 1 ||
-		len(comments) != 1 || comments[0].Body != "sequence three comment" {
+	if parentSequence != 4 || evidenceSequence != 4 || latestRevisionSequence != 4 || revisions != 2 ||
+		len(comments) != 1 || comments[0].Body != "sequence two comment" {
 		t.Fatalf(
 			"persisted state = parent %d, evidence %d, revision %d, revisions %d, comments %+v",
 			parentSequence,
@@ -1775,8 +1782,11 @@ func TestSyncPartialPRCommentsUseParentObservationGeneration(t *testing.T) {
 				t.Fatalf("comments: %v", err)
 			}
 			wantBody := "comment-v2"
+			if test.secondPersistsFirst {
+				wantBody = "comment-v1"
+			}
 			if len(comments) != 1 || comments[0].Body != wantBody {
-				t.Fatalf("comments = %+v, want %s from parent generation 2", comments, wantBody)
+				t.Fatalf("comments = %+v, want latest completed snapshot %s", comments, wantBody)
 			}
 			assertChildReservation(
 				t,
@@ -1794,16 +1804,16 @@ func TestSyncPartialPRDetailsUseCompletedWorkflowObservationOrder(t *testing.T) 
 	for _, test := range []struct {
 		name                string
 		secondPersistsFirst bool
-		workflowSequence    int64
+		wantVersion         int
 	}{
 		{
-			name:             "first child snapshot persists first",
-			workflowSequence: 4,
+			name:        "first child snapshot persists first",
+			wantVersion: 2,
 		},
 		{
 			name:                "second child snapshot persists first",
 			secondPersistsFirst: true,
-			workflowSequence:    3,
+			wantVersion:         1,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1839,7 +1849,7 @@ func TestSyncPartialPRDetailsUseCompletedWorkflowObservationOrder(t *testing.T) 
 				test.secondPersistsFirst,
 			)
 
-			thread, detail := assertVersionedPRHydration(t, ctx, st, 2, true)
+			thread, detail := assertVersionedPRHydration(t, ctx, st, test.wantVersion, true)
 			for _, family := range []store.ThreadChildObservationFamily{
 				store.ThreadChildPullRequestDetails,
 				store.ThreadChildPullRequestFiles,
@@ -1855,11 +1865,11 @@ func TestSyncPartialPRDetailsUseCompletedWorkflowObservationOrder(t *testing.T) 
 				st,
 				detail.RepoID,
 				detail.HeadSHA,
-				test.workflowSequence,
+				2,
 			)
-			wantHead := "head-v2"
+			wantHead := fmt.Sprintf("head-v%d", test.wantVersion)
 			if detail.HeadSHA != wantHead {
-				t.Fatalf("detail = %+v, want %s from parent generation 2", detail, wantHead)
+				t.Fatalf("detail = %+v, want latest completed snapshot %s", detail, wantHead)
 			}
 		})
 	}
@@ -1938,10 +1948,10 @@ func TestSyncPartialPRDetailsAdvanceIndependentFamilies(t *testing.T) {
 		store.ThreadChildPullRequestChecks,
 		store.ThreadChildReviewThreads,
 	} {
-		assertChildReservation(t, ctx, st, thread.ID, family, 3)
+		assertChildReservation(t, ctx, st, thread.ID, family, 2)
 	}
-	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, "head-v1", 2)
-	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 4)
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, "head-v1", 1)
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
 }
 
 func TestSyncWorkflowRunsSharedHeadRejectsOlderPRSnapshot(t *testing.T) {
@@ -2029,7 +2039,7 @@ func TestSyncWorkflowRunsSharedHeadRejectsOlderPRSnapshot(t *testing.T) {
 		runsByID["901"].WorkflowName != "new lint" {
 		t.Fatalf("workflow runs = %+v, older PR overwrote newer snapshot", runs)
 	}
-	assertWorkflowRunReservation(t, ctx, st, repo.ID, "shared-head", 3)
+	assertWorkflowRunReservation(t, ctx, st, repo.ID, "shared-head", 1)
 	var legacyReservations int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select count(*)
@@ -2092,7 +2102,7 @@ func TestSyncWorkflowRunsAcceptsVerifiedDeletionWithoutRegressingSnapshotClock(t
 	if err != nil || !found {
 		t.Fatalf("workflow reservation = %q/%d found=%t err=%v", source, sequence, found, err)
 	}
-	if source != "2026-07-12T00:02:00Z" || sequence != 4 {
+	if source != "2026-07-12T00:02:00Z" || sequence != 2 {
 		t.Fatalf("workflow reservation after deletion = %s/%d", source, sequence)
 	}
 
@@ -2316,8 +2326,8 @@ func TestSyncWorkflowRunsCommitTimeCASRejectsStaleResurrection(t *testing.T) {
 		repo.ID,
 		"shared-head",
 	)
-	if err != nil || !found || sequence != 6 {
-		t.Fatalf("workflow reservation sequence = %d found=%t err=%v, want 6", sequence, found, err)
+	if err != nil || !found || sequence != 3 {
+		t.Fatalf("workflow reservation sequence = %d found=%t err=%v, want 3", sequence, found, err)
 	}
 }
 
@@ -2533,7 +2543,48 @@ func TestSyncWorkflowRunsLaterSiblingTombstonesNewlyObservedRun(t *testing.T) {
 	if len(runs) != 1 || runs[0].RunID != "900" {
 		t.Fatalf("later sibling deletion resurrected new run: %+v", runs)
 	}
-	assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 2)
+	assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 1)
+}
+
+func TestSyncWorkflowRunsPersistsNewerExactSiblingRun(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	client := &sameSyncSharedHeadGitHub{exactStatus: "completed"}
+	stats, err := New(client, st).Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{8, 9}, IncludePRDetails: true,
+	})
+	if err != nil {
+		t.Fatalf("same-generation exact-run sync: %v", err)
+	}
+	if stats.WorkflowRunsSynced != 2 || client.lookupCalls != 1 {
+		t.Fatalf("same-generation exact-run stats = %#v, lookups=%d", stats, client.lookupCalls)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: "same-sync-head",
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	runsByID := make(map[string]store.WorkflowRun, len(runs))
+	for _, run := range runs {
+		runsByID[run.RunID] = run
+	}
+	if len(runs) != 2 ||
+		runsByID["900"].Status != "completed" ||
+		runsByID["900"].UpdatedAtGH != "2026-07-12T00:03:00Z" {
+		t.Fatalf("newer exact workflow run was discarded: %+v", runs)
+	}
 }
 
 func TestConsolidateWorkflowSnapshotsTombstonesDeletionAcrossStaleReappearanceOrders(t *testing.T) {
@@ -2735,7 +2786,7 @@ func TestSyncWorkflowRunsSameGenerationVerifiedDeletionWinsSiblingSnapshot(t *te
 			if len(runs) != 1 || runs[0].RunID != "900" {
 				t.Fatalf("verified deletion was resurrected: %+v", runs)
 			}
-			assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 4)
+			assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 2)
 		})
 	}
 }
@@ -3491,6 +3542,10 @@ func TestPullRequestDetailsUseFetchTimestampWhenPersistedLater(t *testing.T) {
 	rows, err := s.fetchPullRequestDetails(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}, 8)
 	if err != nil {
 		t.Fatalf("fetch details: %v", err)
+	}
+	rows.workflowObservationSequence, err = st.NextThreadObservationSequence(ctx, fetchTime)
+	if err != nil {
+		t.Fatalf("complete detail observation: %v", err)
 	}
 	s.now = func() time.Time { return mustTime(t, persistTime) }
 	if _, err := s.persistPullRequestDetails(ctx, st, thread, rows, store.PullRequestHydrationFamilies{

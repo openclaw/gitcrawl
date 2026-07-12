@@ -84,28 +84,17 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 	if err != nil {
 		return pullRequestDetailRows{}, err
 	}
-	workflowObservationSequence := int64(0)
-	if headSHA != "" && workflowSnapshotFresh {
-		workflowObservationSequence, err = s.store.NextThreadObservationSequence(
-			ctx,
-			s.now().Format(time.RFC3339Nano),
-		)
-		if err != nil {
-			return pullRequestDetailRows{}, err
-		}
-	}
 	return pullRequestDetailRows{
-		fetchedAt:                   fetchedAt,
-		workflowSourceUpdatedAt:     workflowSourceUpdatedAt,
-		workflowSnapshotFresh:       workflowSnapshotFresh,
-		workflowBaseline:            workflowBaseline,
-		workflowDeletedRunIDs:       workflowDeletedRunIDs,
-		workflowObservationSequence: workflowObservationSequence,
-		pull:                        pull,
-		filesRaw:                    filesRaw,
-		commitsRaw:                  commitsRaw,
-		checksRaw:                   checksRaw,
-		runsRaw:                     runsRaw,
+		fetchedAt:               fetchedAt,
+		workflowSourceUpdatedAt: workflowSourceUpdatedAt,
+		workflowSnapshotFresh:   workflowSnapshotFresh,
+		workflowBaseline:        workflowBaseline,
+		workflowDeletedRunIDs:   workflowDeletedRunIDs,
+		pull:                    pull,
+		filesRaw:                filesRaw,
+		commitsRaw:              commitsRaw,
+		checksRaw:               checksRaw,
+		runsRaw:                 runsRaw,
 	}, nil
 }
 
@@ -399,7 +388,7 @@ func (s *Syncer) consolidateWorkflowSnapshots(
 			if _, deleted := deletedRunIDs[runID]; deleted {
 				continue
 			}
-			deleted, err := s.verifySiblingWorkflowRunDeletion(
+			exact, deleted, err := s.verifySiblingWorkflowRunDeletion(
 				ctx,
 				options,
 				group.headSHA,
@@ -410,6 +399,36 @@ func (s *Syncer) consolidateWorkflowSnapshots(
 			}
 			if deleted {
 				deletedRunIDs[runID] = struct{}{}
+				continue
+			}
+			existing := rowsByID[runID]
+			existingSource, err := workflowRunTimestamp(
+				stringValue(existing["updated_at"]),
+				stringValue(existing["created_at"]),
+			)
+			if err != nil {
+				return fmt.Errorf("workflow run %s source: %w", runID, err)
+			}
+			exactSource, err := workflowRunTimestamp(
+				stringValue(exact["updated_at"]),
+				stringValue(exact["created_at"]),
+			)
+			if err != nil {
+				return fmt.Errorf("exact workflow run %s source: %w", runID, err)
+			}
+			sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, exactSource)
+			if err != nil {
+				return err
+			}
+			if workflowTimestampBefore(existingSource, exactSource) {
+				merged := make(map[string]any, len(existing)+len(exact))
+				for key, value := range existing {
+					merged[key] = value
+				}
+				for key, value := range exact {
+					merged[key] = value
+				}
+				rowsByID[runID] = merged
 			}
 		}
 		for runID := range deletedRunIDs {
@@ -445,10 +464,10 @@ func (s *Syncer) verifySiblingWorkflowRunDeletion(
 	options Options,
 	headSHA string,
 	runID string,
-) (bool, error) {
+) (map[string]any, bool, error) {
 	lookup, ok := s.client.(workflowRunLookupClient)
 	if !ok {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"cannot verify workflow run %s absent from later sibling for head %s",
 			runID,
 			headSHA,
@@ -463,17 +482,17 @@ func (s *Syncer) verifySiblingWorkflowRunDeletion(
 	)
 	var requestErr *gh.RequestError
 	if errors.As(lookupErr, &requestErr) && requestErr.Status == 404 {
-		return true, nil
+		return nil, true, nil
 	}
 	if lookupErr != nil {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"verify workflow run %s absent from later sibling: %w",
 			runID,
 			lookupErr,
 		)
 	}
 	if exactRunID := jsonID(exact["id"]); exactRunID != runID {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"verify workflow run %s absent from later sibling: exact lookup returned %s",
 			runID,
 			exactRunID,
@@ -483,13 +502,13 @@ func (s *Syncer) verifySiblingWorkflowRunDeletion(
 		stringValue(exact["updated_at"]),
 		stringValue(exact["created_at"]),
 	); err != nil {
-		return false, fmt.Errorf(
+		return nil, false, fmt.Errorf(
 			"verify workflow run %s absent from later sibling source: %w",
 			runID,
 			err,
 		)
 	}
-	return false, nil
+	return exact, false, nil
 }
 
 func workflowSnapshotBaselinesEqual(
