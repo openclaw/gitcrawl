@@ -195,6 +195,13 @@ func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
 				t.Fatalf("thread: %v", err)
 			}
 			if _, err := st.DB().ExecContext(ctx, `
+				update threads
+				set observation_sequence = 0
+				where id = ?
+			`, threadID); err != nil {
+				t.Fatalf("mark legacy thread: %v", err)
+			}
+			if _, err := st.DB().ExecContext(ctx, `
 				insert into thread_revisions(
 					thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at
 				) values(?, ?, 'content', 'title', 'body', 'labels', '2026-07-12T12:00:01Z')

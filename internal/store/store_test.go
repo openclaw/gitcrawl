@@ -319,12 +319,8 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	`, result.RevisionID).Scan(&observationSequence); err != nil {
 		t.Fatalf("read migrated observation sequence: %v", err)
 	}
-	if observationSequence != result.RevisionID {
-		t.Fatalf(
-			"migrated observation sequence = %d, want revision id %d",
-			observationSequence,
-			result.RevisionID,
-		)
+	if observationSequence != 0 {
+		t.Fatalf("migrated observation sequence = %d, want legacy marker 0", observationSequence)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
 		select observation_sequence
@@ -333,11 +329,10 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	`, migratedThreadID).Scan(&threadObservationSequence); err != nil {
 		t.Fatalf("read migrated thread observation sequence: %v", err)
 	}
-	if threadObservationSequence != result.RevisionID {
+	if threadObservationSequence != 0 {
 		t.Fatalf(
-			"migrated thread observation sequence = %d, want revision id %d",
+			"migrated thread observation sequence = %d, want legacy marker 0",
 			threadObservationSequence,
-			result.RevisionID,
 		)
 	}
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
@@ -495,11 +490,11 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 	`, thread.ID).Scan(&threadSequence); err != nil {
 		t.Fatalf("read migrated thread sequence: %v", err)
 	}
-	if threadSequence != revisionSequence+1 {
+	if revisionSequence != 0 || threadSequence != 0 {
 		t.Fatalf(
-			"migrated stale sequence = %d, want revision sequence %d + 1",
-			threadSequence,
+			"migrated stale sequences = revision %d, thread %d; want legacy markers",
 			revisionSequence,
+			threadSequence,
 		)
 	}
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})

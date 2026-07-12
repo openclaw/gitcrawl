@@ -22,7 +22,7 @@ func TestTimestampOrderKeyPreservesRFC3339NanoPrecision(t *testing.T) {
 	}
 }
 
-func TestSQLiteTimestampKeyOrdersSubMillisecondRevisions(t *testing.T) {
+func TestSQLiteTimestampKeyOrdersLegacySubMillisecondRevisions(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -60,14 +60,21 @@ func TestSQLiteTimestampKeyOrdersSubMillisecondRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stale revision: %v", err)
 	}
+	if _, err := st.DB().ExecContext(ctx, `
+		update thread_revisions
+		set observation_sequence = 0
+		where id in (?, ?)
+	`, newer.RevisionID, stale.RevisionID); err != nil {
+		t.Fatalf("mark legacy revisions: %v", err)
+	}
 
 	var latestID int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
-			observation_sequence desc,
+		order by observation_sequence desc,
+			gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			id desc
 		limit 1
 	`, thread.ID).Scan(&latestID); err != nil {

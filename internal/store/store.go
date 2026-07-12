@@ -242,7 +242,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
-	if err := s.ensureLegacyPortableColumns(ctx, current); err != nil {
+	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureThreadVectorsCompositeKey(ctx); err != nil {
@@ -260,66 +260,24 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) ensureLegacyPortableColumns(ctx context.Context, currentSchemaVersion int) error {
+func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "repositories", "raw_json", "text"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "thread_revisions", "raw_json_blob_id", "integer references blobs(id) on delete set null"); err != nil {
 		return err
 	}
-	hadRevisionObservationSequence := s.hasColumn(ctx, "thread_revisions", "observation_sequence")
 	if err := s.ensureColumn(ctx, "thread_revisions", "observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
-	if !hadRevisionObservationSequence || currentSchemaVersion < schemaVersion {
-		if _, err := s.db.ExecContext(ctx, `
-			update thread_revisions
-			set observation_sequence = id
-			where observation_sequence <= 0
-		`); err != nil {
-			return fmt.Errorf("backfill thread revision observation sequence: %w", err)
-		}
-	}
-	hadThreadObservationSequence := s.hasColumn(ctx, "threads", "observation_sequence")
 	if err := s.ensureColumn(ctx, "threads", "observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
-	if !hadThreadObservationSequence || currentSchemaVersion < schemaVersion {
-		if _, err := s.db.ExecContext(ctx, `
-		with latest_revisions as (
-			select
-				tr.thread_id,
-				tr.observation_sequence,
-				coalesce(nullif(tr.source_updated_at, ''), tr.created_at) as observed_at,
-				row_number() over (
-					partition by tr.thread_id
-					order by
-						gitcrawl_timestamp_key(nullif(tr.source_updated_at, '')) desc,
-						tr.observation_sequence desc,
-						tr.id desc
-				) as revision_rank
-			from thread_revisions tr
-		)
-		update threads
-		set observation_sequence = coalesce(
-			(
-				select case
-					when julianday(lr.observed_at) >= julianday(
-						coalesce(nullif(threads.updated_at_gh, ''), threads.updated_at)
-					)
-					then lr.observation_sequence
-					else lr.observation_sequence + 1
-				end
-				from latest_revisions lr
-				where lr.thread_id = threads.id
-					and lr.revision_rank = 1
-			),
-			id
-		)
-		where observation_sequence <= 0
-		`); err != nil {
-			return fmt.Errorf("backfill thread observation sequence: %w", err)
-		}
+	if _, err := s.db.ExecContext(ctx, `
+		create index if not exists idx_thread_revisions_thread_observation
+		on thread_revisions(thread_id, observation_sequence desc)
+	`); err != nil {
+		return fmt.Errorf("ensure thread revision observation index: %w", err)
 	}
 	hadThreadBody := s.hasColumn(ctx, "threads", "body")
 	if err := s.ensureColumn(ctx, "threads", "body", "text"); err != nil {
@@ -465,6 +423,10 @@ func (s *Store) ensureThreadRevisionTransitionHistory(ctx context.Context) error
 	if !s.hasTable(ctx, "thread_revisions") || !s.threadRevisionsHaveUniqueContentHash(ctx) {
 		return nil
 	}
+	observationSequenceExpression := "0"
+	if s.hasColumn(ctx, "thread_revisions", "observation_sequence") {
+		observationSequenceExpression = "observation_sequence"
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("open thread revision migration connection: %w", err)
@@ -487,6 +449,13 @@ func (s *Store) ensureThreadRevisionTransitionHistory(ctx context.Context) error
 		return fmt.Errorf("begin thread revision transition migration: %w", err)
 	}
 	defer tx.Rollback()
+	copyRevisions := fmt.Sprintf(`insert into thread_revisions_new(
+			id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, raw_json_blob_id, observation_sequence, created_at
+		)
+		select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
+			labels_hash, raw_json_blob_id, %s, created_at
+		from thread_revisions`, observationSequenceExpression)
 	for _, stmt := range []string{
 		`drop table if exists thread_revisions_new`,
 		`create table thread_revisions_new (
@@ -501,16 +470,11 @@ func (s *Store) ensureThreadRevisionTransitionHistory(ctx context.Context) error
 				observation_sequence integer not null default 0,
 				created_at text not null
 			)`,
-		`insert into thread_revisions_new(
-				id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
-				labels_hash, raw_json_blob_id, observation_sequence, created_at
-			)
-			select id, thread_id, source_updated_at, content_hash, title_hash, body_hash,
-				labels_hash, raw_json_blob_id, id, created_at
-			from thread_revisions`,
+		copyRevisions,
 		`drop table thread_revisions`,
 		`alter table thread_revisions_new rename to thread_revisions`,
 		`create index if not exists idx_thread_revisions_thread_created on thread_revisions(thread_id, created_at)`,
+		`create index if not exists idx_thread_revisions_thread_observation on thread_revisions(thread_id, observation_sequence desc)`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("migrate thread revision transitions: %w", err)

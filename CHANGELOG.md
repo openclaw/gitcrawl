@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Order canonical threads and revision evidence by lossless RFC3339Nano source time plus a durable pre-fetch observation sequence, skipping an entire delayed hydration payload before it can overwrite comments, PR details, documents, or evidence. Metadata-only observations carry an explicit incomplete generation so they invalidate stale enrichment while allowing same-source hydration to finish, missing source clocks use the sequence across archive coverage, embedding, summary, and cluster consumers, malformed non-empty clocks fail closed across every consumer, legacy migrations preserve stale and fresh revision state, and pre-v7 portable archives remain readable without mutation.
+- Order canonical thread metadata by lossless RFC3339Nano source time and complete evidence snapshots by a durable pre-fetch observation sequence, so delayed hydration cannot overwrite newer state and later snapshots can remove deleted comments, checks, or workflow evidence. Metadata-only observations carry an explicit incomplete generation that invalidates stale enrichment while allowing same-payload hydration to finish; archive, embedding, summary, and cluster consumers fail closed on malformed clocks, preserve unknown legacy ordering as sequence zero, and keep pre-v7 portable archives readable without mutation.
 
 ## 0.7.1 - 2026-07-09
 

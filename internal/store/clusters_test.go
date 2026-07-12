@@ -1142,6 +1142,13 @@ func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
 		t.Fatalf("thread: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set observation_sequence = 0
+		where id = ?
+	`, thread.ID); err != nil {
+		t.Fatalf("mark legacy thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
 		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
 		values
 			(900, ?, '2026-07-12T00:01:00Z', 'old', 'title', 'body', 'labels', '2026-07-12T00:01:00Z'),

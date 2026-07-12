@@ -169,12 +169,31 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	if strings.TrimSpace(createdAt) == "" {
 		createdAt = time.Now().UTC().Format(timeLayout)
 	}
-	if evidence.ObservationSequence <= 0 {
+	sequenceProvided := evidence.ObservationSequence > 0
+	if !sequenceProvided {
 		sequence, err := s.NextThreadObservationSequence(ctx, createdAt)
 		if err != nil {
 			return ThreadEnrichmentResult{}, err
 		}
 		evidence.ObservationSequence = sequence
+		var persistedSourceUpdatedAt string
+		if err := s.q().QueryRowContext(ctx, `
+			select coalesce(updated_at_gh, '')
+			from threads
+			where id = ?
+		`, evidence.Thread.ID).Scan(&persistedSourceUpdatedAt); err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("read thread source clock: %w", err)
+		}
+		sourceOrder, err := compareObservationOrder(
+			observationOrder{SourceUpdatedAt: evidence.Thread.UpdatedAtGitHub},
+			observationOrder{SourceUpdatedAt: persistedSourceUpdatedAt},
+		)
+		if err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("compare thread source clock: %w", err)
+		}
+		if sourceOrder < 0 {
+			evidence.ObservationSequence = 0
+		}
 	}
 	revision, fingerprint := buildThreadEnrichment(evidence, createdAt)
 	evidenceBlobID, err := s.upsertThreadRevisionEvidenceBlob(ctx, revision)
@@ -183,15 +202,14 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	}
 	var latestID, latestObservationSequence int64
 	var latestHash, latestSourceUpdatedAt string
-	err = s.q().QueryRowContext(ctx, `
+	latestOrder := s.latestThreadRevisionOrder(ctx, "tr")
+	err = s.q().QueryRowContext(ctx, fmt.Sprintf(`
 		select id, content_hash, coalesce(source_updated_at, ''), observation_sequence
-		from thread_revisions
-		where thread_id = ?
-		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
-			observation_sequence desc,
-			id desc
+		from thread_revisions tr
+		where tr.thread_id = ?
+		order by %s
 		limit 1
-	`, revision.ThreadID).Scan(
+	`, latestOrder), revision.ThreadID).Scan(
 		&latestID,
 		&latestHash,
 		&latestSourceUpdatedAt,
@@ -225,7 +243,11 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 
 	order := 1
 	if latestExists {
-		order, err = compareObservationOrder(
+		compareOrder := compareRevisionObservationOrder
+		if !sequenceProvided {
+			compareOrder = compareObservationOrder
+		}
+		order, err = compareOrder(
 			observationOrder{
 				SourceUpdatedAt:     revision.SourceUpdatedAt,
 				ObservationSequence: revision.ObservationSequence,

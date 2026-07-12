@@ -56,14 +56,43 @@ func compareObservationOrder(incoming, current observationOrder) (int, error) {
 	}
 }
 
+func compareRevisionObservationOrder(incoming, current observationOrder) (int, error) {
+	incomingTimestamp := strings.TrimSpace(incoming.SourceUpdatedAt)
+	currentTimestamp := strings.TrimSpace(current.SourceUpdatedAt)
+	_, incomingValid := timestampOrderKey(incomingTimestamp)
+	_, currentValid := timestampOrderKey(currentTimestamp)
+	if !incomingValid && !currentValid && incomingTimestamp != currentTimestamp {
+		return 0, fmt.Errorf(
+			"ambiguous malformed observation timestamps %q and %q",
+			incomingTimestamp,
+			currentTimestamp,
+		)
+	}
+
+	switch {
+	case incoming.ObservationSequence > 0 && current.ObservationSequence > 0:
+		switch {
+		case incoming.ObservationSequence < current.ObservationSequence:
+			return -1, nil
+		case incoming.ObservationSequence > current.ObservationSequence:
+			return 1, nil
+		}
+	case incoming.ObservationSequence > 0:
+		return 1, nil
+	case current.ObservationSequence > 0:
+		return -1, nil
+	}
+	return compareObservationOrder(incoming, current)
+}
+
 func (s *Store) latestThreadRevisionOrder(ctx context.Context, alias string) string {
 	qualified := sqliteIdentifier(alias) + "."
 	parts := make([]string, 0, 3)
-	if s.hasColumn(ctx, "thread_revisions", "source_updated_at") {
-		parts = append(parts, "gitcrawl_timestamp_key(nullif("+qualified+"source_updated_at, '')) desc")
-	}
 	if s.hasColumn(ctx, "thread_revisions", "observation_sequence") {
 		parts = append(parts, qualified+"observation_sequence desc")
+	}
+	if s.hasColumn(ctx, "thread_revisions", "source_updated_at") {
+		parts = append(parts, "gitcrawl_timestamp_key(nullif("+qualified+"source_updated_at, '')) desc")
 	}
 	parts = append(parts, qualified+"id desc")
 	return strings.Join(parts, ", ")
@@ -76,39 +105,44 @@ func (s *Store) threadRevisionFreshnessPredicate(
 ) string {
 	revision := sqliteIdentifier(revisionAlias) + "."
 	thread := sqliteIdentifier(threadAlias) + "."
-	hasRevisionSource := s.hasColumn(ctx, "thread_revisions", "source_updated_at")
-	hasThreadSource := s.hasColumn(ctx, "threads", "updated_at_gh")
 	hasSequence := s.hasColumn(ctx, "thread_revisions", "observation_sequence") &&
 		s.hasColumn(ctx, "threads", "observation_sequence")
+	revisionLegacyTimestamp := "gitcrawl_timestamp_key(" + revision + "created_at)"
+	revisionSourceTimestamp := "null"
+	revisionSourceUsable := "1 = 1"
+	if s.hasColumn(ctx, "thread_revisions", "source_updated_at") {
+		revisionLegacyTimestamp = "gitcrawl_timestamp_key(coalesce(nullif(" +
+			revision + "source_updated_at, ''), " + revision + "created_at))"
+		revisionSourceTimestamp = "gitcrawl_timestamp_key(nullif(" +
+			revision + "source_updated_at, ''))"
+		revisionSourceUsable = revisionSourceTimestamp + " is not null or trim(coalesce(" +
+			revision + "source_updated_at, '')) = ''"
+	}
+	threadLegacyTimestamp := "gitcrawl_timestamp_key(" + thread + "updated_at)"
+	threadSourceTimestamp := "null"
+	threadSourceUsable := "1 = 1"
+	if s.hasColumn(ctx, "threads", "updated_at_gh") {
+		threadLegacyTimestamp = "gitcrawl_timestamp_key(coalesce(nullif(" +
+			thread + "updated_at_gh, ''), " + thread + "updated_at))"
+		threadSourceTimestamp = "gitcrawl_timestamp_key(nullif(" + thread + "updated_at_gh, ''))"
+		threadSourceUsable = threadSourceTimestamp + " is not null or trim(coalesce(" +
+			thread + "updated_at_gh, '')) = ''"
+	}
+	legacyClockFresh := revisionLegacyTimestamp + " is not null and " +
+		threadLegacyTimestamp + " is not null and " +
+		revisionLegacyTimestamp + " >= " + threadLegacyTimestamp
 
 	if hasSequence {
-		sequenceFresh := thread + "observation_sequence >= 0 and (" +
-			revision + "observation_sequence <= 0 or " +
-			thread + "observation_sequence = 0 or " +
-			revision + "observation_sequence >= " + thread + "observation_sequence)"
-		if !hasRevisionSource || !hasThreadSource {
-			return sequenceFresh
-		}
-		revisionTimestamp := "gitcrawl_timestamp_key(nullif(" + revision + "source_updated_at, ''))"
-		threadTimestamp := "gitcrawl_timestamp_key(nullif(" + thread + "updated_at_gh, ''))"
-		revisionClockUsable := revisionTimestamp + " is not null or trim(coalesce(" +
-			revision + "source_updated_at, '')) = ''"
-		threadClockUsable := threadTimestamp + " is not null or trim(coalesce(" +
-			thread + "updated_at_gh, '')) = ''"
-		return "((" + revisionTimestamp + " is not null and " + threadTimestamp + " is not null and (" +
-			sequenceFresh + ") and " + revisionTimestamp + " >= " + threadTimestamp + ") or ((" +
-			revisionTimestamp + " is null or " + threadTimestamp + " is null) and " +
-			"(" + revisionClockUsable + ") and (" + threadClockUsable + ") and " +
-			sequenceFresh + "))"
+		sourceClockFresh := "(" + revisionSourceUsable + ") and (" + threadSourceUsable +
+			") and (" + revisionSourceTimestamp + " is null or " +
+			threadSourceTimestamp + " is null or " +
+			revisionSourceTimestamp + " >= " + threadSourceTimestamp + ")"
+		sequenceFresh := thread + "observation_sequence > 0 and " +
+			revision + "observation_sequence > 0 and " +
+			revision + "observation_sequence >= " + thread + "observation_sequence"
+		return "((" + sequenceFresh + ") and (" + sourceClockFresh + ")) or (" +
+			thread + "observation_sequence = 0 and (" + legacyClockFresh + "))"
 	}
 
-	if !hasRevisionSource {
-		return "0 = 1"
-	}
-	threadTimestamp := "gitcrawl_timestamp_key(" + thread + "updated_at)"
-	if hasThreadSource {
-		threadTimestamp = "gitcrawl_timestamp_key(coalesce(nullif(" + thread + "updated_at_gh, ''), " +
-			thread + "updated_at))"
-	}
-	return "gitcrawl_timestamp_key(nullif(" + revision + "source_updated_at, '')) >= " + threadTimestamp
+	return legacyClockFresh
 }

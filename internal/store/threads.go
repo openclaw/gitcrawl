@@ -148,7 +148,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		if err != nil {
 			return UpsertThreadResult{}, fmt.Errorf("compare thread observation order: %w", err)
 		}
-		if sourceOrder == 0 && !options.IncompleteEvidence && existing.observationSequence < 0 {
+		if sourceOrder == 0 && samePayload && !options.IncompleteEvidence && existing.observationSequence < 0 {
 			order = 1
 		}
 		if order < 0 {

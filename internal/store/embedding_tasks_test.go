@@ -47,6 +47,13 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 		t.Fatalf("thread: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set observation_sequence = 0
+		where id = ?
+	`, threadID); err != nil {
+		t.Fatalf("mark legacy thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
 		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
 		values(1, ?, '2026-04-26T00:00:00Z', 'hash', 'title', 'body', 'labels', '2026-04-26T00:00:00Z');
 		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
@@ -114,6 +121,13 @@ func TestListEmbeddingTasksUsesLatestObservedRevision(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set observation_sequence = 0
+		where id = ?
+	`, threadID); err != nil {
+		t.Fatalf("mark legacy thread: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
 		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)

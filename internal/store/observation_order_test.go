@@ -96,6 +96,75 @@ func TestCompareObservationOrder(t *testing.T) {
 	}
 }
 
+func TestCompareRevisionObservationOrder(t *testing.T) {
+	tests := []struct {
+		name     string
+		incoming observationOrder
+		current  observationOrder
+		want     int
+		wantErr  string
+	}{
+		{
+			name: "newer fetch wins after evidence clock decreases",
+			incoming: observationOrder{
+				SourceUpdatedAt: "2026-07-12T00:00:00Z", ObservationSequence: 2,
+			},
+			current: observationOrder{
+				SourceUpdatedAt: "2026-07-12T00:00:01Z", ObservationSequence: 1,
+			},
+			want: 1,
+		},
+		{
+			name: "older fetch loses despite newer evidence clock",
+			incoming: observationOrder{
+				SourceUpdatedAt: "2026-07-12T00:00:01Z", ObservationSequence: 1,
+			},
+			current: observationOrder{
+				SourceUpdatedAt: "2026-07-12T00:00:00Z", ObservationSequence: 2,
+			},
+			want: -1,
+		},
+		{
+			name: "legacy observations fall back to source clock",
+			incoming: observationOrder{
+				SourceUpdatedAt: "2026-07-12T00:00:01Z",
+			},
+			current: observationOrder{
+				SourceUpdatedAt: "2026-07-12T00:00:00Z",
+			},
+			want: 1,
+		},
+		{
+			name: "different malformed clocks remain ambiguous",
+			incoming: observationOrder{
+				SourceUpdatedAt: "not-a-time-a", ObservationSequence: 2,
+			},
+			current: observationOrder{
+				SourceUpdatedAt: "not-a-time-b", ObservationSequence: 1,
+			},
+			wantErr: "ambiguous malformed observation timestamps",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := compareRevisionObservationOrder(test.incoming, test.current)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("compare: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("order = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestUpsertThreadObservationRejectsDelayedCanonicalOverwrite(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
@@ -281,6 +350,23 @@ func TestUpsertThreadObservationTracksIncompleteEvidenceGeneration(t *testing.T)
 	if sequence := readSequence(); sequence != -5 {
 		t.Fatalf("same-clock conflict sequence = %d, want -5", sequence)
 	}
+
+	delayed := thread
+	delayed.Title = "metadata update"
+	delayed.RawJSON = `{"state":"metadata-update"}`
+	delayed.ContentHash = "metadata-update"
+	staleHydration, err := st.UpsertThreadObservation(ctx, delayed, UpsertThreadOptions{
+		ObservationSequence: 3,
+	})
+	if err != nil {
+		t.Fatalf("delayed conflicting hydration: %v", err)
+	}
+	if staleHydration.Applied {
+		t.Fatalf("delayed conflicting hydration applied: %+v", staleHydration)
+	}
+	if sequence := readSequence(); sequence != -5 {
+		t.Fatalf("sequence after delayed hydration = %d, want -5", sequence)
+	}
 }
 
 func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration(t *testing.T) {
@@ -339,6 +425,59 @@ func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration
 	}
 	if sequence != -7 {
 		t.Fatalf("reopened incomplete sequence = %d, want -7", sequence)
+	}
+}
+
+func TestPortableReopenPreservesIncompleteObservationGeneration(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	result, err := st.UpsertThreadObservation(ctx, Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
+		Title: "metadata", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: `{}`,
+		ContentHash: "metadata", UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt: "2026-07-12T00:01:00Z",
+	}, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 7,
+	})
+	if err != nil || !result.Applied {
+		t.Fatalf("incomplete observation = %+v, %v", result, err)
+	}
+	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 64}); err != nil {
+		t.Fatalf("portable prune: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close portable store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen portable store: %v", err)
+	}
+	defer st.Close()
+	var sequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence
+		from threads
+		where id = ?
+	`, result.ID).Scan(&sequence); err != nil {
+		t.Fatalf("read portable observation sequence: %v", err)
+	}
+	if sequence != -7 {
+		t.Fatalf("portable observation sequence = %d, want -7", sequence)
 	}
 }
 

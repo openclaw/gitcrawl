@@ -468,8 +468,8 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 					select id
 					from thread_revisions
 					where thread_id = ?
-					order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
-						observation_sequence desc,
+					order by observation_sequence desc,
+						gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 						id desc
 				limit 1
 			`, thread.ID).Scan(&latestID); err != nil {
@@ -550,8 +550,8 @@ func TestUpsertThreadRevisionPreservesSameClockReviewThreadReversion(t *testing.
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
-			observation_sequence desc,
+		order by observation_sequence desc,
+			gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			id desc
 		limit 1
 	`, thread.ID).Scan(&latestID); err != nil {
@@ -559,6 +559,115 @@ func TestUpsertThreadRevisionPreservesSameClockReviewThreadReversion(t *testing.
 	}
 	if revisionCount != 3 || latestID != revertedA.RevisionID {
 		t.Fatalf("revision count/latest = %d/%d, want 3/%d", revisionCount, latestID, revertedA.RevisionID)
+	}
+}
+
+func TestUpsertThreadRevisionPromotesCompleteSnapshotAfterEvidenceDeletion(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "14", Number: 14, Kind: "issue", State: "open",
+		Title: "evidence deletion", Body: "latest complete snapshot wins",
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/issues/14",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T12:00:00Z", UpdatedAt: "2026-07-12T12:00:00Z",
+	}
+	upsert, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{ObservationSequence: 1})
+	if err != nil || !upsert.Applied {
+		t.Fatalf("initial thread observation = %+v, %v", upsert, err)
+	}
+	thread.ID = upsert.ID
+	first, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 1,
+		Comments: []Comment{{
+			ThreadID: thread.ID, GitHubID: "comment-1", CommentType: "issue_comment",
+			Body: "obsolete evidence", UpdatedAtGitHub: "2026-07-12T12:05:00Z",
+		}},
+	}, "2026-07-12T12:06:00Z")
+	if err != nil {
+		t.Fatalf("initial revision: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: first.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "test",
+		Model:            "test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "obsolete evidence summary",
+		CreatedAt:        "2026-07-12T12:06:00Z",
+	}); err != nil {
+		t.Fatalf("initial summary: %v", err)
+	}
+
+	upsert, err = st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{ObservationSequence: 2})
+	if err != nil || !upsert.Applied {
+		t.Fatalf("replacement thread observation = %+v, %v", upsert, err)
+	}
+	current, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 2,
+	}, "2026-07-12T12:07:00Z")
+	if err != nil {
+		t.Fatalf("replacement revision: %v", err)
+	}
+	if !current.RevisionCreated || current.RevisionID == first.RevisionID {
+		t.Fatalf("initial/current revisions = %+v/%+v", first, current)
+	}
+
+	var latestID int64
+	var firstClock, currentClock string
+	if err := st.DB().QueryRowContext(ctx, `
+		select id
+		from thread_revisions
+		where thread_id = ?
+		order by observation_sequence desc,
+			gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
+			id desc
+		limit 1
+	`, thread.ID).Scan(&latestID); err != nil {
+		t.Fatalf("latest revision: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select
+			(select source_updated_at from thread_revisions where id = ?),
+			(select source_updated_at from thread_revisions where id = ?)
+	`, first.RevisionID, current.RevisionID).Scan(&firstClock, &currentClock); err != nil {
+		t.Fatalf("revision clocks: %v", err)
+	}
+	if latestID != current.RevisionID ||
+		firstClock != "2026-07-12T12:05:00Z" ||
+		currentClock != thread.UpdatedAtGitHub {
+		t.Fatalf(
+			"latest/clocks = %d/%q/%q, want %d/%q/%q",
+			latestID,
+			firstClock,
+			currentClock,
+			current.RevisionID,
+			"2026-07-12T12:05:00Z",
+			thread.UpdatedAtGitHub,
+		)
+	}
+	summaries, err := st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("summaries: %v", err)
+	}
+	if summaries[thread.ID][SummaryKindLLMKey] != "" {
+		t.Fatalf("obsolete summary remained current: %+v", summaries)
 	}
 }
 
@@ -588,7 +697,8 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 		t.Fatalf("thread: %v", err)
 	}
 	current, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
-		Thread: thread,
+		Thread:              thread,
+		ObservationSequence: 2,
 		Detail: &PullRequestDetail{
 			ThreadID: thread.ID, RepoID: repoID, Number: thread.Number,
 			BaseSHA: "base", HeadSHA: "current",
@@ -614,7 +724,8 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 	staleThread.UpdatedAtGitHub = "2026-07-12T12:02:00Z"
 	staleThread.UpdatedAt = staleThread.UpdatedAtGitHub
 	stale, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
-		Thread: staleThread,
+		Thread:              staleThread,
+		ObservationSequence: 1,
 		Detail: &PullRequestDetail{
 			ThreadID: thread.ID, RepoID: repoID, Number: thread.Number,
 			BaseSHA: "base", HeadSHA: "stale",
@@ -641,8 +752,8 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
-			observation_sequence desc,
+		order by observation_sequence desc,
+			gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			id desc
 		limit 1
 	`, thread.ID).Scan(&latestID); err != nil {
@@ -714,8 +825,8 @@ func TestUpsertThreadRevisionUsesSequenceWhenSourceTimestampIsMissing(t *testing
 		select id
 		from thread_revisions
 		where thread_id = ?
-		order by gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
-			observation_sequence desc,
+		order by observation_sequence desc,
+			gitcrawl_timestamp_key(nullif(source_updated_at, '')) desc,
 			id desc
 		limit 1
 	`, thread.ID).Scan(&latestID); err != nil {

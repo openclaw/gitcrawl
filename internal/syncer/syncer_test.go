@@ -40,7 +40,8 @@ func (f *observationProbeGitHub) GetRepo(ctx context.Context, owner, repo string
 
 type mutableCommentGitHub struct {
 	fakeGitHub
-	empty bool
+	empty            bool
+	commentUpdatedAt string
 }
 
 type delayedObservationGitHub struct {
@@ -117,7 +118,14 @@ func (f *mutableCommentGitHub) ListIssueComments(ctx context.Context, owner, rep
 	if f.empty {
 		return []map[string]any{}, nil
 	}
-	return f.fakeGitHub.ListIssueComments(ctx, owner, repo, number, reporter)
+	rows, err := f.fakeGitHub.ListIssueComments(ctx, owner, repo, number, reporter)
+	if err != nil || f.commentUpdatedAt == "" {
+		return rows, err
+	}
+	for _, row := range rows {
+		row["updated_at"] = f.commentUpdatedAt
+	}
+	return rows, nil
 }
 
 func (fakeGitHub) GetRepo(ctx context.Context, owner, repo string, reporter gh.Reporter) (map[string]any, error) {
@@ -981,7 +989,7 @@ func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) 
 	}
 	defer st.Close()
 
-	client := &mutableCommentGitHub{}
+	client := &mutableCommentGitHub{commentUpdatedAt: "2026-04-26T00:05:00Z"}
 	s := New(client, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
 	options := Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{7}, IncludeComments: true}
@@ -1000,6 +1008,15 @@ func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) 
 	}
 	assertTableRowCount(t, st, "comments", 0)
 	assertDocumentFTSCount(t, st, "same", 0)
+	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("archive coverage after empty snapshot: %v", err)
+	}
+	if len(coverage.Rows) != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Fresh != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Stale != 0 {
+		t.Fatalf("revision coverage after empty snapshot = %+v", coverage.Rows)
+	}
 
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{7}}); err != nil {
 		t.Fatalf("metadata sync after empty snapshot: %v", err)
