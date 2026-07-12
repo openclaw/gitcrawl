@@ -372,13 +372,14 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 			coalesce(tr.created_at, ''),
 			`+threadUpdatedAt+`
 		from threads t
-		left join thread_revisions tr on tr.id = (
-			select latest.id
-			from thread_revisions latest
-			where latest.thread_id = t.id
-			order by latest.id desc
-			limit 1
-		)
+			left join thread_revisions tr on tr.id = (
+				select latest.id
+				from thread_revisions latest
+				where latest.thread_id = t.id
+				order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+					latest.id desc
+				limit 1
+			)
 		where t.repo_id = ?
 	`, repoID)
 	if err != nil {
@@ -440,13 +441,14 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 			coalesce(child.created_at, ''),
 			`+threadUpdatedAt+`
 		from threads t
-		left join thread_revisions tr on tr.id = (
-			select latest.id
-			from thread_revisions latest
-			where latest.thread_id = t.id
-			order by latest.id desc
-			limit 1
-		)
+			left join thread_revisions tr on tr.id = (
+				select latest.id
+				from thread_revisions latest
+				where latest.thread_id = t.id
+				order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+					latest.id desc
+				limit 1
+			)
 		left join `+tableName+` child on child.id = (
 			select latest_child.id
 			from `+tableName+` latest_child

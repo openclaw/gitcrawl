@@ -208,9 +208,12 @@ select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, co
     join thread_revisions tr on tr.id = tks.thread_revision_id
     where tr.thread_id = t.id
       and tr.id = (
-        select max(latest.id)
+        select latest.id
         from thread_revisions latest
         where latest.thread_id = t.id
+        order by julianday(coalesce(nullif(latest.source_updated_at, ''), latest.created_at)) desc,
+          latest.id desc
+        limit 1
       )
       and julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
         julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))

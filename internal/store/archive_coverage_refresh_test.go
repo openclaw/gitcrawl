@@ -263,3 +263,95 @@ func TestArchiveCoverageUsesSummaryCreationTimeWithoutRunHistory(t *testing.T) {
 		t.Fatalf("summary latest observation = %+v", metric)
 	}
 }
+
+func TestArchiveCoverageUsesLatestObservedRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:02:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	current := Thread{
+		RepoID:          repoID,
+		GitHubID:        "3",
+		Number:          3,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "Current evidence",
+		Body:            "The lower revision id has the newest source observation.",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/3",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "thread-current",
+		UpdatedAtGitHub: "2026-07-12T00:02:00Z",
+		UpdatedAt:       "2026-07-12T00:02:00Z",
+	}
+	current.ID, err = st.UpsertThread(ctx, current)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	currentEnrichment, err := st.UpsertThreadRevisionAndFingerprint(
+		ctx,
+		ThreadEvidence{Thread: current},
+		"2026-07-12T00:02:00Z",
+	)
+	if err != nil {
+		t.Fatalf("current enrichment: %v", err)
+	}
+
+	stale := current
+	stale.Title = "Stale intermediate evidence"
+	stale.ContentHash = "thread-stale"
+	stale.UpdatedAtGitHub = "2026-07-12T00:01:00Z"
+	stale.UpdatedAt = "2026-07-12T00:01:00Z"
+	staleEnrichment, err := st.UpsertThreadRevisionAndFingerprint(
+		ctx,
+		ThreadEvidence{Thread: stale},
+		"2026-07-12T00:01:00Z",
+	)
+	if err != nil {
+		t.Fatalf("stale enrichment: %v", err)
+	}
+	if staleEnrichment.RevisionID <= currentEnrichment.RevisionID {
+		t.Fatalf("stale revision id = %d, current revision id = %d", staleEnrichment.RevisionID, currentEnrichment.RevisionID)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: currentEnrichment.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "openai",
+		Model:            "summary-test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "Current observed evidence.",
+		CreatedAt:        "2026-07-12T00:02:00Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("coverage: %v", err)
+	}
+	if metric := coverage.Rows[0].Enrichment.Revisions; metric.Fresh != 1 {
+		t.Fatalf("revision coverage = %+v", metric)
+	}
+	if metric := coverage.Rows[0].Enrichment.Fingerprints; metric.Fresh != 1 {
+		t.Fatalf("fingerprint coverage = %+v", metric)
+	}
+	if metric := coverage.Rows[0].Enrichment.Summaries; metric.Fresh != 1 {
+		t.Fatalf("summary coverage = %+v", metric)
+	}
+}

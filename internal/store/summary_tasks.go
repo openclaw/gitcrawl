@@ -67,13 +67,17 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 	}
 	rows, err := s.q().QueryContext(ctx, `
 		with latest_revisions as (
-			select tr.*
-			from thread_revisions tr
-			join (
-				select thread_id, max(id) as id
-				from thread_revisions
-				group by thread_id
-			) latest on latest.id = tr.id
+			select *
+			from (
+				select tr.*,
+					row_number() over (
+						partition by tr.thread_id
+						order by julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) desc,
+							tr.id desc
+					) as observation_rank
+				from thread_revisions tr
+			)
+			where observation_rank = 1
 		)
 		select t.id, lr.id, t.number, t.kind,
 			b.inline_text,
