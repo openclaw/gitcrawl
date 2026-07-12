@@ -915,6 +915,62 @@ func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
 	}
 }
 
+func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "90", Number: 90, Kind: "issue", State: "open",
+		Title: "Current cluster summary", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/90",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T00:02:00Z", UpdatedAt: "2026-07-12T00:02:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values
+			(900, ?, '2026-07-12T00:01:00Z', 'old', 'title', 'body', 'labels', '2026-07-12T00:01:00Z'),
+			(901, ?, '2026-07-12T00:02:00Z', 'new', 'title', 'body', 'labels', '2026-07-12T00:02:00Z');
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(900, 'llm_key_summary', 'v1', 'test', 'test', 'input-old', 'output-old', 'obsolete summary', '2026-07-12T00:03:00Z')
+	`, thread.ID, thread.ID); err != nil {
+		t.Fatalf("seed revisions: %v", err)
+	}
+	summaries, err := st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("summaries: %v", err)
+	}
+	if summaries[thread.ID]["llm_key_summary"] != "" {
+		t.Fatalf("obsolete summary surfaced for latest revision: %+v", summaries)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(901, 'llm_key_summary', 'v1', 'test', 'test', 'input-new', 'output-new', 'current summary', '2026-07-12T00:04:00Z')
+	`); err != nil {
+		t.Fatalf("current summary: %v", err)
+	}
+	summaries, err = st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("current summaries: %v", err)
+	}
+	if summaries[thread.ID]["llm_key_summary"] != "current summary" {
+		t.Fatalf("current summary missing: %+v", summaries)
+	}
+}
+
 func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

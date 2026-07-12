@@ -1451,7 +1451,15 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 			select tr.thread_id, tks.summary_kind, tks.key_text
 			from thread_key_summaries tks
 			join thread_revisions tr on tr.id = tks.thread_revision_id
+			join threads t on t.id = tr.thread_id
 			where tr.thread_id in (`+strings.Join(placeholders, ",")+`)
+				and tr.id = (
+					select max(latest.id)
+					from thread_revisions latest
+					where latest.thread_id = tr.thread_id
+				)
+				and julianday(coalesce(nullif(tr.source_updated_at, ''), tr.created_at)) >=
+					julianday(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
 			order by tr.thread_id, tks.summary_kind, tks.created_at desc
 		`, args...)
 		if err != nil {
