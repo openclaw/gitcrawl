@@ -457,6 +457,108 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 	}
 }
 
+func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "11", Number: 11, Kind: "pull_request", State: "open",
+		Title: "current B", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/11",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T12:03:00Z", UpdatedAt: "2026-07-12T12:03:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	current, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread,
+		Detail: &PullRequestDetail{
+			ThreadID: thread.ID, RepoID: repoID, Number: thread.Number,
+			BaseSHA: "base", HeadSHA: "current",
+			FetchedAt: "2026-07-12T12:03:00Z", UpdatedAt: "2026-07-12T12:03:00Z",
+		},
+		Checks: []PullRequestCheck{{
+			ThreadID: thread.ID, Name: "test", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-07-12T12:02:30Z", CompletedAt: "2026-07-12T12:03:00Z",
+			FetchedAt: "2026-07-12T12:03:00Z",
+		}},
+		WorkflowRuns: []WorkflowRun{{
+			RepoID: repoID, RunID: "current", Status: "completed", Conclusion: "success",
+			CreatedAtGH: "2026-07-12T12:02:00Z", UpdatedAtGH: "2026-07-12T12:03:00Z",
+			FetchedAt: "2026-07-12T12:03:00Z",
+		}},
+	}, "2026-07-12T12:03:00Z")
+	if err != nil {
+		t.Fatalf("current revision: %v", err)
+	}
+
+	staleThread := thread
+	staleThread.Title = "stale A"
+	staleThread.UpdatedAtGitHub = "2026-07-12T12:02:00Z"
+	staleThread.UpdatedAt = staleThread.UpdatedAtGitHub
+	stale, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: staleThread,
+		Detail: &PullRequestDetail{
+			ThreadID: thread.ID, RepoID: repoID, Number: thread.Number,
+			BaseSHA: "base", HeadSHA: "stale",
+			FetchedAt: "2026-07-12T12:10:00Z", UpdatedAt: "2026-07-12T12:10:00Z",
+		},
+		Checks: []PullRequestCheck{{
+			ThreadID: thread.ID, Name: "test", Status: "completed", Conclusion: "failure",
+			StartedAt: "2026-07-12T12:01:30Z", CompletedAt: "2026-07-12T12:02:00Z",
+			FetchedAt: "2026-07-12T12:10:00Z",
+		}},
+		WorkflowRuns: []WorkflowRun{{
+			RepoID: repoID, RunID: "stale", Status: "completed", Conclusion: "failure",
+			CreatedAtGH: "2026-07-12T12:01:00Z", UpdatedAtGH: "2026-07-12T12:02:00Z",
+			FetchedAt: "2026-07-12T12:10:00Z",
+		}},
+	}, "2026-07-12T12:10:00Z")
+	if err != nil {
+		t.Fatalf("stale revision: %v", err)
+	}
+
+	var latestID int64
+	var staleSourceUpdatedAt string
+	if err := st.DB().QueryRowContext(ctx, `
+		select id
+		from thread_revisions
+		where thread_id = ?
+		order by gitcrawl_timestamp_key(coalesce(nullif(source_updated_at, ''), created_at)) desc, id desc
+		limit 1
+	`, thread.ID).Scan(&latestID); err != nil {
+		t.Fatalf("latest revision: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at
+		from thread_revisions
+		where id = ?
+	`, stale.RevisionID).Scan(&staleSourceUpdatedAt); err != nil {
+		t.Fatalf("stale source timestamp: %v", err)
+	}
+	if latestID != current.RevisionID || staleSourceUpdatedAt != "2026-07-12T12:02:00Z" {
+		t.Fatalf(
+			"latest/stale source = %d/%q, want %d/%q",
+			latestID,
+			staleSourceUpdatedAt,
+			current.RevisionID,
+			"2026-07-12T12:02:00Z",
+		)
+	}
+}
+
 func TestLatestTimestampComparesRFC3339Instants(t *testing.T) {
 	tests := []struct {
 		name   string

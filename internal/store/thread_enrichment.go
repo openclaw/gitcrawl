@@ -332,7 +332,6 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 		canonical.Additions = evidence.Detail.Additions
 		canonical.Deletions = evidence.Detail.Deletions
 		canonical.ChangedFiles = evidence.Detail.ChangedFiles
-		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, evidence.Detail.UpdatedAt, evidence.Detail.FetchedAt)
 	}
 	for _, reviewThread := range evidence.ReviewThreads {
 		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, reviewThread.FirstCommentUpdatedAt)
@@ -341,10 +340,10 @@ func buildThreadEnrichment(evidence ThreadEvidence, createdAt string) (ThreadRev
 		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, comment.UpdatedAtGitHub, comment.CreatedAtGitHub)
 	}
 	for _, check := range evidence.Checks {
-		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, check.CompletedAt, check.StartedAt, check.FetchedAt)
+		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, check.CompletedAt, check.StartedAt)
 	}
 	for _, run := range evidence.WorkflowRuns {
-		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, run.UpdatedAtGH, run.CreatedAtGH, run.FetchedAt)
+		sourceUpdatedAt = latestTimestamp(sourceUpdatedAt, run.UpdatedAtGH, run.CreatedAtGH)
 	}
 	labelsJSON := mustStableJSON(labels)
 	evidenceJSON := mustStableJSON(canonical)
