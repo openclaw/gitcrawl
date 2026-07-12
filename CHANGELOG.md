@@ -2,9 +2,6 @@
 
 ## 0.7.2 - Unreleased
 
-- Order canonical thread metadata by lossless RFC3339Nano source time and complete evidence snapshots by a durable pre-fetch observation sequence, so delayed hydration cannot overwrite newer state and later snapshots can remove deleted comments, checks, or workflow evidence. Metadata-only observations carry an explicit incomplete generation that invalidates stale enrichment while allowing same-payload hydration to finish; archive, embedding, summary, and cluster consumers select the newest fresh revision before sequence order, fail closed on malformed clocks, preserve unknown legacy ordering as sequence zero, and keep pre-v7 portable archives readable without mutation. Sequence allocation now advances its durable counter in constant time after a one-time migration floor instead of rescanning thread history before every sync.
-- Reserve complete child-evidence generations atomically on each thread so concurrent delayed syncs cannot overwrite newer comments, PR details, revisions, or fingerprints. Schema v9 backfills the reservation high-water from positive revisions while legacy read-only stores remain readable without mutation.
-
 ## 0.7.1 - 2026-07-09
 
 - Add local, fail-closed packaging and independent verification for official macOS archives signed as `org.openclaw.gitcrawl` by `Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)`, while keeping CI and cross-platform snapshots credential-free and non-publishing.
