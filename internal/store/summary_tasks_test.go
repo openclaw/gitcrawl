@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,125 @@ func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 	}
 	if len(tasks) != 1 {
 		t.Fatalf("forced tasks = %+v", tasks)
+	}
+}
+
+func TestSummaryTasksValidateAndBoundStoredEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{}); err == nil || !strings.Contains(err.Error(), "provider") {
+		t.Fatalf("missing summary options error = %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{}); err == nil || !strings.Contains(err.Error(), "positive") {
+		t.Fatalf("missing revision error = %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{ThreadRevisionID: 1}); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("missing summary fields error = %v", err)
+	}
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID:          repoID,
+		GitHubID:        "9",
+		Number:          9,
+		Kind:            "issue",
+		State:           "closed",
+		Title:           "Bound summary evidence",
+		Body:            "fallback",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/9",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "thread",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	threadID, err := st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	thread.ID = threadID
+	if _, err := st.UpsertDocument(ctx, Document{
+		ThreadID:   threadID,
+		Title:      thread.Title,
+		Body:       thread.Body,
+		RawText:    strings.Repeat("evidence ", MaxSummaryTextRunes),
+		DedupeText: thread.Title,
+		UpdatedAt:  thread.UpdatedAt,
+	}); err != nil {
+		t.Fatalf("document: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z")
+	if err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	options := SummaryTaskOptions{
+		RepoID:        repoID,
+		Provider:      "openai",
+		Model:         "summary-test",
+		SummaryKind:   SummaryKindLLMKey,
+		PromptVersion: SummaryPromptVersionV1,
+		Number:        9,
+		Limit:         1,
+		IncludeClosed: true,
+	}
+	tasks, err := st.ListSummaryTasks(ctx, options)
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(tasks) != 1 || !tasks[0].TextTruncated || len([]rune(tasks[0].Text)) > MaxSummaryTextRunes {
+		t.Fatalf("bounded task = %+v", tasks)
+	}
+	summary := ThreadKeySummary{
+		ThreadRevisionID: enrichment.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "openai",
+		Model:            "summary-test",
+		InputHash:        tasks[0].InputHash,
+		OutputHash:       StableHash("first"),
+		KeyText:          " First summary. ",
+	}
+	if err := st.UpsertThreadKeySummary(ctx, summary); err != nil {
+		t.Fatalf("insert summary: %v", err)
+	}
+	summary.OutputHash = StableHash("second")
+	summary.KeyText = "Second summary."
+	if err := st.UpsertThreadKeySummary(ctx, summary); err != nil {
+		t.Fatalf("update summary: %v", err)
+	}
+	var keyText, createdAt string
+	if err := st.DB().QueryRowContext(ctx, `
+		select key_text, created_at
+		from thread_key_summaries
+		where thread_revision_id = ?
+	`, enrichment.RevisionID).Scan(&keyText, &createdAt); err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if keyText != "Second summary." || strings.TrimSpace(createdAt) == "" {
+		t.Fatalf("stored summary = %q at %q", keyText, createdAt)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if _, err := st.ListSummaryTasks(ctx, options); err == nil || !strings.Contains(err.Error(), "list summary tasks") {
+		t.Fatalf("closed list error = %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, summary); err == nil || !strings.Contains(err.Error(), "upsert thread key summary") {
+		t.Fatalf("closed upsert error = %v", err)
 	}
 }
