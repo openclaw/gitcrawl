@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,6 +157,65 @@ func TestSendIngestRowsBatchesAndFinalizes(t *testing.T) {
 		t.Fatalf("first request = %#v", requests[0])
 	}
 	if requests[1].Cursor != "250" || !requests[1].Final || len(requests[1].Rows) != 1 {
+		t.Fatalf("second request = %#v", requests[1])
+	}
+}
+
+func TestSendSnapshotIngestRowsRotatesMutationTokens(t *testing.T) {
+	ctx := context.Background()
+	var requests []crawlremote.IngestRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body crawlremote.IngestRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, body)
+		token := fmt.Sprintf("generation-%d", len(requests))
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+			SnapshotID:    body.Manifest.SnapshotID,
+			MutationToken: token,
+			RowsAccepted:  int64(len(body.Rows)),
+			Complete:      body.Final,
+		})
+	}))
+	defer server.Close()
+
+	client, err := crawlremote.NewClientFromConfig(crawlremote.Config{Endpoint: server.URL}, crawlremote.Options{
+		TokenProvider: crawlremote.StaticToken("publish-token"),
+	})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	rows := make([][]any, gitcrawlCloudBatchSize+1)
+	for i := range rows {
+		rows[i] = []any{i}
+	}
+	progress, err := sendSnapshotIngestRows(
+		ctx,
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw",
+		crawlremote.IngestManifest{App: "gitcrawl", SnapshotID: strings.Repeat("a", 64)},
+		"threads",
+		[]string{"id"},
+		rows,
+		"previous-dataset",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("send snapshot ingest: %v", err)
+	}
+	if progress.RowsAccepted != int64(len(rows)) || progress.MutationToken != "generation-2" {
+		t.Fatalf("progress = %#v", progress)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if requests[0].Cursor != "" || requests[0].MutationToken != "previous-dataset" {
+		t.Fatalf("first request = %#v", requests[0])
+	}
+	if requests[1].Cursor != "250" || requests[1].MutationToken != "generation-1" || !requests[1].Final {
 		t.Fatalf("second request = %#v", requests[1])
 	}
 }
