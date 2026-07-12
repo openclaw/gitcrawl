@@ -147,6 +147,9 @@ func pendingCompatibilityMigrations(ctx context.Context, st *Store, current int,
 		if !st.hasColumn(ctx, "threads", "observation_sequence") {
 			pending = append(pending, "threads_observation_sequence")
 		}
+		if !st.hasColumn(ctx, "threads", "evidence_observation_sequence") {
+			pending = append(pending, "threads_evidence_observation_sequence")
+		}
 	}
 	if st.hasTable(ctx, "thread_vectors") && !st.threadVectorsHaveCompositeKey(ctx) {
 		pending = append(pending, "thread_vectors_composite_key")

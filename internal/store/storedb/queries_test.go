@@ -54,6 +54,18 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert thread: %v", err)
 	}
+	if updated, err := q.ReserveThreadEvidenceObservation(ctx, storedb.ReserveThreadEvidenceObservationParams{
+		ID:                          threadID,
+		EvidenceObservationSequence: 3,
+	}); err != nil || updated != 1 {
+		t.Fatalf("reserve thread evidence observation = %d, %v", updated, err)
+	}
+	if updated, err := q.ReserveThreadEvidenceObservation(ctx, storedb.ReserveThreadEvidenceObservationParams{
+		ID:                          threadID,
+		EvidenceObservationSequence: 2,
+	}); err != nil || updated != 0 {
+		t.Fatalf("reserve stale thread evidence observation = %d, %v", updated, err)
+	}
 
 	if got, err := q.CountRepositories(ctx); err != nil || got != 1 {
 		t.Fatalf("count repositories = %d, %v", got, err)

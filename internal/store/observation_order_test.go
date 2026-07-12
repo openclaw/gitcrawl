@@ -403,6 +403,21 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 	if err != nil || !incomplete.Applied || incomplete.ObservationSequence != 4 {
 		t.Fatalf("incomplete observation = %+v, %v", incomplete, err)
 	}
+	readEvidenceSequence := func() int64 {
+		t.Helper()
+		var sequence int64
+		if err := st.DB().QueryRowContext(ctx, `
+			select evidence_observation_sequence
+			from threads
+			where id = ?
+		`, incomplete.ID).Scan(&sequence); err != nil {
+			t.Fatalf("read evidence observation sequence: %v", err)
+		}
+		return sequence
+	}
+	if sequence := readEvidenceSequence(); sequence != 0 {
+		t.Fatalf("incomplete evidence sequence = %d, want 0", sequence)
+	}
 
 	completed, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
 		ObservationSequence: 2,
@@ -411,23 +426,8 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 		completed.ObservationSequence != 4 || completed.EvidenceObservationSequence != 2 {
 		t.Fatalf("completed observation = %+v, %v", completed, err)
 	}
-	thread.ID = completed.ID
-	comment := Comment{
-		ThreadID: thread.ID, GitHubID: "comment-1", CommentType: "issue_comment",
-		Body: "sequence two child", RawJSON: `{"body":"sequence two child"}`,
-		CreatedAtGitHub: "2026-07-12T00:00:00Z",
-		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
-	}
-	if _, err := st.UpsertComment(ctx, comment); err != nil {
-		t.Fatalf("comment: %v", err)
-	}
-	firstEnrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
-		Thread:              thread,
-		ObservationSequence: completed.EvidenceObservationSequence,
-		Comments:            []Comment{comment},
-	}, "2026-07-12T00:02:00Z")
-	if err != nil {
-		t.Fatalf("enrichment: %v", err)
+	if sequence := readEvidenceSequence(); sequence != 2 {
+		t.Fatalf("completed evidence sequence = %d, want 2", sequence)
 	}
 
 	newerEvidence, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
@@ -437,25 +437,8 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 		newerEvidence.ObservationSequence != 4 || newerEvidence.EvidenceObservationSequence != 3 {
 		t.Fatalf("newer complete evidence = %+v, %v", newerEvidence, err)
 	}
-	comment.Body = "sequence three child"
-	comment.RawJSON = `{"body":"sequence three child"}`
-	comment.UpdatedAtGitHub = "2026-07-12T00:00:01Z"
-	if err := st.DeleteCommentsForThread(ctx, thread.ID); err != nil {
-		t.Fatalf("replace comments: %v", err)
-	}
-	if _, err := st.UpsertComment(ctx, comment); err != nil {
-		t.Fatalf("newer comment: %v", err)
-	}
-	secondEnrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
-		Thread:              thread,
-		ObservationSequence: newerEvidence.EvidenceObservationSequence,
-		Comments:            []Comment{comment},
-	}, "2026-07-12T00:03:00Z")
-	if err != nil {
-		t.Fatalf("newer enrichment: %v", err)
-	}
-	if !secondEnrichment.RevisionCreated || secondEnrichment.RevisionID == firstEnrichment.RevisionID {
-		t.Fatalf("newer enrichment = %+v, first %+v", secondEnrichment, firstEnrichment)
+	if sequence := readEvidenceSequence(); sequence != 3 {
+		t.Fatalf("newer evidence sequence = %d, want 3", sequence)
 	}
 	replayedEvidence, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
 		ObservationSequence: 2,
@@ -463,6 +446,27 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 	if err != nil || replayedEvidence.Applied || replayedEvidence.EvidenceApplied ||
 		replayedEvidence.ObservationSequence != 4 {
 		t.Fatalf("replayed evidence = %+v, %v", replayedEvidence, err)
+	}
+	thread.ID = completed.ID
+	comment := Comment{
+		ThreadID: thread.ID, GitHubID: "comment-1", CommentType: "issue_comment",
+		Body: "sequence three child", RawJSON: `{"body":"sequence three child"}`,
+		CreatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAtGitHub: "2026-07-12T00:00:01Z",
+	}
+	if _, err := st.UpsertComment(ctx, comment); err != nil {
+		t.Fatalf("newer comment: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: newerEvidence.EvidenceObservationSequence,
+		Comments:            []Comment{comment},
+	}, "2026-07-12T00:03:00Z")
+	if err != nil {
+		t.Fatalf("newer enrichment: %v", err)
+	}
+	if !enrichment.RevisionCreated || !enrichment.FingerprintUpserted {
+		t.Fatalf("newer enrichment = %+v", enrichment)
 	}
 
 	delayed := thread
@@ -481,12 +485,12 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 	}
 
 	var canonicalTitle string
-	var canonicalSequence, revisionSequence, revisions, fingerprints int64
+	var canonicalSequence, evidenceSequence, revisionSequence, revisions, fingerprints int64
 	if err := st.DB().QueryRowContext(ctx, `
-		select title, observation_sequence
+		select title, observation_sequence, evidence_observation_sequence
 		from threads
 		where id = ?
-	`, thread.ID).Scan(&canonicalTitle, &canonicalSequence); err != nil {
+	`, thread.ID).Scan(&canonicalTitle, &canonicalSequence, &evidenceSequence); err != nil {
 		t.Fatalf("canonical observation: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
@@ -511,12 +515,13 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 		t.Fatalf("comments: %v", err)
 	}
 	if canonicalTitle != "complete payload" || canonicalSequence != 4 ||
-		revisionSequence != 3 || revisions != 2 || fingerprints != 2 ||
+		evidenceSequence != 3 || revisionSequence != 3 || revisions != 1 || fingerprints != 1 ||
 		len(comments) != 1 || comments[0].Body != "sequence three child" {
 		t.Fatalf(
-			"persisted state = title %q, canonical %d, revision %d, revisions %d, fingerprints %d, comments %+v",
+			"persisted state = title %q, canonical %d, evidence %d, revision %d, revisions %d, fingerprints %d, comments %+v",
 			canonicalTitle,
 			canonicalSequence,
+			evidenceSequence,
 			revisionSequence,
 			revisions,
 			fingerprints,

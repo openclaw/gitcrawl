@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 8
+	schemaVersion = 9
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -239,6 +239,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if current > schemaVersion {
 		return fmt.Errorf("database schema version %d is newer than supported version %d", current, schemaVersion)
 	}
+	hadEvidenceObservationSequence := s.hasColumn(ctx, "threads", "evidence_observation_sequence")
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
@@ -247,6 +248,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if current < 8 {
 		if err := s.ensureThreadObservationSequenceFloor(ctx); err != nil {
+			return err
+		}
+	}
+	if current < 9 || !hadEvidenceObservationSequence {
+		if err := s.ensureThreadEvidenceObservationSequence(ctx); err != nil {
 			return err
 		}
 	}
@@ -278,6 +284,9 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "threads", "observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "threads", "evidence_observation_sequence", "integer not null default 0"); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `
 		create index if not exists idx_thread_revisions_thread_observation
 		on thread_revisions(thread_id, observation_sequence desc)
@@ -298,6 +307,24 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt where body is null and body_excerpt is not null`); err != nil {
 			return fmt.Errorf("backfill thread body from portable excerpt: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) ensureThreadEvidenceObservationSequence(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		update threads
+		set evidence_observation_sequence = max(
+			evidence_observation_sequence,
+			coalesce((
+				select max(observation_sequence)
+				from thread_revisions
+				where thread_id = threads.id
+					and observation_sequence > 0
+			), 0)
+		)
+	`); err != nil {
+		return fmt.Errorf("backfill thread evidence observation sequence: %w", err)
 	}
 	return nil
 }

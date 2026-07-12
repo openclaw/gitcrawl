@@ -165,11 +165,14 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		if order < 0 {
 			evidenceApplied := false
 			if sourceOrder == 0 && samePayload && !options.IncompleteEvidence {
-				latestEvidenceSequence, err := s.latestCompleteThreadEvidenceSequence(ctx, existing.id)
+				evidenceApplied, err = s.reserveThreadEvidenceObservation(
+					ctx,
+					existing.id,
+					options.ObservationSequence,
+				)
 				if err != nil {
 					return UpsertThreadResult{}, err
 				}
-				evidenceApplied = options.ObservationSequence > latestEvidenceSequence
 			}
 			return UpsertThreadResult{
 				ID:                          existing.id,
@@ -183,11 +186,21 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		if order == 0 {
 			if samePayload {
 				if !options.IncompleteEvidence {
+					evidenceApplied, err := s.reserveThreadEvidenceObservation(
+						ctx,
+						existing.id,
+						options.ObservationSequence,
+					)
+					if err != nil {
+						return UpsertThreadResult{}, err
+					}
 					return UpsertThreadResult{
-						ID:                  existing.id,
-						Applied:             false,
-						PreviousState:       existing.state,
-						ObservationSequence: observationSequenceOrderValue(existing.observationSequence),
+						ID:                          existing.id,
+						Applied:                     false,
+						EvidenceApplied:             evidenceApplied,
+						PreviousState:               existing.state,
+						ObservationSequence:         observationSequenceOrderValue(existing.observationSequence),
+						EvidenceObservationSequence: evidenceObservationSequence(evidenceApplied, options.ObservationSequence),
 					}, nil
 				}
 			} else {
@@ -233,26 +246,39 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 	if err != nil {
 		return UpsertThreadResult{}, fmt.Errorf("upsert thread: %w", err)
 	}
+	evidenceApplied := false
+	if !options.IncompleteEvidence {
+		evidenceApplied, err = s.reserveThreadEvidenceObservation(
+			ctx,
+			id,
+			options.ObservationSequence,
+		)
+		if err != nil {
+			return UpsertThreadResult{}, err
+		}
+	}
 	return UpsertThreadResult{
 		ID:                          id,
 		Applied:                     true,
-		EvidenceApplied:             !options.IncompleteEvidence,
+		EvidenceApplied:             evidenceApplied,
 		PreviousState:               existing.state,
 		ObservationSequence:         observationSequenceOrderValue(storedObservationSequence),
-		EvidenceObservationSequence: evidenceObservationSequence(!options.IncompleteEvidence, options.ObservationSequence),
+		EvidenceObservationSequence: evidenceObservationSequence(evidenceApplied, options.ObservationSequence),
 	}, nil
 }
 
-func (s *Store) latestCompleteThreadEvidenceSequence(ctx context.Context, threadID int64) (int64, error) {
-	var sequence int64
-	if err := s.q().QueryRowContext(ctx, `
-		select coalesce(max(observation_sequence), 0)
-		from thread_revisions
-		where thread_id = ? and observation_sequence > 0
-	`, threadID).Scan(&sequence); err != nil {
-		return 0, fmt.Errorf("read complete thread evidence sequence: %w", err)
+func (s *Store) reserveThreadEvidenceObservation(ctx context.Context, threadID, sequence int64) (bool, error) {
+	updated, err := s.qsql().ReserveThreadEvidenceObservation(
+		ctx,
+		storedb.ReserveThreadEvidenceObservationParams{
+			ID:                          threadID,
+			EvidenceObservationSequence: sequence,
+		},
+	)
+	if err != nil {
+		return false, fmt.Errorf("reserve thread evidence observation: %w", err)
 	}
-	return sequence, nil
+	return updated > 0, nil
 }
 
 func evidenceObservationSequence(applied bool, sequence int64) int64 {

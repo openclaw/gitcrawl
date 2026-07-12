@@ -260,6 +260,7 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 		from thread_revisions`,
 		`drop table thread_revisions`,
 		`alter table thread_revisions_legacy rename to thread_revisions`,
+		`alter table threads drop column evidence_observation_sequence`,
 		`alter table threads drop column observation_sequence`,
 		`drop table thread_observation_sequence`,
 		`pragma user_version = 4`,
@@ -295,11 +296,14 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 	if !st.hasColumn(ctx, "threads", "observation_sequence") {
 		t.Fatal("thread observation sequence column was not restored")
 	}
+	if !st.hasColumn(ctx, "threads", "evidence_observation_sequence") {
+		t.Fatal("thread evidence observation sequence column was not restored")
+	}
 	if !st.hasTable(ctx, "thread_observation_sequence") {
 		t.Fatal("thread observation sequence table was not restored")
 	}
 	var version, fingerprints int
-	var observationSequence, threadObservationSequence int64
+	var observationSequence, threadObservationSequence, evidenceObservationSequence int64
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
@@ -323,16 +327,17 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 		t.Fatalf("migrated observation sequence = %d, want legacy marker 0", observationSequence)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select observation_sequence, evidence_observation_sequence
 		from threads
 		where id = ?
-	`, migratedThreadID).Scan(&threadObservationSequence); err != nil {
+	`, migratedThreadID).Scan(&threadObservationSequence, &evidenceObservationSequence); err != nil {
 		t.Fatalf("read migrated thread observation sequence: %v", err)
 	}
-	if threadObservationSequence != 0 {
+	if threadObservationSequence != 0 || evidenceObservationSequence != 0 {
 		t.Fatalf(
-			"migrated thread observation sequence = %d, want legacy marker 0",
+			"migrated thread sequences = parent %d, evidence %d; want legacy markers",
 			threadObservationSequence,
+			evidenceObservationSequence,
 		)
 	}
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
@@ -457,6 +462,7 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 		from thread_revisions`,
 		`drop table thread_revisions`,
 		`alter table thread_revisions_legacy rename to thread_revisions`,
+		`alter table threads drop column evidence_observation_sequence`,
 		`alter table threads drop column observation_sequence`,
 		`drop table thread_observation_sequence`,
 		`pragma user_version = 4`,
@@ -475,7 +481,7 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 		t.Fatalf("reopen migrated store: %v", err)
 	}
 	defer st.Close()
-	var revisionSequence, threadSequence int64
+	var revisionSequence, threadSequence, evidenceSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select observation_sequence
 		from thread_revisions
@@ -484,17 +490,18 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 		t.Fatalf("read migrated revision sequence: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select observation_sequence, evidence_observation_sequence
 		from threads
 		where id = ?
-	`, thread.ID).Scan(&threadSequence); err != nil {
+	`, thread.ID).Scan(&threadSequence, &evidenceSequence); err != nil {
 		t.Fatalf("read migrated thread sequence: %v", err)
 	}
-	if revisionSequence != 0 || threadSequence != 0 {
+	if revisionSequence != 0 || threadSequence != 0 || evidenceSequence != 0 {
 		t.Fatalf(
-			"migrated stale sequences = revision %d, thread %d; want legacy markers",
+			"migrated stale sequences = revision %d, thread %d, evidence %d; want legacy markers",
 			revisionSequence,
 			threadSequence,
+			evidenceSequence,
 		)
 	}
 	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
@@ -602,6 +609,93 @@ func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
 	}
 }
 
+func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "evidence-migration", Number: 103, Kind: "issue", State: "open",
+		Title: "evidence migration", Body: "backfill durable reservation",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/103",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "evidence-migration",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	upsert, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 9,
+	})
+	if err != nil {
+		t.Fatalf("thread observation: %v", err)
+	}
+	thread.ID = upsert.ID
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 7,
+	}, "2026-07-12T00:01:00Z"); err != nil {
+		t.Fatalf("thread revision: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	for _, statement := range []string{
+		`alter table threads drop column evidence_observation_sequence`,
+		`pragma user_version = 8`,
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			_ = raw.Close()
+			t.Fatalf("prepare evidence migration with %q: %v", statement, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var version int
+	var parentSequence, evidenceSequence int64
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select observation_sequence, evidence_observation_sequence
+		from threads
+		where id = ?
+	`, thread.ID).Scan(&parentSequence, &evidenceSequence); err != nil {
+		t.Fatalf("read migrated evidence sequence: %v", err)
+	}
+	if version != schemaVersion || parentSequence != -9 || evidenceSequence != 7 {
+		t.Fatalf(
+			"migrated evidence state = version %d, parent %d, evidence %d",
+			version,
+			parentSequence,
+			evidenceSequence,
+		)
+	}
+}
+
 func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
@@ -675,7 +769,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_8") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_9") {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -708,7 +802,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 8;
+		pragma user_version = 9;
 	`)
 	if err != nil {
 		_ = db.Close()
@@ -735,6 +829,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 		"threads_raw_json_column",
 		"threads_author_association_column",
 		"threads_observation_sequence",
+		"threads_evidence_observation_sequence",
 		"thread_vectors_composite_key",
 		"pull_request_files_table",
 	} {
@@ -815,7 +910,7 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_8") ||
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_9") ||
 		!containsString(diag.PendingMigrations, "pull_request_files_position_key") {
 		t.Fatalf("pending migrations = %#v", diag.PendingMigrations)
 	}

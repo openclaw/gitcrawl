@@ -67,6 +67,7 @@ func TestLegacyReadOnlyArchiveUsesAvailableRevisionOrderColumns(t *testing.T) {
 	for _, statement := range []string{
 		`drop index if exists idx_thread_revisions_thread_observation`,
 		`alter table thread_revisions drop column observation_sequence`,
+		`alter table threads drop column evidence_observation_sequence`,
 		`alter table threads drop column observation_sequence`,
 		`drop table thread_observation_sequence`,
 		`pragma user_version = 6`,

@@ -1191,6 +1191,26 @@ func (q *Queries) RepositoryByFullName(ctx context.Context, fullName string) (Re
 	return i, err
 }
 
+const reserveThreadEvidenceObservation = `-- name: ReserveThreadEvidenceObservation :execrows
+update threads
+set evidence_observation_sequence = ?1
+where id = ?2
+  and evidence_observation_sequence < ?1
+`
+
+type ReserveThreadEvidenceObservationParams struct {
+	EvidenceObservationSequence int64 `json:"evidence_observation_sequence"`
+	ID                          int64 `json:"id"`
+}
+
+func (q *Queries) ReserveThreadEvidenceObservation(ctx context.Context, arg ReserveThreadEvidenceObservationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reserveThreadEvidenceObservation, arg.EvidenceObservationSequence, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertComment = `-- name: UpsertComment :one
 insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh)
 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)

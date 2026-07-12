@@ -121,6 +121,12 @@ on conflict(repo_id, kind, number) do update set
   updated_at=excluded.updated_at
 returning id;
 
+-- name: ReserveThreadEvidenceObservation :execrows
+update threads
+set evidence_observation_sequence = sqlc.arg(evidence_observation_sequence)
+where id = sqlc.arg(id)
+  and evidence_observation_sequence < sqlc.arg(evidence_observation_sequence);
+
 -- name: MarkOpenThreadClosedFromGitHub :execrows
 update threads
 set github_id = sqlc.arg(github_id),
