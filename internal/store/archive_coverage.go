@@ -533,10 +533,23 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	if !s.archiveCoverageHasColumns(ctx, "pull_request_details", "thread_id", "fetched_at") {
 		return EnrichmentCoverageMetric{}, nil
 	}
-	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
-	threadObservationSequence := "0"
+	acceptedSourceUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
+	acceptedObservationSequence := "0"
 	if s.hasColumn(ctx, "threads", "observation_sequence") {
-		threadObservationSequence = "t.observation_sequence"
+		acceptedObservationSequence = "t.observation_sequence"
+	}
+	if s.hasColumn(ctx, "threads", "evidence_observation_sequence") &&
+		s.hasColumn(ctx, "threads", "evidence_source_updated_at") {
+		acceptedSourceUpdatedAt = `case
+			when t.evidence_observation_sequence > 0
+				then coalesce(t.evidence_source_updated_at, '')
+			else ` + acceptedSourceUpdatedAt + `
+		end`
+		acceptedObservationSequence = `case
+			when t.evidence_observation_sequence > 0
+				then t.evidence_observation_sequence
+			else ` + acceptedObservationSequence + `
+		end`
 	}
 	reservationJoin := ""
 	reservationPresent := "0"
@@ -562,8 +575,8 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	rows, err := s.q().QueryContext(ctx, `
 		select case when prd.thread_id is null then 0 else 1 end,
 			coalesce(prd.fetched_at, ''),
-			`+threadUpdatedAt+`,
-			`+threadObservationSequence+`,
+			`+acceptedSourceUpdatedAt+`,
+			`+acceptedObservationSequence+`,
 			`+reservationPresent+`,
 			`+reservationSourceUpdatedAt+`,
 			`+reservationObservationSequence+`
@@ -581,13 +594,13 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	var latestFetchedAt time.Time
 	for rows.Next() {
 		var hasDetail, hasReservation int
-		var parentSequence, reservationSequence int64
-		var fetchedAt, sourceUpdatedAt, reservationSourceUpdatedAt string
+		var acceptedSequence, reservationSequence int64
+		var fetchedAt, acceptedSource, reservationSourceUpdatedAt string
 		if err := rows.Scan(
 			&hasDetail,
 			&fetchedAt,
-			&sourceUpdatedAt,
-			&parentSequence,
+			&acceptedSource,
+			&acceptedSequence,
 			&hasReservation,
 			&reservationSourceUpdatedAt,
 			&reservationSequence,
@@ -609,11 +622,11 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 			fresh = archiveObservationAtOrAfter(
 				reservationSourceUpdatedAt,
 				reservationSequence,
-				sourceUpdatedAt,
-				observationSequenceOrderValue(parentSequence),
+				acceptedSource,
+				observationSequenceOrderValue(acceptedSequence),
 			)
 		} else {
-			fresh = fetchedOK && archiveCoverageTimestampAtOrAfter(fetchedAt, sourceUpdatedAt)
+			fresh = fetchedOK && archiveCoverageTimestampAtOrAfter(fetchedAt, acceptedSource)
 		}
 		if fresh {
 			metric.Fresh++

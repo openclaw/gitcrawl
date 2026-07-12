@@ -198,9 +198,23 @@ func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testin
 		t.Fatalf("archive coverage: %v", err)
 	}
 	metric := coverage.Rows[0].Enrichment.PRDetails
-	if metric.Covered != 1 || metric.Fresh != 0 || metric.Stale != 1 ||
+	if metric.Covered != 1 || metric.Fresh != 1 || metric.Stale != 0 ||
 		metric.LatestAt != "2026-07-12T12:05:00.000000000Z" {
-		t.Fatalf("PR detail coverage = %+v", metric)
+		t.Fatalf("PR detail coverage after metadata-only parent = %+v", metric)
+	}
+
+	if accepted, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 3,
+	}); err != nil || !accepted.EvidenceApplied {
+		t.Fatalf("newer accepted evidence = %+v, %v", accepted, err)
+	}
+	coverage, err = st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("archive coverage after accepted evidence: %v", err)
+	}
+	metric = coverage.Rows[0].Enrichment.PRDetails
+	if metric.Covered != 1 || metric.Fresh != 0 || metric.Stale != 1 {
+		t.Fatalf("PR detail coverage after accepted evidence advanced = %+v", metric)
 	}
 }
 
