@@ -1079,6 +1079,83 @@ func TestMigrationRepairsPartialV10ObservationBackfills(t *testing.T) {
 	}
 }
 
+func TestMigrationRepairsWorkflowReservationBelowEvidenceFloor(t *testing.T) {
+	ctx := context.Background()
+	dbPath, repoID, _ := seedMigrationPullRequest(t, "regressed-workflow-head", 11)
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("converge seeded workflow reservation: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close converged workflow reservation: %v", err)
+	}
+
+	raw := openRawMigrationDB(t, dbPath)
+	if _, err := raw.ExecContext(ctx, `
+		update workflow_run_observation_reservations
+		set source_updated_at = '2026-07-12T00:00:03Z',
+			observation_sequence = 3
+		where repo_id = ? and head_sha = 'regressed-workflow-head'
+	`, repoID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("regress workflow reservation: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close regressed workflow store: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if !containsString(diag.PendingMigrations, migrationWorkflowRunReservationsBackfill) {
+		t.Fatalf("regressed workflow diagnostics = %#v", diag)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("repair regressed workflow reservation: %v", err)
+	}
+	var source string
+	var sequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'regressed-workflow-head'
+	`, repoID).Scan(&source, &sequence); err != nil {
+		_ = st.Close()
+		t.Fatalf("read repaired workflow reservation: %v", err)
+	}
+	if source != "" || sequence != 11 {
+		_ = st.Close()
+		t.Fatalf("repaired workflow reservation = %q/%d, want unknown source at 11", source, sequence)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close repaired workflow reservation: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen repaired workflow reservation: %v", err)
+	}
+	defer st.Close()
+	if applied, err := st.ReserveWorkflowRunObservation(
+		ctx,
+		repoID,
+		"regressed-workflow-head",
+		"2026-07-12T00:00:10Z",
+		10,
+	); err != nil || applied {
+		t.Fatalf("lower repaired workflow observation = %t, %v", applied, err)
+	}
+	if applied, err := st.ReserveWorkflowRunObservation(
+		ctx,
+		repoID,
+		"regressed-workflow-head",
+		"2026-07-12T00:00:12Z",
+		12,
+	); err != nil || !applied {
+		t.Fatalf("newer repaired workflow observation = %t, %v", applied, err)
+	}
+}
+
 func TestMigrationReconcilesAllocatorFromEveryPersistedSequenceTable(t *testing.T) {
 	ctx := context.Background()
 	dbPath, repoID, threadID := seedMigrationPullRequest(t, "allocator-head", 5)

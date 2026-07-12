@@ -325,6 +325,8 @@ func (s *Store) workflowRunObservationReservationsNeedRepair(ctx context.Context
 				on workflow_run_observation_reservations.repo_id = expected.repo_id
 					and workflow_run_observation_reservations.head_sha = expected.head_sha
 			where workflow_run_observation_reservations.repo_id is null
+				or workflow_run_observation_reservations.observation_sequence <
+					expected.observation_sequence
 			limit 1
 		)
 	`).Scan(&drift); err != nil {
