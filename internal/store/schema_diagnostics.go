@@ -2,30 +2,31 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"strings"
 
 	crawlstore "github.com/openclaw/crawlkit/store"
 	"github.com/openclaw/gitcrawl/internal/store/storedb"
 )
 
 type SchemaDiagnostics struct {
-	Path                     string                    `json:"path"`
-	Exists                   bool                      `json:"exists"`
-	CurrentVersion           int                       `json:"current_version"`
-	SupportedVersion         int                       `json:"supported_version"`
-	State                    string                    `json:"state"`
-	Current                  bool                      `json:"current"`
-	PendingMigration         bool                      `json:"pending_migration"`
-	Legacy                   bool                      `json:"legacy"`
-	Newer                    bool                      `json:"newer"`
-	ChildReservations        bool                      `json:"child_observation_reservations"`
-	ChildReservationsCurrent bool                      `json:"child_observation_reservations_current"`
-	WorkflowRunReservations  bool                      `json:"workflow_run_observation_reservations"`
-	PendingMigrations        []string                  `json:"pending_migrations"`
-	PRDetails                PRDetailSchemaDiagnostics `json:"pr_details"`
-	NextSteps                []string                  `json:"next_steps,omitempty"`
-	Error                    string                    `json:"error,omitempty"`
+	Path                           string                    `json:"path"`
+	Exists                         bool                      `json:"exists"`
+	CurrentVersion                 int                       `json:"current_version"`
+	SupportedVersion               int                       `json:"supported_version"`
+	State                          string                    `json:"state"`
+	Current                        bool                      `json:"current"`
+	PendingMigration               bool                      `json:"pending_migration"`
+	Legacy                         bool                      `json:"legacy"`
+	Newer                          bool                      `json:"newer"`
+	ChildReservations              bool                      `json:"child_observation_reservations"`
+	ChildReservationsCurrent       bool                      `json:"child_observation_reservations_current"`
+	WorkflowRunReservations        bool                      `json:"workflow_run_observation_reservations"`
+	WorkflowRunReservationsCurrent bool                      `json:"workflow_run_observation_reservations_current"`
+	PendingMigrations              []string                  `json:"pending_migrations"`
+	PRDetails                      PRDetailSchemaDiagnostics `json:"pr_details"`
+	NextSteps                      []string                  `json:"next_steps,omitempty"`
+	Error                          string                    `json:"error,omitempty"`
 }
 
 type PRDetailSchemaDiagnostics struct {
@@ -85,7 +86,20 @@ func InspectSchema(ctx context.Context, path string) SchemaDiagnostics {
 	diag.ChildReservationsCurrent = diag.ChildReservations &&
 		st.threadChildObservationReservationsHaveCurrentShape(ctx)
 	diag.WorkflowRunReservations = st.hasTable(ctx, "workflow_run_observation_reservations")
-	diag.PendingMigrations = pendingCompatibilityMigrations(ctx, st, current, diag.PRDetails)
+	diag.WorkflowRunReservationsCurrent = diag.WorkflowRunReservations &&
+		st.workflowRunObservationReservationsHaveCurrentShape(ctx)
+	diag.PendingMigrations, err = inspectCompatibilityMigrations(
+		ctx,
+		st,
+		current,
+		diag.PRDetails,
+	)
+	if err != nil {
+		diag.State = "error"
+		diag.Error = err.Error()
+		diag.NextSteps = []string{"Check SQLite schema and observation-order metadata before running write commands."}
+		return diag
+	}
 	if diag.PendingMigrations == nil {
 		diag.PendingMigrations = []string{}
 	}
@@ -133,67 +147,6 @@ func inspectPRDetailSchema(ctx context.Context, st *Store) PRDetailSchemaDiagnos
 	}
 }
 
-func pendingCompatibilityMigrations(ctx context.Context, st *Store, current int, prDetails PRDetailSchemaDiagnostics) []string {
-	var pending []string
-	if current < schemaVersion {
-		pending = append(pending, fmt.Sprintf("schema_version_%d_to_%d", current, schemaVersion))
-	}
-	if st.hasTable(ctx, "repositories") && !st.hasColumn(ctx, "repositories", "raw_json") {
-		pending = append(pending, "repositories_raw_json_column")
-	}
-	if st.hasTable(ctx, "threads") {
-		if !st.hasColumn(ctx, "threads", "body") {
-			pending = append(pending, "threads_body_column")
-		}
-		if !st.hasColumn(ctx, "threads", "raw_json") {
-			pending = append(pending, "threads_raw_json_column")
-		}
-		if !st.hasColumn(ctx, "threads", "author_association") {
-			pending = append(pending, "threads_author_association_column")
-		}
-		if !st.hasColumn(ctx, "threads", "observation_sequence") {
-			pending = append(pending, "threads_observation_sequence")
-		}
-		if !st.hasColumn(ctx, "threads", "evidence_observation_sequence") {
-			pending = append(pending, "threads_evidence_observation_sequence")
-		}
-	}
-	if st.hasTable(ctx, "thread_vectors") && !st.threadVectorsHaveCompositeKey(ctx) {
-		pending = append(pending, "thread_vectors_composite_key")
-	}
-	if st.hasTable(ctx, "thread_revisions") {
-		if st.threadRevisionsHaveUniqueContentHash(ctx) {
-			pending = append(pending, "thread_revisions_transition_history")
-		}
-		if !st.hasColumn(ctx, "thread_revisions", "observation_sequence") {
-			pending = append(pending, "thread_revisions_observation_sequence")
-		}
-	}
-	if current > 0 && !st.hasTable(ctx, "thread_observation_sequence") {
-		pending = append(pending, "thread_observation_sequence_table")
-	}
-	if current > 0 && !st.hasTable(ctx, "thread_child_observation_reservations") {
-		pending = append(pending, "thread_child_observation_reservations_table")
-	} else if current > 0 && !st.threadChildObservationReservationsHaveCurrentShape(ctx) {
-		pending = append(pending, "thread_child_observation_reservations_shape")
-	}
-	if current > 0 && !st.hasTable(ctx, "workflow_run_observation_reservations") {
-		pending = append(pending, "workflow_run_observation_reservations_table")
-	}
-	if current > 0 && current <= schemaVersion {
-		if !prDetails.DetailsTable {
-			pending = append(pending, "pull_request_details_table")
-		}
-		if !prDetails.FilesTable {
-			pending = append(pending, "pull_request_files_table")
-		}
-	}
-	if prDetails.FilesTable && !prDetails.FilesPositionKey {
-		pending = append(pending, "pull_request_files_position_key")
-	}
-	return pending
-}
-
 func schemaNextSteps(diag SchemaDiagnostics) []string {
 	switch diag.State {
 	case "missing":
@@ -201,7 +154,11 @@ func schemaNextSteps(diag SchemaDiagnostics) []string {
 	case "newer":
 		return []string{"Upgrade the active gitcrawl executable to a build that supports this database schema."}
 	case "pending_migration":
-		return []string{"Run a write-path command with the intended rebuilt gitcrawl executable to apply pending migrations."}
+		return []string{
+			"Run a writable gitcrawl command once to repair: " +
+				strings.Join(diag.PendingMigrations, ", ") + ".",
+			"Re-run gitcrawl doctor --json and confirm db_schema.state is current.",
+		}
 	case "error":
 		return []string{"Check SQLite file health before running write commands."}
 	default:

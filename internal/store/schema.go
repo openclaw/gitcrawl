@@ -81,10 +81,6 @@ create table if not exists thread_observation_sequence (
   last_started_at text not null
 );
 
-insert into thread_observation_sequence(id, value, last_started_at)
-values(1, 0, '')
-on conflict(id) do nothing;
-
 create table if not exists thread_child_observation_reservations (
   thread_id integer not null references threads(id) on delete cascade,
   family text not null check (family in (

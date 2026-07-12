@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -25,12 +24,6 @@ var sqliteBusyRetryDelays = []time.Duration{
 	400 * time.Millisecond,
 	800 * time.Millisecond,
 }
-
-var threadChildFamilyCheckPattern = regexp.MustCompile(
-	`(?is)\bfamily\s+text\s+not\s+null\s+check\s*\(\s*family\s+in\s*\(([^)]*)\)\s*\)`,
-)
-
-var sqlStringLiteralPattern = regexp.MustCompile(`'([^']*)'`)
 
 type sqliteCoder interface {
 	Code() int
@@ -249,7 +242,38 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	if current == schemaVersion {
+		prDetails := inspectPRDetailSchema(ctx, s)
+		structural, err := inspectStructuralCompatibilityMigrations(
+			ctx,
+			s,
+			current,
+			prDetails,
+		)
+		if err != nil {
+			return err
+		}
+		if len(structural) == 0 {
+			converged, err := s.observationSchemaConvergenceIsCurrent(ctx)
+			if err != nil {
+				return err
+			}
+			if converged {
+				return nil
+			}
+			pending, err := inspectCompatibilityMigrations(ctx, s, current, prDetails)
+			if err != nil {
+				return err
+			}
+			if len(pending) == 0 {
+				return s.markObservationSchemaConverged(ctx)
+			}
+		}
+	}
 	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureCanonicalObservationTables(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureThreadEvidenceObservationSequence(ctx); err != nil {
@@ -257,6 +281,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	// Recover legacy per-thread workflow reservations before constraining the
 	// child table to its current family set.
+	if err := s.ensureWorkflowRunObservationReservationsSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureWorkflowRunObservationReservations(ctx); err != nil {
 		return err
 	}
@@ -264,6 +291,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureThreadChildObservationReservations(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureThreadObservationSequenceSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureThreadObservationSequenceFloor(ctx); err != nil {
@@ -275,13 +305,25 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensurePullRequestFilesPositionKey(ctx); err != nil {
 		return err
 	}
-	if err := s.ensureThreadRevisionTransitionHistory(ctx); err != nil {
+	if err := s.ensureObservationSchemaConvergence(ctx); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
-	return nil
+	pending, err := inspectCompatibilityMigrations(
+		ctx,
+		s,
+		schemaVersion,
+		inspectPRDetailSchema(ctx, s),
+	)
+	if err != nil {
+		return err
+	}
+	if len(pending) != 0 {
+		return fmt.Errorf("schema migration left pending convergence: %s", strings.Join(pending, ", "))
+	}
+	return s.markObservationSchemaConverged(ctx)
 }
 
 func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
@@ -300,10 +342,7 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "threads", "evidence_observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		create index if not exists idx_thread_revisions_thread_observation
-		on thread_revisions(thread_id, observation_sequence desc)
-	`); err != nil {
+	if _, err := s.db.ExecContext(ctx, createRevisionObservationIndexSQL); err != nil {
 		return fmt.Errorf("ensure thread revision observation index: %w", err)
 	}
 	hadThreadBody := s.hasColumn(ctx, "threads", "body")
@@ -384,99 +423,26 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 	return nil
 }
 
-func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Context) error {
-	if s.threadChildObservationReservationsHaveCurrentShape(ctx) {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin child observation reservation migration: %w", err)
-	}
-	defer tx.Rollback()
-	for _, stmt := range []string{
-		`drop table if exists thread_child_observation_reservations_new`,
-		`create table thread_child_observation_reservations_new (
-			thread_id integer not null references threads(id) on delete cascade,
-			family text not null check (family in (
-				'comments',
-				'pull_request_details',
-				'pull_request_files',
-				'pull_request_commits',
-				'pull_request_checks',
-				'pull_request_review_threads'
-			)),
-			observation_sequence integer not null check (observation_sequence > 0),
-			primary key(thread_id, family)
-		)`,
-		`insert into thread_child_observation_reservations_new(
-			thread_id, family, observation_sequence
-		)
-		select thread_id, family, observation_sequence
-		from thread_child_observation_reservations
-		where family in (
-			'comments',
-			'pull_request_details',
-			'pull_request_files',
-			'pull_request_commits',
-			'pull_request_checks',
-			'pull_request_review_threads'
-		)`,
-		`drop table thread_child_observation_reservations`,
-		`alter table thread_child_observation_reservations_new
-			rename to thread_child_observation_reservations`,
-	} {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("migrate child observation reservation schema: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit child observation reservation migration: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) threadChildObservationReservationsHaveCurrentShape(ctx context.Context) bool {
-	var createSQL string
-	if err := s.q().QueryRowContext(ctx, `
-		select sql
-		from sqlite_schema
-		where type = 'table'
-			and name = 'thread_child_observation_reservations'
-	`).Scan(&createSQL); err != nil {
-		return false
-	}
-	match := threadChildFamilyCheckPattern.FindStringSubmatch(createSQL)
-	if len(match) != 2 {
-		return false
-	}
-	literals := sqlStringLiteralPattern.FindAllStringSubmatch(match[1], -1)
-	if len(literals) != len(threadChildObservationFamilies) {
-		return false
-	}
-	expected := make(map[string]struct{}, len(threadChildObservationFamilies))
-	for _, family := range threadChildObservationFamilies {
-		expected[string(family)] = struct{}{}
-	}
-	for _, literal := range literals {
-		if _, ok := expected[literal[1]]; !ok {
-			return false
-		}
-		delete(expected, literal[1])
-	}
-	return len(expected) == 0
-}
-
 func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
-		with candidates(repo_id, head_sha, observation_sequence) as (
-			select
-				pull_request_details.repo_id,
-				trim(pull_request_details.head_sha),
-				threads.evidence_observation_sequence
-			from pull_request_details
-			join threads on threads.id = pull_request_details.thread_id
-			where trim(coalesce(pull_request_details.head_sha, '')) <> ''
-				and threads.evidence_observation_sequence > 0
+	candidates := `
+		select
+			pull_request_details.repo_id,
+			trim(pull_request_details.head_sha),
+			threads.evidence_observation_sequence
+		from pull_request_details
+		join threads on threads.id = pull_request_details.thread_id
+		where trim(coalesce(pull_request_details.head_sha, '')) <> ''
+			and threads.evidence_observation_sequence > 0
+	`
+	hasLegacyWorkflowReservations := s.hasColumns(
+		ctx,
+		"thread_child_observation_reservations",
+		"thread_id",
+		"family",
+		"observation_sequence",
+	)
+	if hasLegacyWorkflowReservations {
+		candidates += `
 			union all
 			select
 				pull_request_details.repo_id,
@@ -485,10 +451,13 @@ func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) er
 			from pull_request_details
 			join thread_child_observation_reservations
 				on thread_child_observation_reservations.thread_id = pull_request_details.thread_id
-				and thread_child_observation_reservations.family = 'workflow_runs'
+					and thread_child_observation_reservations.family = 'workflow_runs'
 			where trim(coalesce(pull_request_details.head_sha, '')) <> ''
 				and thread_child_observation_reservations.observation_sequence > 0
-		)
+		`
+	}
+	query := `
+		with candidates(repo_id, head_sha, observation_sequence) as (` + candidates + `)
 		insert into workflow_run_observation_reservations(
 			repo_id, head_sha, observation_sequence
 		)
@@ -500,14 +469,17 @@ func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) er
 				workflow_run_observation_reservations.observation_sequence,
 				excluded.observation_sequence
 			)
-	`); err != nil {
+	`
+	if _, err := s.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("backfill workflow run observation reservations: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		delete from thread_child_observation_reservations
-		where family = 'workflow_runs'
-	`); err != nil {
-		return fmt.Errorf("remove legacy thread workflow run reservations: %w", err)
+	if hasLegacyWorkflowReservations {
+		if _, err := s.db.ExecContext(ctx, `
+			delete from thread_child_observation_reservations
+			where family = 'workflow_runs'
+		`); err != nil {
+			return fmt.Errorf("remove legacy thread workflow run reservations: %w", err)
+		}
 	}
 	return nil
 }
