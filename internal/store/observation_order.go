@@ -89,6 +89,50 @@ func compareRevisionObservationOrder(incoming, current observationOrder) (int, e
 	return compareObservationOrder(incoming, current)
 }
 
+func observationOrderSQL(sourceExpression, sequenceExpression string) string {
+	source := "trim(coalesce(" + sourceExpression + ", ''))"
+	key := "gitcrawl_timestamp_key(nullif(" + source + ", ''))"
+	return "case when " + key + " is not null then 1 else 0 end desc, " +
+		key + " desc, case when " + key + " is null then " + source +
+		" else '' end desc, " + sequenceExpression + " desc"
+}
+
+func observationSourceEquivalentSQL(leftExpression, rightExpression string) string {
+	left := "trim(coalesce(" + leftExpression + ", ''))"
+	right := "trim(coalesce(" + rightExpression + ", ''))"
+	leftKey := "gitcrawl_timestamp_key(nullif(" + left + ", ''))"
+	rightKey := "gitcrawl_timestamp_key(nullif(" + right + ", ''))"
+	return "((" + leftKey + " is not null and " + rightKey + " is not null and " +
+		leftKey + " = " + rightKey + ") or (" + leftKey + " is null and " +
+		rightKey + " is null and " + left + " = " + right + "))"
+}
+
+func threadEvidenceRevisionOrderSQL(revisionAlias, threadAlias string) string {
+	revision := sqliteIdentifier(revisionAlias) + "."
+	thread := sqliteIdentifier(threadAlias) + "."
+	return "case when " + observationSourceEquivalentSQL(
+		revision+"source_updated_at",
+		thread+"updated_at_gh",
+	) + " then 1 else 0 end desc, " +
+		observationOrderSQL(revision+"source_updated_at", revision+"observation_sequence") +
+		", " + revision + "id desc"
+}
+
+func threadEvidenceTupleExistsSQL(revisionAlias, threadAlias string) string {
+	revision := sqliteIdentifier(revisionAlias) + "."
+	thread := sqliteIdentifier(threadAlias) + "."
+	return `exists(
+		select 1
+		from thread_revisions ` + sqliteIdentifier(revisionAlias) + `
+		where ` + revision + `thread_id = ` + thread + `id
+			and ` + revision + `observation_sequence = ` + thread + `evidence_observation_sequence
+			and ` + observationSourceEquivalentSQL(
+		revision+"source_updated_at",
+		thread+"evidence_source_updated_at",
+	) + `
+	)`
+}
+
 func (s *Store) latestThreadRevisionOrder(ctx context.Context, alias string) string {
 	qualified := sqliteIdentifier(alias) + "."
 	parts := make([]string, 0, 3)

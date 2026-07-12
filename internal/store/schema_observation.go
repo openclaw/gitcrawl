@@ -339,6 +339,7 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 			else ''
 		end`
 	}
+	observationOrder := observationOrderSQL(sourceExpression, "observation_sequence")
 	return s.withForeignKeysDisabled(ctx, "workflow observation reservation schema", func(tx *sql.Tx) error {
 		for _, statement := range []string{
 			`drop table if exists workflow_run_observation_reservations_migration_backup`,
@@ -365,7 +366,7 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 						observation_sequence,
 						row_number() over (
 							partition by repo_id, trim(head_sha)
-							order by observation_sequence desc
+							order by `+observationOrder+`, rowid desc
 						) as observation_rank
 					from workflow_run_observation_reservations
 					where typeof(repo_id) = 'integer'
@@ -417,6 +418,7 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 			else ''
 		end`
 	}
+	observationOrder := observationOrderSQL(sourceExpression, "observation_sequence")
 	return s.withForeignKeysDisabled(ctx, "child observation reservation schema", func(tx *sql.Tx) error {
 		for _, statement := range []string{
 			`drop table if exists thread_child_observation_reservations_migration_backup`,
@@ -443,7 +445,7 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 						observation_sequence,
 						row_number() over (
 							partition by thread_id, family
-							order by observation_sequence desc
+							order by `+observationOrder+`, rowid desc
 						) as observation_rank
 					from thread_child_observation_reservations
 					where typeof(thread_id) = 'integer'

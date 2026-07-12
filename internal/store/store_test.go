@@ -725,6 +725,108 @@ func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 	}
 }
 
+func TestMigrationBackfillsActualThreadEvidenceTuple(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "evidence-tuple", Number: 104, Kind: "issue", State: "open",
+		Title: "evidence tuple", Body: "preserve one actual revision order",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/104",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         `{"version":1}`,
+		ContentHash:     "version-1",
+		UpdatedAtGitHub: "2026-07-12T00:01:00Z",
+		UpdatedAt:       "2026-07-12T00:01:00Z",
+	}
+	old, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	})
+	if err != nil {
+		t.Fatalf("old thread observation: %v", err)
+	}
+	thread.ID = old.ID
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread, ObservationSequence: 2,
+	}, "2026-07-12T00:01:01Z"); err != nil {
+		t.Fatalf("old revision: %v", err)
+	}
+	thread.UpdatedAtGitHub = "2026-07-12T00:02:00Z"
+	thread.UpdatedAt = "2026-07-12T00:02:00Z"
+	thread.RawJSON = `{"version":2}`
+	thread.ContentHash = "version-2"
+	current, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil || !current.EvidenceApplied {
+		t.Fatalf("newer-source thread observation = %+v, %v", current, err)
+	}
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread: thread, ObservationSequence: 1,
+	}, "2026-07-12T00:02:01Z"); err != nil {
+		t.Fatalf("newer-source revision: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		update threads
+		set evidence_source_updated_at = '2026-07-12T00:02:00Z',
+			evidence_observation_sequence = 2
+		where id = ?
+	`, thread.ID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("fabricate evidence tuple: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+	var source string
+	var sequence, matchingRevisions int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select evidence_source_updated_at, evidence_observation_sequence
+		from threads
+		where id = ?
+	`, thread.ID).Scan(&source, &sequence); err != nil {
+		t.Fatalf("read repaired evidence tuple: %v", err)
+	}
+	if source != "2026-07-12T00:02:00Z" || sequence != 1 {
+		t.Fatalf("repaired evidence tuple = %s/%d, want newer source at sequence 1", source, sequence)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions
+		where thread_id = ? and source_updated_at = ? and observation_sequence = ?
+	`, thread.ID, source, sequence).Scan(&matchingRevisions); err != nil {
+		t.Fatalf("match repaired evidence tuple: %v", err)
+	}
+	if matchingRevisions != 1 {
+		t.Fatalf("repaired evidence tuple matched %d revisions, want exactly one", matchingRevisions)
+	}
+}
+
 func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")

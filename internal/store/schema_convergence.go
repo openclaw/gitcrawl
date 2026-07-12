@@ -218,11 +218,12 @@ func (s *Store) threadObservationSequenceValuesNeedRepair(ctx context.Context) (
 
 func (s *Store) threadEvidenceObservationSequenceNeedsRepair(ctx context.Context) (bool, error) {
 	var drift bool
+	evidenceTupleExists := threadEvidenceTupleExistsSQL("evidence_revision", "threads")
 	if err := s.q().QueryRowContext(ctx, `
 		select exists(
 			select 1
 			from threads
-			where evidence_observation_sequence = 0
+			where (evidence_observation_sequence = 0 or not `+evidenceTupleExists+`)
 				and coalesce((
 				select max(thread_revisions.observation_sequence)
 				from thread_revisions
@@ -239,19 +240,22 @@ func (s *Store) threadEvidenceObservationSequenceNeedsRepair(ctx context.Context
 
 func (s *Store) threadChildObservationReservationsNeedRepair(ctx context.Context) (bool, error) {
 	var drift bool
+	effectiveEvidenceSequence := `case
+		when evidence_observation_sequence > 0
+			then evidence_observation_sequence
+		else coalesce((
+			select thread_revisions.observation_sequence
+			from thread_revisions
+			where thread_revisions.thread_id = threads.id
+				and thread_revisions.observation_sequence > 0
+			order by ` + threadEvidenceRevisionOrderSQL("thread_revisions", "threads") + `
+			limit 1
+		), 0)
+	end`
 	if err := s.q().QueryRowContext(ctx, `
 		with effective_threads as (
 			select threads.*,
-				case
-					when evidence_observation_sequence > 0
-						then evidence_observation_sequence
-					else coalesce((
-						select max(thread_revisions.observation_sequence)
-						from thread_revisions
-						where thread_revisions.thread_id = threads.id
-							and thread_revisions.observation_sequence > 0
-					), 0)
-				end as effective_evidence_observation_sequence
+				`+effectiveEvidenceSequence+` as effective_evidence_observation_sequence
 			from threads
 		),
 		families(family, pull_request_only) as (
@@ -273,10 +277,7 @@ func (s *Store) threadChildObservationReservationsNeedRepair(ctx context.Context
 				on thread_child_observation_reservations.thread_id = effective_threads.id
 					and thread_child_observation_reservations.family = families.family
 			where effective_threads.effective_evidence_observation_sequence > 0
-				and coalesce(
-					thread_child_observation_reservations.observation_sequence,
-					0
-				) < effective_threads.effective_evidence_observation_sequence
+				and thread_child_observation_reservations.thread_id is null
 			limit 1
 		)
 	`).Scan(&drift); err != nil {
@@ -287,19 +288,22 @@ func (s *Store) threadChildObservationReservationsNeedRepair(ctx context.Context
 
 func (s *Store) workflowRunObservationReservationsNeedRepair(ctx context.Context) (bool, error) {
 	var drift bool
+	effectiveEvidenceSequence := `case
+		when evidence_observation_sequence > 0
+			then evidence_observation_sequence
+		else coalesce((
+			select thread_revisions.observation_sequence
+			from thread_revisions
+			where thread_revisions.thread_id = threads.id
+				and thread_revisions.observation_sequence > 0
+			order by ` + threadEvidenceRevisionOrderSQL("thread_revisions", "threads") + `
+			limit 1
+		), 0)
+	end`
 	if err := s.q().QueryRowContext(ctx, `
 		with effective_threads as (
 			select threads.id,
-				case
-					when evidence_observation_sequence > 0
-						then evidence_observation_sequence
-					else coalesce((
-						select max(thread_revisions.observation_sequence)
-						from thread_revisions
-						where thread_revisions.thread_id = threads.id
-							and thread_revisions.observation_sequence > 0
-					), 0)
-				end as evidence_observation_sequence
+				`+effectiveEvidenceSequence+` as evidence_observation_sequence
 			from threads
 		),
 		expected(repo_id, head_sha, observation_sequence) as (
@@ -320,10 +324,7 @@ func (s *Store) workflowRunObservationReservationsNeedRepair(ctx context.Context
 			left join workflow_run_observation_reservations
 				on workflow_run_observation_reservations.repo_id = expected.repo_id
 					and workflow_run_observation_reservations.head_sha = expected.head_sha
-			where coalesce(
-				workflow_run_observation_reservations.observation_sequence,
-				0
-			) < expected.observation_sequence
+			where workflow_run_observation_reservations.repo_id is null
 			limit 1
 		)
 	`).Scan(&drift); err != nil {

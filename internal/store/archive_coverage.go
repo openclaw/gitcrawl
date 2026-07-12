@@ -641,7 +641,14 @@ func archiveObservationAtOrAfter(
 	currentKey, currentValid := timestampOrderKey(currentSourceUpdatedAt)
 	switch {
 	case observedValid && currentValid:
-		return observedKey >= currentKey
+		switch {
+		case observedKey > currentKey:
+			return true
+		case observedKey < currentKey:
+			return false
+		default:
+			return observedSequence >= currentSequence
+		}
 	case observedValid:
 		return true
 	case currentValid:

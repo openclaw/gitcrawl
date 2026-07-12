@@ -204,6 +204,19 @@ func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testin
 	}
 }
 
+func TestArchiveObservationFreshnessUsesSequenceForEqualSource(t *testing.T) {
+	const source = "2026-07-12T12:00:00Z"
+	if archiveObservationAtOrAfter(source, 10, source, 11) {
+		t.Fatal("older sequence at the same source timestamp was reported fresh")
+	}
+	if !archiveObservationAtOrAfter(source, 11, source, 11) {
+		t.Fatal("equal source and sequence should be fresh")
+	}
+	if !archiveObservationAtOrAfter(source, 12, source, 11) {
+		t.Fatal("newer sequence at the same source timestamp should be fresh")
+	}
+}
+
 func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {

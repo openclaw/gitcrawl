@@ -381,22 +381,25 @@ func (s *Store) ensureThreadObservationSequenceValues(ctx context.Context) error
 }
 
 func (s *Store) ensureThreadEvidenceObservationSequence(ctx context.Context) error {
+	evidenceTupleExists := threadEvidenceTupleExistsSQL("evidence_revision", "threads")
 	if _, err := s.db.ExecContext(ctx, `
 		update threads
-		set evidence_source_updated_at = coalesce(updated_at_gh, ''),
-			evidence_observation_sequence = coalesce((
-				select max(observation_sequence)
+		set (evidence_source_updated_at, evidence_observation_sequence) = (
+			select coalesce(thread_revisions.source_updated_at, ''),
+				thread_revisions.observation_sequence
+			from thread_revisions
+			where thread_revisions.thread_id = threads.id
+				and thread_revisions.observation_sequence > 0
+			order by `+threadEvidenceRevisionOrderSQL("thread_revisions", "threads")+`
+			limit 1
+		)
+		where (evidence_observation_sequence = 0 or not `+evidenceTupleExists+`)
+			and exists(
+				select 1
 				from thread_revisions
-				where thread_id = threads.id
-					and observation_sequence > 0
-			), 0)
-		where evidence_observation_sequence = 0
-			and coalesce((
-				select max(observation_sequence)
-				from thread_revisions
-				where thread_id = threads.id
-					and observation_sequence > 0
-			), 0) > 0
+				where thread_revisions.thread_id = threads.id
+					and thread_revisions.observation_sequence > 0
+			)
 	`); err != nil {
 		return fmt.Errorf("backfill thread evidence observation order: %w", err)
 	}
@@ -412,17 +415,7 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 			evidence_observation_sequence
 		from threads
 		where evidence_observation_sequence > 0
-		on conflict(thread_id, family) do update set
-			source_updated_at = case
-				when excluded.observation_sequence >
-					thread_child_observation_reservations.observation_sequence
-					then excluded.source_updated_at
-				else thread_child_observation_reservations.source_updated_at
-			end,
-			observation_sequence = max(
-				thread_child_observation_reservations.observation_sequence,
-				excluded.observation_sequence
-			)
+		on conflict(thread_id, family) do nothing
 	`); err != nil {
 		return fmt.Errorf("backfill comment observation reservations: %w", err)
 	}
@@ -443,17 +436,7 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 		) as families
 		where threads.kind = 'pull_request'
 			and threads.evidence_observation_sequence > 0
-		on conflict(thread_id, family) do update set
-			source_updated_at = case
-				when excluded.observation_sequence >
-					thread_child_observation_reservations.observation_sequence
-					then excluded.source_updated_at
-				else thread_child_observation_reservations.source_updated_at
-			end,
-			observation_sequence = max(
-				thread_child_observation_reservations.observation_sequence,
-				excluded.observation_sequence
-			)
+		on conflict(thread_id, family) do nothing
 	`); err != nil {
 		return fmt.Errorf("backfill pull request observation reservations: %w", err)
 	}
@@ -501,11 +484,7 @@ func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) er
 		select repo_id, head_sha, '', max(observation_sequence)
 		from candidates
 		group by repo_id, head_sha
-		on conflict(repo_id, head_sha) do update set
-			observation_sequence = max(
-				workflow_run_observation_reservations.observation_sequence,
-				excluded.observation_sequence
-			)
+		on conflict(repo_id, head_sha) do nothing
 	`
 	if _, err := s.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("backfill workflow run observation reservations: %w", err)

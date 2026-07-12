@@ -311,7 +311,9 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 			values
 				(?, 'comments', '2026-07-12T00:02:00Z', 7),
 				(?, 'comments', '2026-07-12T00:01:00Z', 17),
-				(?, 'comments', '2026-07-12T00:03:00Z', 'poison');
+				(?, 'comments', '2026-07-12T00:03:00Z', 'poison'),
+				(?, 'pull_request_files', '2026-07-12T00:02:00Z', 5),
+				(?, 'pull_request_files', '2026-07-12T02:02:00+02:00', 9);
 
 		drop table workflow_run_observation_reservations;
 		create table workflow_run_observation_reservations (
@@ -326,9 +328,14 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 			values
 				(?, 'malformed-shared-head', '2026-07-12T00:02:00Z', 13),
 				(?, 'malformed-shared-head', '2026-07-12T00:01:00Z', 19),
-				(?, 'malformed-shared-head', '2026-07-12T00:03:00Z', 'poison');
+				(?, 'malformed-shared-head', '2026-07-12T00:03:00Z', 'poison'),
+				(?, 'equivalent-head', '2026-07-12T00:02:00Z', 11),
+				(?, 'equivalent-head', '2026-07-12T02:02:00+02:00', 15);
 			pragma user_version = 10;
-		`, threadID, threadID, threadID, repoID, repoID, repoID); err != nil {
+		`,
+		threadID, threadID, threadID, threadID, threadID,
+		repoID, repoID, repoID, repoID, repoID,
+	); err != nil {
 		_ = raw.Close()
 		t.Fatalf("prepare malformed reservation lookalikes: %v", err)
 	}
@@ -366,7 +373,7 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 	`, threadID).Scan(&childSource, &childSequence, &childRows); err != nil {
 		t.Fatalf("read rebuilt child reservation: %v", err)
 	}
-	if childRows != 1 || childSource != "2026-07-12T00:01:00Z" || childSequence != 17 {
+	if childRows != 1 || childSource != "2026-07-12T00:02:00Z" || childSequence != 7 {
 		t.Fatalf(
 			"rebuilt child reservation = rows %d order %s/%d",
 			childRows,
@@ -381,11 +388,43 @@ func TestMigrationRebuildsMalformedReservationLookalikes(t *testing.T) {
 	`, repoID).Scan(&workflowSource, &workflowSequence); err != nil {
 		t.Fatalf("read rebuilt workflow reservation: %v", err)
 	}
-	if workflowSource != "2026-07-12T00:01:00Z" || workflowSequence != 19 {
+	if workflowSource != "2026-07-12T00:02:00Z" || workflowSequence != 13 {
 		t.Fatalf(
 			"rebuilt workflow reservation = %s/%d",
 			workflowSource,
 			workflowSequence,
+		)
+	}
+	var equivalentChildSource, equivalentWorkflowSource string
+	var equivalentChildSequence, equivalentWorkflowSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = 'pull_request_files'
+	`, threadID).Scan(&equivalentChildSource, &equivalentChildSequence); err != nil {
+		t.Fatalf("read equivalent child reservation: %v", err)
+	}
+	if equivalentChildSource != "2026-07-12T02:02:00+02:00" ||
+		equivalentChildSequence != 9 {
+		t.Fatalf(
+			"equivalent child reservation = %s/%d",
+			equivalentChildSource,
+			equivalentChildSequence,
+		)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'equivalent-head'
+	`, repoID).Scan(&equivalentWorkflowSource, &equivalentWorkflowSequence); err != nil {
+		t.Fatalf("read equivalent workflow reservation: %v", err)
+	}
+	if equivalentWorkflowSource != "2026-07-12T02:02:00+02:00" ||
+		equivalentWorkflowSequence != 15 {
+		t.Fatalf(
+			"equivalent workflow reservation = %s/%d",
+			equivalentWorkflowSource,
+			equivalentWorkflowSequence,
 		)
 	}
 	for _, statement := range []string{

@@ -134,6 +134,36 @@ func validThreadChildObservationFamily(family ThreadChildObservationFamily) bool
 	return false
 }
 
+func (s *Store) WorkflowRunObservationReservation(
+	ctx context.Context,
+	repoID int64,
+	headSHA string,
+) (sourceUpdatedAt string, sequence int64, found bool, err error) {
+	if repoID <= 0 {
+		return "", 0, false, fmt.Errorf("repository id must be positive")
+	}
+	headSHA = strings.TrimSpace(headSHA)
+	if headSHA == "" {
+		return "", 0, false, fmt.Errorf("head SHA must not be empty")
+	}
+	err = s.q().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = ?
+	`, repoID, headSHA).Scan(&sourceUpdatedAt, &sequence)
+	if err == sql.ErrNoRows {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf(
+			"read workflow run observation for %s: %w",
+			headSHA,
+			err,
+		)
+	}
+	return sourceUpdatedAt, sequence, true, nil
+}
+
 func (s *Store) ReserveWorkflowRunObservation(
 	ctx context.Context,
 	repoID int64,
