@@ -484,7 +484,11 @@ func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) er
 		select repo_id, head_sha, '', max(observation_sequence)
 		from candidates
 		group by repo_id, head_sha
-		on conflict(repo_id, head_sha) do nothing
+		on conflict(repo_id, head_sha) do update set
+			source_updated_at = excluded.source_updated_at,
+			observation_sequence = excluded.observation_sequence
+		where excluded.observation_sequence >
+			workflow_run_observation_reservations.observation_sequence
 	`
 	if _, err := s.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("backfill workflow run observation reservations: %w", err)

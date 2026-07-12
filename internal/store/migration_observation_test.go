@@ -1122,13 +1122,41 @@ func TestMigrationNormalizesLegacyV10ChildReservationShape(t *testing.T) {
 			thread_id, family, observation_sequence
 		)
 		values(?, 'workflow_runs', 37);
-		update workflow_run_observation_reservations
-		set observation_sequence = 31
+		delete from workflow_run_observation_reservations
 		where repo_id = ? and head_sha = 'legacy-shared-head';
+		insert into workflow_run_observation_reservations(
+			repo_id, head_sha, source_updated_at, observation_sequence
+		)
+		values(?, 'legacy-shared-head', '2026-07-12T00:00:31Z', 31);
 		pragma user_version = 10;
-	`, threadID, repoID); err != nil {
+	`, threadID, repoID, repoID); err != nil {
 		_ = raw.Close()
 		t.Fatalf("prepare legacy child reservation schema: %v", err)
+	}
+	var canonicalSequence, legacySequence int64
+	if err := raw.QueryRowContext(ctx, `
+		select observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = 'legacy-shared-head'
+	`, repoID).Scan(&canonicalSequence); err != nil {
+		_ = raw.Close()
+		t.Fatalf("read seeded canonical workflow reservation: %v", err)
+	}
+	if err := raw.QueryRowContext(ctx, `
+		select observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = 'workflow_runs'
+	`, threadID).Scan(&legacySequence); err != nil {
+		_ = raw.Close()
+		t.Fatalf("read seeded legacy workflow reservation: %v", err)
+	}
+	if canonicalSequence != 31 || legacySequence != 37 {
+		_ = raw.Close()
+		t.Fatalf(
+			"seeded workflow reservations = canonical %d, legacy %d; want 31 and 37",
+			canonicalSequence,
+			legacySequence,
+		)
 	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close legacy child reservation store: %v", err)
