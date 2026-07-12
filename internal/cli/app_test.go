@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -829,13 +830,109 @@ func testSnapshotPublishContract() crawlremote.Contract {
 	contract := crawlremote.BaseContract()
 	contract.Apps = []crawlremote.AppSpec{{
 		App: "gitcrawl",
+		IngestTables: []crawlremote.IngestTableSpec{
+			{Name: "repositories", Columns: gitcrawlRepositoryColumns},
+			{Name: "threads", Columns: gitcrawlThreadColumns},
+			{Name: "thread_revisions", Columns: []string{
+				"id", "thread_id", "source_updated_at", "content_hash", "title_hash",
+				"body_hash", "labels_hash", "created_at",
+			}},
+			{Name: "thread_fingerprints", Columns: []string{
+				"id", "thread_revision_id", "algorithm_version", "fingerprint_hash",
+				"fingerprint_slug", "body_token_hash", "file_set_hash", "simhash64", "created_at",
+			}},
+			{Name: "thread_key_summaries", Columns: []string{
+				"id", "thread_revision_id", "summary_kind", "prompt_version", "provider",
+				"model", "input_hash", "output_hash", "key_text", "created_at",
+			}},
+			{Name: "cluster_groups", Columns: []string{
+				"id", "repo_id", "stable_key", "stable_slug", "status", "cluster_type",
+				"representative_thread_id", "title", "member_count", "created_at", "updated_at",
+				"closed_at",
+			}},
+			{Name: "cluster_memberships", Columns: []string{
+				"cluster_id", "thread_id", "role", "state", "score_to_representative",
+				"created_at", "updated_at", "removed_at",
+			}},
+			{Name: "pull_request_details", Columns: []string{
+				"thread_id", "repo_id", "number", "base_sha", "head_sha", "head_ref",
+				"head_repo_full_name", "mergeable_state", "additions", "deletions",
+				"changed_files", "fetched_at", "updated_at",
+			}},
+			{Name: "pull_request_files", Columns: []string{
+				"thread_id", "position", "path", "status", "additions", "deletions",
+				"changes", "previous_path", "fetched_at",
+			}},
+			{Name: "dataset_coverage", Columns: gitcrawlCloudCoverageColumns},
+		},
 		Capabilities: []string{
 			gitcrawlSnapshotAtomicCapability,
+			gitcrawlSnapshotCutoverCapability,
 			gitcrawlSnapshotProvenanceCapability,
 			sqliteBundleGzipUploadCapability,
 		},
 	}}
 	return contract
+}
+
+func TestGitcrawlSnapshotStatusMatchesExactMetadata(t *testing.T) {
+	snapshotID := strings.Repeat("a", 64)
+	manifest := crawlremote.IngestManifest{
+		App:           "gitcrawl",
+		Archive:       "gitcrawl/openclaw__openclaw",
+		SchemaName:    gitcrawlCloudSchemaName,
+		SchemaVersion: gitcrawlCloudSchemaVersion,
+		SchemaHash:    gitcrawlCloudSchemaHash,
+		SnapshotID:    snapshotID,
+		SourceSHA256:  snapshotID,
+	}
+	status := crawlremote.Status{
+		App:              "gitcrawl",
+		Archive:          manifest.Archive,
+		ActiveSnapshotID: snapshotID,
+		CoverageComplete: true,
+		Snapshot: &crawlremote.ArchiveSnapshot{
+			ID:               snapshotID,
+			SourceSHA256:     snapshotID,
+			SchemaName:       gitcrawlCloudSchemaName,
+			SchemaVersion:    gitcrawlCloudSchemaVersion,
+			SchemaHash:       gitcrawlCloudSchemaHash,
+			CoverageComplete: true,
+		},
+	}
+	if !gitcrawlSnapshotStatusMatches(status, manifest) {
+		t.Fatal("exact active snapshot did not match")
+	}
+
+	sourceMismatch := status
+	sourceMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
+	*sourceMismatch.Snapshot = *status.Snapshot
+	sourceMismatch.Snapshot.SourceSHA256 = strings.Repeat("b", 64)
+	if gitcrawlSnapshotStatusMatches(sourceMismatch, manifest) {
+		t.Fatal("source digest mismatch was reused")
+	}
+
+	schemaMismatch := status
+	schemaMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
+	*schemaMismatch.Snapshot = *status.Snapshot
+	schemaMismatch.Snapshot.SchemaVersion++
+	if gitcrawlSnapshotStatusMatches(schemaMismatch, manifest) {
+		t.Fatal("schema mismatch was reused")
+	}
+
+	manifest.Capabilities = []string{gitcrawlObservationOrderCapability}
+	if gitcrawlSnapshotStatusMatches(status, manifest) {
+		t.Fatal("staged snapshot reused without observable capability proof")
+	}
+	status.SnapshotCutoverAt = "2026-07-12T12:00:00Z"
+	status.Capabilities = []string{gitcrawlObservationOrderCapability}
+	if !gitcrawlSnapshotStatusMatches(status, manifest) {
+		t.Fatal("cut-over snapshot with requested capability did not match")
+	}
+	status.Capabilities = nil
+	if gitcrawlSnapshotStatusMatches(status, manifest) {
+		t.Fatal("snapshot reused without requested capability")
+	}
 }
 
 func TestCloudPublishSendsLocalRows(t *testing.T) {
@@ -1134,6 +1231,166 @@ func TestCloudPublishRejectsMissingSnapshotCapabilityBeforeUpload(t *testing.T) 
 	}
 }
 
+func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T) {
+	tests := []struct {
+		name              string
+		args              []string
+		missingCapability string
+	}{
+		{
+			name:              "observation order",
+			args:              []string{"--observation-order"},
+			missingCapability: gitcrawlObservationOrderCapability,
+		},
+		{
+			name:              "cutover",
+			args:              []string{"--cutover"},
+			missingCapability: gitcrawlSnapshotCutoverCapability,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			dbPath := filepath.Join(dir, "gitcrawl.db")
+			cfg := config.Default()
+			cfg.DBPath = dbPath
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("save config: %v", err)
+			}
+			seedCommandFlowStore(t, dbPath)
+
+			const tokenEnv = "GITCRAWL_TEST_OPTION_CONTRACT_TOKEN"
+			t.Setenv(tokenEnv, "publish-token")
+			mutations := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
+					contract := testSnapshotPublishContract()
+					capabilities := make([]string, 0, len(contract.Apps[0].Capabilities))
+					for _, capability := range contract.Apps[0].Capabilities {
+						if capability != test.missingCapability {
+							capabilities = append(capabilities, capability)
+						}
+					}
+					contract.Apps[0].Capabilities = capabilities
+					w.Header().Set("content-type", "application/json")
+					_ = json.NewEncoder(w).Encode(contract)
+					return
+				}
+				mutations++
+				http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			args := []string{
+				"--config", configPath,
+				"cloud", "publish",
+				"--remote", server.URL,
+				"--archive", "gitcrawl/openclaw__openclaw",
+				"--token-env", tokenEnv,
+				"--allow-incomplete",
+				"--json",
+			}
+			args = append(args, test.args...)
+			err := New().Run(ctx, args)
+			if err == nil || !strings.Contains(err.Error(), test.missingCapability) {
+				t.Fatalf("cloud publish error = %v", err)
+			}
+			if mutations != 0 {
+				t.Fatalf("remote mutations = %d, want 0", mutations)
+			}
+		})
+	}
+}
+
+func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
+	tests := []struct {
+		name      string
+		want      string
+		mutate    func(*crawlremote.Contract)
+		extraArgs []string
+	}{
+		{
+			name: "missing ingest column",
+			want: "pull_request_files is missing required column position",
+			mutate: func(contract *crawlremote.Contract) {
+				for tableIndex := range contract.Apps[0].IngestTables {
+					table := &contract.Apps[0].IngestTables[tableIndex]
+					if table.Name == "pull_request_files" {
+						table.Columns = slices.DeleteFunc(
+							table.Columns,
+							func(column string) bool { return column == "position" },
+						)
+					}
+				}
+			},
+		},
+		{
+			name:      "missing cutover route",
+			want:      "POST /v1/apps/:app/archives/:archive/cutover",
+			extraArgs: []string{"--cutover"},
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Routes = slices.DeleteFunc(
+					contract.Routes,
+					func(route crawlremote.RouteSpec) bool {
+						return route.Method == http.MethodPost &&
+							route.Path == "/v1/apps/:app/archives/:archive/cutover"
+					},
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			dbPath := filepath.Join(dir, "gitcrawl.db")
+			cfg := config.Default()
+			cfg.DBPath = dbPath
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("save config: %v", err)
+			}
+			seedCommandFlowStore(t, dbPath)
+
+			const tokenEnv = "GITCRAWL_TEST_SURFACE_CONTRACT_TOKEN"
+			t.Setenv(tokenEnv, "publish-token")
+			mutations := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
+					contract := testSnapshotPublishContract()
+					test.mutate(&contract)
+					w.Header().Set("content-type", "application/json")
+					_ = json.NewEncoder(w).Encode(contract)
+					return
+				}
+				mutations++
+				http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			args := []string{
+				"--config", configPath,
+				"cloud", "publish",
+				"--remote", server.URL,
+				"--archive", "gitcrawl/openclaw__openclaw",
+				"--token-env", tokenEnv,
+				"--allow-incomplete",
+				"--json",
+			}
+			args = append(args, test.extraArgs...)
+			err := New().Run(ctx, args)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("cloud publish error = %v", err)
+			}
+			if mutations != 0 {
+				t.Fatalf("remote mutations = %d, want 0", mutations)
+			}
+		})
+	}
+}
+
 func TestCloudPublishStagesByDefaultAndResumesCutover(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -1219,6 +1476,9 @@ func TestCloudPublishStagesByDefaultAndResumesCutover(t *testing.T) {
 				Snapshot: &crawlremote.ArchiveSnapshot{
 					ID:               snapshotID,
 					SourceSHA256:     snapshotID,
+					SchemaName:       gitcrawlCloudSchemaName,
+					SchemaVersion:    gitcrawlCloudSchemaVersion,
+					SchemaHash:       gitcrawlCloudSchemaHash,
 					CoverageComplete: true,
 				},
 			})

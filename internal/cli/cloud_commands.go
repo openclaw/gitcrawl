@@ -24,9 +24,15 @@ const (
 	gitcrawlCloudSQLiteBundleChunkSize = int64(64 * 1024 * 1024)
 
 	gitcrawlSnapshotAtomicCapability     = "gitcrawl.snapshot.atomic"
+	gitcrawlSnapshotCutoverCapability    = "gitcrawl.snapshot.cutover"
 	gitcrawlSnapshotProvenanceCapability = "gitcrawl.snapshot.provenance.v1"
 	sqliteBundleGzipUploadCapability     = "sqlite.bundle.gzip.upload"
 )
+
+var gitcrawlCloudCoverageColumns = []string{
+	"dataset", "row_count", "eligible_count", "covered_count",
+	"max_source_at", "dataset_generated_at", "complete", "mutation_token",
+}
 
 func (a *App) runCloud(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -112,7 +118,12 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	}
 	manifest := gitcrawlCloudManifest(archiveID, snapshot)
 	counts := gitcrawlCloudDatasetCounts(snapshot)
-	if err := requireGitcrawlSnapshotPublishContract(ctx, client); err != nil {
+	if err := requireGitcrawlSnapshotPublishContract(
+		ctx,
+		client,
+		snapshot,
+		*cutover,
+	); err != nil {
 		return err
 	}
 	sqliteBundle, err := uploadSQLiteSnapshotArchive(
@@ -130,7 +141,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	alreadyActive := false
 	status, statusErr := client.Status(ctx, "gitcrawl", archiveID)
 	if statusErr == nil {
-		alreadyActive = status.ActiveSnapshotID == snapshot.ID && status.CoverageComplete
+		alreadyActive = gitcrawlSnapshotStatusMatches(status, manifest)
 	} else if !remoteNotFound(statusErr) {
 		return statusErr
 	}
@@ -163,10 +174,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			archiveID,
 			manifest,
 			"dataset_coverage",
-			[]string{
-				"dataset", "row_count", "eligible_count", "covered_count",
-				"max_source_at", "dataset_generated_at", "complete", "mutation_token",
-			},
+			gitcrawlCloudCoverageColumns,
 			coverageRows,
 			mutationToken,
 			true,
@@ -429,6 +437,8 @@ func remoteNotFound(err error) bool {
 func requireGitcrawlSnapshotPublishContract(
 	ctx context.Context,
 	client *crawlremote.Client,
+	snapshot gitcrawlCloudSnapshot,
+	cutover bool,
 ) error {
 	contract, err := client.Contract(ctx)
 	if err != nil {
@@ -437,26 +447,136 @@ func requireGitcrawlSnapshotPublishContract(
 	if err := contract.Validate(); err != nil {
 		return fmt.Errorf("validate remote snapshot publish contract: %w", err)
 	}
-	var capabilities []string
-	for _, app := range contract.Apps {
+	var appSpec *crawlremote.AppSpec
+	for index := range contract.Apps {
+		app := &contract.Apps[index]
 		if app.App == "gitcrawl" {
-			capabilities = app.Capabilities
+			appSpec = app
 			break
 		}
 	}
-	for _, capability := range []string{
+	if appSpec == nil {
+		return fmt.Errorf("remote contract does not advertise the gitcrawl app")
+	}
+	requiredCapabilities := []string{
 		gitcrawlSnapshotAtomicCapability,
 		gitcrawlSnapshotProvenanceCapability,
 		sqliteBundleGzipUploadCapability,
-	} {
-		if !slices.Contains(capabilities, capability) {
+	}
+	requiredCapabilities = append(requiredCapabilities, snapshot.Capabilities...)
+	if cutover {
+		requiredCapabilities = append(
+			requiredCapabilities,
+			gitcrawlSnapshotCutoverCapability,
+		)
+	}
+	for _, capability := range requiredCapabilities {
+		if !slices.Contains(appSpec.Capabilities, capability) {
 			return fmt.Errorf(
 				"remote does not advertise required snapshot publish capability %s",
 				capability,
 			)
 		}
 	}
+	requiredRoutes := []crawlremote.RouteSpec{
+		{
+			Method: http.MethodGet,
+			Path:   "/v1/apps/:app/archives/:archive/status",
+			Auth:   crawlremote.AuthReader,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/v1/apps/:app/archives/:archive/ingest",
+			Auth:   crawlremote.AuthPublisher,
+		},
+		{
+			Method: http.MethodPut,
+			Path:   "/v1/apps/:app/archives/:archive/sqlite",
+			Auth:   crawlremote.AuthPublisher,
+		},
+	}
+	if cutover {
+		requiredRoutes = append(requiredRoutes, crawlremote.RouteSpec{
+			Method: http.MethodPost,
+			Path:   "/v1/apps/:app/archives/:archive/cutover",
+			Auth:   crawlremote.AuthPublisher,
+		})
+	}
+	for _, required := range requiredRoutes {
+		if !slices.ContainsFunc(contract.Routes, func(route crawlremote.RouteSpec) bool {
+			return route == required
+		}) {
+			return fmt.Errorf(
+				"remote contract does not advertise required snapshot publish route %s %s with %s auth",
+				required.Method,
+				required.Path,
+				required.Auth,
+			)
+		}
+	}
+	requiredTables := make([]crawlremote.IngestTableSpec, 0, len(snapshot.Datasets)+1)
+	for _, dataset := range snapshot.Datasets {
+		requiredTables = append(requiredTables, crawlremote.IngestTableSpec{
+			Name:    dataset.Name,
+			Columns: dataset.Columns,
+		})
+	}
+	requiredTables = append(requiredTables, crawlremote.IngestTableSpec{
+		Name:    "dataset_coverage",
+		Columns: gitcrawlCloudCoverageColumns,
+	})
+	for _, required := range requiredTables {
+		tableIndex := slices.IndexFunc(appSpec.IngestTables, func(table crawlremote.IngestTableSpec) bool {
+			return table.Name == required.Name
+		})
+		if tableIndex < 0 {
+			return fmt.Errorf(
+				"remote contract does not advertise required snapshot ingest table %s",
+				required.Name,
+			)
+		}
+		remoteColumns := appSpec.IngestTables[tableIndex].Columns
+		for _, column := range required.Columns {
+			if !slices.Contains(remoteColumns, column) {
+				return fmt.Errorf(
+					"remote contract snapshot ingest table %s is missing required column %s",
+					required.Name,
+					column,
+				)
+			}
+		}
+	}
 	return nil
+}
+
+func gitcrawlSnapshotStatusMatches(
+	status crawlremote.Status,
+	manifest crawlremote.IngestManifest,
+) bool {
+	snapshot := status.Snapshot
+	if snapshot == nil ||
+		status.ActiveSnapshotID != manifest.SnapshotID ||
+		!status.CoverageComplete ||
+		snapshot.ID != manifest.SnapshotID ||
+		snapshot.SourceSHA256 != manifest.SourceSHA256 ||
+		snapshot.SchemaName != manifest.SchemaName ||
+		snapshot.SchemaVersion != manifest.SchemaVersion ||
+		snapshot.SchemaHash != manifest.SchemaHash ||
+		!snapshot.CoverageComplete {
+		return false
+	}
+	if len(manifest.Capabilities) == 0 {
+		return true
+	}
+	if strings.TrimSpace(status.SnapshotCutoverAt) == "" {
+		return false
+	}
+	for _, capability := range manifest.Capabilities {
+		if !slices.Contains(status.Capabilities, capability) {
+			return false
+		}
+	}
+	return true
 }
 
 func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {
