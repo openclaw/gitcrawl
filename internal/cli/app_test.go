@@ -899,6 +899,72 @@ func testSnapshotPublishContract() crawlremote.Contract {
 	return contract
 }
 
+func TestCloudPublishRejectsPublisherOnlyTokenBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	seedCommandFlowStore(t, dbPath)
+
+	const tokenEnv = "GITCRAWL_TEST_PUBLISHER_ONLY_TOKEN"
+	t.Setenv(tokenEnv, "publisher-only-token")
+	whoamiRequests := 0
+	mutations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract":
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(testSnapshotPublishContract())
+		case r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/whoami":
+			whoamiRequests++
+			if got := r.Header.Get("authorization"); got != "Bearer publisher-only-token" {
+				http.Error(w, "missing bearer", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(crawlremote.Identity{
+				Owner: "openclaw",
+				Org:   "openclaw",
+				Login: "publisher",
+				Roles: []string{crawlremote.AuthPublisher},
+			})
+		default:
+			if r.Method == http.MethodPost ||
+				r.Method == http.MethodPut ||
+				r.Method == http.MethodPatch ||
+				r.Method == http.MethodDelete {
+				mutations++
+			}
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	err := New().Run(ctx, []string{
+		"--config", configPath,
+		"cloud", "publish",
+		"--remote", server.URL,
+		"--archive", "gitcrawl/openclaw__openclaw",
+		"--token-env", tokenEnv,
+		"--allow-incomplete",
+		"--json",
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing reader") {
+		t.Fatalf("cloud publish error = %v, want missing reader role", err)
+	}
+	if whoamiRequests != 1 {
+		t.Fatalf("whoami requests = %d, want 1", whoamiRequests)
+	}
+	if mutations != 0 {
+		t.Fatalf("remote mutations = %d, want 0", mutations)
+	}
+}
+
 func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
 	manifest := crawlremote.IngestManifest{
@@ -926,7 +992,7 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 			SchemaVersion:      gitcrawlCloudSchemaVersion,
 			SchemaHash:         gitcrawlCloudSchemaHash,
 			Capabilities:       publicationCapabilities,
-			CoverageComplete:   false,
+			CoverageComplete:   true,
 		},
 	}
 	if !gitcrawlPublisherStatusMatches(status, manifest, publicationCapabilities) {
@@ -976,6 +1042,14 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 		t.Fatal("incomplete publisher status was reused")
 	}
 	status.CoverageComplete = true
+
+	nestedIncomplete := status
+	nestedIncomplete.Snapshot = &crawlremote.ArchiveSnapshot{}
+	*nestedIncomplete.Snapshot = *status.Snapshot
+	nestedIncomplete.Snapshot.CoverageComplete = false
+	if gitcrawlPublisherStatusMatches(nestedIncomplete, manifest, publicationCapabilities) {
+		t.Fatal("snapshot with nested incomplete coverage was reused")
+	}
 
 	manifest.Capabilities = []string{gitcrawlObservationOrderCapability}
 	publicationCapabilities = gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
@@ -1033,6 +1107,15 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 		}
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/whoami" {
+			_ = json.NewEncoder(w).Encode(crawlremote.Identity{
+				Owner: "openclaw",
+				Org:   "openclaw",
+				Login: "publisher",
+				Roles: []string{crawlremote.AuthPublisher, crawlremote.AuthReader},
+			})
 			return
 		}
 		if r.Method == http.MethodPut && r.URL.EscapedPath() == "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/sqlite" {
@@ -1169,6 +1252,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			}
 			sawSQLiteRead = true
 			w.Header().Set("content-type", "application/vnd.sqlite3")
+			w.Header().Set("content-length", strconv.Itoa(len(sqliteImage)))
 			w.Header().Set("x-crawl-content-sha256", snapshotID)
 			_, _ = w.Write(sqliteImage)
 			return
@@ -1418,6 +1502,19 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 		extraArgs []string
 	}
 	tests := []remoteSurfaceTest{
+		{
+			name: "missing authenticated whoami route",
+			want: "GET /v1/whoami",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Routes = slices.DeleteFunc(
+					contract.Routes,
+					func(route crawlremote.RouteSpec) bool {
+						return route.Method == http.MethodGet &&
+							route.Path == "/v1/whoami"
+					},
+				)
+			},
+		},
 		{
 			name: "missing ingest column",
 			want: "pull_request_files is missing required column position",
@@ -1669,6 +1766,15 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/whoami" {
+			_ = json.NewEncoder(w).Encode(crawlremote.Identity{
+				Owner: "openclaw",
+				Org:   "openclaw",
+				Login: "publisher",
+				Roles: []string{crawlremote.AuthPublisher, crawlremote.AuthReader},
+			})
+			return
+		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite") {
 			sqliteReadRequests++
 			if servingSnapshotID != snapshotID || len(sqliteImage) == 0 {
@@ -1676,6 +1782,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				return
 			}
 			w.Header().Set("content-type", "application/vnd.sqlite3")
+			w.Header().Set("content-length", strconv.Itoa(len(sqliteImage)))
 			w.Header().Set("x-crawl-content-sha256", snapshotID)
 			_, _ = w.Write(sqliteImage)
 			return

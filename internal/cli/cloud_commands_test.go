@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,7 +62,7 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 		{
 			name:       "downloaded digest mismatch",
 			statusCode: http.StatusOK,
-			body:       []byte("different sqlite image"),
+			body:       bytes.Repeat([]byte("x"), len(source)),
 			want:       "does not match source",
 		},
 	} {
@@ -83,9 +85,14 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 							SchemaVersion:      manifest.SchemaVersion,
 							SchemaHash:         manifest.SchemaHash,
 							Capabilities:       publicationCapabilities,
+							CoverageComplete:   true,
 						},
 					})
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/sqlite"):
+					if test.statusCode == http.StatusOK {
+						w.Header().Set("content-length", fmt.Sprintf("%d", len(test.body)))
+						w.Header().Set("x-crawl-content-sha256", snapshotID)
+					}
 					w.WriteHeader(test.statusCode)
 					_, _ = w.Write(test.body)
 				default:
@@ -114,7 +121,99 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 				snapshot,
 				manifest,
 				publicationCapabilities,
+				int64(len(source)),
 			)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("verification error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestVerifyGitcrawlSQLiteHydrationRejectsInvalidFramingAndDigest(t *testing.T) {
+	source := []byte("SQLite format 3\x00bound source")
+	snapshotID := fmt.Sprintf("%x", sha256.Sum256(source))
+	different := bytes.Repeat([]byte("x"), len(source))
+
+	tests := []struct {
+		name          string
+		body          []byte
+		digest        string
+		contentLength int64
+		want          string
+	}{
+		{
+			name:          "valid",
+			body:          source,
+			digest:        snapshotID,
+			contentLength: int64(len(source)),
+		},
+		{
+			name:          "missing digest",
+			body:          source,
+			contentLength: int64(len(source)),
+			want:          "missing x-crawl-content-sha256",
+		},
+		{
+			name:          "wrong digest",
+			body:          source,
+			digest:        strings.Repeat("f", 64),
+			contentLength: int64(len(source)),
+			want:          "advertises digest",
+		},
+		{
+			name:          "missing length",
+			body:          source,
+			digest:        snapshotID,
+			contentLength: -1,
+			want:          "missing a positive Content-Length",
+		},
+		{
+			name:          "wrong length",
+			body:          source,
+			digest:        snapshotID,
+			contentLength: int64(len(source) + 1),
+			want:          "does not match uploaded source size",
+		},
+		{
+			name:          "truncated body",
+			body:          source[:len(source)-1],
+			digest:        snapshotID,
+			contentLength: int64(len(source)),
+			want:          "truncated",
+		},
+		{
+			name:          "oversized body",
+			body:          append(append([]byte(nil), source...), 'x'),
+			digest:        snapshotID,
+			contentLength: int64(len(source)),
+			want:          "exceeds Content-Length",
+		},
+		{
+			name:          "body digest mismatch",
+			body:          different,
+			digest:        snapshotID,
+			contentLength: int64(len(source)),
+			want:          "does not match source",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := &http.Response{
+				Header:        make(http.Header),
+				Body:          io.NopCloser(bytes.NewReader(test.body)),
+				ContentLength: test.contentLength,
+			}
+			if test.digest != "" {
+				response.Header.Set("x-crawl-content-sha256", test.digest)
+			}
+			err := verifyGitcrawlSQLiteHydration(response, snapshotID, int64(len(source)))
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("verify hydration: %v", err)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("verification error = %v, want %q", err, test.want)
 			}
