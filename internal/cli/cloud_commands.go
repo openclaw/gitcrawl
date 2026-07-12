@@ -153,7 +153,11 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	alreadyStaged := false
 	status, statusErr := client.PublishStatus(ctx, "gitcrawl", archiveID)
 	if statusErr == nil {
-		alreadyStaged = gitcrawlPublisherStatusMatches(status, manifest)
+		alreadyStaged = gitcrawlPublisherStatusMatches(
+			status,
+			manifest,
+			snapshot.AllowsIncompleteCoverage,
+		)
 	} else if !remoteNotFound(statusErr) {
 		return statusErr
 	}
@@ -362,7 +366,16 @@ func sendIngestBatch(
 		})
 		if err == nil {
 			if result.ResetIncomplete {
-				if err := drainIngestReset(ctx, client, app, archive, manifest, table, columns); err != nil {
+				if err := drainIngestReset(
+					ctx,
+					client,
+					app,
+					archive,
+					manifest,
+					table,
+					columns,
+					mutationToken,
+				); err != nil {
 					return crawlremote.IngestResult{}, err
 				}
 				continue
@@ -372,19 +385,37 @@ func sendIngestBatch(
 		if !isResetIncomplete(err) {
 			return crawlremote.IngestResult{}, err
 		}
-		if err := drainIngestReset(ctx, client, app, archive, manifest, table, columns); err != nil {
+		if err := drainIngestReset(
+			ctx,
+			client,
+			app,
+			archive,
+			manifest,
+			table,
+			columns,
+			mutationToken,
+		); err != nil {
 			return crawlremote.IngestResult{}, err
 		}
 	}
 }
 
-func drainIngestReset(ctx context.Context, client *crawlremote.Client, app, archive string, manifest crawlremote.IngestManifest, table string, columns []string) error {
+func drainIngestReset(
+	ctx context.Context,
+	client *crawlremote.Client,
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	table string,
+	columns []string,
+	mutationToken string,
+) error {
 	for {
 		result, err := client.Ingest(ctx, app, archive, crawlremote.IngestRequest{
-			Manifest: manifest,
-			Table:    table,
-			Columns:  columns,
-			Rows:     [][]any{},
+			Manifest:      manifest,
+			Table:         table,
+			Columns:       columns,
+			Rows:          [][]any{},
+			MutationToken: mutationToken,
 		})
 		if err != nil {
 			return err
@@ -552,7 +583,7 @@ func requireGitcrawlSnapshotPublishContract(
 			)
 		}
 		remoteArgs := appSpec.Queries[queryIndex].Args
-		if !slices.Equal(remoteArgs, required.Args) {
+		if !equalUniqueStringSet(remoteArgs, required.Args) {
 			return fmt.Errorf(
 				"remote contract reader query %s has arguments %v, want %v",
 				required.Name,
@@ -596,27 +627,47 @@ func requireGitcrawlSnapshotPublishContract(
 	return nil
 }
 
+func equalUniqueStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, duplicate := seen[value]; !duplicate {
+			return false
+		}
+		delete(seen, value)
+	}
+	return len(seen) == 0
+}
+
 func gitcrawlPublisherStatusMatches(
 	status crawlremote.PublisherStatus,
 	manifest crawlremote.IngestManifest,
+	allowIncomplete bool,
 ) bool {
 	snapshot := status.Snapshot
-	if snapshot == nil ||
+	if status.App != manifest.App ||
+		status.Archive != manifest.Archive ||
+		snapshot == nil ||
 		snapshot.ID != manifest.SnapshotID ||
 		snapshot.SourceSHA256 != manifest.SourceSHA256 ||
 		snapshot.SchemaName != manifest.SchemaName ||
 		snapshot.SchemaVersion != manifest.SchemaVersion ||
-		snapshot.SchemaHash != manifest.SchemaHash ||
-		!snapshot.CoverageComplete {
+		snapshot.SchemaHash != manifest.SchemaHash {
 		return false
 	}
-	if len(manifest.Capabilities) == 0 {
-		return true
+	if !status.CoverageComplete && !allowIncomplete {
+		return false
 	}
-	for _, capability := range manifest.Capabilities {
-		if !slices.Contains(snapshot.Capabilities, capability) {
-			return false
-		}
+	if !equalUniqueStringSet(snapshot.Capabilities, manifest.Capabilities) {
+		return false
 	}
 	return true
 }

@@ -842,7 +842,7 @@ func testSnapshotPublishContract() crawlremote.Contract {
 	contract.Apps = []crawlremote.AppSpec{{
 		App: "gitcrawl",
 		Queries: []crawlremote.QuerySpec{
-			{Name: "gitcrawl.threads.search", Args: []string{"owner", "repo", "query", "kind", "state", "mode", "limit"}},
+			{Name: "gitcrawl.threads.search", Args: []string{"limit", "mode", "state", "kind", "query", "repo", "owner"}},
 			{Name: "gitcrawl.clusters.related", Args: []string{"owner", "repo", "number"}},
 			{Name: "gitcrawl.clusters.list", Args: []string{"owner", "repo", "status", "min_size"}},
 			{Name: "gitcrawl.clusters.members", Args: []string{"owner", "repo", "cluster_id"}},
@@ -909,17 +909,17 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 		App:              "gitcrawl",
 		Archive:          manifest.Archive,
 		ActiveSnapshotID: strings.Repeat("f", 64),
-		CoverageComplete: false,
+		CoverageComplete: true,
 		Snapshot: &crawlremote.ArchiveSnapshot{
 			ID:               snapshotID,
 			SourceSHA256:     snapshotID,
 			SchemaName:       gitcrawlCloudSchemaName,
 			SchemaVersion:    gitcrawlCloudSchemaVersion,
 			SchemaHash:       gitcrawlCloudSchemaHash,
-			CoverageComplete: true,
+			CoverageComplete: false,
 		},
 	}
-	if !gitcrawlPublisherStatusMatches(status, manifest) {
+	if !gitcrawlPublisherStatusMatches(status, manifest, false) {
 		t.Fatal("exact staged snapshot did not match")
 	}
 
@@ -927,7 +927,7 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	sourceMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
 	*sourceMismatch.Snapshot = *status.Snapshot
 	sourceMismatch.Snapshot.SourceSHA256 = strings.Repeat("b", 64)
-	if gitcrawlPublisherStatusMatches(sourceMismatch, manifest) {
+	if gitcrawlPublisherStatusMatches(sourceMismatch, manifest, false) {
 		t.Fatal("source digest mismatch was reused")
 	}
 
@@ -935,25 +935,40 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 	schemaMismatch.Snapshot = &crawlremote.ArchiveSnapshot{}
 	*schemaMismatch.Snapshot = *status.Snapshot
 	schemaMismatch.Snapshot.SchemaVersion++
-	if gitcrawlPublisherStatusMatches(schemaMismatch, manifest) {
+	if gitcrawlPublisherStatusMatches(schemaMismatch, manifest, false) {
 		t.Fatal("schema mismatch was reused")
 	}
 
+	status.CoverageComplete = false
+	if gitcrawlPublisherStatusMatches(status, manifest, false) {
+		t.Fatal("incomplete publisher status was reused without the escape hatch")
+	}
+	if !gitcrawlPublisherStatusMatches(status, manifest, true) {
+		t.Fatal("allow-incomplete did not resume an exact staged snapshot")
+	}
+	status.CoverageComplete = true
+
 	manifest.Capabilities = []string{gitcrawlObservationOrderCapability}
-	if gitcrawlPublisherStatusMatches(status, manifest) {
+	if gitcrawlPublisherStatusMatches(status, manifest, false) {
 		t.Fatal("staged snapshot reused without snapshot capability proof")
 	}
 	status.Snapshot.Capabilities = []string{gitcrawlObservationOrderCapability}
-	if !gitcrawlPublisherStatusMatches(status, manifest) {
+	if !gitcrawlPublisherStatusMatches(status, manifest, false) {
 		t.Fatal("staged snapshot with requested capability did not match")
 	}
-	status.Snapshot.Capabilities = nil
-	if gitcrawlPublisherStatusMatches(status, manifest) {
-		t.Fatal("snapshot reused without requested capability")
+	status.Snapshot.Capabilities = []string{
+		gitcrawlObservationOrderCapability,
+		"gitcrawl.unrequested-profile.v1",
 	}
-	status.Snapshot.CoverageComplete = false
-	if gitcrawlPublisherStatusMatches(status, manifest) {
-		t.Fatal("incomplete staged snapshot was reused")
+	if gitcrawlPublisherStatusMatches(status, manifest, false) {
+		t.Fatal("snapshot with a broader publication profile was reused")
+	}
+	status.Snapshot.Capabilities = []string{
+		gitcrawlObservationOrderCapability,
+		gitcrawlObservationOrderCapability,
+	}
+	if gitcrawlPublisherStatusMatches(status, manifest, false) {
+		t.Fatal("snapshot with duplicate publication capabilities was reused")
 	}
 }
 
@@ -1416,6 +1431,15 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 			},
 		},
 		{
+			name: "thread search duplicate argument",
+			want: "reader query gitcrawl.threads.search has arguments",
+			mutate: func(contract *crawlremote.Contract) {
+				contract.Apps[0].Queries[0].Args = []string{
+					"owner", "repo", "query", "kind", "state", "mode", "mode",
+				}
+			},
+		},
+		{
 			name: "duplicate reader query",
 			want: "required reader query gitcrawl.threads.search more than once",
 			mutate: func(contract *crawlremote.Contract) {
@@ -1566,7 +1590,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				App:              "gitcrawl",
 				Archive:          "gitcrawl/openclaw__openclaw",
 				ActiveSnapshotID: servingSnapshotID,
-				CoverageComplete: servingSnapshotID == snapshotID,
+				CoverageComplete: stagedSnapshot != nil,
 				Snapshot:         stagedSnapshot,
 			})
 			return
@@ -1646,7 +1670,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					SchemaVersion:    body.Manifest.SchemaVersion,
 					SchemaHash:       body.Manifest.SchemaHash,
 					Capabilities:     slices.Clone(body.Manifest.Capabilities),
-					CoverageComplete: true,
+					CoverageComplete: false,
 				}
 			}
 			_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{

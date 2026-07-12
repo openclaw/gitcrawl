@@ -223,6 +223,7 @@ func TestSendSnapshotIngestRowsRotatesMutationTokens(t *testing.T) {
 func TestSendIngestRowsDrainsRemoteResetBeforeRetry(t *testing.T) {
 	ctx := context.Background()
 	var requests []crawlremote.IngestRequest
+	var drainRequests []crawlremote.IngestRequest
 	resetCalls := 0
 	rejectedFirstBatch := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -237,8 +238,13 @@ func TestSendIngestRowsDrainsRemoteResetBeforeRetry(t *testing.T) {
 		}
 		w.Header().Set("content-type", "application/json")
 		if len(body.Rows) == 0 {
+			drainRequests = append(drainRequests, body)
 			resetCalls++
-			_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{ResetIncomplete: resetCalls == 1, ResetDeleted: 10000})
+			_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+				MutationToken:   body.MutationToken,
+				ResetIncomplete: resetCalls == 1,
+				ResetDeleted:    10000,
+			})
 			return
 		}
 		if body.Cursor == "" && !rejectedFirstBatch {
@@ -251,7 +257,11 @@ func TestSendIngestRowsDrainsRemoteResetBeforeRetry(t *testing.T) {
 			return
 		}
 		requests = append(requests, body)
-		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{RowsAccepted: int64(len(body.Rows)), Complete: body.Final})
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+			MutationToken: body.MutationToken,
+			RowsAccepted:  int64(len(body.Rows)),
+			Complete:      body.Final,
+		})
 	}))
 	defer server.Close()
 
@@ -261,18 +271,34 @@ func TestSendIngestRowsDrainsRemoteResetBeforeRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	accepted, err := sendIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", crawlremote.IngestManifest{App: "gitcrawl"}, "threads", []string{"id"}, [][]any{{1}}, true)
+	progress, err := sendSnapshotIngestRows(
+		ctx,
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw",
+		crawlremote.IngestManifest{App: "gitcrawl"},
+		"threads",
+		[]string{"id"},
+		[][]any{{1}},
+		"generation-current",
+		true,
+	)
 	if err != nil {
 		t.Fatalf("send ingest: %v", err)
 	}
-	if accepted != 1 {
-		t.Fatalf("accepted = %d", accepted)
+	if progress.RowsAccepted != 1 || progress.MutationToken != "generation-current" {
+		t.Fatalf("progress = %#v", progress)
 	}
 	if resetCalls != 2 {
 		t.Fatalf("resetCalls = %d", resetCalls)
 	}
 	if len(requests) != 1 || requests[0].Cursor != "" || !requests[0].Final {
 		t.Fatalf("data requests = %#v", requests)
+	}
+	for index, request := range drainRequests {
+		if request.MutationToken != "generation-current" {
+			t.Fatalf("drain request %d mutation token = %q", index, request.MutationToken)
+		}
 	}
 }
 
