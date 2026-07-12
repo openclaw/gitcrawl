@@ -795,6 +795,9 @@ func requireGitcrawlCloudPublishRoles(ctx context.Context, client *crawlremote.C
 	if err != nil {
 		return fmt.Errorf("read remote identity before snapshot publication: %w", err)
 	}
+	if slices.Contains(identity.Roles, "admin") {
+		return nil
+	}
 	missing := make([]string, 0, 2)
 	for _, role := range []string{crawlremote.AuthPublisher, crawlremote.AuthReader} {
 		if !slices.Contains(identity.Roles, role) {

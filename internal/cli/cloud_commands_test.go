@@ -37,6 +37,32 @@ func TestUniqueStringSupersetRejectsMissingOrDuplicateArguments(t *testing.T) {
 	}
 }
 
+func TestRequireGitcrawlCloudPublishRolesAcceptsAdmin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v1/whoami" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(crawlremote.Identity{
+			Login: "admin",
+			Roles: []string{"admin"},
+		})
+	}))
+	defer server.Close()
+
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("admin-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	if err := requireGitcrawlCloudPublishRoles(context.Background(), client); err != nil {
+		t.Fatalf("admin role preflight: %v", err)
+	}
+}
+
 func TestSendSnapshotIngestDatasetStreamsBoundedBatches(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
