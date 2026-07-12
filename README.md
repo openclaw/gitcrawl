@@ -71,7 +71,8 @@ Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser boot
 SHA-256 as the snapshot identity, exports repositories, threads, revisions,
 fingerprints, summaries, durable clusters, and PR detail/file rows from that
 same image, negotiates the remote snapshot-provenance contract before touching
-R2, uploads its digest-scoped bundle, and completes staged D1 coverage.
+R2, uploads its digest-scoped bundle, and completes staged D1 coverage through
+row- and encoded-byte-bounded ingest requests.
 Publishing moves unpinned reads to the complete snapshot by default, preserving
 the existing reader-refresh behavior. The remote must advertise
 `gitcrawl.snapshot.staging.v1`; `--stage-only` keeps the immutable snapshot
@@ -80,8 +81,10 @@ candidate through the publisher-only status projection, skips repeated ingest
 when its digest, source sync, schema, resolved publication profile, persisted
 generation timestamp, and coverage match, then cuts it over. Cutover requires
 the remote contract to advertise reader-authenticated `GET /sqlite`; Gitcrawl
-rechecks the exact publisher metadata and hashes the downloaded bound SQLite
-image before reporting success. Before any upload or ingest, Gitcrawl verifies
+validates the cutover acknowledgement, retries the scoped reader projection
+until its digest, profile, generation, and dataset coverage are exact, rechecks
+the exact publisher metadata, and hashes the downloaded bound SQLite image
+before reporting success. Before any upload or ingest, Gitcrawl verifies
 the configured credential through the advertised `/v1/whoami` route and
 requires both publisher and reader roles, including for stage-only publication.
 Incomplete local enrichment fails before any remote mutation;

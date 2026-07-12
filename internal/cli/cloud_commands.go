@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,10 +23,13 @@ import (
 )
 
 const (
-	gitcrawlCloudBatchSize               = 250
-	gitcrawlCloudSQLiteBundleChunkSize   = int64(64 * 1024 * 1024)
-	gitcrawlCloudPublishPreflightTimeout = 30 * time.Second
-	gitcrawlCloudHydrationTimeout        = 10 * time.Minute
+	gitcrawlCloudBatchSize                   = 250
+	gitcrawlCloudIngestRequestMaxBytes       = int64(4 * 1024 * 1024)
+	gitcrawlCloudSQLiteBundleChunkSize       = int64(64 * 1024 * 1024)
+	gitcrawlCloudPublishPreflightTimeout     = 30 * time.Second
+	gitcrawlCloudPostCutoverStatusAttempts   = 5
+	gitcrawlCloudPostCutoverStatusRetryDelay = 100 * time.Millisecond
+	gitcrawlCloudHydrationTimeout            = 10 * time.Minute
 
 	gitcrawlSnapshotAtomicCapability     = "gitcrawl.snapshot.atomic"
 	gitcrawlSnapshotCutoverCapability    = "gitcrawl.snapshot.cutover"
@@ -239,6 +243,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				}
 				if recoveredGeneration != "" {
 					snapshot.DatasetGeneratedAt = recoveredGeneration
+					mutationToken = ""
 					alreadyStaged = true
 					completedConcurrently = true
 					break
@@ -275,6 +280,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 					return fmt.Errorf("complete cloud snapshot staging: %w", err)
 				}
 				snapshot.DatasetGeneratedAt = recoveredGeneration
+				mutationToken = ""
 				alreadyStaged = true
 			} else {
 				mutationToken = progress.MutationToken
@@ -305,6 +311,9 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
 			if err != nil {
 				return fmt.Errorf("cut over cloud snapshot: %w", err)
+			}
+			if err := validateGitcrawlCutoverResult(result, archiveID, snapshot.ID); err != nil {
+				return fmt.Errorf("validate cloud snapshot cutover: %w", err)
 			}
 			cutoverResult = &result
 		}
@@ -349,6 +358,84 @@ type ingestProgress struct {
 	Result        crawlremote.IngestResult
 }
 
+type gitcrawlIngestBatchSizer struct {
+	baseBytes      int64
+	finalBaseBytes int64
+	rowBytes       int64
+	rowCount       int
+}
+
+func newGitcrawlIngestBatchSizer(
+	app, archive string,
+	manifest crawlremote.IngestManifest,
+	table string,
+	columns []string,
+	cursor, mutationToken string,
+) (gitcrawlIngestBatchSizer, error) {
+	manifest.App = strings.TrimSpace(app)
+	manifest.Archive = strings.TrimSpace(archive)
+	request := crawlremote.IngestRequest{
+		Manifest:      manifest,
+		Table:         table,
+		Columns:       columns,
+		Rows:          [][]any{},
+		Cursor:        cursor,
+		MutationToken: mutationToken,
+	}
+	baseBytes, err := encodedGitcrawlIngestRequestBytes(request)
+	if err != nil {
+		return gitcrawlIngestBatchSizer{}, err
+	}
+	request.Final = true
+	finalBaseBytes, err := encodedGitcrawlIngestRequestBytes(request)
+	if err != nil {
+		return gitcrawlIngestBatchSizer{}, err
+	}
+	return gitcrawlIngestBatchSizer{
+		baseBytes:      baseBytes,
+		finalBaseBytes: finalBaseBytes,
+	}, nil
+}
+
+func encodedGitcrawlIngestRequestBytes(request crawlremote.IngestRequest) (int64, error) {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return 0, fmt.Errorf("encode ingest request envelope: %w", err)
+	}
+	// crawlremote uses json.Encoder, which appends one newline byte.
+	return int64(len(encoded)) + 1, nil
+}
+
+func (s *gitcrawlIngestBatchSizer) add(row []any, final bool) (bool, int64, error) {
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		return false, 0, fmt.Errorf("encode ingest row: %w", err)
+	}
+	separatorBytes := int64(0)
+	if s.rowCount > 0 {
+		separatorBytes = 1
+	}
+	baseBytes := s.baseBytes
+	if final {
+		baseBytes = s.finalBaseBytes
+	}
+	encodedBytes := baseBytes + s.rowBytes + separatorBytes + int64(len(encoded))
+	if encodedBytes > gitcrawlCloudIngestRequestMaxBytes {
+		return false, encodedBytes, nil
+	}
+	s.rowBytes += separatorBytes + int64(len(encoded))
+	s.rowCount++
+	return true, encodedBytes, nil
+}
+
+func (s gitcrawlIngestBatchSizer) encodedBytes(final bool) int64 {
+	baseBytes := s.baseBytes
+	if final {
+		baseBytes = s.finalBaseBytes
+	}
+	return baseBytes + s.rowBytes
+}
+
 func sendSnapshotIngestDataset(
 	ctx context.Context,
 	db *sql.DB,
@@ -378,6 +465,27 @@ func sendSnapshotIngestDataset(
 	batch := make([][]any, 0, gitcrawlCloudBatchSize)
 	var scanned int64
 	var accepted int64
+	var batchStart int64
+	var batchSizer *gitcrawlIngestBatchSizer
+	ensureBatchSizer := func() error {
+		if batchSizer != nil {
+			return nil
+		}
+		sizer, err := newGitcrawlIngestBatchSizer(
+			app,
+			archive,
+			manifest,
+			dataset.Name,
+			dataset.Columns,
+			cursorFor(batchStart),
+			mutationToken,
+		)
+		if err != nil {
+			return err
+		}
+		batchSizer = &sizer
+		return nil
+	}
 	flush := func() error {
 		result, err := sendIngestBatch(
 			ctx,
@@ -388,7 +496,7 @@ func sendSnapshotIngestDataset(
 			dataset.Name,
 			dataset.Columns,
 			batch,
-			scanned-int64(len(batch)),
+			batchStart,
 			mutationToken,
 			false,
 		)
@@ -405,6 +513,8 @@ func sendSnapshotIngestDataset(
 		accepted += result.RowsAccepted
 		mutationToken = result.MutationToken
 		batch = batch[:0]
+		batchStart = scanned
+		batchSizer = nil
 		return nil
 	}
 
@@ -422,6 +532,34 @@ func sendSnapshotIngestDataset(
 				values[index] = string(bytes)
 			}
 		}
+		if err := ensureBatchSizer(); err != nil {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+		}
+		fits, encodedBytes, err := batchSizer.add(values, false)
+		if err != nil {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+		}
+		if !fits && len(batch) > 0 {
+			if err := flush(); err != nil {
+				return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+			}
+			if err := ensureBatchSizer(); err != nil {
+				return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+			}
+			fits, encodedBytes, err = batchSizer.add(values, false)
+			if err != nil {
+				return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+			}
+		}
+		if !fits {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, fmt.Errorf(
+				"dataset %s row %d encoded ingest request is %d bytes, limit %d",
+				dataset.Name,
+				scanned,
+				encodedBytes,
+				gitcrawlCloudIngestRequestMaxBytes,
+			)
+		}
 		batch = append(batch, values)
 		scanned++
 		if len(batch) == gitcrawlCloudBatchSize {
@@ -433,7 +571,23 @@ func sendSnapshotIngestDataset(
 	if err := rows.Err(); err != nil {
 		return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
 	}
-	if len(batch) > 0 || scanned == 0 {
+	if len(batch) > 0 {
+		if err := flush(); err != nil {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+		}
+	}
+	if scanned == 0 {
+		if err := ensureBatchSizer(); err != nil {
+			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
+		}
+		if encodedBytes := batchSizer.encodedBytes(false); encodedBytes > gitcrawlCloudIngestRequestMaxBytes {
+			return ingestProgress{}, fmt.Errorf(
+				"dataset %s empty encoded ingest request is %d bytes, limit %d",
+				dataset.Name,
+				encodedBytes,
+				gitcrawlCloudIngestRequestMaxBytes,
+			)
+		}
 		if err := flush(); err != nil {
 			return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, err
 		}
@@ -486,6 +640,26 @@ func sendSnapshotIngestRows(
 ) (ingestProgress, error) {
 	var total int64
 	if len(rows) == 0 {
+		sizer, sizeErr := newGitcrawlIngestBatchSizer(
+			app,
+			archive,
+			manifest,
+			table,
+			columns,
+			"",
+			mutationToken,
+		)
+		if sizeErr != nil {
+			return ingestProgress{}, sizeErr
+		}
+		if encodedBytes := sizer.encodedBytes(final); encodedBytes > gitcrawlCloudIngestRequestMaxBytes {
+			return ingestProgress{}, fmt.Errorf(
+				"ingest table %s empty encoded request is %d bytes, limit %d",
+				table,
+				encodedBytes,
+				gitcrawlCloudIngestRequestMaxBytes,
+			)
+		}
 		result, err := sendIngestBatch(
 			ctx,
 			client,
@@ -506,10 +680,50 @@ func sendSnapshotIngestRows(
 		}, err
 	}
 	var lastResult crawlremote.IngestResult
-	for start := 0; start < len(rows); start += gitcrawlCloudBatchSize {
-		end := start + gitcrawlCloudBatchSize
-		if end > len(rows) {
-			end = len(rows)
+	for start := 0; start < len(rows); {
+		sizer, err := newGitcrawlIngestBatchSizer(
+			app,
+			archive,
+			manifest,
+			table,
+			columns,
+			cursorFor(int64(start)),
+			mutationToken,
+		)
+		if err != nil {
+			return ingestProgress{
+				RowsAccepted:  total,
+				MutationToken: mutationToken,
+				Result:        lastResult,
+			}, err
+		}
+		end := start
+		for end < len(rows) && end-start < gitcrawlCloudBatchSize {
+			fits, encodedBytes, err := sizer.add(rows[end], final && end == len(rows)-1)
+			if err != nil {
+				return ingestProgress{
+					RowsAccepted:  total,
+					MutationToken: mutationToken,
+					Result:        lastResult,
+				}, err
+			}
+			if !fits {
+				if end == start {
+					return ingestProgress{
+							RowsAccepted:  total,
+							MutationToken: mutationToken,
+							Result:        lastResult,
+						}, fmt.Errorf(
+							"ingest table %s row %d encoded request is %d bytes, limit %d",
+							table,
+							start,
+							encodedBytes,
+							gitcrawlCloudIngestRequestMaxBytes,
+						)
+				}
+				break
+			}
+			end++
 		}
 		result, err := sendIngestBatch(
 			ctx,
@@ -534,6 +748,7 @@ func sendSnapshotIngestRows(
 		total += result.RowsAccepted
 		mutationToken = result.MutationToken
 		lastResult = result
+		start = end
 	}
 	return ingestProgress{
 		RowsAccepted:  total,
@@ -1125,6 +1340,95 @@ func gitcrawlReaderStatusMatches(
 	return gitcrawlDatasetCoverageMatches(status.Datasets, snapshot)
 }
 
+func validateGitcrawlCutoverResult(
+	result crawlremote.CutoverResult,
+	archive, snapshotID string,
+) error {
+	if result.Archive != archive {
+		return fmt.Errorf("cutover returned archive %q, want %q", result.Archive, archive)
+	}
+	if result.SnapshotID != snapshotID {
+		return fmt.Errorf("cutover returned snapshot %q, want %q", result.SnapshotID, snapshotID)
+	}
+	if result.SnapshotMode != "snapshot" {
+		return fmt.Errorf("cutover returned snapshot mode %q, want snapshot", result.SnapshotMode)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, result.CutoverAt); err != nil {
+		return fmt.Errorf("cutover returned invalid timestamp %q: %w", result.CutoverAt, err)
+	}
+	return nil
+}
+
+func verifyGitcrawlReaderProjection(
+	ctx context.Context,
+	client *crawlremote.Client,
+	archive string,
+	snapshot gitcrawlCloudSnapshot,
+	manifest crawlremote.IngestManifest,
+	publicationCapabilities []string,
+) error {
+	return verifyGitcrawlReaderProjectionWithRetry(
+		ctx,
+		client,
+		archive,
+		snapshot,
+		manifest,
+		publicationCapabilities,
+		gitcrawlCloudPostCutoverStatusAttempts,
+		gitcrawlCloudPostCutoverStatusRetryDelay,
+	)
+}
+
+func verifyGitcrawlReaderProjectionWithRetry(
+	ctx context.Context,
+	client *crawlremote.Client,
+	archive string,
+	snapshot gitcrawlCloudSnapshot,
+	manifest crawlremote.IngestManifest,
+	publicationCapabilities []string,
+	attempts int,
+	retryDelay time.Duration,
+) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		status, err := client.Status(ctx, "gitcrawl", archive)
+		if err == nil && gitcrawlReaderStatusMatches(
+			status,
+			snapshot,
+			manifest,
+			publicationCapabilities,
+		) {
+			return nil
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf(
+			"read post-cutover reader status after %d attempts: %w",
+			attempts,
+			lastErr,
+		)
+	}
+	return fmt.Errorf(
+		"post-cutover reader status does not match snapshot %s digest, profile, generation, and coverage after %d attempts",
+		snapshot.ID,
+		attempts,
+	)
+}
+
 func gitcrawlDatasetCoverageMatches(
 	actual []crawlremote.DatasetCoverage,
 	snapshot gitcrawlCloudSnapshot,
@@ -1167,6 +1471,16 @@ func verifyGitcrawlSnapshotPublication(
 	publicationCapabilities []string,
 	sourceSize int64,
 ) error {
+	if err := verifyGitcrawlReaderProjection(
+		ctx,
+		client,
+		archive,
+		snapshot,
+		manifest,
+		publicationCapabilities,
+	); err != nil {
+		return err
+	}
 	status, err := client.PublishStatusForSnapshot(
 		ctx,
 		"gitcrawl",

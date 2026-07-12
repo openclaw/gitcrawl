@@ -1099,6 +1099,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	var snapshotID string
 	var sqliteImage []byte
 	var publishedSnapshot *crawlremote.ArchiveSnapshot
+	var publishedDatasets []crawlremote.DatasetCoverage
 	var publisherStatusSnapshotIDs []string
 	mutationCounter := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1235,16 +1236,23 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status") {
-			activeSnapshotID := ""
-			if sawCutover {
-				activeSnapshotID = snapshotID
+			status := crawlremote.Status{
+				App:     "gitcrawl",
+				Archive: "gitcrawl/openclaw__openclaw",
 			}
-			_ = json.NewEncoder(w).Encode(crawlremote.Status{
-				App:              "gitcrawl",
-				Archive:          "gitcrawl/openclaw__openclaw",
-				ActiveSnapshotID: activeSnapshotID,
-				CoverageComplete: sawCutover,
-			})
+			if sawCutover && publishedSnapshot != nil {
+				status.SchemaName = publishedSnapshot.SchemaName
+				status.SchemaVersion = publishedSnapshot.SchemaVersion
+				status.SchemaHash = publishedSnapshot.SchemaHash
+				status.Capabilities = slices.Clone(publishedSnapshot.Capabilities)
+				status.ActiveSnapshotID = publishedSnapshot.ID
+				status.SourceSyncAt = publishedSnapshot.SourceSyncAt
+				status.DatasetGeneratedAt = publishedSnapshot.DatasetGeneratedAt
+				status.CoverageComplete = true
+				status.Datasets = slices.Clone(publishedDatasets)
+				status.Snapshot = publishedSnapshot
+			}
+			_ = json.NewEncoder(w).Encode(status)
 			return
 		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.EscapedPath(), "/cutover") {
@@ -1297,6 +1305,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 				http.Error(w, "coverage activation mismatch", http.StatusBadRequest)
 				return
 			}
+			publishedDatasets = testGitcrawlDatasetCoverageRows(t, body.Rows)
 			for _, row := range body.Rows {
 				if row[len(row)-1] != body.MutationToken {
 					http.Error(w, "coverage token mismatch", http.StatusBadRequest)
@@ -1799,8 +1808,13 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				Archive:          "gitcrawl/openclaw__openclaw",
 				ActiveSnapshotID: servingSnapshotID,
 			}
+			readerProjectionExact := false
+			switch readerStatusRequests {
+			case 3, 5, 6, 7:
+				readerProjectionExact = true
+			}
 			if servingSnapshotID == snapshotID &&
-				readerStatusRequests >= 3 &&
+				readerProjectionExact &&
 				stagedSnapshot != nil {
 				status.SchemaName = stagedSnapshot.SchemaName
 				status.SchemaVersion = stagedSnapshot.SchemaVersion
@@ -2105,7 +2119,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			}
 			stagedDatasetGeneratedAt = result.DatasetGeneratedAt
 			if stagedDatasetGeneratedAt != concurrentDatasetGeneratedAt ||
-				result.MutationToken == "" {
+				result.MutationToken != "" {
 				t.Fatalf("stage-only did not bind its generation: %#v", result)
 			}
 			time.Sleep(2 * time.Millisecond)
@@ -2166,8 +2180,11 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			)
 		}
 	}
-	if readerStatusRequests != 3 {
-		t.Fatalf("reader status requests = %d, want 3 serving-state checks", readerStatusRequests)
+	if readerStatusRequests != 7 {
+		t.Fatalf(
+			"reader status requests = %d, want 7 pre-cutover and exact post-cutover checks",
+			readerStatusRequests,
+		)
 	}
 	if sqliteReadRequests != 3 {
 		t.Fatalf("SQLite read requests = %d, want failed hydration plus two retries", sqliteReadRequests)

@@ -177,6 +177,270 @@ func TestSendSnapshotIngestDatasetStreamsBoundedBatches(t *testing.T) {
 	}
 }
 
+func TestSendSnapshotIngestDatasetFlushesBeforeEncodedByteLimit(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`create table rows(id integer primary key, value text not null)`); err != nil {
+		t.Fatalf("create rows: %v", err)
+	}
+	value := strings.Repeat("x", int(gitcrawlCloudIngestRequestMaxBytes/2))
+	for id := 1; id <= 3; id++ {
+		if _, err := db.Exec(`insert into rows(id, value) values(?, ?)`, id, value); err != nil {
+			t.Fatalf("seed row %d: %v", id, err)
+		}
+	}
+
+	var requests []crawlremote.IngestRequest
+	var encodedSizes []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if int64(len(body)) > gitcrawlCloudIngestRequestMaxBytes {
+			http.Error(w, "encoded request exceeded byte budget", http.StatusRequestEntityTooLarge)
+			return
+		}
+		var request crawlremote.IngestRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+		encodedSizes = append(encodedSizes, len(body))
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+			Table:         request.Table,
+			SnapshotID:    request.Manifest.SnapshotID,
+			MutationToken: fmt.Sprintf("mutation-%d", len(requests)),
+			RowsAccepted:  int64(len(request.Rows)),
+		})
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("publisher-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	progress, err := sendSnapshotIngestDataset(
+		context.Background(),
+		db,
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw__gitcrawl",
+		crawlremote.IngestManifest{
+			App:        "gitcrawl",
+			Archive:    "gitcrawl/openclaw__gitcrawl",
+			SnapshotID: strings.Repeat("a", 64),
+		},
+		gitcrawlCloudDataset{
+			Name:     "bounded_bytes",
+			Columns:  []string{"id", "value"},
+			Query:    `select id, value from rows order by id`,
+			RowCount: 3,
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("stream byte-bounded dataset: %v", err)
+	}
+	if progress.RowsAccepted != 3 || progress.MutationToken != "mutation-3" {
+		t.Fatalf("progress = %#v", progress)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want one per large row", len(requests))
+	}
+	for index := range requests {
+		if len(requests[index].Rows) != 1 {
+			t.Fatalf("request %d rows = %d, want 1", index, len(requests[index].Rows))
+		}
+		if int64(encodedSizes[index]) > gitcrawlCloudIngestRequestMaxBytes {
+			t.Fatalf(
+				"request %d encoded bytes = %d, limit %d",
+				index,
+				encodedSizes[index],
+				gitcrawlCloudIngestRequestMaxBytes,
+			)
+		}
+	}
+}
+
+func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
+	var requests []crawlremote.IngestRequest
+	var encodedSizes []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if int64(len(body)) > gitcrawlCloudIngestRequestMaxBytes {
+			http.Error(w, "encoded request exceeded byte budget", http.StatusRequestEntityTooLarge)
+			return
+		}
+		var request crawlremote.IngestRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+		encodedSizes = append(encodedSizes, len(body))
+		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
+			Table:         request.Table,
+			SnapshotID:    request.Manifest.SnapshotID,
+			MutationToken: fmt.Sprintf("mutation-%d", len(requests)),
+			RowsAccepted:  int64(len(request.Rows)),
+			Complete:      request.Final,
+		})
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("publisher-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	value := strings.Repeat("x", int(gitcrawlCloudIngestRequestMaxBytes/2))
+	progress, err := sendSnapshotIngestRows(
+		context.Background(),
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw__gitcrawl",
+		crawlremote.IngestManifest{
+			App:        "gitcrawl",
+			Archive:    "gitcrawl/openclaw__gitcrawl",
+			SnapshotID: strings.Repeat("a", 64),
+		},
+		"threads",
+		[]string{"body"},
+		[][]any{{value}, {value}, {value}},
+		"",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("send byte-bounded rows: %v", err)
+	}
+	if progress.RowsAccepted != 3 || progress.MutationToken != "mutation-3" {
+		t.Fatalf("progress = %#v", progress)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want one per large row", len(requests))
+	}
+	for index := range requests {
+		if len(requests[index].Rows) != 1 {
+			t.Fatalf("request %d rows = %d, want 1", index, len(requests[index].Rows))
+		}
+		if int64(encodedSizes[index]) > gitcrawlCloudIngestRequestMaxBytes {
+			t.Fatalf(
+				"request %d encoded bytes = %d, limit %d",
+				index,
+				encodedSizes[index],
+				gitcrawlCloudIngestRequestMaxBytes,
+			)
+		}
+		wantCursor := ""
+		if index > 0 {
+			wantCursor = fmt.Sprint(index)
+		}
+		if requests[index].Cursor != wantCursor {
+			t.Fatalf("request %d cursor = %q, want %q", index, requests[index].Cursor, wantCursor)
+		}
+		if requests[index].Final != (index == len(requests)-1) {
+			t.Fatalf("request %d final = %v", index, requests[index].Final)
+		}
+	}
+}
+
+func TestIngestBatchingRejectsSingleOversizedRowBeforeRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := crawlremote.NewClient(crawlremote.Options{
+		Endpoint:      server.URL,
+		HTTPClient:    server.Client(),
+		TokenProvider: crawlremote.StaticToken("publisher-token"),
+	})
+	if err != nil {
+		t.Fatalf("remote client: %v", err)
+	}
+	_, err = sendSnapshotIngestRows(
+		context.Background(),
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw__gitcrawl",
+		crawlremote.IngestManifest{
+			App:        "gitcrawl",
+			Archive:    "gitcrawl/openclaw__gitcrawl",
+			SnapshotID: strings.Repeat("a", 64),
+		},
+		"threads",
+		[]string{"body"},
+		[][]any{{strings.Repeat("x", int(gitcrawlCloudIngestRequestMaxBytes))}},
+		"",
+		false,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "ingest table threads row 0 encoded request") ||
+		!strings.Contains(err.Error(), fmt.Sprintf("limit %d", gitcrawlCloudIngestRequestMaxBytes)) {
+		t.Fatalf("oversized row error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("remote requests = %d, want 0", requests)
+	}
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`create table rows(value text not null)`); err != nil {
+		t.Fatalf("create rows: %v", err)
+	}
+	if _, err := db.Exec(
+		`insert into rows(value) values(?)`,
+		strings.Repeat("x", int(gitcrawlCloudIngestRequestMaxBytes)),
+	); err != nil {
+		t.Fatalf("seed oversized row: %v", err)
+	}
+	_, err = sendSnapshotIngestDataset(
+		context.Background(),
+		db,
+		client,
+		"gitcrawl",
+		"gitcrawl/openclaw__gitcrawl",
+		crawlremote.IngestManifest{
+			App:        "gitcrawl",
+			Archive:    "gitcrawl/openclaw__gitcrawl",
+			SnapshotID: strings.Repeat("a", 64),
+		},
+		gitcrawlCloudDataset{
+			Name:     "oversized",
+			Columns:  []string{"value"},
+			Query:    `select value from rows`,
+			RowCount: 1,
+		},
+		"",
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "dataset oversized row 0 encoded ingest request") {
+		t.Fatalf("oversized dataset row error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("remote requests after streamed row = %d, want 0", requests)
+	}
+}
+
 func TestCompleteGitcrawlSnapshotStagingRequiresExactAcknowledgement(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
 	snapshot := gitcrawlCloudSnapshot{
@@ -442,6 +706,180 @@ func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 	}
 }
 
+func TestValidateGitcrawlCutoverResultRequiresExactAcknowledgement(t *testing.T) {
+	const archive = "gitcrawl/openclaw__gitcrawl"
+	snapshotID := strings.Repeat("a", 64)
+	valid := crawlremote.CutoverResult{
+		Archive:      archive,
+		SnapshotID:   snapshotID,
+		SnapshotMode: "snapshot",
+		CutoverAt:    "2026-07-12T12:00:00.123456789Z",
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*crawlremote.CutoverResult)
+		want   string
+	}{
+		{name: "exact acknowledgement"},
+		{
+			name: "wrong archive",
+			mutate: func(result *crawlremote.CutoverResult) {
+				result.Archive = "gitcrawl/other"
+			},
+			want: "want \"" + archive + "\"",
+		},
+		{
+			name: "wrong snapshot",
+			mutate: func(result *crawlremote.CutoverResult) {
+				result.SnapshotID = strings.Repeat("b", 64)
+			},
+			want: "want \"" + snapshotID + "\"",
+		},
+		{
+			name: "wrong mode",
+			mutate: func(result *crawlremote.CutoverResult) {
+				result.SnapshotMode = "mutable"
+			},
+			want: "want snapshot",
+		},
+		{
+			name: "invalid timestamp",
+			mutate: func(result *crawlremote.CutoverResult) {
+				result.CutoverAt = "later"
+			},
+			want: "invalid timestamp",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := valid
+			if test.mutate != nil {
+				test.mutate(&result)
+			}
+			err := validateGitcrawlCutoverResult(result, archive, snapshotID)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validate cutover: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestVerifyGitcrawlReaderProjectionUsesBoundedExactRetries(t *testing.T) {
+	snapshotID := strings.Repeat("a", 64)
+	snapshot := gitcrawlCloudSnapshot{
+		ID:                 snapshotID,
+		SourceSyncAt:       "2026-07-12T12:00:00Z",
+		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
+		Datasets: []gitcrawlCloudDataset{{
+			Name:          "repositories",
+			RowCount:      1,
+			EligibleCount: 1,
+			CoveredCount:  1,
+			MaxSourceAt:   "2026-07-12T12:00:00Z",
+			Complete:      true,
+		}},
+	}
+	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__gitcrawl", snapshot)
+	capabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
+	exactStatus := crawlremote.Status{
+		App:                manifest.App,
+		Archive:            manifest.Archive,
+		SchemaName:         manifest.SchemaName,
+		SchemaVersion:      manifest.SchemaVersion,
+		SchemaHash:         manifest.SchemaHash,
+		Capabilities:       capabilities,
+		ActiveSnapshotID:   snapshot.ID,
+		SourceSyncAt:       snapshot.SourceSyncAt,
+		DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+		CoverageComplete:   true,
+		Datasets: []crawlremote.DatasetCoverage{{
+			Dataset:            "repositories",
+			RowCount:           1,
+			EligibleCount:      1,
+			CoveredCount:       1,
+			FreshCount:         1,
+			MaxSourceAt:        "2026-07-12T12:00:00Z",
+			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+			Complete:           true,
+		}},
+		Snapshot: &crawlremote.ArchiveSnapshot{
+			ID:                 snapshot.ID,
+			SourceSHA256:       snapshot.ID,
+			SchemaName:         manifest.SchemaName,
+			SchemaVersion:      manifest.SchemaVersion,
+			SchemaHash:         manifest.SchemaHash,
+			Capabilities:       capabilities,
+			SourceSyncAt:       snapshot.SourceSyncAt,
+			DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+			CoverageComplete:   true,
+		},
+	}
+
+	for _, test := range []struct {
+		name      string
+		exactAt   int
+		want      string
+		wantCalls int
+	}{
+		{
+			name:      "eventually exact",
+			exactAt:   3,
+			wantCalls: 3,
+		},
+		{
+			name:      "retry bound exhausted",
+			want:      "after 3 attempts",
+			wantCalls: 3,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				status := exactStatus
+				if test.exactAt == 0 || calls < test.exactAt {
+					status.ActiveSnapshotID = strings.Repeat("b", 64)
+				}
+				_ = json.NewEncoder(w).Encode(status)
+			}))
+			defer server.Close()
+			client, err := crawlremote.NewClient(crawlremote.Options{
+				Endpoint:      server.URL,
+				HTTPClient:    server.Client(),
+				TokenProvider: crawlremote.StaticToken("reader-token"),
+			})
+			if err != nil {
+				t.Fatalf("remote client: %v", err)
+			}
+			err = verifyGitcrawlReaderProjectionWithRetry(
+				context.Background(),
+				client,
+				manifest.Archive,
+				snapshot,
+				manifest,
+				capabilities,
+				3,
+				0,
+			)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("verify reader projection: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("verification error = %v, want %q", err, test.want)
+			}
+			if calls != test.wantCalls {
+				t.Fatalf("status calls = %d, want %d", calls, test.wantCalls)
+			}
+		})
+	}
+}
+
 func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
 	snapshot := gitcrawlCloudSnapshot{
@@ -585,6 +1023,30 @@ func TestVerifyGitcrawlSnapshotPublicationRejectsUnreadableOrMismatchedSQLite(t 
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/status"):
+					_ = json.NewEncoder(w).Encode(crawlremote.Status{
+						App:                manifest.App,
+						Archive:            manifest.Archive,
+						SchemaName:         manifest.SchemaName,
+						SchemaVersion:      manifest.SchemaVersion,
+						SchemaHash:         manifest.SchemaHash,
+						Capabilities:       publicationCapabilities,
+						ActiveSnapshotID:   snapshot.ID,
+						SourceSyncAt:       snapshot.SourceSyncAt,
+						DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+						CoverageComplete:   true,
+						Snapshot: &crawlremote.ArchiveSnapshot{
+							ID:                 snapshot.ID,
+							SourceSHA256:       snapshot.ID,
+							SourceSyncAt:       snapshot.SourceSyncAt,
+							DatasetGeneratedAt: snapshot.DatasetGeneratedAt,
+							SchemaName:         manifest.SchemaName,
+							SchemaVersion:      manifest.SchemaVersion,
+							SchemaHash:         manifest.SchemaHash,
+							Capabilities:       publicationCapabilities,
+							CoverageComplete:   true,
+						},
+					})
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.EscapedPath(), "/publish-status"):
 					if got := r.URL.Query().Get("snapshot_id"); got != snapshotID {
 						http.Error(
