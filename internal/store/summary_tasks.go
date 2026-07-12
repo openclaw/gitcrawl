@@ -66,6 +66,7 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 		number = options.Number
 	}
 	revisionOrder := s.latestThreadRevisionOrder(ctx, "tr")
+	revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "lr", "t")
 	rows, err := s.q().QueryContext(ctx, `
 		with latest_revisions as (
 			select *
@@ -108,8 +109,7 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			and b.storage_kind = 'inline'
 			and b.compression = 'none'
 			and nullif(b.inline_text, '') is not null
-			and gitcrawl_timestamp_key(nullif(lr.source_updated_at, '')) >=
-				gitcrawl_timestamp_key(coalesce(nullif(t.updated_at_gh, ''), t.updated_at))
+			and `+revisionFresh+`
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
 	`, summaryKind, promptVersion, provider, model, options.RepoID, boolInt(options.IncludeClosed), number, number)
 	if err != nil {

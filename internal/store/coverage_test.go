@@ -116,9 +116,14 @@ func TestEmbeddingTaskBasisBranches(t *testing.T) {
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := st.DB().ExecContext(ctx, `
-		insert into thread_revisions(thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(?, ?, 'content', 'title', 'body', 'labels', ?)
-	`, threadIDs[0], now, now); err != nil {
+		insert into thread_revisions(
+			thread_id, source_updated_at, observation_sequence,
+			content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select id, ?, observation_sequence, 'content', 'title', 'body', 'labels', ?
+		from threads
+		where id = ?
+	`, now, now, threadIDs[0]); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
 	var revisionID int64
@@ -801,9 +806,14 @@ func TestClusterErrorBranchesAndSummaryScanning(t *testing.T) {
 	}
 	freshRevisionAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := st.DB().ExecContext(ctx, `
-		insert into thread_revisions(thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(?, ?, 'content', 'title', 'body', 'labels', ?)
-	`, threadIDs[1], freshRevisionAt, freshRevisionAt); err != nil {
+		insert into thread_revisions(
+			thread_id, source_updated_at, observation_sequence,
+			content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select id, ?, observation_sequence, 'content', 'title', 'body', 'labels', ?
+		from threads
+		where id = ?
+	`, freshRevisionAt, freshRevisionAt, threadIDs[1]); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
 	var revisionID int64

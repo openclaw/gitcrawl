@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-
-	"github.com/openclaw/gitcrawl/internal/store/storedb"
 )
 
 type EmbeddingTask struct {
@@ -48,27 +46,105 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 	if options.Number > 0 {
 		number = options.Number
 	}
-	rows, err := s.qsql().ListEmbeddingTasks(ctx, storedb.ListEmbeddingTasksParams{
-		Basis:         basis,
-		Model:         model,
-		RepoID:        options.RepoID,
-		IncludeClosed: boolInt(options.IncludeClosed),
-		Number:        number,
-		RowLimit:      options.Limit,
-	})
+	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+	summaryFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
+	eligibleSummaryFresh := s.threadRevisionFreshnessPredicate(ctx, "eligible_revision", "t")
+	rows, err := s.q().QueryContext(ctx, `
+		select t.id, t.number, t.kind, t.title,
+			coalesce(d.body, t.body, '') as body,
+			coalesce(d.raw_text, t.body, '') as raw_text,
+			coalesce(d.dedupe_text, t.title || ' ' || coalesce(t.body, '')) as dedupe_text,
+			cast(coalesce((
+				select tks.key_text
+				from thread_key_summaries tks
+				join thread_revisions tr on tr.id = tks.thread_revision_id
+				where tr.thread_id = t.id
+					and tr.id = (
+						select latest.id
+						from thread_revisions latest
+						where latest.thread_id = t.id
+						order by `+revisionOrder+`
+						limit 1
+					)
+					and `+summaryFresh+`
+					and tks.summary_kind = 'llm_key_summary'
+				order by tks.created_at desc, tks.id desc
+				limit 1
+			), '') as text) as key_summary,
+			coalesce(tv.content_hash, '') as existing_hash
+		from threads t
+		left join documents d on d.thread_id = t.id
+		left join thread_vectors tv on tv.thread_id = t.id and tv.basis = ?1 and tv.model = ?2
+		where t.repo_id = ?3
+			and (?4 != 0 or (t.state = 'open' and t.closed_at_local is null))
+			and (?5 is null or t.number = ?5)
+			and (
+				?1 != 'llm_key_summary'
+				or exists (
+					select 1
+					from thread_key_summaries eligible_summary
+					join thread_revisions eligible_revision
+						on eligible_revision.id = eligible_summary.thread_revision_id
+					where eligible_revision.thread_id = t.id
+						and eligible_revision.id = (
+							select latest.id
+							from thread_revisions latest
+							where latest.thread_id = t.id
+							order by `+revisionOrder+`
+							limit 1
+						)
+						and `+eligibleSummaryFresh+`
+						and eligible_summary.summary_kind = 'llm_key_summary'
+				)
+			)
+		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
+		limit case when ?6 <= 0 then -1 else ?6 end
+	`, basis, model, options.RepoID, boolInt(options.IncludeClosed), number, options.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("list embedding tasks: %w", err)
 	}
+	defer rows.Close()
 
 	out := make([]EmbeddingTask, 0)
-	for _, row := range rows {
-		task := EmbeddingTask{
-			ThreadID: row.ID,
-			Number:   int(row.Number),
-			Kind:     row.Kind,
-			Title:    row.Title,
+	for rows.Next() {
+		var row struct {
+			id           int64
+			number       int
+			kind         string
+			title        string
+			body         string
+			rawText      string
+			dedupeText   string
+			keySummary   string
+			existingHash string
 		}
-		text, meta, err := embeddingTextForBasisWithMeta(basis, task.Title, row.Body, row.RawText, row.DedupeText, row.KeySummary)
+		if err := rows.Scan(
+			&row.id,
+			&row.number,
+			&row.kind,
+			&row.title,
+			&row.body,
+			&row.rawText,
+			&row.dedupeText,
+			&row.keySummary,
+			&row.existingHash,
+		); err != nil {
+			return nil, fmt.Errorf("scan embedding task: %w", err)
+		}
+		task := EmbeddingTask{
+			ThreadID: row.id,
+			Number:   row.number,
+			Kind:     row.kind,
+			Title:    row.title,
+		}
+		text, meta, err := embeddingTextForBasisWithMeta(
+			basis,
+			task.Title,
+			row.body,
+			row.rawText,
+			row.dedupeText,
+			row.keySummary,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -80,10 +156,13 @@ func (s *Store) ListEmbeddingTasks(ctx context.Context, options EmbeddingTaskOpt
 		task.OriginalTextRunes = meta.OriginalRunes
 		task.TextRunes = meta.Runes
 		task.ContentHash = embeddingContentHash(basis, model, text)
-		if !options.Force && row.ExistingHash == task.ContentHash {
+		if !options.Force && row.existingHash == task.ContentHash {
 			continue
 		}
 		out = append(out, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding tasks: %w", err)
 	}
 	return out, nil
 }

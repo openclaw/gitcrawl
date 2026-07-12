@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +104,18 @@ func TestLegacyReadOnlyArchiveUsesAvailableRevisionOrderColumns(t *testing.T) {
 	if summaries[thread.ID][SummaryKindLLMKey] != "legacy summary" {
 		_ = readOnly.Close()
 		t.Fatalf("legacy summaries = %+v", summaries)
+	}
+	embeddingTasks, err := readOnly.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID, Basis: "llm_key_summary", Model: "test", Force: true,
+	})
+	if err != nil {
+		_ = readOnly.Close()
+		t.Fatalf("legacy embedding tasks: %v", err)
+	}
+	if len(embeddingTasks) != 1 ||
+		!strings.Contains(embeddingTasks[0].Text, "legacy summary") {
+		_ = readOnly.Close()
+		t.Fatalf("legacy embedding tasks = %+v", embeddingTasks)
 	}
 	if err := readOnly.Close(); err != nil {
 		t.Fatalf("close read-only store: %v", err)
