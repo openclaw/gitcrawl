@@ -5235,6 +5235,58 @@ func TestClusterVectorCoverageRejectsMissingSummaryInputs(t *testing.T) {
 	}
 }
 
+func TestClusterFallbackDropsStaleSupportedVectorsBeforeDeduplication(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	now := "2026-07-12T03:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "520", Number: 520, Kind: "issue", State: "open",
+		Title: "Fresh fallback vector", Body: "body",
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/issues/520",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread", UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	tasks, err := st.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
+		RepoID: repoID, Basis: "title_original", Model: "legacy-model", Force: true,
+	})
+	if err != nil {
+		t.Fatalf("list embedding tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("embedding tasks = %+v", tasks)
+	}
+	vectors := []store.ThreadVector{
+		{
+			ThreadID: threadID, Basis: "title_original", Model: "configured-model", Dimensions: 2,
+			ContentHash: "stale", Vector: []float64{1, 0}, CreatedAt: now, UpdatedAt: "2026-07-12T03:02:00Z",
+		},
+		{
+			ThreadID: threadID, Basis: "title_original", Model: "legacy-model", Dimensions: 2,
+			ContentHash: tasks[0].ContentHash, Vector: []float64{0, 1}, CreatedAt: now, UpdatedAt: "2026-07-12T03:01:00Z",
+		},
+	}
+	fresh, err := freshFallbackClusterVectors(ctx, st, store.ThreadVectorQuery{RepoID: repoID}, vectors)
+	if err != nil {
+		t.Fatalf("fresh fallback vectors: %v", err)
+	}
+	if len(fresh) != 1 || fresh[0].Model != "legacy-model" || fresh[0].ContentHash != tasks[0].ContentHash {
+		t.Fatalf("fresh fallback vectors = %+v", fresh)
+	}
+}
+
 func TestClusterCommandAllowsExplicitUnsupportedBasisWithoutRetirement(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

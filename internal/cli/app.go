@@ -463,7 +463,11 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			}
 			if len(fallbackVectors) > 0 {
 				query = fallbackQuery
-				vectors = dedupeThreadVectorsByThread(fallbackVectors)
+				vectors, err = freshFallbackClusterVectors(ctx, rt.Store, fallbackQuery, fallbackVectors)
+				if err != nil {
+					_ = rt.Store.Close()
+					return err
+				}
 				coverage.Fallback = true
 			}
 		}
@@ -1150,7 +1154,10 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		}
 		if len(fallbackVectors) > 0 {
 			query = fallbackQuery
-			vectors = dedupeThreadVectorsByThread(fallbackVectors)
+			vectors, err = freshFallbackClusterVectors(ctx, rt.Store, fallbackQuery, fallbackVectors)
+			if err != nil {
+				return err
+			}
 			coverage.Fallback = true
 		}
 	}
@@ -4427,6 +4434,46 @@ func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query s
 	coverage.Missing = max(0, coverage.Eligible-coverage.Covered)
 	coverage.Complete = coverage.Fresh == coverage.Eligible && coverage.Missing == 0 && coverage.MissingInput == 0 && coverage.Stale == 0
 	return coverage, fresh, nil
+}
+
+func freshFallbackClusterVectors(ctx context.Context, st *store.Store, query store.ThreadVectorQuery, vectors []store.ThreadVector) ([]store.ThreadVector, error) {
+	type vectorGroup struct {
+		query   store.ThreadVectorQuery
+		vectors []store.ThreadVector
+	}
+	groups := map[string]*vectorGroup{}
+	groupOrder := make([]string, 0)
+	passthrough := make([]store.ThreadVector, 0, len(vectors))
+	for _, vector := range vectors {
+		if strings.TrimSpace(vector.Model) == "" || strings.TrimSpace(vector.Basis) == "" || !store.SupportsEmbeddingBasis(vector.Basis) {
+			passthrough = append(passthrough, vector)
+			continue
+		}
+		key := vector.Model + "\x00" + vector.Basis
+		group := groups[key]
+		if group == nil {
+			group = &vectorGroup{
+				query: store.ThreadVectorQuery{
+					RepoID:        query.RepoID,
+					Model:         vector.Model,
+					Basis:         vector.Basis,
+					IncludeClosed: query.IncludeClosed,
+				},
+			}
+			groups[key] = group
+			groupOrder = append(groupOrder, key)
+		}
+		group.vectors = append(group.vectors, vector)
+	}
+	for _, key := range groupOrder {
+		group := groups[key]
+		_, fresh, err := evaluateClusterVectorCoverage(ctx, st, group.query, group.vectors)
+		if err != nil {
+			return nil, err
+		}
+		passthrough = append(passthrough, fresh...)
+	}
+	return dedupeThreadVectorsByThread(passthrough), nil
 }
 
 func requireCompleteClusterVectorCoverage(owner, repoName string, query store.ThreadVectorQuery, coverage clusterVectorCoverage, freshVectorCount int, allowPartial bool) error {
