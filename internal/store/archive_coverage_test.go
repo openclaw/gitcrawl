@@ -49,6 +49,94 @@ func TestArchiveCoverageReportsAndFiltersCurrentStore(t *testing.T) {
 	}
 }
 
+func TestArchiveCoveragePRDetailFreshnessParsesTimestamps(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name            string
+		sourceUpdatedAt string
+		fetchedAt       string
+		wantFresh       int
+		wantLatestAt    string
+	}{
+		{
+			name:            "fractional fetch after whole-second source update",
+			sourceUpdatedAt: "2026-07-12T12:00:00Z",
+			fetchedAt:       "2026-07-12T12:00:00.500Z",
+			wantFresh:       1,
+			wantLatestAt:    "2026-07-12T12:00:00.500000000Z",
+		},
+		{
+			name:            "whole-second fetch before fractional source update",
+			sourceUpdatedAt: "2026-07-12T12:00:00.500Z",
+			fetchedAt:       "2026-07-12T12:00:00Z",
+			wantFresh:       0,
+			wantLatestAt:    "2026-07-12T12:00:00.000000000Z",
+		},
+		{
+			name:            "malformed fetch timestamp is stale",
+			sourceUpdatedAt: "2026-07-12T12:00:00Z",
+			fetchedAt:       "not-a-timestamp",
+			wantFresh:       0,
+		},
+		{
+			name:            "malformed source timestamp is stale",
+			sourceUpdatedAt: "not-a-timestamp",
+			fetchedAt:       "2026-07-12T12:00:00.500Z",
+			wantFresh:       0,
+			wantLatestAt:    "2026-07-12T12:00:00.500000000Z",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+
+			repoID, err := st.UpsertRepository(ctx, Repository{
+				Owner:     "openclaw",
+				Name:      "gitcrawl",
+				FullName:  "openclaw/gitcrawl",
+				RawJSON:   "{}",
+				UpdatedAt: "2026-07-12T12:00:00Z",
+			})
+			if err != nil {
+				t.Fatalf("repository: %v", err)
+			}
+			thread := archiveCoverageThread(repoID, 1, "pull_request")
+			thread.UpdatedAtGitHub = test.sourceUpdatedAt
+			threadID, err := st.UpsertThread(ctx, thread)
+			if err != nil {
+				t.Fatalf("thread: %v", err)
+			}
+			if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{
+				ThreadID:  threadID,
+				RepoID:    repoID,
+				Number:    thread.Number,
+				RawJSON:   "{}",
+				FetchedAt: test.fetchedAt,
+				UpdatedAt: test.fetchedAt,
+			}, nil, nil, nil, nil); err != nil {
+				t.Fatalf("PR detail: %v", err)
+			}
+
+			coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+			if err != nil {
+				t.Fatalf("archive coverage: %v", err)
+			}
+			if len(coverage.Rows) != 1 {
+				t.Fatalf("coverage rows = %d, want 1", len(coverage.Rows))
+			}
+			metric := coverage.Rows[0].Enrichment.PRDetails
+			if metric.Eligible != 1 || metric.Covered != 1 || metric.Fresh != test.wantFresh ||
+				metric.Stale != 1-test.wantFresh || metric.LatestAt != test.wantLatestAt {
+				t.Fatalf("PR detail coverage = %+v", metric)
+			}
+		})
+	}
+}
+
 func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 	ctx := context.Background()
 

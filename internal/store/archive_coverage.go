@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
+
+const archiveCoverageTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 type ArchiveCoverageOptions struct {
 	RepoIDs             []int64
@@ -386,18 +389,69 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 		return EnrichmentCoverageMetric{}, nil
 	}
 	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
-	return s.scanEnrichmentCoverageMetric(ctx, `
-		select count(*),
-			coalesce(sum(case when prd.thread_id is not null then 1 else 0 end), 0),
-			coalesce(sum(case
-				when prd.thread_id is not null and (`+threadUpdatedAt+` = '' or prd.fetched_at >= `+threadUpdatedAt+`) then 1
-				else 0
-			end), 0),
-			coalesce(max(prd.fetched_at), '')
+	rows, err := s.q().QueryContext(ctx, `
+		select case when prd.thread_id is null then 0 else 1 end,
+			coalesce(prd.fetched_at, ''),
+			`+threadUpdatedAt+`
 		from threads t
 		left join pull_request_details prd on prd.thread_id = t.id
 		where t.repo_id = ? and t.kind = 'pull_request'
 	`, repoID)
+	if err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("archive PR detail coverage: %w", err)
+	}
+	defer rows.Close()
+
+	metric := EnrichmentCoverageMetric{Supported: true}
+	var latestFetchedAt time.Time
+	for rows.Next() {
+		var hasDetail int
+		var fetchedAt, sourceUpdatedAt string
+		if err := rows.Scan(&hasDetail, &fetchedAt, &sourceUpdatedAt); err != nil {
+			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive PR detail coverage: %w", err)
+		}
+		metric.Eligible++
+		if hasDetail == 0 {
+			continue
+		}
+		metric.Covered++
+
+		fetched, fetchedOK := parseArchiveCoverageTimestamp(fetchedAt)
+		if fetchedOK && (latestFetchedAt.IsZero() || fetched.After(latestFetchedAt)) {
+			latestFetchedAt = fetched
+		}
+		if !fetchedOK {
+			continue
+		}
+		if strings.TrimSpace(sourceUpdatedAt) == "" {
+			metric.Fresh++
+			continue
+		}
+		sourceUpdated, sourceOK := parseArchiveCoverageTimestamp(sourceUpdatedAt)
+		if sourceOK && !fetched.Before(sourceUpdated) {
+			metric.Fresh++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("iterate archive PR detail coverage: %w", err)
+	}
+	if !latestFetchedAt.IsZero() {
+		metric.LatestAt = formatArchiveCoverageTimestamp(latestFetchedAt)
+	}
+	finalizeEnrichmentCoverageMetric(&metric)
+	return metric, nil
+}
+
+func parseArchiveCoverageTimestamp(value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
+}
+
+func formatArchiveCoverageTimestamp(value time.Time) string {
+	return value.UTC().Format(archiveCoverageTimestampLayout)
 }
 
 func archiveThreadUpdatedAtExpression(s *Store, ctx context.Context, alias string) string {
@@ -453,8 +507,10 @@ func addEnrichmentCoverageMetric(total *EnrichmentCoverageMetric, row Enrichment
 	total.Eligible += row.Eligible
 	total.Covered += row.Covered
 	total.Fresh += row.Fresh
-	if row.LatestAt > total.LatestAt {
-		total.LatestAt = row.LatestAt
+	rowLatest, rowLatestOK := parseArchiveCoverageTimestamp(row.LatestAt)
+	totalLatest, totalLatestOK := parseArchiveCoverageTimestamp(total.LatestAt)
+	if rowLatestOK && (!totalLatestOK || rowLatest.After(totalLatest)) {
+		total.LatestAt = formatArchiveCoverageTimestamp(rowLatest)
 	}
 }
 
