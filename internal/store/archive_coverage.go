@@ -299,14 +299,11 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 		return EnrichmentCoverageMetric{}, nil
 	}
 	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
-	return s.scanEnrichmentCoverageMetric(ctx, `
-		select count(*),
-			coalesce(sum(case when tr.id is not null then 1 else 0 end), 0),
-			coalesce(sum(case
-				when tr.id is not null and (`+threadUpdatedAt+` = '' or coalesce(nullif(tr.source_updated_at, ''), tr.created_at, '') >= `+threadUpdatedAt+`) then 1
-				else 0
-			end), 0),
-			coalesce(max(tr.created_at), '')
+	rows, err := s.q().QueryContext(ctx, `
+		select case when tr.id is null then 0 else 1 end,
+			coalesce(nullif(tr.source_updated_at, ''), tr.created_at, ''),
+			coalesce(tr.created_at, ''),
+			`+threadUpdatedAt+`
 		from threads t
 		left join thread_revisions tr on tr.id = (
 			select latest.id
@@ -317,6 +314,39 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 		)
 		where t.repo_id = ?
 	`, repoID)
+	if err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("archive revision coverage: %w", err)
+	}
+	defer rows.Close()
+
+	metric := EnrichmentCoverageMetric{Supported: true}
+	var latestCreatedAt time.Time
+	for rows.Next() {
+		var hasRevision int
+		var revisionUpdatedAt, createdAt, sourceUpdatedAt string
+		if err := rows.Scan(&hasRevision, &revisionUpdatedAt, &createdAt, &sourceUpdatedAt); err != nil {
+			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive revision coverage: %w", err)
+		}
+		metric.Eligible++
+		if hasRevision == 0 {
+			continue
+		}
+		metric.Covered++
+		if parsed, ok := parseArchiveCoverageTimestamp(createdAt); ok && (latestCreatedAt.IsZero() || parsed.After(latestCreatedAt)) {
+			latestCreatedAt = parsed
+		}
+		if archiveCoverageTimestampAtOrAfter(revisionUpdatedAt, sourceUpdatedAt) {
+			metric.Fresh++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("iterate archive revision coverage: %w", err)
+	}
+	if !latestCreatedAt.IsZero() {
+		metric.LatestAt = formatArchiveCoverageTimestamp(latestCreatedAt)
+	}
+	finalizeEnrichmentCoverageMetric(&metric)
+	return metric, nil
 }
 
 func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, table, revisionColumn, condition string, conditionArgs ...any) (EnrichmentCoverageMetric, error) {
@@ -420,15 +450,7 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 		if fetchedOK && (latestFetchedAt.IsZero() || fetched.After(latestFetchedAt)) {
 			latestFetchedAt = fetched
 		}
-		if !fetchedOK {
-			continue
-		}
-		if strings.TrimSpace(sourceUpdatedAt) == "" {
-			metric.Fresh++
-			continue
-		}
-		sourceUpdated, sourceOK := parseArchiveCoverageTimestamp(sourceUpdatedAt)
-		if sourceOK && !fetched.Before(sourceUpdated) {
+		if fetchedOK && archiveCoverageTimestampAtOrAfter(fetchedAt, sourceUpdatedAt) {
 			metric.Fresh++
 		}
 	}
@@ -452,6 +474,18 @@ func parseArchiveCoverageTimestamp(value string) (time.Time, bool) {
 
 func formatArchiveCoverageTimestamp(value time.Time) string {
 	return value.UTC().Format(archiveCoverageTimestampLayout)
+}
+
+func archiveCoverageTimestampAtOrAfter(value, baseline string) bool {
+	parsedValue, ok := parseArchiveCoverageTimestamp(value)
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(baseline) == "" {
+		return true
+	}
+	parsedBaseline, ok := parseArchiveCoverageTimestamp(baseline)
+	return ok && !parsedValue.Before(parsedBaseline)
 }
 
 func archiveThreadUpdatedAtExpression(s *Store, ctx context.Context, alias string) string {

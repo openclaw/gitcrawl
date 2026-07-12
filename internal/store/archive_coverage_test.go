@@ -137,6 +137,87 @@ func TestArchiveCoveragePRDetailFreshnessParsesTimestamps(t *testing.T) {
 	}
 }
 
+func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name              string
+		sourceUpdatedAt   string
+		revisionUpdatedAt string
+		wantFresh         int
+	}{
+		{
+			name:              "fractional revision after whole-second source update",
+			sourceUpdatedAt:   "2026-07-12T12:00:00Z",
+			revisionUpdatedAt: "2026-07-12T12:00:00.500Z",
+			wantFresh:         1,
+		},
+		{
+			name:              "whole-second revision before fractional source update",
+			sourceUpdatedAt:   "2026-07-12T12:00:00.500Z",
+			revisionUpdatedAt: "2026-07-12T12:00:00Z",
+			wantFresh:         0,
+		},
+		{
+			name:              "malformed revision timestamp is stale",
+			sourceUpdatedAt:   "2026-07-12T12:00:00Z",
+			revisionUpdatedAt: "not-a-timestamp",
+			wantFresh:         0,
+		},
+		{
+			name:              "malformed source timestamp is stale",
+			sourceUpdatedAt:   "not-a-timestamp",
+			revisionUpdatedAt: "2026-07-12T12:00:00.500Z",
+			wantFresh:         0,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+
+			repoID, err := st.UpsertRepository(ctx, Repository{
+				Owner:     "openclaw",
+				Name:      "gitcrawl",
+				FullName:  "openclaw/gitcrawl",
+				RawJSON:   "{}",
+				UpdatedAt: "2026-07-12T12:00:00Z",
+			})
+			if err != nil {
+				t.Fatalf("repository: %v", err)
+			}
+			thread := archiveCoverageThread(repoID, 1, "pull_request")
+			thread.UpdatedAtGitHub = test.sourceUpdatedAt
+			threadID, err := st.UpsertThread(ctx, thread)
+			if err != nil {
+				t.Fatalf("thread: %v", err)
+			}
+			if _, err := st.DB().ExecContext(ctx, `
+				insert into thread_revisions(
+					thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at
+				) values(?, ?, 'content', 'title', 'body', 'labels', '2026-07-12T12:00:01Z')
+			`, threadID, test.revisionUpdatedAt); err != nil {
+				t.Fatalf("revision: %v", err)
+			}
+
+			coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+			if err != nil {
+				t.Fatalf("archive coverage: %v", err)
+			}
+			if len(coverage.Rows) != 1 {
+				t.Fatalf("coverage rows = %d, want 1", len(coverage.Rows))
+			}
+			metric := coverage.Rows[0].Enrichment.Revisions
+			if metric.Eligible != 1 || metric.Covered != 1 || metric.Fresh != test.wantFresh ||
+				metric.Stale != 1-test.wantFresh || metric.LatestAt != "2026-07-12T12:00:01.000000000Z" {
+				t.Fatalf("revision coverage = %+v", metric)
+			}
+		})
+	}
+}
+
 func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 	ctx := context.Background()
 
