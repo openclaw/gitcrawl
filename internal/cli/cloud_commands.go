@@ -394,7 +394,7 @@ func uploadSQLiteSnapshotArchive(
 	app, archive, snapshotPath string,
 	counts map[string]int64,
 ) (*crawlremote.SQLiteBundle, error) {
-	bundle, err := crawlremote.BuildGzipSQLiteBundle(ctx, crawlremote.SQLiteBundleBuildOptions{
+	bundle, err := crawlremote.BuildSnapshotGzipSQLiteBundle(ctx, crawlremote.SQLiteBundleBuildOptions{
 		App:        app,
 		Archive:    archive,
 		SourcePath: snapshotPath,

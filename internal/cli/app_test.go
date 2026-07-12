@@ -816,7 +816,11 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 				} else {
 					snapshotID = got
 				}
-				if r.Header.Get("content-type") != "application/gzip" || r.Header.Get("x-crawl-content-sha256") == "" {
+				partSHA := r.Header.Get("x-crawl-content-sha256")
+				partIndex, err := strconv.Atoi(r.Header.Get("x-crawl-bundle-part-index"))
+				if r.Header.Get("content-type") != "application/gzip" ||
+					partSHA == "" ||
+					err != nil {
 					http.Error(w, "bad bundle part headers", http.StatusBadRequest)
 					return
 				}
@@ -846,7 +850,13 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 					Archive:  "gitcrawl/openclaw__openclaw",
 					Complete: false,
 					Object: &crawlremote.SQLiteObject{
-						Key:  crawlremote.SQLiteSnapshotBundlePartKey("gitcrawl", "gitcrawl/openclaw__openclaw", snapshotID, 0),
+						Key: crawlremote.SQLiteSnapshotBundlePartKey(
+							"gitcrawl",
+							"gitcrawl/openclaw__openclaw",
+							snapshotID,
+							partSHA,
+							partIndex,
+						),
 						Size: int64(len(payload)),
 					},
 				})
