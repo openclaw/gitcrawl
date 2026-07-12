@@ -1079,7 +1079,7 @@ func TestMigrationRepairsPartialV10ObservationBackfills(t *testing.T) {
 	}
 }
 
-func TestMigrationRepairsWorkflowReservationBelowEvidenceFloor(t *testing.T) {
+func TestMigrationRepairsUnknownWorkflowReservationBelowEvidenceFloor(t *testing.T) {
 	ctx := context.Background()
 	dbPath, repoID, _ := seedMigrationPullRequest(t, "regressed-workflow-head", 11)
 	st, err := Open(ctx, dbPath)
@@ -1093,7 +1093,7 @@ func TestMigrationRepairsWorkflowReservationBelowEvidenceFloor(t *testing.T) {
 	raw := openRawMigrationDB(t, dbPath)
 	if _, err := raw.ExecContext(ctx, `
 		update workflow_run_observation_reservations
-		set source_updated_at = '2026-07-12T00:00:03Z',
+		set source_updated_at = '',
 			observation_sequence = 3
 		where repo_id = ? and head_sha = 'regressed-workflow-head'
 	`, repoID); err != nil {
@@ -1153,6 +1153,94 @@ func TestMigrationRepairsWorkflowReservationBelowEvidenceFloor(t *testing.T) {
 		12,
 	); err != nil || !applied {
 		t.Fatalf("newer repaired workflow observation = %t, %v", applied, err)
+	}
+}
+
+func TestMigrationPreservesSourceBoundWorkflowReservationBelowEvidenceFloor(t *testing.T) {
+	ctx := context.Background()
+	dbPath, repoID, _ := seedMigrationPullRequest(t, "source-bound-workflow-head", 11)
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("converge seeded workflow reservation: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close converged workflow reservation: %v", err)
+	}
+
+	raw := openRawMigrationDB(t, dbPath)
+	if _, err := raw.ExecContext(ctx, `
+		update workflow_run_observation_reservations
+		set source_updated_at = '2026-07-12T00:03:00Z',
+			observation_sequence = 3
+		where repo_id = ? and head_sha = 'source-bound-workflow-head';
+		insert into github_workflow_runs(
+			repo_id, run_id, head_sha, status, updated_at_gh, raw_json, fetched_at
+		)
+		values(
+			?, 'newer-run', 'source-bound-workflow-head', 'completed',
+			'2026-07-12T00:03:00Z', '{}', '2026-07-12T00:03:00Z'
+		);
+	`, repoID, repoID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("seed source-bound workflow snapshot: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close source-bound workflow store: %v", err)
+	}
+
+	diag := InspectSchema(ctx, dbPath)
+	if containsString(diag.PendingMigrations, migrationWorkflowRunReservationsBackfill) {
+		t.Fatalf("source-bound workflow diagnostics = %#v", diag)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen source-bound workflow store: %v", err)
+	}
+	defer st.Close()
+	baseline, err := st.ReadWorkflowRunSnapshotState(
+		ctx,
+		repoID,
+		"source-bound-workflow-head",
+	)
+	if err != nil {
+		t.Fatalf("read migrated workflow snapshot: %v", err)
+	}
+	if baseline.SourceUpdatedAt != "2026-07-12T00:03:00Z" ||
+		baseline.ObservationSequence != 3 ||
+		len(baseline.Runs) != 1 ||
+		baseline.Runs[0].RunID != "newer-run" {
+		t.Fatalf("migrated workflow snapshot = %+v", baseline)
+	}
+
+	stale, err := st.ApplyWorkflowRunSnapshot(
+		ctx,
+		repoID,
+		"source-bound-workflow-head",
+		"2026-07-12T00:02:00Z",
+		12,
+		baseline,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("apply older workflow deletion: %v", err)
+	}
+	if stale.Applied || stale.RowsSynced != 0 {
+		t.Fatalf("older workflow deletion = %+v, want skipped", stale)
+	}
+	state, err := st.ReadWorkflowRunSnapshotState(
+		ctx,
+		repoID,
+		"source-bound-workflow-head",
+	)
+	if err != nil {
+		t.Fatalf("read workflow snapshot after stale deletion: %v", err)
+	}
+	if state.SourceUpdatedAt != baseline.SourceUpdatedAt ||
+		state.ObservationSequence != baseline.ObservationSequence ||
+		len(state.Runs) != 1 ||
+		state.Runs[0].RunID != "newer-run" {
+		t.Fatalf("older workflow deletion replaced newer state: %+v", state)
 	}
 }
 

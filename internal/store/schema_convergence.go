@@ -324,12 +324,18 @@ func (s *Store) workflowRunObservationReservationsNeedRepair(ctx context.Context
 			left join workflow_run_observation_reservations
 				on workflow_run_observation_reservations.repo_id = expected.repo_id
 					and workflow_run_observation_reservations.head_sha = expected.head_sha
-			where workflow_run_observation_reservations.repo_id is null
-				or workflow_run_observation_reservations.observation_sequence <
-					expected.observation_sequence
-			limit 1
-		)
-	`).Scan(&drift); err != nil {
+				where workflow_run_observation_reservations.repo_id is null
+					or (
+						trim(coalesce(
+							workflow_run_observation_reservations.source_updated_at,
+							''
+						)) = ''
+						and workflow_run_observation_reservations.observation_sequence <
+							expected.observation_sequence
+					)
+				limit 1
+			)
+		`).Scan(&drift); err != nil {
 		return false, fmt.Errorf("inspect workflow run observation reservations: %w", err)
 	}
 	return drift, nil

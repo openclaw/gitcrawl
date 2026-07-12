@@ -444,16 +444,41 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 }
 
 func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) error {
-	candidates := `
-		select
-			pull_request_details.repo_id,
-			trim(pull_request_details.head_sha),
-			threads.evidence_observation_sequence
-		from pull_request_details
-		join threads on threads.id = pull_request_details.thread_id
-		where trim(coalesce(pull_request_details.head_sha, '')) <> ''
-			and threads.evidence_observation_sequence > 0
-	`
+	if _, err := s.db.ExecContext(ctx, `
+		with candidates(repo_id, head_sha, observation_sequence) as (
+			select
+				pull_request_details.repo_id,
+				trim(pull_request_details.head_sha),
+				threads.evidence_observation_sequence
+			from pull_request_details
+			join threads on threads.id = pull_request_details.thread_id
+			where trim(coalesce(pull_request_details.head_sha, '')) <> ''
+				and threads.evidence_observation_sequence > 0
+		),
+		expected(repo_id, head_sha, observation_sequence) as (
+			select repo_id, head_sha, max(observation_sequence)
+			from candidates
+			group by repo_id, head_sha
+		)
+		insert into workflow_run_observation_reservations(
+			repo_id, head_sha, source_updated_at, observation_sequence
+		)
+		select repo_id, head_sha, '', observation_sequence
+		from expected
+		where true
+		on conflict(repo_id, head_sha) do update set
+			source_updated_at = excluded.source_updated_at,
+			observation_sequence = excluded.observation_sequence
+		where trim(coalesce(
+				workflow_run_observation_reservations.source_updated_at,
+				''
+			)) = ''
+			and excluded.observation_sequence >
+				workflow_run_observation_reservations.observation_sequence
+	`); err != nil {
+		return fmt.Errorf("backfill workflow run observation reservations: %w", err)
+	}
+
 	hasLegacyWorkflowReservations := s.hasColumns(
 		ctx,
 		"thread_child_observation_reservations",
@@ -462,38 +487,39 @@ func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) er
 		"observation_sequence",
 	)
 	if hasLegacyWorkflowReservations {
-		candidates += `
-			union all
-			select
-				pull_request_details.repo_id,
-				trim(pull_request_details.head_sha),
-				thread_child_observation_reservations.observation_sequence
-			from pull_request_details
-			join thread_child_observation_reservations
-				on thread_child_observation_reservations.thread_id = pull_request_details.thread_id
-					and thread_child_observation_reservations.family = 'workflow_runs'
-			where trim(coalesce(pull_request_details.head_sha, '')) <> ''
-				and thread_child_observation_reservations.observation_sequence > 0
-		`
-	}
-	query := `
-		with candidates(repo_id, head_sha, observation_sequence) as (` + candidates + `)
-		insert into workflow_run_observation_reservations(
-			repo_id, head_sha, source_updated_at, observation_sequence
-		)
-		select repo_id, head_sha, '', max(observation_sequence)
-		from candidates
-		group by repo_id, head_sha
-		on conflict(repo_id, head_sha) do update set
-			source_updated_at = excluded.source_updated_at,
-			observation_sequence = excluded.observation_sequence
-		where excluded.observation_sequence >
-			workflow_run_observation_reservations.observation_sequence
-	`
-	if _, err := s.db.ExecContext(ctx, query); err != nil {
-		return fmt.Errorf("backfill workflow run observation reservations: %w", err)
-	}
-	if hasLegacyWorkflowReservations {
+		if _, err := s.db.ExecContext(ctx, `
+			with candidates(repo_id, head_sha, observation_sequence) as (
+				select
+					pull_request_details.repo_id,
+					trim(pull_request_details.head_sha),
+					thread_child_observation_reservations.observation_sequence
+				from pull_request_details
+				join thread_child_observation_reservations
+					on thread_child_observation_reservations.thread_id =
+						pull_request_details.thread_id
+						and thread_child_observation_reservations.family = 'workflow_runs'
+				where trim(coalesce(pull_request_details.head_sha, '')) <> ''
+					and thread_child_observation_reservations.observation_sequence > 0
+			),
+			expected(repo_id, head_sha, observation_sequence) as (
+				select repo_id, head_sha, max(observation_sequence)
+				from candidates
+				group by repo_id, head_sha
+			)
+			insert into workflow_run_observation_reservations(
+				repo_id, head_sha, source_updated_at, observation_sequence
+			)
+			select repo_id, head_sha, '', observation_sequence
+			from expected
+			where true
+			on conflict(repo_id, head_sha) do update set
+				source_updated_at = excluded.source_updated_at,
+				observation_sequence = excluded.observation_sequence
+			where excluded.observation_sequence >
+				workflow_run_observation_reservations.observation_sequence
+		`); err != nil {
+			return fmt.Errorf("recover legacy workflow run observation reservations: %w", err)
+		}
 		if _, err := s.db.ExecContext(ctx, `
 			delete from thread_child_observation_reservations
 			where family = 'workflow_runs'
