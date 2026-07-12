@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/documents"
@@ -25,6 +26,7 @@ type pullRequestDetailRows struct {
 	workflowSourceUpdatedAt string
 	workflowSnapshotFresh   bool
 	workflowBaseline        store.WorkflowRunSnapshotState
+	workflowDeletedRunIDs   []string
 	pull                    map[string]any
 	filesRaw                []map[string]any
 	commitsRaw              []map[string]any
@@ -71,7 +73,7 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 			return pullRequestDetailRows{}, err
 		}
 	}
-	workflowSourceUpdatedAt, workflowSnapshotFresh, workflowBaseline, err := s.workflowSnapshotObservation(
+	workflowSourceUpdatedAt, workflowSnapshotFresh, workflowBaseline, workflowDeletedRunIDs, err := s.workflowSnapshotObservation(
 		ctx,
 		options,
 		headSHA,
@@ -85,6 +87,7 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 		workflowSourceUpdatedAt: workflowSourceUpdatedAt,
 		workflowSnapshotFresh:   workflowSnapshotFresh,
 		workflowBaseline:        workflowBaseline,
+		workflowDeletedRunIDs:   workflowDeletedRunIDs,
 		pull:                    pull,
 		filesRaw:                filesRaw,
 		commitsRaw:              commitsRaw,
@@ -102,32 +105,33 @@ func (s *Syncer) workflowSnapshotObservation(
 	sourceUpdatedAt string,
 	fresh bool,
 	baseline store.WorkflowRunSnapshotState,
+	deletedRunIDs []string,
 	err error,
 ) {
 	sourceUpdatedAt, incoming, err := workflowSnapshotOrder(rows)
 	if err != nil {
-		return "", false, store.WorkflowRunSnapshotState{}, err
+		return "", false, store.WorkflowRunSnapshotState{}, nil, err
 	}
 	if headSHA == "" {
-		return sourceUpdatedAt, true, store.WorkflowRunSnapshotState{}, nil
+		return sourceUpdatedAt, true, store.WorkflowRunSnapshotState{}, nil, nil
 	}
 	repo, err := s.store.RepositoryByFullName(ctx, options.Owner+"/"+options.Repo)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return sourceUpdatedAt, true, store.WorkflowRunSnapshotState{}, nil
+			return sourceUpdatedAt, true, store.WorkflowRunSnapshotState{}, nil, nil
 		}
-		return "", false, store.WorkflowRunSnapshotState{}, err
+		return "", false, store.WorkflowRunSnapshotState{}, nil, err
 	}
 	baseline, err = s.store.ReadWorkflowRunSnapshotState(ctx, repo.ID, headSHA)
 	if err != nil {
-		return "", false, store.WorkflowRunSnapshotState{}, err
+		return "", false, store.WorkflowRunSnapshotState{}, nil, err
 	}
 	currentRuns := baseline.Runs
 	reservationSource := baseline.SourceUpdatedAt
 	found := baseline.ReservationFound
 	if found {
 		if _, err = latestWorkflowTimestamp(reservationSource); err != nil {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"validate workflow reservation source: %w",
 				err,
 			)
@@ -138,7 +142,7 @@ func (s *Syncer) workflowSnapshotObservation(
 		currentRunIDs[current.RunID] = struct{}{}
 		currentSource, err := workflowRunTimestamp(current.UpdatedAtGH, current.CreatedAtGH)
 		if err != nil {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"validate stored workflow run %s source: %w",
 				current.RunID,
 				err,
@@ -147,16 +151,16 @@ func (s *Syncer) workflowSnapshotObservation(
 		incomingSource, present := incoming[current.RunID]
 		if present {
 			if workflowTimestampBefore(incomingSource, currentSource) {
-				return sourceUpdatedAt, false, baseline, nil
+				return sourceUpdatedAt, false, baseline, nil, nil
 			}
 			continue
 		}
 		lookup, ok := s.client.(workflowRunLookupClient)
 		if !ok {
 			if workflowTimestampBefore(sourceUpdatedAt, reservationSource) {
-				return sourceUpdatedAt, false, baseline, nil
+				return sourceUpdatedAt, false, baseline, nil, nil
 			}
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"cannot verify missing workflow run %s before replacing head %s",
 				current.RunID,
 				headSHA,
@@ -171,18 +175,19 @@ func (s *Syncer) workflowSnapshotObservation(
 		)
 		var requestErr *gh.RequestError
 		if lookupErr == nil {
-			return sourceUpdatedAt, false, baseline, nil
+			return sourceUpdatedAt, false, baseline, nil, nil
 		}
 		if !errors.As(lookupErr, &requestErr) || requestErr.Status != 404 {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"verify missing workflow run %s: %w",
 				current.RunID,
 				lookupErr,
 			)
 		}
+		deletedRunIDs = append(deletedRunIDs, current.RunID)
 		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, currentSource)
 		if err != nil {
-			return "", false, store.WorkflowRunSnapshotState{}, err
+			return "", false, store.WorkflowRunSnapshotState{}, nil, err
 		}
 	}
 	for runID, incomingSource := range incoming {
@@ -194,7 +199,7 @@ func (s *Syncer) workflowSnapshotObservation(
 		}
 		lookup, ok := s.client.(workflowRunLookupClient)
 		if !ok {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"cannot verify reappearing workflow run %s for head %s",
 				runID,
 				headSHA,
@@ -209,17 +214,17 @@ func (s *Syncer) workflowSnapshotObservation(
 		)
 		var requestErr *gh.RequestError
 		if errors.As(lookupErr, &requestErr) && requestErr.Status == 404 {
-			return sourceUpdatedAt, false, baseline, nil
+			return sourceUpdatedAt, false, baseline, nil, nil
 		}
 		if lookupErr != nil {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"verify reappearing workflow run %s: %w",
 				runID,
 				lookupErr,
 			)
 		}
 		if exactRunID := jsonID(exact["id"]); exactRunID != runID {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"verify reappearing workflow run %s: exact lookup returned %s",
 				runID,
 				exactRunID,
@@ -230,23 +235,169 @@ func (s *Syncer) workflowSnapshotObservation(
 			stringValue(exact["created_at"]),
 		)
 		if err != nil {
-			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, nil, fmt.Errorf(
 				"verify reappearing workflow run %s source: %w",
 				runID,
 				err,
 			)
 		}
 		if workflowTimestampBefore(incomingSource, exactSource) {
-			return sourceUpdatedAt, false, baseline, nil
+			return sourceUpdatedAt, false, baseline, nil, nil
 		}
 	}
 	if found {
 		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, reservationSource)
 		if err != nil {
-			return "", false, store.WorkflowRunSnapshotState{}, err
+			return "", false, store.WorkflowRunSnapshotState{}, nil, err
 		}
 	}
-	return sourceUpdatedAt, true, baseline, nil
+	sort.Strings(deletedRunIDs)
+	return sourceUpdatedAt, true, baseline, deletedRunIDs, nil
+}
+
+func consolidateWorkflowSnapshots(payloads []threadSyncPayload) error {
+	type snapshotGroup struct {
+		headSHA  string
+		baseline store.WorkflowRunSnapshotState
+		indices  []int
+	}
+
+	groups := make([]snapshotGroup, 0)
+	groupIndicesByHead := make(map[string][]int)
+	for index := range payloads {
+		rows := &payloads[index].pullDetails
+		if !payloads[index].hasPullDetails || !rows.workflowSnapshotFresh {
+			continue
+		}
+		headSHA := nestedString(rows.pull, "head", "sha")
+		if headSHA == "" {
+			continue
+		}
+		groupIndex := -1
+		for _, candidate := range groupIndicesByHead[headSHA] {
+			if groups[candidate].headSHA == headSHA &&
+				workflowSnapshotBaselinesEqual(groups[candidate].baseline, rows.workflowBaseline) {
+				groupIndex = candidate
+				break
+			}
+		}
+		if groupIndex < 0 {
+			groupIndex = len(groups)
+			groups = append(groups, snapshotGroup{
+				headSHA:  headSHA,
+				baseline: rows.workflowBaseline,
+				indices:  []int{index},
+			})
+			groupIndicesByHead[headSHA] = append(groupIndicesByHead[headSHA], groupIndex)
+			continue
+		}
+		groups[groupIndex].indices = append(groups[groupIndex].indices, index)
+	}
+
+	for _, group := range groups {
+		if len(group.indices) < 2 {
+			continue
+		}
+		sourceUpdatedAt := ""
+		rowsByID := make(map[string]map[string]any)
+		deletedRunIDs := make(map[string]struct{})
+		for _, index := range group.indices {
+			rows := &payloads[index].pullDetails
+			var err error
+			sourceUpdatedAt, err = latestWorkflowTimestamp(
+				sourceUpdatedAt,
+				rows.workflowSourceUpdatedAt,
+			)
+			if err != nil {
+				return err
+			}
+			for _, runID := range rows.workflowDeletedRunIDs {
+				if runID != "" {
+					deletedRunIDs[runID] = struct{}{}
+				}
+			}
+			for _, row := range rows.runsRaw {
+				runID := jsonID(row["id"])
+				if runID == "" {
+					continue
+				}
+				existing, found := rowsByID[runID]
+				if !found {
+					rowsByID[runID] = row
+					continue
+				}
+				incomingSource, err := workflowRunTimestamp(
+					stringValue(row["updated_at"]),
+					stringValue(row["created_at"]),
+				)
+				if err != nil {
+					return fmt.Errorf("workflow run %s source: %w", runID, err)
+				}
+				existingSource, err := workflowRunTimestamp(
+					stringValue(existing["updated_at"]),
+					stringValue(existing["created_at"]),
+				)
+				if err != nil {
+					return fmt.Errorf("workflow run %s source: %w", runID, err)
+				}
+				switch {
+				case workflowTimestampBefore(existingSource, incomingSource):
+					rowsByID[runID] = row
+				case workflowTimestampBefore(incomingSource, existingSource):
+				default:
+					if mustJSON(existing) != mustJSON(row) {
+						return fmt.Errorf(
+							"conflicting workflow run %s observations share one sync generation",
+							runID,
+						)
+					}
+				}
+			}
+		}
+		for runID := range deletedRunIDs {
+			delete(rowsByID, runID)
+		}
+
+		runIDs := make([]string, 0, len(rowsByID))
+		for runID := range rowsByID {
+			runIDs = append(runIDs, runID)
+		}
+		sort.Strings(runIDs)
+		consolidatedRows := make([]map[string]any, 0, len(runIDs))
+		for _, runID := range runIDs {
+			consolidatedRows = append(consolidatedRows, rowsByID[runID])
+		}
+		tombstones := make([]string, 0, len(deletedRunIDs))
+		for runID := range deletedRunIDs {
+			tombstones = append(tombstones, runID)
+		}
+		sort.Strings(tombstones)
+		for _, index := range group.indices {
+			rows := &payloads[index].pullDetails
+			rows.workflowSourceUpdatedAt = sourceUpdatedAt
+			rows.workflowDeletedRunIDs = append([]string(nil), tombstones...)
+			rows.runsRaw = append([]map[string]any(nil), consolidatedRows...)
+		}
+	}
+	return nil
+}
+
+func workflowSnapshotBaselinesEqual(
+	left store.WorkflowRunSnapshotState,
+	right store.WorkflowRunSnapshotState,
+) bool {
+	if left.SourceUpdatedAt != right.SourceUpdatedAt ||
+		left.ObservationSequence != right.ObservationSequence ||
+		left.ReservationFound != right.ReservationFound ||
+		len(left.Runs) != len(right.Runs) {
+		return false
+	}
+	for index := range left.Runs {
+		if left.Runs[index] != right.Runs[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Syncer) persistPullRequestDetails(

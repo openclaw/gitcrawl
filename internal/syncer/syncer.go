@@ -197,6 +197,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		payloads = append(payloads, payload)
 	}
+	if err := consolidateWorkflowSnapshots(payloads); err != nil {
+		return Stats{}, err
+	}
 	if s.beforePersist != nil {
 		s.beforePersist()
 	}
