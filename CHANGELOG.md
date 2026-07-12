@@ -2,6 +2,8 @@
 
 ## 0.7.2 - Unreleased
 
+- Order canonical thread state and each hydrated child family with durable pre-fetch generations, preventing delayed metadata, comments, PR details, checks, revisions, or fingerprints from overwriting newer snapshots while preserving legacy read-only archives.
+
 ## 0.7.1 - 2026-07-09
 
 - Add local, fail-closed packaging and independent verification for official macOS archives signed as `org.openclaw.gitcrawl` by `Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)`, while keeping CI and cross-platform snapshots credential-free and non-publishing.
