@@ -286,6 +286,97 @@ func TestArchiveCoveragePRFilesRequireCurrentObservation(t *testing.T) {
 	assertMetric(1, 0, 0, 1, false)
 }
 
+func TestArchiveCoveragePRFilesUsesLegacySnapshotProof(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := archiveCoverageThread(repoID, 1, "pull_request")
+	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
+	thread.RawJSON = `{"version":1}`
+	thread.ContentHash = "version-1"
+	initial, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil {
+		t.Fatalf("initial thread: %v", err)
+	}
+	thread.ID = initial.ID
+	if _, err := st.DB().ExecContext(ctx, `drop table thread_child_observation_reservations`); err != nil {
+		t.Fatalf("drop reservation table: %v", err)
+	}
+
+	upsertFiles := func(changedFiles int, files []PullRequestFile) {
+		t.Helper()
+		if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{
+			ThreadID:     thread.ID,
+			RepoID:       repoID,
+			Number:       thread.Number,
+			ChangedFiles: changedFiles,
+			RawJSON:      "{}",
+			FetchedAt:    "2026-07-12T12:05:00Z",
+			UpdatedAt:    "2026-07-12T12:05:00Z",
+		}, files, nil, nil, nil, PullRequestHydrationFamilies{
+			Details: true,
+			Files:   true,
+		}); err != nil {
+			t.Fatalf("PR cache: %v", err)
+		}
+	}
+	assertMetric := func(wantCovered, wantFresh int, wantComplete bool) {
+		t.Helper()
+		coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+		if err != nil {
+			t.Fatalf("archive coverage: %v", err)
+		}
+		metric := coverage.Rows[0].Enrichment.PRFiles
+		if !metric.Supported || metric.Eligible != 1 ||
+			metric.Covered != wantCovered || metric.Fresh != wantFresh ||
+			metric.Complete != wantComplete {
+			t.Fatalf("legacy PR file coverage = %+v", metric)
+		}
+	}
+
+	upsertFiles(0, nil)
+	assertMetric(1, 1, true)
+
+	upsertFiles(2, []PullRequestFile{{
+		ThreadID:  thread.ID,
+		Path:      "README.md",
+		RawJSON:   "{}",
+		FetchedAt: "2026-07-12T12:05:00Z",
+	}})
+	assertMetric(0, 0, false)
+
+	upsertFiles(1, []PullRequestFile{{
+		ThreadID:  thread.ID,
+		Path:      "README.md",
+		RawJSON:   "{}",
+		FetchedAt: "2026-07-12T12:05:00Z",
+	}})
+	assertMetric(1, 1, true)
+
+	thread.UpdatedAtGitHub = "2026-07-12T12:06:00Z"
+	thread.RawJSON = `{"version":2}`
+	thread.ContentHash = "version-2"
+	if accepted, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	}); err != nil || !accepted.EvidenceApplied {
+		t.Fatalf("newer accepted evidence = %+v, %v", accepted, err)
+	}
+	assertMetric(1, 0, false)
+}
+
 func TestArchiveObservationFreshnessUsesSequenceForEqualSource(t *testing.T) {
 	const source = "2026-07-12T12:00:00Z"
 	if archiveObservationAtOrAfter(source, 10, source, 11) {

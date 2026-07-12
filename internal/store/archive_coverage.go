@@ -635,28 +635,86 @@ func (s *Store) archivePRFileCoverage(
 	ctx context.Context,
 	repoID int64,
 ) (EnrichmentCoverageMetric, error) {
-	if !s.archiveCoverageHasColumns(
+	hasReservations := s.archiveCoverageHasColumns(
 		ctx,
 		"thread_child_observation_reservations",
 		"thread_id",
 		"family",
 		"source_updated_at",
 		"observation_sequence",
-	) {
+	)
+	hasLegacyProof := s.archiveCoverageHasColumns(
+		ctx,
+		"pull_request_details",
+		"thread_id",
+		"changed_files",
+		"fetched_at",
+	) && s.archiveCoverageHasColumns(
+		ctx,
+		"pull_request_files",
+		"thread_id",
+		"fetched_at",
+	)
+	if !hasReservations && !hasLegacyProof {
 		return EnrichmentCoverageMetric{}, nil
 	}
 	acceptedSourceUpdatedAt, acceptedObservationSequence :=
 		s.archiveAcceptedThreadObservationExpressions(ctx, "t")
-	rows, err := s.q().QueryContext(ctx, `
-		select case when reservation.thread_id is null then 0 else 1 end,
-			coalesce(reservation.source_updated_at, ''),
-			coalesce(reservation.observation_sequence, 0),
-			`+acceptedSourceUpdatedAt+`,
-			`+acceptedObservationSequence+`
-		from threads t
+	reservationJoin := ""
+	reservationPresent := "0"
+	reservationSourceUpdatedAt := "''"
+	reservationObservationSequence := "0"
+	if hasReservations {
+		reservationJoin = `
 		left join thread_child_observation_reservations reservation
 			on reservation.thread_id = t.id
 				and reservation.family = 'pull_request_files'
+		`
+		reservationPresent = "case when reservation.thread_id is null then 0 else 1 end"
+		reservationSourceUpdatedAt = "coalesce(reservation.source_updated_at, '')"
+		reservationObservationSequence = "coalesce(reservation.observation_sequence, 0)"
+	}
+	legacyJoin := ""
+	detailPresent := "0"
+	detailChangedFiles := "0"
+	detailFetchedAt := "''"
+	fileCount := "0"
+	oldestFileFetchedAt := "''"
+	latestFileFetchedAt := "''"
+	if hasLegacyProof {
+		legacyJoin = `
+		left join pull_request_details prd on prd.thread_id = t.id
+		left join (
+			select thread_id,
+				count(*) as file_count,
+				min(fetched_at) as oldest_fetched_at,
+				max(fetched_at) as latest_fetched_at
+			from pull_request_files
+			group by thread_id
+		) prf on prf.thread_id = t.id
+		`
+		detailPresent = "case when prd.thread_id is null then 0 else 1 end"
+		detailChangedFiles = "coalesce(prd.changed_files, 0)"
+		detailFetchedAt = "coalesce(prd.fetched_at, '')"
+		fileCount = "coalesce(prf.file_count, 0)"
+		oldestFileFetchedAt = "coalesce(prf.oldest_fetched_at, '')"
+		latestFileFetchedAt = "coalesce(prf.latest_fetched_at, '')"
+	}
+	rows, err := s.q().QueryContext(ctx, `
+		select `+reservationPresent+`,
+			`+reservationSourceUpdatedAt+`,
+			`+reservationObservationSequence+`,
+			`+detailPresent+`,
+			`+detailChangedFiles+`,
+			`+detailFetchedAt+`,
+			`+fileCount+`,
+			`+oldestFileFetchedAt+`,
+			`+latestFileFetchedAt+`,
+			`+acceptedSourceUpdatedAt+`,
+			`+acceptedObservationSequence+`
+		from threads t
+		`+reservationJoin+`
+		`+legacyJoin+`
 		where t.repo_id = ? and t.kind = 'pull_request'
 	`, repoID)
 	if err != nil {
@@ -667,34 +725,51 @@ func (s *Store) archivePRFileCoverage(
 	metric := EnrichmentCoverageMetric{Supported: true}
 	var latestObservedAt time.Time
 	for rows.Next() {
-		var hasReservation int
+		var hasReservation, hasDetail, changedFiles, files int
 		var reservationSequence, acceptedSequence int64
-		var reservationSourceUpdatedAt, acceptedSource string
+		var reservationSourceUpdatedAt, detailFetchedAt, oldestFileFetchedAt string
+		var latestFileFetchedAt, acceptedSource string
 		if err := rows.Scan(
 			&hasReservation,
 			&reservationSourceUpdatedAt,
 			&reservationSequence,
+			&hasDetail,
+			&changedFiles,
+			&detailFetchedAt,
+			&files,
+			&oldestFileFetchedAt,
+			&latestFileFetchedAt,
 			&acceptedSource,
 			&acceptedSequence,
 		); err != nil {
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive PR file coverage: %w", err)
 		}
 		metric.Eligible++
-		if hasReservation == 0 {
-			continue
-		}
-		metric.Covered++
-		if observedAt, ok := parseArchiveCoverageTimestamp(reservationSourceUpdatedAt); ok &&
-			(latestObservedAt.IsZero() || observedAt.After(latestObservedAt)) {
-			latestObservedAt = observedAt
-		}
-		if archiveObservationAtOrAfter(
-			reservationSourceUpdatedAt,
-			reservationSequence,
-			acceptedSource,
-			observationSequenceOrderValue(acceptedSequence),
-		) {
-			metric.Fresh++
+		switch {
+		case hasReservation != 0:
+			metric.Covered++
+			latestObservedAt = laterArchiveCoverageTimestamp(
+				latestObservedAt,
+				reservationSourceUpdatedAt,
+			)
+			if archiveObservationAtOrAfter(
+				reservationSourceUpdatedAt,
+				reservationSequence,
+				acceptedSource,
+				observationSequenceOrderValue(acceptedSequence),
+			) {
+				metric.Fresh++
+			}
+		case hasDetail != 0 && changedFiles >= 0 && files == changedFiles:
+			metric.Covered++
+			latestObservedAt = laterArchiveCoverageTimestamp(latestObservedAt, detailFetchedAt)
+			latestObservedAt = laterArchiveCoverageTimestamp(latestObservedAt, latestFileFetchedAt)
+			detailFresh := archiveCoverageTimestampAtOrAfter(detailFetchedAt, acceptedSource)
+			filesFresh := files == 0 ||
+				archiveCoverageTimestampAtOrAfter(oldestFileFetchedAt, acceptedSource)
+			if detailFresh && filesFresh {
+				metric.Fresh++
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -705,6 +780,14 @@ func (s *Store) archivePRFileCoverage(
 	}
 	finalizeEnrichmentCoverageMetric(&metric)
 	return metric, nil
+}
+
+func laterArchiveCoverageTimestamp(latest time.Time, candidate string) time.Time {
+	parsed, ok := parseArchiveCoverageTimestamp(candidate)
+	if ok && (latest.IsZero() || parsed.After(latest)) {
+		return parsed
+	}
+	return latest
 }
 
 func (s *Store) archiveAcceptedThreadObservationExpressions(
