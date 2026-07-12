@@ -2,7 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
-- Order canonical thread state and hydrated child snapshots with durable pre-fetch generations, including repository/head-SHA workflow-run fencing, so delayed metadata or hydration cannot overwrite newer snapshots and accepted complete evidence remains visible while preserving legacy read-only archives.
+- Order canonical thread state, accepted evidence, hydrated child snapshots, and repository/head-SHA workflow runs by GitHub source revision before durable pre-fetch generation, so a delayed newer fetch can replace an older snapshot without allowing late stale hydration to overwrite it, while preserving legacy read-only archives.
 
 ## 0.7.1 - 2026-07-09
 

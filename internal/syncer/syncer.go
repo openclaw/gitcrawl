@@ -265,6 +265,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					ctx,
 					thread.ID,
 					family,
+					thread.UpdatedAtGitHub,
 					observationSequence,
 				)
 				if err != nil {
@@ -297,6 +298,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 							ctx,
 							thread.RepoID,
 							headSHA,
+							thread.UpdatedAtGitHub,
 							observationSequence,
 						)
 						if err != nil {

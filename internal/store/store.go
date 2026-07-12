@@ -345,6 +345,9 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "threads", "evidence_observation_sequence", "integer not null default 0"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "threads", "evidence_source_updated_at", "text not null default ''"); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, createRevisionObservationIndexSQL); err != nil {
 		return fmt.Errorf("ensure thread revision observation index: %w", err)
 	}
@@ -392,18 +395,40 @@ func (s *Store) ensureThreadEvidenceObservationSequence(ctx context.Context) err
 	`); err != nil {
 		return fmt.Errorf("backfill thread evidence observation sequence: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `
+		update threads
+		set evidence_source_updated_at = coalesce((
+			select source_updated_at
+			from thread_revisions
+			where thread_id = threads.id
+				and observation_sequence = threads.evidence_observation_sequence
+				and trim(coalesce(source_updated_at, '')) <> ''
+			order by id desc
+			limit 1
+		), '')
+		where evidence_observation_sequence > 0
+			and trim(evidence_source_updated_at) = ''
+	`); err != nil {
+		return fmt.Errorf("backfill thread evidence source timestamp: %w", err)
+	}
 	return nil
 }
 
 func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `
 		insert into thread_child_observation_reservations(
-			thread_id, family, observation_sequence
+			thread_id, family, source_updated_at, observation_sequence
 		)
-		select id, 'comments', evidence_observation_sequence
+		select id, 'comments', evidence_source_updated_at,
+			evidence_observation_sequence
 		from threads
 		where evidence_observation_sequence > 0
 		on conflict(thread_id, family) do update set
+			source_updated_at = case
+				when trim(thread_child_observation_reservations.source_updated_at) = ''
+					then excluded.source_updated_at
+				else thread_child_observation_reservations.source_updated_at
+			end,
 			observation_sequence = max(
 				thread_child_observation_reservations.observation_sequence,
 				excluded.observation_sequence
@@ -413,9 +438,11 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		insert into thread_child_observation_reservations(
-			thread_id, family, observation_sequence
+			thread_id, family, source_updated_at, observation_sequence
 		)
-		select threads.id, families.family, threads.evidence_observation_sequence
+		select threads.id, families.family,
+			threads.evidence_source_updated_at,
+			threads.evidence_observation_sequence
 		from threads
 		cross join (
 			select 'pull_request_details' as family
@@ -427,6 +454,11 @@ func (s *Store) ensureThreadChildObservationReservations(ctx context.Context) er
 		where threads.kind = 'pull_request'
 			and threads.evidence_observation_sequence > 0
 		on conflict(thread_id, family) do update set
+			source_updated_at = case
+				when trim(thread_child_observation_reservations.source_updated_at) = ''
+					then excluded.source_updated_at
+				else thread_child_observation_reservations.source_updated_at
+			end,
 			observation_sequence = max(
 				thread_child_observation_reservations.observation_sequence,
 				excluded.observation_sequence
@@ -473,9 +505,9 @@ func (s *Store) ensureWorkflowRunObservationReservations(ctx context.Context) er
 	query := `
 		with candidates(repo_id, head_sha, observation_sequence) as (` + candidates + `)
 		insert into workflow_run_observation_reservations(
-			repo_id, head_sha, observation_sequence
+			repo_id, head_sha, source_updated_at, observation_sequence
 		)
-		select repo_id, head_sha, max(observation_sequence)
+		select repo_id, head_sha, '', max(observation_sequence)
 		from candidates
 		group by repo_id, head_sha
 		on conflict(repo_id, head_sha) do update set

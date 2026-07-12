@@ -198,19 +198,41 @@ func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 	}
 
 	for _, reservation := range []struct {
-		family   ThreadChildObservationFamily
-		sequence int64
-		want     bool
+		family          ThreadChildObservationFamily
+		sourceUpdatedAt string
+		sequence        int64
+		want            bool
 	}{
-		{family: ThreadChildComments, sequence: 3, want: true},
-		{family: ThreadChildPullRequestDetails, sequence: 2, want: true},
-		{family: ThreadChildComments, sequence: 2, want: false},
-		{family: ThreadChildPullRequestDetails, sequence: 4, want: true},
+		{
+			family: ThreadChildComments, sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 3, want: true,
+		},
+		{
+			family: ThreadChildPullRequestDetails, sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 2, want: true,
+		},
+		{
+			family: ThreadChildComments, sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 2, want: false,
+		},
+		{
+			family: ThreadChildComments, sourceUpdatedAt: "2026-07-12T00:01:00Z",
+			sequence: 1, want: true,
+		},
+		{
+			family: ThreadChildComments, sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 9, want: false,
+		},
+		{
+			family: ThreadChildPullRequestDetails, sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 4, want: true,
+		},
 	} {
 		applied, err := st.ReserveThreadChildObservation(
 			ctx,
 			threadID,
 			reservation.family,
+			reservation.sourceUpdatedAt,
 			reservation.sequence,
 		)
 		if err != nil || applied != reservation.want {
@@ -224,12 +246,13 @@ func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 			)
 		}
 	}
+	var commentsSource string
 	var commentsSequence, detailsSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select source_updated_at, observation_sequence
 		from thread_child_observation_reservations
 		where thread_id = ? and family = 'comments'
-	`, threadID).Scan(&commentsSequence); err != nil {
+	`, threadID).Scan(&commentsSource, &commentsSequence); err != nil {
 		t.Fatalf("comments reservation: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
@@ -239,13 +262,20 @@ func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 	`, threadID).Scan(&detailsSequence); err != nil {
 		t.Fatalf("details reservation: %v", err)
 	}
-	if commentsSequence != 3 || detailsSequence != 4 {
-		t.Fatalf("reservations = comments %d, details %d", commentsSequence, detailsSequence)
+	if commentsSource != "2026-07-12T00:01:00Z" || commentsSequence != 1 ||
+		detailsSequence != 4 {
+		t.Fatalf(
+			"reservations = comments %s/%d, details %d",
+			commentsSource,
+			commentsSequence,
+			detailsSequence,
+		)
 	}
 	if _, err := st.ReserveThreadChildObservation(
 		ctx,
 		threadID,
 		ThreadChildObservationFamily("unbounded"),
+		"2026-07-12T00:00:00Z",
 		5,
 	); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("invalid family error = %v", err)
@@ -268,19 +298,41 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 		t.Fatalf("repository: %v", err)
 	}
 	for _, reservation := range []struct {
-		headSHA  string
-		sequence int64
-		want     bool
+		headSHA         string
+		sourceUpdatedAt string
+		sequence        int64
+		want            bool
 	}{
-		{headSHA: "shared-head", sequence: 3, want: true},
-		{headSHA: "shared-head", sequence: 2, want: false},
-		{headSHA: "shared-head", sequence: 3, want: true},
-		{headSHA: "other-head", sequence: 1, want: true},
+		{
+			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 3, want: true,
+		},
+		{
+			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 2, want: false,
+		},
+		{
+			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 3, want: true,
+		},
+		{
+			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:01:00Z",
+			sequence: 1, want: true,
+		},
+		{
+			headSHA: "shared-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 9, want: false,
+		},
+		{
+			headSHA: "other-head", sourceUpdatedAt: "2026-07-12T00:00:00Z",
+			sequence: 1, want: true,
+		},
 	} {
 		applied, err := st.ReserveWorkflowRunObservation(
 			ctx,
 			repoID,
 			reservation.headSHA,
+			reservation.sourceUpdatedAt,
 			reservation.sequence,
 		)
 		if err != nil || applied != reservation.want {
@@ -294,12 +346,13 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 			)
 		}
 	}
+	var sharedSource string
 	var sharedSequence, otherSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
-		select observation_sequence
+		select source_updated_at, observation_sequence
 		from workflow_run_observation_reservations
 		where repo_id = ? and head_sha = 'shared-head'
-	`, repoID).Scan(&sharedSequence); err != nil {
+	`, repoID).Scan(&sharedSource, &sharedSequence); err != nil {
 		t.Fatalf("shared reservation: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
@@ -309,8 +362,14 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 	`, repoID).Scan(&otherSequence); err != nil {
 		t.Fatalf("other reservation: %v", err)
 	}
-	if sharedSequence != 3 || otherSequence != 1 {
-		t.Fatalf("reservations = shared %d, other %d", sharedSequence, otherSequence)
+	if sharedSource != "2026-07-12T00:01:00Z" || sharedSequence != 1 ||
+		otherSequence != 1 {
+		t.Fatalf(
+			"reservations = shared %s/%d, other %d",
+			sharedSource,
+			sharedSequence,
+			otherSequence,
+		)
 	}
 	for _, invalid := range []struct {
 		repoID   int64
@@ -325,6 +384,7 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 			ctx,
 			invalid.repoID,
 			invalid.headSHA,
+			"2026-07-12T00:00:00Z",
 			invalid.sequence,
 		); err == nil {
 			t.Fatalf("invalid reservation %+v succeeded", invalid)
@@ -769,6 +829,84 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 			revisions,
 			fingerprints,
 			comments,
+		)
+	}
+}
+
+func TestUpsertThreadObservationCompletesNewerSourceBelowEvidenceSequence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
+		Title: "old source", Body: "old body",
+		HTMLURL:    "https://github.com/openclaw/gitcrawl/issues/1",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: `{"version":1}`,
+		ContentHash: "old", UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt: "2026-07-12T00:01:00Z",
+	}
+	old, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 5,
+	})
+	if err != nil || !old.Applied || !old.EvidenceApplied {
+		t.Fatalf("old complete observation = %+v, %v", old, err)
+	}
+
+	thread.Title = "new source"
+	thread.Body = "new body"
+	thread.RawJSON = `{"version":2}`
+	thread.ContentHash = "new"
+	thread.UpdatedAtGitHub = "2026-07-12T00:02:00Z"
+	metadata, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 8,
+	})
+	if err != nil || !metadata.Applied || metadata.EvidenceApplied {
+		t.Fatalf("newer metadata observation = %+v, %v", metadata, err)
+	}
+	complete, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	})
+	if err != nil || !complete.Applied || !complete.EvidenceApplied ||
+		complete.ObservationSequence != 8 ||
+		complete.EvidenceObservationSequence != 2 {
+		t.Fatalf("newer complete observation = %+v, %v", complete, err)
+	}
+
+	var title, evidenceSource string
+	var parentSequence, evidenceSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select title, observation_sequence, evidence_source_updated_at,
+			evidence_observation_sequence
+		from threads
+		where id = ?
+	`, complete.ID).Scan(
+		&title,
+		&parentSequence,
+		&evidenceSource,
+		&evidenceSequence,
+	); err != nil {
+		t.Fatalf("read completed observation: %v", err)
+	}
+	if title != "new source" || parentSequence != 8 ||
+		evidenceSource != "2026-07-12T00:02:00Z" || evidenceSequence != 2 {
+		t.Fatalf(
+			"completed observation = title %q, parent %d, evidence %s/%d",
+			title,
+			parentSequence,
+			evidenceSource,
+			evidenceSequence,
 		)
 	}
 }

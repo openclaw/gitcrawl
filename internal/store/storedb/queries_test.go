@@ -54,47 +54,6 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert thread: %v", err)
 	}
-	if updated, err := q.ReserveThreadEvidenceObservation(ctx, storedb.ReserveThreadEvidenceObservationParams{
-		ID:                          threadID,
-		EvidenceObservationSequence: 3,
-	}); err != nil || updated != 1 {
-		t.Fatalf("reserve thread evidence observation = %d, %v", updated, err)
-	}
-	if updated, err := q.ReserveThreadEvidenceObservation(ctx, storedb.ReserveThreadEvidenceObservationParams{
-		ID:                          threadID,
-		EvidenceObservationSequence: 2,
-	}); err != nil || updated != 0 {
-		t.Fatalf("reserve stale thread evidence observation = %d, %v", updated, err)
-	}
-	if updated, err := q.ReserveThreadChildObservation(ctx, storedb.ReserveThreadChildObservationParams{
-		ThreadID:            threadID,
-		Family:              "comments",
-		ObservationSequence: 3,
-	}); err != nil || updated != 1 {
-		t.Fatalf("reserve thread child observation = %d, %v", updated, err)
-	}
-	if updated, err := q.ReserveThreadChildObservation(ctx, storedb.ReserveThreadChildObservationParams{
-		ThreadID:            threadID,
-		Family:              "comments",
-		ObservationSequence: 2,
-	}); err != nil || updated != 0 {
-		t.Fatalf("reserve stale thread child observation = %d, %v", updated, err)
-	}
-	if updated, err := q.ReserveWorkflowRunObservation(ctx, storedb.ReserveWorkflowRunObservationParams{
-		RepoID:              repoID,
-		HeadSha:             "head-sha",
-		ObservationSequence: 3,
-	}); err != nil || updated != 1 {
-		t.Fatalf("reserve workflow run observation = %d, %v", updated, err)
-	}
-	if updated, err := q.ReserveWorkflowRunObservation(ctx, storedb.ReserveWorkflowRunObservationParams{
-		RepoID:              repoID,
-		HeadSha:             "head-sha",
-		ObservationSequence: 2,
-	}); err != nil || updated != 0 {
-		t.Fatalf("reserve stale workflow run observation = %d, %v", updated, err)
-	}
-
 	if got, err := q.CountRepositories(ctx); err != nil || got != 1 {
 		t.Fatalf("count repositories = %d, %v", got, err)
 	}

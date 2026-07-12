@@ -455,11 +455,12 @@ func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T
 	if !freshUpsert.Applied {
 		t.Fatal("newer source observation was not applied")
 	}
-	if freshUpsert.EvidenceApplied {
-		t.Fatal("lower sequence unexpectedly replaced accepted evidence")
+	if !freshUpsert.EvidenceApplied ||
+		freshUpsert.EvidenceObservationSequence != 1 {
+		t.Fatalf("newer source evidence was not accepted: %+v", freshUpsert)
 	}
 	freshThread.ID = freshUpsert.ID
-	unacceptedRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+	initialFreshRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
 		Thread:              freshThread,
 		ObservationSequence: 1,
 	}, "2026-07-12T00:03:00Z")
@@ -467,7 +468,7 @@ func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T
 		t.Fatalf("fresh revision: %v", err)
 	}
 	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
-		ThreadRevisionID: unacceptedRevision.RevisionID,
+		ThreadRevisionID: initialFreshRevision.RevisionID,
 		SummaryKind:      SummaryKindLLMKey,
 		PromptVersion:    SummaryPromptVersionV1,
 		Provider:         "test",
@@ -488,8 +489,13 @@ func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T
 	if err != nil {
 		t.Fatalf("summary tasks: %v", err)
 	}
-	if len(summaryTasks) != 0 {
-		t.Fatalf("unaccepted lower-sequence summary tasks = %+v", summaryTasks)
+	if len(summaryTasks) != 1 ||
+		summaryTasks[0].RevisionID != initialFreshRevision.RevisionID {
+		t.Fatalf(
+			"newer-source summary tasks = %+v, want revision %d",
+			summaryTasks,
+			initialFreshRevision.RevisionID,
+		)
 	}
 
 	acceptedUpsert, err := st.UpsertThreadObservation(

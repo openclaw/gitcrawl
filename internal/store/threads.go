@@ -174,6 +174,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 				evidenceApplied, err = s.reserveThreadEvidenceObservation(
 					ctx,
 					existing.id,
+					thread.UpdatedAtGitHub,
 					options.ObservationSequence,
 				)
 				if err != nil {
@@ -195,6 +196,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 					evidenceApplied, err := s.reserveThreadEvidenceObservation(
 						ctx,
 						existing.id,
+						thread.UpdatedAtGitHub,
 						options.ObservationSequence,
 					)
 					if err != nil {
@@ -257,6 +259,7 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		evidenceApplied, err = s.reserveThreadEvidenceObservation(
 			ctx,
 			id,
+			thread.UpdatedAtGitHub,
 			options.ObservationSequence,
 		)
 		if err != nil {
@@ -273,18 +276,71 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 	}, nil
 }
 
-func (s *Store) reserveThreadEvidenceObservation(ctx context.Context, threadID, sequence int64) (bool, error) {
-	updated, err := s.qsql().ReserveThreadEvidenceObservation(
-		ctx,
-		storedb.ReserveThreadEvidenceObservationParams{
-			ID:                          threadID,
-			EvidenceObservationSequence: sequence,
+func (s *Store) reserveThreadEvidenceObservation(
+	ctx context.Context,
+	threadID int64,
+	sourceUpdatedAt string,
+	sequence int64,
+) (bool, error) {
+	if s.queries == nil {
+		var applied bool
+		err := s.WithTx(ctx, func(tx *Store) error {
+			var err error
+			applied, err = tx.reserveThreadEvidenceObservation(
+				ctx,
+				threadID,
+				sourceUpdatedAt,
+				sequence,
+			)
+			return err
+		})
+		return applied, err
+	}
+	var currentSourceUpdatedAt string
+	var currentSequence int64
+	if err := s.q().QueryRowContext(ctx, `
+		select evidence_source_updated_at, evidence_observation_sequence
+		from threads
+		where id = ?
+	`, threadID).Scan(&currentSourceUpdatedAt, &currentSequence); err != nil {
+		return false, fmt.Errorf("read thread evidence observation: %w", err)
+	}
+	if currentSequence == 0 {
+		if _, err := s.q().ExecContext(ctx, `
+			update threads
+			set evidence_source_updated_at = ?,
+				evidence_observation_sequence = ?
+			where id = ?
+		`, sourceUpdatedAt, sequence, threadID); err != nil {
+			return false, fmt.Errorf("reserve initial thread evidence observation: %w", err)
+		}
+		return true, nil
+	}
+	order, err := compareObservationOrder(
+		observationOrder{
+			SourceUpdatedAt:     sourceUpdatedAt,
+			ObservationSequence: sequence,
+		},
+		observationOrder{
+			SourceUpdatedAt:     currentSourceUpdatedAt,
+			ObservationSequence: currentSequence,
 		},
 	)
 	if err != nil {
+		return false, fmt.Errorf("compare thread evidence observation order: %w", err)
+	}
+	if order <= 0 {
+		return false, nil
+	}
+	if _, err := s.q().ExecContext(ctx, `
+		update threads
+		set evidence_source_updated_at = ?,
+			evidence_observation_sequence = ?
+		where id = ?
+	`, sourceUpdatedAt, sequence, threadID); err != nil {
 		return false, fmt.Errorf("reserve thread evidence observation: %w", err)
 	}
-	return updated > 0, nil
+	return true, nil
 }
 
 func evidenceObservationSequence(applied bool, sequence int64) int64 {

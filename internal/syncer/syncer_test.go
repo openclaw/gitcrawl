@@ -128,14 +128,6 @@ func (f delayedVersionedPRGitHub) GetIssue(
 	number int,
 	reporter gh.Reporter,
 ) (map[string]any, error) {
-	if f.fetched != nil {
-		close(f.fetched)
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-f.release:
-		}
-	}
 	return map[string]any{
 		"id":                 2,
 		"number":             number,
@@ -151,6 +143,23 @@ func (f delayedVersionedPRGitHub) GetIssue(
 		"author_association": "MEMBER",
 		"pull_request":       map[string]any{"url": fmt.Sprintf("https://api.github.com/repos/openclaw/gitcrawl/pulls/%d", number)},
 	}, nil
+}
+
+func (f delayedVersionedPRGitHub) ListIssueComments(
+	ctx context.Context,
+	owner, repo string,
+	number int,
+	reporter gh.Reporter,
+) ([]map[string]any, error) {
+	if f.fetched != nil {
+		close(f.fetched)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.release:
+		}
+	}
+	return pullCommentRows(f.version), nil
 }
 
 func (f *interleavedEvidenceGitHub) ListIssueComments(
@@ -1253,7 +1262,7 @@ func TestSyncDelayedNewerParentUsesSameGenerationForAllChildren(t *testing.T) {
 		stats, err := slow.Sync(ctx, options)
 		slowResult <- syncResult{stats: stats, err: err}
 	}()
-	awaitSyncSignal(t, slowFetched, "delayed newer parent fetch")
+	awaitSyncSignal(t, slowFetched, "delayed newer child fetch")
 
 	fastStats, err := fast.Sync(ctx, options)
 	if err != nil {
@@ -1283,9 +1292,9 @@ func TestSyncDelayedNewerParentUsesSameGenerationForAllChildren(t *testing.T) {
 		store.ThreadChildPullRequestChecks,
 		store.ThreadChildReviewThreads,
 	} {
-		assertChildReservation(t, ctx, st, thread.ID, family, 2)
+		assertChildReservation(t, ctx, st, thread.ID, family, 1)
 	}
-	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 2)
+	assertWorkflowRunReservation(t, ctx, st, detail.RepoID, detail.HeadSHA, 1)
 	var parentSequence int64
 	if err := st.DB().QueryRowContext(ctx, `
 		select observation_sequence
@@ -1294,8 +1303,8 @@ func TestSyncDelayedNewerParentUsesSameGenerationForAllChildren(t *testing.T) {
 	`, thread.ID).Scan(&parentSequence); err != nil {
 		t.Fatalf("read parent observation sequence: %v", err)
 	}
-	if parentSequence != 2 {
-		t.Fatalf("parent observation sequence = %d, want child generation 2", parentSequence)
+	if parentSequence != 1 {
+		t.Fatalf("parent observation sequence = %d, want newer source generation 1", parentSequence)
 	}
 }
 
@@ -1605,6 +1614,7 @@ func TestSyncPartialPRDetailsAdvanceIndependentFamilies(t *testing.T) {
 		ctx,
 		thread.ID,
 		store.ThreadChildPullRequestFiles,
+		"2026-04-26T00:00:00Z",
 		10,
 	); err != nil || !applied {
 		t.Fatalf("reserve newer files = %t, %v", applied, err)

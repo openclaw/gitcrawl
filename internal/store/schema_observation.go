@@ -41,6 +41,7 @@ const canonicalThreadsCreateSQL = `create table threads (
     ),
   evidence_observation_sequence integer not null default 0
     check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
+  evidence_source_updated_at text not null default '',
   updated_at text not null,
   unique(repo_id, kind, number)
 )`
@@ -75,6 +76,7 @@ const canonicalThreadChildReservationsCreateSQL = `create table thread_child_obs
     'pull_request_checks',
     'pull_request_review_threads'
   )),
+  source_updated_at text not null default '',
   observation_sequence integer not null
     check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(thread_id, family)
@@ -83,6 +85,7 @@ const canonicalThreadChildReservationsCreateSQL = `create table thread_child_obs
 const canonicalWorkflowReservationsCreateSQL = `create table workflow_run_observation_reservations (
   repo_id integer not null references repositories(id) on delete cascade,
   head_sha text not null check (trim(head_sha) <> ''),
+  source_updated_at text not null default '',
   observation_sequence integer not null
     check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(repo_id, head_sha)
@@ -258,7 +261,8 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 				created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
 				closed_at_local, close_reason_local, first_pulled_at,
 				last_pulled_at, observation_sequence,
-				evidence_observation_sequence, updated_at
+				evidence_observation_sequence, evidence_source_updated_at,
+				updated_at
 			)
 			select
 				id, repo_id, github_id, number, kind, state, title, body,
@@ -280,6 +284,7 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 						then evidence_observation_sequence
 					else 0
 				end,
+				coalesce(evidence_source_updated_at, ''),
 				updated_at
 			from threads_migration_backup`,
 			canonicalThreadRevisionsCreateSQL,
@@ -327,12 +332,20 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 		"head_sha",
 		"observation_sequence",
 	)
+	sourceExpression := `''`
+	if s.hasColumn(ctx, "workflow_run_observation_reservations", "source_updated_at") {
+		sourceExpression = `case
+			when typeof(source_updated_at) = 'text' then source_updated_at
+			else ''
+		end`
+	}
 	return s.withForeignKeysDisabled(ctx, "workflow observation reservation schema", func(tx *sql.Tx) error {
 		for _, statement := range []string{
 			`drop table if exists workflow_run_observation_reservations_migration_backup`,
 			`create table workflow_run_observation_reservations_migration_backup(
 				repo_id integer,
 				head_sha text,
+				source_updated_at text,
 				observation_sequence integer
 			)`,
 		} {
@@ -343,9 +356,10 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 		if hasColumns {
 			if _, err := tx.ExecContext(ctx, `
 				insert into workflow_run_observation_reservations_migration_backup(
-					repo_id, head_sha, observation_sequence
+					repo_id, head_sha, source_updated_at, observation_sequence
 				)
-				select repo_id, trim(head_sha), max(observation_sequence)
+				select repo_id, trim(head_sha), max(`+sourceExpression+`),
+					max(observation_sequence)
 				from workflow_run_observation_reservations
 				where typeof(repo_id) = 'integer'
 					and repo_id in (select id from repositories)
@@ -362,9 +376,10 @@ func (s *Store) ensureWorkflowRunObservationReservationsSchema(ctx context.Conte
 			`drop table if exists workflow_run_observation_reservations`,
 			canonicalWorkflowReservationsCreateSQL,
 			`insert into workflow_run_observation_reservations(
-				repo_id, head_sha, observation_sequence
+				repo_id, head_sha, source_updated_at, observation_sequence
 			)
-			select repo_id, head_sha, observation_sequence
+			select repo_id, head_sha, coalesce(source_updated_at, ''),
+				observation_sequence
 			from workflow_run_observation_reservations_migration_backup`,
 			`drop table workflow_run_observation_reservations_migration_backup`,
 		} {
@@ -387,12 +402,20 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 		"family",
 		"observation_sequence",
 	)
+	sourceExpression := `''`
+	if s.hasColumn(ctx, "thread_child_observation_reservations", "source_updated_at") {
+		sourceExpression = `case
+			when typeof(source_updated_at) = 'text' then source_updated_at
+			else ''
+		end`
+	}
 	return s.withForeignKeysDisabled(ctx, "child observation reservation schema", func(tx *sql.Tx) error {
 		for _, statement := range []string{
 			`drop table if exists thread_child_observation_reservations_migration_backup`,
 			`create table thread_child_observation_reservations_migration_backup(
 				thread_id integer,
 				family text,
+				source_updated_at text,
 				observation_sequence integer
 			)`,
 		} {
@@ -403,9 +426,10 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 		if hasColumns {
 			if _, err := tx.ExecContext(ctx, `
 				insert into thread_child_observation_reservations_migration_backup(
-					thread_id, family, observation_sequence
+					thread_id, family, source_updated_at, observation_sequence
 				)
-				select thread_id, family, max(observation_sequence)
+				select thread_id, family, max(`+sourceExpression+`),
+					max(observation_sequence)
 				from thread_child_observation_reservations
 				where typeof(thread_id) = 'integer'
 					and thread_id in (select id from threads)
@@ -429,9 +453,10 @@ func (s *Store) ensureThreadChildObservationReservationsSchema(ctx context.Conte
 			`drop table if exists thread_child_observation_reservations`,
 			canonicalThreadChildReservationsCreateSQL,
 			`insert into thread_child_observation_reservations(
-				thread_id, family, observation_sequence
+				thread_id, family, source_updated_at, observation_sequence
 			)
-			select thread_id, family, observation_sequence
+			select thread_id, family, coalesce(source_updated_at, ''),
+				observation_sequence
 			from thread_child_observation_reservations_migration_backup`,
 			`drop table thread_child_observation_reservations_migration_backup`,
 		} {

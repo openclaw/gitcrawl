@@ -2,11 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/openclaw/gitcrawl/internal/store/storedb"
 )
 
 type ThreadChildObservationFamily string
@@ -57,6 +56,7 @@ func (s *Store) ReserveThreadChildObservation(
 	ctx context.Context,
 	threadID int64,
 	family ThreadChildObservationFamily,
+	sourceUpdatedAt string,
 	sequence int64,
 ) (bool, error) {
 	if threadID <= 0 {
@@ -68,18 +68,61 @@ func (s *Store) ReserveThreadChildObservation(
 	if sequence <= 0 {
 		return false, fmt.Errorf("observation sequence must be positive")
 	}
-	updated, err := s.qsql().ReserveThreadChildObservation(
-		ctx,
-		storedb.ReserveThreadChildObservationParams{
-			ThreadID:            threadID,
-			Family:              string(family),
-			ObservationSequence: sequence,
-		},
-	)
-	if err != nil {
+	if s.queries == nil {
+		var applied bool
+		err := s.WithTx(ctx, func(tx *Store) error {
+			var err error
+			applied, err = tx.ReserveThreadChildObservation(
+				ctx,
+				threadID,
+				family,
+				sourceUpdatedAt,
+				sequence,
+			)
+			return err
+		})
+		return applied, err
+	}
+	var currentSourceUpdatedAt string
+	var currentSequence int64
+	err := s.q().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from thread_child_observation_reservations
+		where thread_id = ? and family = ?
+	`, threadID, family).Scan(&currentSourceUpdatedAt, &currentSequence)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("read thread child observation %q: %w", family, err)
+	}
+	if err == nil {
+		order, err := compareObservationOrder(
+			observationOrder{
+				SourceUpdatedAt:     sourceUpdatedAt,
+				ObservationSequence: sequence,
+			},
+			observationOrder{
+				SourceUpdatedAt:     currentSourceUpdatedAt,
+				ObservationSequence: currentSequence,
+			},
+		)
+		if err != nil {
+			return false, fmt.Errorf("compare thread child observation %q order: %w", family, err)
+		}
+		if order <= 0 {
+			return false, nil
+		}
+	}
+	if _, err := s.q().ExecContext(ctx, `
+		insert into thread_child_observation_reservations(
+			thread_id, family, source_updated_at, observation_sequence
+		)
+		values(?, ?, ?, ?)
+		on conflict(thread_id, family) do update set
+			source_updated_at = excluded.source_updated_at,
+			observation_sequence = excluded.observation_sequence
+	`, threadID, family, sourceUpdatedAt, sequence); err != nil {
 		return false, fmt.Errorf("reserve thread child observation %q: %w", family, err)
 	}
-	return updated > 0, nil
+	return true, nil
 }
 
 func validThreadChildObservationFamily(family ThreadChildObservationFamily) bool {
@@ -95,6 +138,7 @@ func (s *Store) ReserveWorkflowRunObservation(
 	ctx context.Context,
 	repoID int64,
 	headSHA string,
+	sourceUpdatedAt string,
 	sequence int64,
 ) (bool, error) {
 	if repoID <= 0 {
@@ -107,16 +151,62 @@ func (s *Store) ReserveWorkflowRunObservation(
 	if sequence <= 0 {
 		return false, fmt.Errorf("observation sequence must be positive")
 	}
-	updated, err := s.qsql().ReserveWorkflowRunObservation(
-		ctx,
-		storedb.ReserveWorkflowRunObservationParams{
-			RepoID:              repoID,
-			HeadSha:             headSHA,
-			ObservationSequence: sequence,
-		},
-	)
-	if err != nil {
+	if s.queries == nil {
+		var applied bool
+		err := s.WithTx(ctx, func(tx *Store) error {
+			var err error
+			applied, err = tx.ReserveWorkflowRunObservation(
+				ctx,
+				repoID,
+				headSHA,
+				sourceUpdatedAt,
+				sequence,
+			)
+			return err
+		})
+		return applied, err
+	}
+	var currentSourceUpdatedAt string
+	var currentSequence int64
+	err := s.q().QueryRowContext(ctx, `
+		select source_updated_at, observation_sequence
+		from workflow_run_observation_reservations
+		where repo_id = ? and head_sha = ?
+	`, repoID, headSHA).Scan(&currentSourceUpdatedAt, &currentSequence)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("read workflow run observation for %s: %w", headSHA, err)
+	}
+	if err == nil {
+		order, err := compareObservationOrder(
+			observationOrder{
+				SourceUpdatedAt:     sourceUpdatedAt,
+				ObservationSequence: sequence,
+			},
+			observationOrder{
+				SourceUpdatedAt:     currentSourceUpdatedAt,
+				ObservationSequence: currentSequence,
+			},
+		)
+		if err != nil {
+			return false, fmt.Errorf("compare workflow run observation for %s order: %w", headSHA, err)
+		}
+		if order < 0 {
+			return false, nil
+		}
+		if order == 0 {
+			return true, nil
+		}
+	}
+	if _, err := s.q().ExecContext(ctx, `
+		insert into workflow_run_observation_reservations(
+			repo_id, head_sha, source_updated_at, observation_sequence
+		)
+		values(?, ?, ?, ?)
+		on conflict(repo_id, head_sha) do update set
+			source_updated_at = excluded.source_updated_at,
+			observation_sequence = excluded.observation_sequence
+	`, repoID, headSHA, sourceUpdatedAt, sequence); err != nil {
 		return false, fmt.Errorf("reserve workflow run observation for %s: %w", headSHA, err)
 	}
-	return updated > 0, nil
+	return true, nil
 }

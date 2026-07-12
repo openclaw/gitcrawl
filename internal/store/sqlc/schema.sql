@@ -41,6 +41,7 @@ create table threads (
     ),
   evidence_observation_sequence integer not null default 0
     check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
+  evidence_source_updated_at text not null default '',
   updated_at text not null,
   unique(repo_id, kind, number)
 );
@@ -89,6 +90,7 @@ create table thread_child_observation_reservations (
     'pull_request_checks',
     'pull_request_review_threads'
   )),
+  source_updated_at text not null default '',
   observation_sequence integer not null
     check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(thread_id, family)
@@ -97,6 +99,7 @@ create table thread_child_observation_reservations (
 create table workflow_run_observation_reservations (
   repo_id integer not null references repositories(id) on delete cascade,
   head_sha text not null check (trim(head_sha) <> ''),
+  source_updated_at text not null default '',
   observation_sequence integer not null
     check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
   primary key(repo_id, head_sha)

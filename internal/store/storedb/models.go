@@ -279,12 +279,14 @@ type Thread struct {
 	LastPulledAt                sql.NullString `json:"last_pulled_at"`
 	ObservationSequence         int64          `json:"observation_sequence"`
 	EvidenceObservationSequence int64          `json:"evidence_observation_sequence"`
+	EvidenceSourceUpdatedAt     string         `json:"evidence_source_updated_at"`
 	UpdatedAt                   string         `json:"updated_at"`
 }
 
 type ThreadChildObservationReservation struct {
 	ThreadID            int64  `json:"thread_id"`
 	Family              string `json:"family"`
+	SourceUpdatedAt     string `json:"source_updated_at"`
 	ObservationSequence int64  `json:"observation_sequence"`
 }
 
@@ -351,5 +353,6 @@ type ThreadVector struct {
 type WorkflowRunObservationReservation struct {
 	RepoID              int64  `json:"repo_id"`
 	HeadSha             string `json:"head_sha"`
+	SourceUpdatedAt     string `json:"source_updated_at"`
 	ObservationSequence int64  `json:"observation_sequence"`
 }
