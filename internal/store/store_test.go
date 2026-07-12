@@ -536,7 +536,7 @@ func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
 	upsert, err := st.UpsertThreadObservation(
 		ctx,
 		thread,
-		UpsertThreadOptions{ObservationSequence: 13},
+		UpsertThreadOptions{ObservationSequence: 19},
 	)
 	if err != nil {
 		t.Fatalf("thread observation: %v", err)
@@ -558,7 +558,7 @@ func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
 	}
 	if _, err := raw.ExecContext(
 		ctx,
-		`update threads set observation_sequence = -13 where id = ?`,
+		`update threads set observation_sequence = -19 where id = ?`,
 		thread.ID,
 	); err != nil {
 		_ = raw.Close()
@@ -590,15 +590,15 @@ func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
 	`).Scan(&floor); err != nil {
 		t.Fatalf("read reconciled sequence floor: %v", err)
 	}
-	if floor != 17 {
-		t.Fatalf("sequence floor = %d, want 17", floor)
+	if floor != 19 {
+		t.Fatalf("sequence floor = %d, want 19", floor)
 	}
 	next, err := st.NextThreadObservationSequence(ctx, "2026-07-12T00:02:00Z")
 	if err != nil {
 		t.Fatalf("next observation sequence: %v", err)
 	}
-	if next != 18 {
-		t.Fatalf("next observation sequence = %d, want 18", next)
+	if next != 20 {
+		t.Fatalf("next observation sequence = %d, want 20", next)
 	}
 }
 
