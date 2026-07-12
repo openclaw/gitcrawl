@@ -295,33 +295,49 @@ func (s *Store) upsertPullRequestCacheFamilies(
 		}
 	}
 	if families.WorkflowRuns {
-		if detail.HeadSHA != "" {
-			if _, err := s.q().ExecContext(ctx, `
-				delete from github_workflow_runs
-				where repo_id = ? and head_sha = ?
-			`, detail.RepoID, detail.HeadSHA); err != nil {
-				return fmt.Errorf("clear workflow runs for head: %w", err)
-			}
+		if err := s.replaceWorkflowRuns(ctx, detail.RepoID, detail.HeadSHA, runs); err != nil {
+			return err
 		}
-		for _, run := range runs {
-			if err := s.qsql().UpsertWorkflowRun(ctx, storedb.UpsertWorkflowRunParams{
-				RepoID:       run.RepoID,
-				RunID:        run.RunID,
-				RunNumber:    int64(run.RunNumber),
-				HeadBranch:   nullString(run.HeadBranch),
-				HeadSha:      nullString(run.HeadSHA),
-				Status:       nullString(run.Status),
-				Conclusion:   nullString(run.Conclusion),
-				WorkflowName: nullString(run.WorkflowName),
-				Event:        nullString(run.Event),
-				HtmlUrl:      nullString(run.HTMLURL),
-				CreatedAtGh:  nullString(run.CreatedAtGH),
-				UpdatedAtGh:  nullString(run.UpdatedAtGH),
-				RawJson:      run.RawJSON,
-				FetchedAt:    run.FetchedAt,
-			}); err != nil {
-				return fmt.Errorf("upsert workflow run: %w", err)
-			}
+	}
+	return nil
+}
+
+func (s *Store) replaceWorkflowRuns(
+	ctx context.Context,
+	repoID int64,
+	headSHA string,
+	runs []WorkflowRun,
+) error {
+	if headSHA != "" {
+		if _, err := s.q().ExecContext(ctx, `
+			delete from github_workflow_runs
+			where repo_id = ? and head_sha = ?
+		`, repoID, headSHA); err != nil {
+			return fmt.Errorf("clear workflow runs for head: %w", err)
+		}
+	}
+	return s.upsertWorkflowRuns(ctx, runs)
+}
+
+func (s *Store) upsertWorkflowRuns(ctx context.Context, runs []WorkflowRun) error {
+	for _, run := range runs {
+		if err := s.qsql().UpsertWorkflowRun(ctx, storedb.UpsertWorkflowRunParams{
+			RepoID:       run.RepoID,
+			RunID:        run.RunID,
+			RunNumber:    int64(run.RunNumber),
+			HeadBranch:   nullString(run.HeadBranch),
+			HeadSha:      nullString(run.HeadSHA),
+			Status:       nullString(run.Status),
+			Conclusion:   nullString(run.Conclusion),
+			WorkflowName: nullString(run.WorkflowName),
+			Event:        nullString(run.Event),
+			HtmlUrl:      nullString(run.HTMLURL),
+			CreatedAtGh:  nullString(run.CreatedAtGH),
+			UpdatedAtGh:  nullString(run.UpdatedAtGH),
+			RawJson:      run.RawJSON,
+			FetchedAt:    run.FetchedAt,
+		}); err != nil {
+			return fmt.Errorf("upsert workflow run: %w", err)
 		}
 	}
 	return nil

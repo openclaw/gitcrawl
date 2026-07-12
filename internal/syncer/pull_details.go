@@ -24,6 +24,7 @@ type pullRequestDetailRows struct {
 	fetchedAt               string
 	workflowSourceUpdatedAt string
 	workflowSnapshotFresh   bool
+	workflowBaseline        store.WorkflowRunSnapshotState
 	pull                    map[string]any
 	filesRaw                []map[string]any
 	commitsRaw              []map[string]any
@@ -70,7 +71,7 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 			return pullRequestDetailRows{}, err
 		}
 	}
-	workflowSourceUpdatedAt, workflowSnapshotFresh, err := s.workflowSnapshotObservation(
+	workflowSourceUpdatedAt, workflowSnapshotFresh, workflowBaseline, err := s.workflowSnapshotObservation(
 		ctx,
 		options,
 		headSHA,
@@ -83,6 +84,7 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 		fetchedAt:               fetchedAt,
 		workflowSourceUpdatedAt: workflowSourceUpdatedAt,
 		workflowSnapshotFresh:   workflowSnapshotFresh,
+		workflowBaseline:        workflowBaseline,
 		pull:                    pull,
 		filesRaw:                filesRaw,
 		commitsRaw:              commitsRaw,
@@ -96,47 +98,47 @@ func (s *Syncer) workflowSnapshotObservation(
 	options Options,
 	headSHA string,
 	rows []map[string]any,
-) (sourceUpdatedAt string, fresh bool, err error) {
+) (
+	sourceUpdatedAt string,
+	fresh bool,
+	baseline store.WorkflowRunSnapshotState,
+	err error,
+) {
 	sourceUpdatedAt, incoming, err := workflowSnapshotOrder(rows)
 	if err != nil {
-		return "", false, err
+		return "", false, store.WorkflowRunSnapshotState{}, err
 	}
 	if headSHA == "" {
-		return sourceUpdatedAt, true, nil
+		return sourceUpdatedAt, true, store.WorkflowRunSnapshotState{}, nil
 	}
 	repo, err := s.store.RepositoryByFullName(ctx, options.Owner+"/"+options.Repo)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return sourceUpdatedAt, true, nil
+			return sourceUpdatedAt, true, store.WorkflowRunSnapshotState{}, nil
 		}
-		return "", false, err
+		return "", false, store.WorkflowRunSnapshotState{}, err
 	}
-	currentRuns, err := s.store.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
-		HeadSHA: headSHA,
-		Limit:   -1,
-	})
+	baseline, err = s.store.ReadWorkflowRunSnapshotState(ctx, repo.ID, headSHA)
 	if err != nil {
-		return "", false, err
+		return "", false, store.WorkflowRunSnapshotState{}, err
 	}
-	reservationSource, _, found, err := s.store.WorkflowRunObservationReservation(
-		ctx,
-		repo.ID,
-		headSHA,
-	)
-	if err != nil {
-		return "", false, err
-	}
+	currentRuns := baseline.Runs
+	reservationSource := baseline.SourceUpdatedAt
+	found := baseline.ReservationFound
 	if found {
 		if _, err = latestWorkflowTimestamp(reservationSource); err != nil {
-			return "", false, fmt.Errorf("validate workflow reservation source: %w", err)
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+				"validate workflow reservation source: %w",
+				err,
+			)
 		}
 	}
 	currentRunIDs := make(map[string]struct{}, len(currentRuns))
 	for _, current := range currentRuns {
 		currentRunIDs[current.RunID] = struct{}{}
-		currentSource, err := latestWorkflowTimestamp(current.UpdatedAtGH, current.CreatedAtGH)
+		currentSource, err := workflowRunTimestamp(current.UpdatedAtGH, current.CreatedAtGH)
 		if err != nil {
-			return "", false, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
 				"validate stored workflow run %s source: %w",
 				current.RunID,
 				err,
@@ -145,16 +147,16 @@ func (s *Syncer) workflowSnapshotObservation(
 		incomingSource, present := incoming[current.RunID]
 		if present {
 			if workflowTimestampBefore(incomingSource, currentSource) {
-				return sourceUpdatedAt, false, nil
+				return sourceUpdatedAt, false, baseline, nil
 			}
 			continue
 		}
 		lookup, ok := s.client.(workflowRunLookupClient)
 		if !ok {
 			if workflowTimestampBefore(sourceUpdatedAt, reservationSource) {
-				return sourceUpdatedAt, false, nil
+				return sourceUpdatedAt, false, baseline, nil
 			}
-			return "", false, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
 				"cannot verify missing workflow run %s before replacing head %s",
 				current.RunID,
 				headSHA,
@@ -169,10 +171,10 @@ func (s *Syncer) workflowSnapshotObservation(
 		)
 		var requestErr *gh.RequestError
 		if lookupErr == nil {
-			return sourceUpdatedAt, false, nil
+			return sourceUpdatedAt, false, baseline, nil
 		}
 		if !errors.As(lookupErr, &requestErr) || requestErr.Status != 404 {
-			return "", false, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
 				"verify missing workflow run %s: %w",
 				current.RunID,
 				lookupErr,
@@ -180,7 +182,7 @@ func (s *Syncer) workflowSnapshotObservation(
 		}
 		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, currentSource)
 		if err != nil {
-			return "", false, err
+			return "", false, store.WorkflowRunSnapshotState{}, err
 		}
 	}
 	for runID, incomingSource := range incoming {
@@ -192,7 +194,7 @@ func (s *Syncer) workflowSnapshotObservation(
 		}
 		lookup, ok := s.client.(workflowRunLookupClient)
 		if !ok {
-			return "", false, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
 				"cannot verify reappearing workflow run %s for head %s",
 				runID,
 				headSHA,
@@ -207,36 +209,44 @@ func (s *Syncer) workflowSnapshotObservation(
 		)
 		var requestErr *gh.RequestError
 		if errors.As(lookupErr, &requestErr) && requestErr.Status == 404 {
-			return sourceUpdatedAt, false, nil
+			return sourceUpdatedAt, false, baseline, nil
 		}
 		if lookupErr != nil {
-			return "", false, fmt.Errorf("verify reappearing workflow run %s: %w", runID, lookupErr)
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+				"verify reappearing workflow run %s: %w",
+				runID,
+				lookupErr,
+			)
 		}
 		if exactRunID := jsonID(exact["id"]); exactRunID != runID {
-			return "", false, fmt.Errorf(
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
 				"verify reappearing workflow run %s: exact lookup returned %s",
 				runID,
 				exactRunID,
 			)
 		}
-		exactSource, err := latestWorkflowTimestamp(
+		exactSource, err := workflowRunTimestamp(
 			stringValue(exact["updated_at"]),
 			stringValue(exact["created_at"]),
 		)
 		if err != nil {
-			return "", false, fmt.Errorf("verify reappearing workflow run %s source: %w", runID, err)
+			return "", false, store.WorkflowRunSnapshotState{}, fmt.Errorf(
+				"verify reappearing workflow run %s source: %w",
+				runID,
+				err,
+			)
 		}
 		if workflowTimestampBefore(incomingSource, exactSource) {
-			return sourceUpdatedAt, false, nil
+			return sourceUpdatedAt, false, baseline, nil
 		}
 	}
 	if found {
 		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, reservationSource)
 		if err != nil {
-			return "", false, err
+			return "", false, store.WorkflowRunSnapshotState{}, err
 		}
 	}
-	return sourceUpdatedAt, true, nil
+	return sourceUpdatedAt, true, baseline, nil
 }
 
 func (s *Syncer) persistPullRequestDetails(
@@ -245,6 +255,7 @@ func (s *Syncer) persistPullRequestDetails(
 	thread store.Thread,
 	rows pullRequestDetailRows,
 	families store.PullRequestHydrationFamilies,
+	observationSequence int64,
 ) (pullDetailStats, error) {
 	fetchedAt := rows.fetchedAt
 	if fetchedAt == "" {
@@ -255,6 +266,23 @@ func (s *Syncer) persistPullRequestDetails(
 	commits := mapPullCommits(thread.ID, rows.commitsRaw, fetchedAt)
 	checks := mapPullChecks(thread.ID, rows.checksRaw, fetchedAt)
 	runs := mapWorkflowRuns(thread.RepoID, rows.runsRaw, fetchedAt)
+	workflowRowsSynced := 0
+	if families.WorkflowRuns {
+		result, err := st.ApplyWorkflowRunSnapshot(
+			ctx,
+			thread.RepoID,
+			detail.HeadSHA,
+			rows.workflowSourceUpdatedAt,
+			observationSequence,
+			rows.workflowBaseline,
+			runs,
+		)
+		if err != nil {
+			return pullDetailStats{}, err
+		}
+		workflowRowsSynced = result.RowsSynced
+		families.WorkflowRuns = false
+	}
 	if err := st.UpsertPullRequestCacheFamilies(
 		ctx,
 		detail,
@@ -294,9 +322,7 @@ func (s *Syncer) persistPullRequestDetails(
 	if families.Checks {
 		stats.checks = len(checks)
 	}
-	if families.WorkflowRuns {
-		stats.runs = len(runs)
-	}
+	stats.runs = workflowRowsSynced
 	return stats, nil
 }
 

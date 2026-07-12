@@ -120,8 +120,9 @@ type sameHeadWorkflowGitHub struct {
 
 type sameSyncSharedHeadGitHub struct {
 	fakeGitHub
-	mu       sync.Mutex
-	runCalls int
+	mu          sync.Mutex
+	runCalls    int
+	subsetFirst bool
 }
 
 type workflowLookupResultGitHub struct {
@@ -613,7 +614,11 @@ func (f *sameSyncSharedHeadGitHub) ListWorkflowRuns(
 		"created_at":  "2026-07-12T00:01:00Z",
 		"updated_at":  "2026-07-12T00:02:00Z",
 	}}
-	if call == 1 {
+	includeEarlier := call == 1
+	if f.subsetFirst {
+		includeEarlier = call == 2
+	}
+	if includeEarlier {
 		rows = append([]map[string]any{{
 			"id":          900,
 			"run_number":  1,
@@ -712,6 +717,8 @@ func pullWorkflowRows(version int, headSHA string) []map[string]any {
 		"conclusion":  "success",
 		"name":        fmt.Sprintf("workflow-v%d", version),
 		"event":       "pull_request",
+		"created_at":  "2026-07-12T00:00:00Z",
+		"updated_at":  fmt.Sprintf("2026-07-12T00:00:0%dZ", version),
 	}}
 }
 
@@ -1252,6 +1259,8 @@ func (g *completeWorkflowRunsGitHub) ListWorkflowRuns(ctx context.Context, owner
 			"status":     "completed",
 			"conclusion": "success",
 			"name":       "CI",
+			"created_at": "2026-07-12T00:00:00Z",
+			"updated_at": "2026-07-12T00:01:00Z",
 		}
 	}
 	return rows, nil
@@ -2018,6 +2027,100 @@ func TestSyncWorkflowRunsAcceptsVerifiedDeletionWithoutRegressingSnapshotClock(t
 	}
 }
 
+func TestSyncWorkflowRunsCommitTimeCASRejectsStaleResurrection(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	initial := New(sameHeadWorkflowGitHub{number: 9, version: 2}, st)
+	if _, err := initial.Sync(ctx, Options{
+		Owner: "openclaw", Repo: "gitcrawl", State: "open",
+		Numbers: []int{9}, IncludePRDetails: true,
+	}); err != nil {
+		t.Fatalf("initial workflow sync: %v", err)
+	}
+
+	deletionFetched := make(chan struct{})
+	releaseDeletion := make(chan struct{})
+	deletion := New(sameHeadWorkflowGitHub{
+		number: 9, version: 3, deletedRun: "901",
+		fetched: deletionFetched, release: releaseDeletion,
+	}, st)
+	type syncResult struct {
+		stats Stats
+		err   error
+	}
+	deletionResult := make(chan syncResult, 1)
+	go func() {
+		stats, err := deletion.Sync(ctx, Options{
+			Owner: "openclaw", Repo: "gitcrawl", State: "open",
+			Numbers: []int{9}, IncludePRDetails: true,
+		})
+		deletionResult <- syncResult{stats: stats, err: err}
+	}()
+	awaitSyncSignal(t, deletionFetched, "deletion workflow fetch")
+
+	staleValidated := make(chan struct{})
+	releaseStale := make(chan struct{})
+	stale := New(sameHeadWorkflowGitHub{number: 9, version: 2}, st)
+	stale.beforePersist = func() {
+		close(staleValidated)
+		<-releaseStale
+	}
+	staleResult := make(chan syncResult, 1)
+	go func() {
+		stats, err := stale.Sync(ctx, Options{
+			Owner: "openclaw", Repo: "gitcrawl", State: "open",
+			Numbers: []int{9}, IncludePRDetails: true,
+		})
+		staleResult <- syncResult{stats: stats, err: err}
+	}()
+	awaitSyncSignal(t, staleValidated, "stale workflow validation")
+
+	close(releaseDeletion)
+	deleted := <-deletionResult
+	if deleted.err != nil {
+		t.Fatalf("verified deletion sync: %v", deleted.err)
+	}
+	if deleted.stats.WorkflowRunsSynced != 1 {
+		t.Fatalf("verified deletion stats = %#v", deleted.stats)
+	}
+	close(releaseStale)
+	replayed := <-staleResult
+	if replayed.err != nil {
+		t.Fatalf("stale workflow sync: %v", replayed.err)
+	}
+	if replayed.stats.WorkflowRunsSynced != 0 {
+		t.Fatalf("stale workflow stats = %#v", replayed.stats)
+	}
+
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+		HeadSHA: "shared-head",
+		Limit:   -1,
+	})
+	if err != nil {
+		t.Fatalf("workflow runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RunID != "900" {
+		t.Fatalf("stale higher-sequence snapshot resurrected deletion: %+v", runs)
+	}
+	_, sequence, found, err := st.WorkflowRunObservationReservation(
+		ctx,
+		repo.ID,
+		"shared-head",
+	)
+	if err != nil || !found || sequence != 2 {
+		t.Fatalf("workflow reservation sequence = %d found=%t err=%v, want 2", sequence, found, err)
+	}
+}
+
 func TestSyncWorkflowRunsVerifiesReappearingRun(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2078,6 +2181,11 @@ func TestSyncWorkflowRunsVerifiesReappearingRun(t *testing.T) {
 			},
 			wantErr: "verify reappearing workflow run 901 source",
 		},
+		{
+			name:    "missing source",
+			exact:   map[string]any{"id": 901},
+			wantErr: "missing created_at and updated_at",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2131,42 +2239,52 @@ func TestSyncWorkflowRunsVerifiesReappearingRun(t *testing.T) {
 }
 
 func TestSyncWorkflowRunsEqualReservationDoesNotReplaceSameSyncSnapshot(t *testing.T) {
-	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	for _, test := range []struct {
+		name        string
+		subsetFirst bool
+	}{
+		{name: "subset then superset", subsetFirst: true},
+		{name: "superset then subset"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
 
-	client := &sameSyncSharedHeadGitHub{}
-	s := New(client, st)
-	stats, err := s.Sync(ctx, Options{
-		Owner: "openclaw", Repo: "gitcrawl", State: "open",
-		Numbers: []int{8, 9}, IncludePRDetails: true,
-	})
-	if err != nil {
-		t.Fatalf("same-sync shared-head sync: %v", err)
-	}
-	if stats.PRDetailsSynced != 2 || stats.WorkflowRunsSynced != 2 {
-		t.Fatalf("same-sync shared-head stats = %#v", stats)
-	}
-	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
-	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
-		HeadSHA: "same-sync-head",
-		Limit:   -1,
-	})
-	if err != nil {
-		t.Fatalf("workflow runs: %v", err)
-	}
-	runIDs := make(map[string]bool, len(runs))
-	for _, run := range runs {
-		runIDs[run.RunID] = true
-	}
-	if len(runs) != 2 || !runIDs["900"] || !runIDs["901"] {
-		t.Fatalf("equal reservation replaced same-sync snapshot: %+v", runs)
+			client := &sameSyncSharedHeadGitHub{subsetFirst: test.subsetFirst}
+			s := New(client, st)
+			stats, err := s.Sync(ctx, Options{
+				Owner: "openclaw", Repo: "gitcrawl", State: "open",
+				Numbers: []int{8, 9}, IncludePRDetails: true,
+			})
+			if err != nil {
+				t.Fatalf("same-sync shared-head sync: %v", err)
+			}
+			if stats.PRDetailsSynced != 2 || stats.WorkflowRunsSynced != 2 {
+				t.Fatalf("same-sync shared-head stats = %#v", stats)
+			}
+			repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+			if err != nil {
+				t.Fatalf("repository: %v", err)
+			}
+			runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
+				HeadSHA: "same-sync-head",
+				Limit:   -1,
+			})
+			if err != nil {
+				t.Fatalf("workflow runs: %v", err)
+			}
+			runIDs := make(map[string]bool, len(runs))
+			for _, run := range runs {
+				runIDs[run.RunID] = true
+			}
+			if len(runs) != 2 || !runIDs["900"] || !runIDs["901"] {
+				t.Fatalf("equal reservation lost a live run: %+v", runs)
+			}
+		})
 	}
 }
 
@@ -2221,14 +2339,33 @@ func TestSyncWorkflowRunsRejectsRegressedMemberDespiteNewerSibling(t *testing.T)
 	}
 }
 
-func TestWorkflowSnapshotRejectsMalformedSourceTimestamp(t *testing.T) {
-	_, _, err := workflowSnapshotOrder([]map[string]any{{
-		"id":         900,
-		"updated_at": "not-a-timestamp",
-		"created_at": "2026-07-12T00:00:00Z",
-	}})
-	if err == nil || !strings.Contains(err.Error(), "invalid timestamp") {
-		t.Fatalf("malformed workflow timestamp error = %v", err)
+func TestWorkflowSnapshotRejectsInvalidSourceTimestamp(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		row     map[string]any
+		wantErr string
+	}{
+		{
+			name: "malformed",
+			row: map[string]any{
+				"id":         900,
+				"updated_at": "not-a-timestamp",
+				"created_at": "2026-07-12T00:00:00Z",
+			},
+			wantErr: "invalid timestamp",
+		},
+		{
+			name:    "missing both clocks",
+			row:     map[string]any{"id": 900},
+			wantErr: "missing created_at and updated_at",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := workflowSnapshotOrder([]map[string]any{test.row})
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("workflow timestamp error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -2910,7 +3047,7 @@ func TestPullRequestDetailsUseFetchTimestampWhenPersistedLater(t *testing.T) {
 		Commits:      true,
 		Checks:       true,
 		WorkflowRuns: true,
-	}); err != nil {
+	}, 1); err != nil {
 		t.Fatalf("persist details: %v", err)
 	}
 

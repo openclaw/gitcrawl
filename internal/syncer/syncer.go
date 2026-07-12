@@ -33,9 +33,10 @@ type GitHubClient interface {
 }
 
 type Syncer struct {
-	client GitHubClient
-	store  *store.Store
-	now    func() time.Time
+	client        GitHubClient
+	store         *store.Store
+	now           func() time.Time
+	beforePersist func()
 }
 
 type Options struct {
@@ -196,6 +197,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		payloads = append(payloads, payload)
 	}
+	if s.beforePersist != nil {
+		s.beforePersist()
+	}
 	stats := Stats{
 		Repository:     options.Owner + "/" + options.Repo,
 		RequestedSince: since,
@@ -256,7 +260,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			evidenceApplied := completeEvidence && upsert.EvidenceApplied
 			childWritesAllowed := !completeEvidence || evidenceApplied
 			childReservations := make(map[store.ThreadChildObservationFamily]bool)
-			workflowRunsReserved := false
+			workflowRunsEligible := false
 			reserveChild := func(family store.ThreadChildObservationFamily) error {
 				if !childWritesAllowed {
 					return nil
@@ -296,16 +300,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					payload.pullDetails.workflowSnapshotFresh {
 					headSHA := nestedString(payload.pullDetails.pull, "head", "sha")
 					if headSHA != "" {
-						workflowRunsReserved, err = st.ReserveWorkflowRunObservation(
-							ctx,
-							thread.RepoID,
-							headSHA,
-							payload.pullDetails.workflowSourceUpdatedAt,
-							observationSequence,
-						)
-						if err != nil {
-							return err
-						}
+						workflowRunsEligible = true
 					}
 				}
 			}
@@ -349,8 +344,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 							Files:        childReservations[store.ThreadChildPullRequestFiles],
 							Commits:      childReservations[store.ThreadChildPullRequestCommits],
 							Checks:       childReservations[store.ThreadChildPullRequestChecks],
-							WorkflowRuns: workflowRunsReserved,
+							WorkflowRuns: workflowRunsEligible,
 						},
+						observationSequence,
 					)
 					if err != nil {
 						return err

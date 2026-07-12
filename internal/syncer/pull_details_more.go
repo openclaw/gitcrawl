@@ -69,7 +69,7 @@ func workflowSnapshotOrder(rows []map[string]any) (string, map[string]string, er
 		if _, exists := byRunID[runID]; exists {
 			return "", nil, fmt.Errorf("workflow snapshot contains duplicate run %s", runID)
 		}
-		runSourceUpdatedAt, err := latestWorkflowTimestamp(
+		runSourceUpdatedAt, err := workflowRunTimestamp(
 			stringValue(row["updated_at"]),
 			stringValue(row["created_at"]),
 		)
@@ -106,6 +106,17 @@ func latestWorkflowTimestamp(values ...string) (string, error) {
 		}
 	}
 	return latestValue, nil
+}
+
+func workflowRunTimestamp(updatedAt, createdAt string) (string, error) {
+	value, err := latestWorkflowTimestamp(updatedAt, createdAt)
+	if err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", fmt.Errorf("missing created_at and updated_at")
+	}
+	return value, nil
 }
 
 func workflowTimestampBefore(incoming, current string) bool {
