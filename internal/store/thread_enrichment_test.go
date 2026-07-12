@@ -293,6 +293,94 @@ func TestUpsertThreadRevisionRefreshesSourceTimestampWithoutNewRevision(t *testi
 	}
 }
 
+func TestUpsertThreadRevisionPreservesTransitionsAndDeduplicatesObservations(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "9", Number: 9, Kind: "issue", State: "open",
+		Title: "current B", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/9",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T12:03:00Z", UpdatedAt: "2026-07-12T12:03:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	currentB, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, "2026-07-12T12:03:00Z")
+	if err != nil {
+		t.Fatalf("current B: %v", err)
+	}
+
+	staleA := thread
+	staleA.Title = "stale A"
+	staleA.UpdatedAtGitHub = "2026-07-12T12:02:00Z"
+	staleA.UpdatedAt = staleA.UpdatedAtGitHub
+	firstA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: staleA}, "2026-07-12T12:04:00Z")
+	if err != nil {
+		t.Fatalf("stale A: %v", err)
+	}
+
+	currentA := staleA
+	currentA.UpdatedAtGitHub = "2026-07-12T12:04:00Z"
+	currentA.UpdatedAt = currentA.UpdatedAtGitHub
+	revertedA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: currentA}, "2026-07-12T12:05:00Z")
+	if err != nil {
+		t.Fatalf("current A: %v", err)
+	}
+	if !revertedA.RevisionCreated ||
+		revertedA.RevisionID == firstA.RevisionID ||
+		revertedA.RevisionID == currentB.RevisionID {
+		t.Fatalf("current B=%+v, stale A=%+v, current A=%+v", currentB, firstA, revertedA)
+	}
+
+	staleC := thread
+	staleC.Title = "stale C"
+	staleC.UpdatedAtGitHub = "2026-07-12T12:01:00Z"
+	staleC.UpdatedAt = staleC.UpdatedAtGitHub
+	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: staleC}, "2026-07-12T12:06:00Z"); err != nil {
+		t.Fatalf("stale C: %v", err)
+	}
+	repeatedA, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: staleA}, "2026-07-12T12:07:00Z")
+	if err != nil {
+		t.Fatalf("repeated stale A: %v", err)
+	}
+	if repeatedA.RevisionCreated || repeatedA.RevisionID != firstA.RevisionID || repeatedA.FingerprintUpserted {
+		t.Fatalf("first stale A=%+v, repeated stale A=%+v", firstA, repeatedA)
+	}
+
+	var revisions, fingerprints int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_revisions
+		where thread_id = ?
+	`, thread.ID).Scan(&revisions); err != nil {
+		t.Fatalf("revision count: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_fingerprints tf
+		join thread_revisions tr on tr.id = tf.thread_revision_id
+		where tr.thread_id = ?
+	`, thread.ID).Scan(&fingerprints); err != nil {
+		t.Fatalf("fingerprint count: %v", err)
+	}
+	if revisions != 4 || fingerprints != 4 {
+		t.Fatalf("revision/fingerprint counts = %d/%d", revisions, fingerprints)
+	}
+}
+
 func TestLatestTimestampComparesRFC3339Instants(t *testing.T) {
 	tests := []struct {
 		name   string

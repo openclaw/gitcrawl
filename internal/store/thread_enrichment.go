@@ -184,30 +184,31 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	if err != nil && err != sql.ErrNoRows {
 		return ThreadEnrichmentResult{}, fmt.Errorf("read latest thread revision: %w", err)
 	}
-	var insertedID int64
-	var insertedHash, insertedSourceUpdatedAt string
-	insertedErr := s.q().QueryRowContext(ctx, `
-		select id, content_hash, coalesce(source_updated_at, '')
+	var observedID int64
+	observedErr := s.q().QueryRowContext(ctx, `
+		select id
 		from thread_revisions
 		where thread_id = ?
+			and content_hash = ?
+			and coalesce(source_updated_at, '') = ?
 		order by id desc
 		limit 1
-	`, revision.ThreadID).Scan(&insertedID, &insertedHash, &insertedSourceUpdatedAt)
-	if insertedErr != nil && insertedErr != sql.ErrNoRows {
-		return ThreadEnrichmentResult{}, fmt.Errorf("read latest inserted thread revision: %w", insertedErr)
+	`, revision.ThreadID, revision.ContentHash, revision.SourceUpdatedAt).Scan(&observedID)
+	if observedErr != nil && observedErr != sql.ErrNoRows {
+		return ThreadEnrichmentResult{}, fmt.Errorf("read matching thread revision observation: %w", observedErr)
 	}
 
 	created := false
 	switch {
-	case insertedErr == nil && insertedHash == revision.ContentHash:
-		revision.ID = insertedID
-		refreshedSourceUpdatedAt := latestTimestamp(insertedSourceUpdatedAt, revision.SourceUpdatedAt)
+	case observedErr == nil &&
+		(observedID == latestID || timestampBefore(revision.SourceUpdatedAt, latestSourceUpdatedAt)):
+		revision.ID = observedID
 		if _, err := s.q().ExecContext(ctx, `
 			update thread_revisions
-			set source_updated_at = ?, raw_json_blob_id = ?
+			set raw_json_blob_id = ?
 			where id = ?
-		`, nullString(refreshedSourceUpdatedAt), evidenceBlobID, revision.ID); err != nil {
-			return ThreadEnrichmentResult{}, fmt.Errorf("refresh latest inserted thread revision evidence: %w", err)
+		`, evidenceBlobID, revision.ID); err != nil {
+			return ThreadEnrichmentResult{}, fmt.Errorf("refresh matching thread revision observation: %w", err)
 		}
 	case err == nil && latestHash == revision.ContentHash:
 		revision.ID = latestID
@@ -756,4 +757,10 @@ func latestTimestamp(values ...string) string {
 		return latestRaw
 	}
 	return fallback
+}
+
+func timestampBefore(left, right string) bool {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
+	return leftErr == nil && rightErr == nil && leftTime.Before(rightTime)
 }
