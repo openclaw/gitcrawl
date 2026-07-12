@@ -251,6 +251,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				continue
 			}
 			thread.ID = upsert.ID
+			completeEvidence := hasFreshThreadEvidence(options, thread)
+			evidenceApplied := completeEvidence && upsert.EvidenceApplied
+			childWritesAllowed := !completeEvidence || evidenceApplied
 			if upsert.Applied {
 				if _, overlap := closedOverlapNumbers[thread.Number]; overlap &&
 					upsert.PreviousState == "open" &&
@@ -259,7 +262,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				}
 			}
 			var comments []store.Comment
-			if options.IncludeComments {
+			if options.IncludeComments && childWritesAllowed {
 				comments, err = persistComments(ctx, st, thread, payload.commentRows)
 				if err != nil {
 					return err
@@ -272,7 +275,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 			}
-			if options.IncludePRDetails && thread.Kind == "pull_request" {
+			if options.IncludePRDetails && thread.Kind == "pull_request" && childWritesAllowed {
 				count, err := s.persistPullReviewThreads(ctx, st, thread, payload.reviewThreads, payload.reviewThreadsFetchedAt)
 				if err != nil {
 					return err
@@ -305,7 +308,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if _, err := st.UpsertDocument(ctx, documents.BuildWithContext(thread, comments, pullFiles, pullCommits)); err != nil {
 				return err
 			}
-			if hasFreshThreadEvidence(options, thread) && upsert.EvidenceApplied {
+			if evidenceApplied {
 				attempt.EvidenceObserved++
 				enrichment, err := persistThreadEnrichment(
 					ctx,

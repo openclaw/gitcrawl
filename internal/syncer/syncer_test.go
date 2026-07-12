@@ -55,41 +55,12 @@ type delayedObservationGitHub struct {
 
 type interleavedEvidenceGitHub struct {
 	fakeGitHub
-	mu                 sync.Mutex
-	issueCalls         int
-	commentCalls       int
-	firstIssueStarted  chan struct{}
-	secondIssueStarted chan struct{}
-	releaseFirstIssue  chan struct{}
-	releaseSecondIssue chan struct{}
-}
-
-func (f *interleavedEvidenceGitHub) GetIssue(
-	ctx context.Context,
-	owner, repo string,
-	number int,
-	reporter gh.Reporter,
-) (map[string]any, error) {
-	f.mu.Lock()
-	f.issueCalls++
-	call := f.issueCalls
-	f.mu.Unlock()
-	var started, release chan struct{}
-	switch call {
-	case 1:
-		started, release = f.firstIssueStarted, f.releaseFirstIssue
-	case 2:
-		started, release = f.secondIssueStarted, f.releaseSecondIssue
-	}
-	if started != nil {
-		close(started)
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-release:
-		}
-	}
-	return f.fakeGitHub.GetIssue(ctx, owner, repo, number, reporter)
+	mu                    sync.Mutex
+	commentCalls          int
+	firstEvidenceFetched  chan struct{}
+	secondEvidenceFetched chan struct{}
+	releaseFirstEvidence  chan struct{}
+	releaseSecondEvidence chan struct{}
 }
 
 func (f *interleavedEvidenceGitHub) ListIssueComments(
@@ -106,13 +77,29 @@ func (f *interleavedEvidenceGitHub) ListIssueComments(
 	if call == 2 {
 		body = "sequence three comment"
 	}
-	return []map[string]any{{
+	rows := []map[string]any{{
 		"id":         11,
 		"body":       body,
 		"created_at": "2026-04-26T00:00:00Z",
 		"updated_at": "2026-04-26T00:00:00Z",
 		"user":       map[string]any{"login": "vincentkoc", "type": "User"},
-	}}, nil
+	}}
+	var fetched, release chan struct{}
+	switch call {
+	case 1:
+		fetched, release = f.firstEvidenceFetched, f.releaseFirstEvidence
+	case 2:
+		fetched, release = f.secondEvidenceFetched, f.releaseSecondEvidence
+	}
+	if fetched != nil {
+		close(fetched)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+		}
+	}
+	return rows, nil
 }
 
 func (f *delayedObservationGitHub) ListRepositoryIssues(
@@ -777,10 +764,10 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		t.Fatalf("sequence floor = %d, %v", sequence, err)
 	}
 	client := &interleavedEvidenceGitHub{
-		firstIssueStarted:  make(chan struct{}),
-		secondIssueStarted: make(chan struct{}),
-		releaseFirstIssue:  make(chan struct{}),
-		releaseSecondIssue: make(chan struct{}),
+		firstEvidenceFetched:  make(chan struct{}),
+		secondEvidenceFetched: make(chan struct{}),
+		releaseFirstEvidence:  make(chan struct{}),
+		releaseSecondEvidence: make(chan struct{}),
 	}
 	s := New(client, st)
 	s.now = func() time.Time { return time.Date(2026, 7, 12, 0, 1, 0, 0, time.UTC) }
@@ -800,9 +787,9 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		firstResult <- syncResult{stats: stats, err: err}
 	}()
 	select {
-	case <-client.firstIssueStarted:
+	case <-client.firstEvidenceFetched:
 	case <-time.After(5 * time.Second):
-		t.Fatal("sequence two sync did not reach issue fetch")
+		t.Fatal("sequence two sync did not fetch complete evidence")
 	}
 	secondResult := make(chan syncResult, 1)
 	go func() {
@@ -810,9 +797,9 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		secondResult <- syncResult{stats: stats, err: err}
 	}()
 	select {
-	case <-client.secondIssueStarted:
+	case <-client.secondEvidenceFetched:
 	case <-time.After(5 * time.Second):
-		t.Fatal("sequence three sync did not reach issue fetch")
+		t.Fatal("sequence three sync did not fetch complete evidence")
 	}
 
 	metadataStats, err := s.Sync(ctx, Options{
@@ -827,17 +814,7 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		t.Fatalf("sequence four metadata stats = %#v", metadataStats)
 	}
 
-	close(client.releaseFirstIssue)
-	first := <-firstResult
-	if first.err != nil {
-		t.Fatalf("sequence two sync: %v", first.err)
-	}
-	if first.stats.ThreadsSynced != 1 || first.stats.ThreadsSkippedStale != 0 ||
-		first.stats.CommentsSynced != 1 || first.stats.EvidenceObserved != 1 ||
-		first.stats.RevisionsCreated != 1 || first.stats.FingerprintsUpserted != 1 {
-		t.Fatalf("sequence two stats = %#v", first.stats)
-	}
-	close(client.releaseSecondIssue)
+	close(client.releaseSecondEvidence)
 	second := <-secondResult
 	if second.err != nil {
 		t.Fatalf("sequence three sync: %v", second.err)
@@ -847,13 +824,23 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 		second.stats.RevisionsCreated != 1 || second.stats.FingerprintsUpserted != 1 {
 		t.Fatalf("sequence three stats = %#v", second.stats)
 	}
+	close(client.releaseFirstEvidence)
+	first := <-firstResult
+	if first.err != nil {
+		t.Fatalf("sequence two sync: %v", first.err)
+	}
+	if first.stats.ThreadsSynced != 0 || first.stats.ThreadsSkippedStale != 1 ||
+		first.stats.CommentsSynced != 0 || first.stats.EvidenceObserved != 0 ||
+		first.stats.RevisionsCreated != 0 || first.stats.FingerprintsUpserted != 0 {
+		t.Fatalf("sequence two stats = %#v", first.stats)
+	}
 
-	var threadID, parentSequence, latestRevisionSequence, revisions int64
+	var threadID, parentSequence, evidenceSequence, latestRevisionSequence, revisions int64
 	if err := st.DB().QueryRowContext(ctx, `
-		select id, observation_sequence
+		select id, observation_sequence, evidence_observation_sequence
 		from threads
 		where number = 7
-	`).Scan(&threadID, &parentSequence); err != nil {
+	`).Scan(&threadID, &parentSequence, &evidenceSequence); err != nil {
 		t.Fatalf("parent sequence: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `
@@ -876,11 +863,12 @@ func TestSyncPersistsNewerCompleteEvidenceBelowParentHighWaterMark(t *testing.T)
 	if err != nil {
 		t.Fatalf("comments: %v", err)
 	}
-	if parentSequence != 4 || latestRevisionSequence != 3 || revisions != 2 ||
+	if parentSequence != 4 || evidenceSequence != 3 || latestRevisionSequence != 3 || revisions != 1 ||
 		len(comments) != 1 || comments[0].Body != "sequence three comment" {
 		t.Fatalf(
-			"persisted state = parent %d, revision %d, revisions %d, comments %+v",
+			"persisted state = parent %d, evidence %d, revision %d, revisions %d, comments %+v",
 			parentSequence,
+			evidenceSequence,
 			latestRevisionSequence,
 			revisions,
 			comments,
