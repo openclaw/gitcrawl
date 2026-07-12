@@ -1769,6 +1769,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	sqliteReadRequests := 0
 	cutovers := 0
 	hydrationFailuresRemaining := 1
+	concurrentFinalCompletionsRemaining := 1
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
 			contract := testSnapshotPublishContract()
@@ -1992,6 +1993,15 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					),
 					CoverageComplete: true,
 				}
+				if concurrentFinalCompletionsRemaining > 0 {
+					concurrentFinalCompletionsRemaining--
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":   "snapshot_active",
+						"message": "a concurrent publisher completed the snapshot",
+					})
+					return
+				}
 			}
 			_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
 				Table:         body.Table,
@@ -2074,8 +2084,8 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 		if index == 0 && result.Cutover != nil {
 			t.Fatalf("stage-only publish unexpectedly cut over: %#v", result.Cutover)
 		}
-		if index == 0 && result.AlreadyStaged {
-			t.Fatal("initial stage-only publish unexpectedly reused a candidate")
+		if index == 0 && !result.AlreadyStaged {
+			t.Fatal("initial stage-only publish did not recover concurrent completion")
 		}
 		if index == 0 {
 			stageIngestRequests = ingestRequests
@@ -2133,8 +2143,11 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	if servingSnapshotID != snapshotID {
 		t.Fatalf("serving snapshot = %q, want staged snapshot %q", servingSnapshotID, snapshotID)
 	}
-	if publisherStatusRequests != 7 {
-		t.Fatalf("publisher status requests = %d, want 7", publisherStatusRequests)
+	if publisherStatusRequests != 8 {
+		t.Fatalf(
+			"publisher status requests = %d, want 8 including concurrent completion recovery",
+			publisherStatusRequests,
+		)
 	}
 	for _, requestedSnapshotID := range publisherStatusSnapshotIDs {
 		if requestedSnapshotID != snapshotID {

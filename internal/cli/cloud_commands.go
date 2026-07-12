@@ -208,6 +208,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 			)
 		}
 		sqliteBundle = uploadedBundle
+		completedConcurrently := false
 		for _, dataset := range snapshot.Datasets {
 			progress, err := sendSnapshotIngestDataset(
 				ctx,
@@ -220,24 +221,63 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 				mutationToken,
 			)
 			if err != nil {
+				recovered, recoveryErr := recoverConcurrentGitcrawlSnapshot(
+					ctx,
+					client,
+					archiveID,
+					snapshot,
+					manifest,
+					publicationCapabilities,
+					err,
+				)
+				if recoveryErr != nil {
+					return fmt.Errorf(
+						"publish cloud dataset %s: %w",
+						dataset.Name,
+						recoveryErr,
+					)
+				}
+				if recovered {
+					alreadyStaged = true
+					completedConcurrently = true
+					break
+				}
 				return fmt.Errorf("publish cloud dataset %s: %w", dataset.Name, err)
 			}
 			counts[dataset.Name] = progress.RowsAccepted
 			mutationToken = progress.MutationToken
 		}
-		progress, err := completeGitcrawlSnapshotStaging(
-			ctx,
-			client,
-			"gitcrawl",
-			archiveID,
-			manifest,
-			snapshot,
-			mutationToken,
-		)
-		if err != nil {
-			return fmt.Errorf("complete cloud snapshot staging: %w", err)
+		if !completedConcurrently {
+			progress, err := completeGitcrawlSnapshotStaging(
+				ctx,
+				client,
+				"gitcrawl",
+				archiveID,
+				manifest,
+				snapshot,
+				mutationToken,
+			)
+			if err != nil {
+				recovered, recoveryErr := recoverConcurrentGitcrawlSnapshot(
+					ctx,
+					client,
+					archiveID,
+					snapshot,
+					manifest,
+					publicationCapabilities,
+					err,
+				)
+				if recoveryErr != nil {
+					return fmt.Errorf("complete cloud snapshot staging: %w", recoveryErr)
+				}
+				if !recovered {
+					return fmt.Errorf("complete cloud snapshot staging: %w", err)
+				}
+				alreadyStaged = true
+			} else {
+				mutationToken = progress.MutationToken
+			}
 		}
-		mutationToken = progress.MutationToken
 	}
 	var cutoverResult *crawlremote.CutoverResult
 	alreadyCutOver := false
@@ -758,6 +798,40 @@ func remoteSnapshotIncomplete(err error) bool {
 	return errors.As(err, &remoteErr) &&
 		remoteErr.Status == http.StatusConflict &&
 		remoteErr.Code == "snapshot_mismatch"
+}
+
+func recoverConcurrentGitcrawlSnapshot(
+	ctx context.Context,
+	client *crawlremote.Client,
+	archive string,
+	snapshot gitcrawlCloudSnapshot,
+	manifest crawlremote.IngestManifest,
+	publicationCapabilities []string,
+	cause error,
+) (bool, error) {
+	var remoteErr *crawlremote.Error
+	if !errors.As(cause, &remoteErr) ||
+		remoteErr.Status != http.StatusConflict ||
+		remoteErr.Code != "snapshot_active" {
+		return false, nil
+	}
+	status, err := client.PublishStatusForSnapshot(
+		ctx,
+		"gitcrawl",
+		archive,
+		snapshot.ID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("re-probe concurrent snapshot completion: %w", err)
+	}
+	if !gitcrawlPublisherStatusMatches(status, manifest, publicationCapabilities) ||
+		status.Snapshot.DatasetGeneratedAt != snapshot.DatasetGeneratedAt {
+		return false, fmt.Errorf(
+			"concurrent active snapshot %s does not match the requested digest, profile, generation, and coverage",
+			snapshot.ID,
+		)
+	}
+	return true, nil
 }
 
 func requireGitcrawlSnapshotPublishContract(
