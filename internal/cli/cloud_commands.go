@@ -1144,19 +1144,18 @@ func verifyGitcrawlSQLiteHydration(
 	if expectedSize <= 0 {
 		return fmt.Errorf("uploaded SQLite manifest source size must be positive, got %d", expectedSize)
 	}
-	contentLength := response.ContentLength
-	if contentLength <= 0 {
-		header := strings.TrimSpace(response.Header.Get("content-length"))
-		if header == "" {
-			return fmt.Errorf("downloaded SQLite snapshot is missing a positive Content-Length")
-		}
+	contentLength := int64(-1)
+	header := strings.TrimSpace(response.Header.Get("content-length"))
+	if header != "" {
 		parsed, err := strconv.ParseInt(header, 10, 64)
 		if err != nil || parsed <= 0 {
 			return fmt.Errorf("downloaded SQLite snapshot has invalid Content-Length %q", header)
 		}
 		contentLength = parsed
+	} else if response.ContentLength >= 0 {
+		contentLength = response.ContentLength
 	}
-	if contentLength != expectedSize {
+	if contentLength >= 0 && contentLength != expectedSize {
 		return fmt.Errorf(
 			"downloaded SQLite snapshot Content-Length %d does not match uploaded source size %d",
 			contentLength,
@@ -1177,7 +1176,7 @@ func verifyGitcrawlSQLiteHydration(
 	n, err := response.Body.Read(extra[:])
 	if n > 0 {
 		return fmt.Errorf(
-			"downloaded SQLite snapshot exceeds Content-Length %d",
+			"downloaded SQLite snapshot exceeds uploaded source size %d",
 			expectedSize,
 		)
 	}

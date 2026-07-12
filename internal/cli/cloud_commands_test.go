@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -512,11 +513,12 @@ func TestVerifyGitcrawlSQLiteHydrationRejectsInvalidFramingAndDigest(t *testing.
 	different := bytes.Repeat([]byte("x"), len(source))
 
 	tests := []struct {
-		name          string
-		body          []byte
-		digest        string
-		contentLength int64
-		want          string
+		name                string
+		body                []byte
+		digest              string
+		contentLength       int64
+		contentLengthHeader string
+		want                string
 	}{
 		{
 			name:          "valid",
@@ -538,11 +540,18 @@ func TestVerifyGitcrawlSQLiteHydrationRejectsInvalidFramingAndDigest(t *testing.
 			want:          "advertises digest",
 		},
 		{
-			name:          "missing length",
+			name:          "chunked response",
 			body:          source,
 			digest:        snapshotID,
 			contentLength: -1,
-			want:          "missing a positive Content-Length",
+		},
+		{
+			name:                "malformed length",
+			body:                source,
+			digest:              snapshotID,
+			contentLength:       -1,
+			contentLengthHeader: "not-a-number",
+			want:                "invalid Content-Length",
 		},
 		{
 			name:          "wrong length",
@@ -563,7 +572,7 @@ func TestVerifyGitcrawlSQLiteHydrationRejectsInvalidFramingAndDigest(t *testing.
 			body:          append(append([]byte(nil), source...), 'x'),
 			digest:        snapshotID,
 			contentLength: int64(len(source)),
-			want:          "exceeds Content-Length",
+			want:          "exceeds uploaded source size",
 		},
 		{
 			name:          "body digest mismatch",
@@ -583,6 +592,9 @@ func TestVerifyGitcrawlSQLiteHydrationRejectsInvalidFramingAndDigest(t *testing.
 			if test.digest != "" {
 				response.Header.Set("x-crawl-content-sha256", test.digest)
 			}
+			if test.contentLengthHeader != "" {
+				response.Header.Set("content-length", test.contentLengthHeader)
+			}
 			err := verifyGitcrawlSQLiteHydration(response, snapshotID, int64(len(source)))
 			if test.want == "" {
 				if err != nil {
@@ -594,5 +606,37 @@ func TestVerifyGitcrawlSQLiteHydrationRejectsInvalidFramingAndDigest(t *testing.
 				t.Fatalf("verification error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestVerifyGitcrawlSQLiteHydrationAcceptsChunkedResponse(t *testing.T) {
+	source := []byte("SQLite format 3\x00chunked source")
+	snapshotID := fmt.Sprintf("%x", sha256.Sum256(source))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-crawl-content-sha256", snapshotID)
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(source)
+	}))
+	defer server.Close()
+
+	response, err := server.Client().Get(server.URL)
+	if err != nil {
+		t.Fatalf("download chunked hydration: %v", err)
+	}
+	defer response.Body.Close()
+	if response.ContentLength != -1 || !slices.Contains(response.TransferEncoding, "chunked") {
+		t.Fatalf(
+			"response framing = length %d transfer %v, want chunked",
+			response.ContentLength,
+			response.TransferEncoding,
+		)
+	}
+	if err := verifyGitcrawlSQLiteHydration(
+		response,
+		snapshotID,
+		int64(len(source)),
+	); err != nil {
+		t.Fatalf("verify chunked hydration: %v", err)
 	}
 }
