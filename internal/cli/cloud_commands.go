@@ -54,7 +54,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	tokenEnv := fs.String("token-env", "", "remote token environment variable")
 	allowIncomplete := fs.Bool("allow-incomplete", false, "publish even when local enrichment coverage is incomplete")
 	observationOrder := fs.Bool("observation-order", false, "publish durable observation ordering when the remote fence is enabled")
-	cutover := fs.Bool("cutover", false, "cut over unpinned reads after activating the snapshot")
+	stageOnly := fs.Bool("stage-only", false, "stage the immutable snapshot without moving unpinned reads")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"remote": true, "archive": true, "token-env": true})); err != nil {
 		return usageErr(err)
@@ -63,6 +63,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	if fs.NArg() != 0 {
 		return usageErr(fmt.Errorf("cloud publish takes flags only"))
 	}
+	cutover := !*stageOnly
 
 	cfg, err := config.LoadRuntime(a.configPath)
 	if err != nil {
@@ -122,7 +123,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		ctx,
 		client,
 		snapshot,
-		*cutover,
+		cutover,
 	); err != nil {
 		return err
 	}
@@ -185,7 +186,7 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		mutationToken = progress.MutationToken
 	}
 	var cutoverResult *crawlremote.CutoverResult
-	if *cutover {
+	if cutover {
 		result, err := client.Cutover(ctx, "gitcrawl", archiveID, snapshot.ID)
 		if err != nil {
 			return fmt.Errorf("cut over cloud snapshot: %w", err)

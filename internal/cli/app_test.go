@@ -1136,7 +1136,6 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 		"--archive", "gitcrawl/openclaw__openclaw",
 		"--token-env", tokenEnv,
 		"--allow-incomplete",
-		"--cutover",
 		"--json",
 	}); err != nil {
 		t.Fatalf("cloud publish: %v", err)
@@ -1239,12 +1238,11 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 	}{
 		{
 			name:              "observation order",
-			args:              []string{"--observation-order"},
+			args:              []string{"--observation-order", "--stage-only"},
 			missingCapability: gitcrawlObservationOrderCapability,
 		},
 		{
 			name:              "cutover",
-			args:              []string{"--cutover"},
 			missingCapability: gitcrawlSnapshotCutoverCapability,
 		},
 	}
@@ -1327,9 +1325,8 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 			},
 		},
 		{
-			name:      "missing cutover route",
-			want:      "POST /v1/apps/:app/archives/:archive/cutover",
-			extraArgs: []string{"--cutover"},
+			name: "missing cutover route",
+			want: "POST /v1/apps/:app/archives/:archive/cutover",
 			mutate: func(contract *crawlremote.Contract) {
 				contract.Routes = slices.DeleteFunc(
 					contract.Routes,
@@ -1391,7 +1388,7 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 	}
 }
 
-func TestCloudPublishStagesByDefaultAndResumesCutover(t *testing.T) {
+func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -1520,7 +1517,7 @@ func TestCloudPublishStagesByDefaultAndResumesCutover(t *testing.T) {
 		"--allow-incomplete",
 		"--json",
 	}
-	for index, extra := range [][]string{nil, {"--cutover"}} {
+	for index, extra := range [][]string{{"--stage-only"}, nil} {
 		app := New()
 		var output bytes.Buffer
 		app.Stdout = &output
@@ -1535,10 +1532,10 @@ func TestCloudPublishStagesByDefaultAndResumesCutover(t *testing.T) {
 			t.Fatalf("decode run %d output: %v\n%s", index+1, err, output.String())
 		}
 		if index == 0 && result.Cutover != nil {
-			t.Fatalf("default publish unexpectedly cut over: %#v", result.Cutover)
+			t.Fatalf("stage-only publish unexpectedly cut over: %#v", result.Cutover)
 		}
 		if index == 1 && result.Cutover == nil {
-			t.Fatalf("explicit cutover missing: %s", output.String())
+			t.Fatalf("default cutover missing: %s", output.String())
 		}
 	}
 	if ingestRequests != 0 {
