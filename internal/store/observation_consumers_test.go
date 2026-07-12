@@ -381,7 +381,7 @@ func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 	assertConsumersStale("malformed thread clock")
 }
 
-func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T) {
+func TestRevisionConsumersRequireAcceptedEvidenceGenerationAfterNewerFetch(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -419,6 +419,12 @@ func TestRevisionConsumersRequireAcceptedFreshSourceAfterNewerFetch(t *testing.T
 	staleRevision, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
 		Thread:              staleThread,
 		ObservationSequence: 2,
+		Comments: []Comment{{
+			ThreadID: staleThread.ID, GitHubID: "stale-child",
+			CommentType: "issue_comment", Body: "later stale child",
+			CreatedAtGitHub: "2026-07-12T00:05:00Z",
+			UpdatedAtGitHub: "2026-07-12T00:05:00Z",
+		}},
 	}, "2026-07-12T00:02:00Z")
 	if err != nil {
 		t.Fatalf("stale revision: %v", err)

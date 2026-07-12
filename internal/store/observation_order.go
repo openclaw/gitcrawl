@@ -217,7 +217,7 @@ func (s *Store) threadRevisionFreshnessPredicate(
 			revisionSourceTimestamp + " >= " + threadSourceTimestamp + ")"
 		sequenceFresh := sequenceFloor + " > 0 and " +
 			revision + "observation_sequence > 0 and " +
-			revision + "observation_sequence >= " + sequenceFloor
+			revision + "observation_sequence = " + sequenceFloor
 		return "(((" + sequenceFresh + ") and (" + sourceClockFresh + ")) or (" +
 			sequenceFloor + " = 0 and (" + legacyClockFresh + ")))"
 	}

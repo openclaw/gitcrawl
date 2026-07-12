@@ -171,18 +171,41 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 	}
 	sequenceProvided := evidence.ObservationSequence > 0
 	if !sequenceProvided {
-		sequence, err := s.NextThreadObservationSequence(ctx, createdAt)
-		if err != nil {
-			return ThreadEnrichmentResult{}, err
-		}
-		evidence.ObservationSequence = sequence
-		var persistedSourceUpdatedAt string
+		var persistedSourceUpdatedAt, acceptedSourceUpdatedAt string
+		var acceptedSequence int64
 		if err := s.q().QueryRowContext(ctx, `
-			select coalesce(updated_at_gh, '')
+			select coalesce(updated_at_gh, ''),
+				coalesce(evidence_source_updated_at, ''),
+				evidence_observation_sequence
 			from threads
 			where id = ?
-		`, evidence.Thread.ID).Scan(&persistedSourceUpdatedAt); err != nil {
+		`, evidence.Thread.ID).Scan(
+			&persistedSourceUpdatedAt,
+			&acceptedSourceUpdatedAt,
+			&acceptedSequence,
+		); err != nil {
 			return ThreadEnrichmentResult{}, fmt.Errorf("read thread source clock: %w", err)
+		}
+		if acceptedSequence > 0 {
+			sourceOrder, err := compareObservationOrder(
+				observationOrder{SourceUpdatedAt: evidence.Thread.UpdatedAtGitHub},
+				observationOrder{SourceUpdatedAt: acceptedSourceUpdatedAt},
+			)
+			if err != nil {
+				return ThreadEnrichmentResult{}, fmt.Errorf(
+					"compare accepted thread evidence source clock: %w",
+					err,
+				)
+			}
+			if sourceOrder == 0 {
+				evidence.ObservationSequence = acceptedSequence
+			}
+		} else {
+			sequence, err := s.NextThreadObservationSequence(ctx, createdAt)
+			if err != nil {
+				return ThreadEnrichmentResult{}, err
+			}
+			evidence.ObservationSequence = sequence
 		}
 		sourceOrder, err := compareObservationOrder(
 			observationOrder{SourceUpdatedAt: evidence.Thread.UpdatedAtGitHub},
