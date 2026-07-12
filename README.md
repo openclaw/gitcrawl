@@ -25,7 +25,7 @@ gitcrawl remote login --endpoint https://crawl.openclaw.ai --json
 gitcrawl remote status --json
 gitcrawl remote archives --json
 gitcrawl whoami --json
-gitcrawl cloud publish --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw --json
+gitcrawl cloud publish --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw --cutover --json
 gitcrawl sync owner/repo
 gitcrawl sync owner/repo --state open
 gitcrawl sync owner/repo --numbers 123,456 --include-comments
@@ -70,12 +70,13 @@ Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser boot
 `gitcrawl cloud publish` freezes and sanitizes one local SQLite image, uses its
 SHA-256 as the snapshot identity, exports repositories, threads, revisions,
 fingerprints, summaries, durable clusters, and PR detail/file rows from that
-same image, uploads its digest-scoped R2 bundle, activates complete D1 coverage,
-and cuts unpinned reads over to the exact snapshot. Incomplete local enrichment
-fails before any remote mutation; `--allow-incomplete` is an explicit escape
-hatch, `--observation-order` publishes durable fetch ordering after the remote
-operator fence is enabled, and `--cutover=false` stages and activates without
-changing unpinned reads.
+same image, negotiates the remote snapshot-provenance contract before touching
+R2, uploads its digest-scoped bundle, and activates complete D1 coverage.
+Publishing stages the immutable snapshot by default; `--cutover` explicitly
+moves unpinned reads to that snapshot and disables legacy ingest. Incomplete
+local enrichment fails before any remote mutation; `--allow-incomplete` is an
+explicit escape hatch, and `--observation-order` publishes durable fetch
+ordering after the remote operator fence is enabled.
 `gitcrawl clusters-report` writes a Markdown report for the top clusters using the same display view, with an at-a-glance table, per-cluster metadata, member tables, and key snippets. Use `--json` for the hydrated report payload.
 `gitcrawl cluster` and `gitcrawl refresh` build ghcrawl-shaped durable clusters by default (`--threshold 0.80`, `--min-size 1`, `--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`): every active vector-backed thread is represented, singleton rows use `singleton_orphan`, multi-member rows use `duplicate_candidate`, and stable IDs are derived from the representative thread. They also add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.
