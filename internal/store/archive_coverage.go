@@ -34,6 +34,7 @@ type EnrichmentCoverage struct {
 	Summaries    EnrichmentCoverageMetric `json:"summaries"`
 	Clusters     EnrichmentCoverageMetric `json:"clusters"`
 	PRDetails    EnrichmentCoverageMetric `json:"pr_details"`
+	PRFiles      EnrichmentCoverageMetric `json:"pr_files"`
 }
 
 type ArchiveCoverageRow struct {
@@ -291,6 +292,10 @@ func (s *Store) archiveEnrichmentCoverage(ctx context.Context, repoID int64) (En
 	if err != nil {
 		return EnrichmentCoverage{}, err
 	}
+	coverage.PRFiles, err = s.archivePRFileCoverage(ctx, repoID)
+	if err != nil {
+		return EnrichmentCoverage{}, err
+	}
 	syncObservedAt, ok, err := s.archiveLatestSuccessfulHydrationRunAt(ctx, repoID)
 	if err != nil {
 		return EnrichmentCoverage{}, err
@@ -533,24 +538,8 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	if !s.archiveCoverageHasColumns(ctx, "pull_request_details", "thread_id", "fetched_at") {
 		return EnrichmentCoverageMetric{}, nil
 	}
-	acceptedSourceUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
-	acceptedObservationSequence := "0"
-	if s.hasColumn(ctx, "threads", "observation_sequence") {
-		acceptedObservationSequence = "t.observation_sequence"
-	}
-	if s.hasColumn(ctx, "threads", "evidence_observation_sequence") &&
-		s.hasColumn(ctx, "threads", "evidence_source_updated_at") {
-		acceptedSourceUpdatedAt = `case
-			when t.evidence_observation_sequence > 0
-				then coalesce(t.evidence_source_updated_at, '')
-			else ` + acceptedSourceUpdatedAt + `
-		end`
-		acceptedObservationSequence = `case
-			when t.evidence_observation_sequence > 0
-				then t.evidence_observation_sequence
-			else ` + acceptedObservationSequence + `
-		end`
-	}
+	acceptedSourceUpdatedAt, acceptedObservationSequence :=
+		s.archiveAcceptedThreadObservationExpressions(ctx, "t")
 	reservationJoin := ""
 	reservationPresent := "0"
 	reservationSourceUpdatedAt := "''"
@@ -640,6 +629,107 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 	}
 	finalizeEnrichmentCoverageMetric(&metric)
 	return metric, nil
+}
+
+func (s *Store) archivePRFileCoverage(
+	ctx context.Context,
+	repoID int64,
+) (EnrichmentCoverageMetric, error) {
+	if !s.archiveCoverageHasColumns(
+		ctx,
+		"thread_child_observation_reservations",
+		"thread_id",
+		"family",
+		"source_updated_at",
+		"observation_sequence",
+	) {
+		return EnrichmentCoverageMetric{}, nil
+	}
+	acceptedSourceUpdatedAt, acceptedObservationSequence :=
+		s.archiveAcceptedThreadObservationExpressions(ctx, "t")
+	rows, err := s.q().QueryContext(ctx, `
+		select case when reservation.thread_id is null then 0 else 1 end,
+			coalesce(reservation.source_updated_at, ''),
+			coalesce(reservation.observation_sequence, 0),
+			`+acceptedSourceUpdatedAt+`,
+			`+acceptedObservationSequence+`
+		from threads t
+		left join thread_child_observation_reservations reservation
+			on reservation.thread_id = t.id
+				and reservation.family = 'pull_request_files'
+		where t.repo_id = ? and t.kind = 'pull_request'
+	`, repoID)
+	if err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("archive PR file coverage: %w", err)
+	}
+	defer rows.Close()
+
+	metric := EnrichmentCoverageMetric{Supported: true}
+	var latestObservedAt time.Time
+	for rows.Next() {
+		var hasReservation int
+		var reservationSequence, acceptedSequence int64
+		var reservationSourceUpdatedAt, acceptedSource string
+		if err := rows.Scan(
+			&hasReservation,
+			&reservationSourceUpdatedAt,
+			&reservationSequence,
+			&acceptedSource,
+			&acceptedSequence,
+		); err != nil {
+			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive PR file coverage: %w", err)
+		}
+		metric.Eligible++
+		if hasReservation == 0 {
+			continue
+		}
+		metric.Covered++
+		if observedAt, ok := parseArchiveCoverageTimestamp(reservationSourceUpdatedAt); ok &&
+			(latestObservedAt.IsZero() || observedAt.After(latestObservedAt)) {
+			latestObservedAt = observedAt
+		}
+		if archiveObservationAtOrAfter(
+			reservationSourceUpdatedAt,
+			reservationSequence,
+			acceptedSource,
+			observationSequenceOrderValue(acceptedSequence),
+		) {
+			metric.Fresh++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return EnrichmentCoverageMetric{}, fmt.Errorf("iterate archive PR file coverage: %w", err)
+	}
+	if !latestObservedAt.IsZero() {
+		metric.LatestAt = formatArchiveCoverageTimestamp(latestObservedAt)
+	}
+	finalizeEnrichmentCoverageMetric(&metric)
+	return metric, nil
+}
+
+func (s *Store) archiveAcceptedThreadObservationExpressions(
+	ctx context.Context,
+	alias string,
+) (sourceUpdatedAt string, observationSequence string) {
+	sourceUpdatedAt = archiveThreadUpdatedAtExpression(s, ctx, alias)
+	observationSequence = "0"
+	if s.hasColumn(ctx, "threads", "observation_sequence") {
+		observationSequence = alias + ".observation_sequence"
+	}
+	if s.hasColumn(ctx, "threads", "evidence_observation_sequence") &&
+		s.hasColumn(ctx, "threads", "evidence_source_updated_at") {
+		sourceUpdatedAt = `case
+			when ` + alias + `.evidence_observation_sequence > 0
+				then coalesce(` + alias + `.evidence_source_updated_at, '')
+			else ` + sourceUpdatedAt + `
+		end`
+		observationSequence = `case
+			when ` + alias + `.evidence_observation_sequence > 0
+				then ` + alias + `.evidence_observation_sequence
+			else ` + observationSequence + `
+		end`
+	}
+	return sourceUpdatedAt, observationSequence
 }
 
 func archiveObservationAtOrAfter(
@@ -743,6 +833,7 @@ func addEnrichmentCoverage(total *EnrichmentCoverage, row EnrichmentCoverage) {
 	addEnrichmentCoverageMetric(&total.Summaries, row.Summaries)
 	addEnrichmentCoverageMetric(&total.Clusters, row.Clusters)
 	addEnrichmentCoverageMetric(&total.PRDetails, row.PRDetails)
+	addEnrichmentCoverageMetric(&total.PRFiles, row.PRFiles)
 }
 
 func addEnrichmentCoverageMetric(total *EnrichmentCoverageMetric, row EnrichmentCoverageMetric) {
@@ -763,4 +854,5 @@ func finalizeEnrichmentCoverage(coverage *EnrichmentCoverage) {
 	finalizeEnrichmentCoverageMetric(&coverage.Summaries)
 	finalizeEnrichmentCoverageMetric(&coverage.Clusters)
 	finalizeEnrichmentCoverageMetric(&coverage.PRDetails)
+	finalizeEnrichmentCoverageMetric(&coverage.PRFiles)
 }

@@ -323,6 +323,7 @@ func incompleteGitcrawlCloudHydration(coverage crawlstore.EnrichmentCoverage) []
 		{name: "summaries", metric: coverage.Summaries},
 		{name: "clusters", metric: coverage.Clusters},
 		{name: "pr_details", metric: coverage.PRDetails},
+		{name: "pr_files", metric: coverage.PRFiles},
 	}
 	var missing []string
 	for _, item := range metrics {

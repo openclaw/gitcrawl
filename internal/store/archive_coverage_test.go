@@ -218,6 +218,74 @@ func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testin
 	}
 }
 
+func TestArchiveCoveragePRFilesRequireCurrentObservation(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := archiveCoverageThread(repoID, 1, "pull_request")
+	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
+	thread.RawJSON = `{"version":1}`
+	thread.ContentHash = "version-1"
+	initial, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 1,
+	})
+	if err != nil {
+		t.Fatalf("initial thread: %v", err)
+	}
+	thread.ID = initial.ID
+
+	assertMetric := func(wantCovered, wantFresh, wantMissing, wantStale int, wantComplete bool) {
+		t.Helper()
+		coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+		if err != nil {
+			t.Fatalf("archive coverage: %v", err)
+		}
+		if len(coverage.Rows) != 1 {
+			t.Fatalf("coverage rows = %d, want 1", len(coverage.Rows))
+		}
+		metric := coverage.Rows[0].Enrichment.PRFiles
+		if !metric.Supported || metric.Eligible != 1 ||
+			metric.Covered != wantCovered || metric.Fresh != wantFresh ||
+			metric.Missing != wantMissing || metric.Stale != wantStale ||
+			metric.Complete != wantComplete {
+			t.Fatalf("PR file coverage = %+v", metric)
+		}
+	}
+
+	assertMetric(0, 0, 1, 0, false)
+	if applied, err := st.ReserveThreadChildObservation(
+		ctx,
+		thread.ID,
+		ThreadChildPullRequestFiles,
+		thread.UpdatedAtGitHub,
+		1,
+	); err != nil || !applied {
+		t.Fatalf("reserve PR file observation = %t, %v", applied, err)
+	}
+	assertMetric(1, 1, 0, 0, true)
+
+	thread.UpdatedAtGitHub = "2026-07-12T12:03:00Z"
+	thread.RawJSON = `{"version":2}`
+	thread.ContentHash = "version-2"
+	if accepted, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		ObservationSequence: 2,
+	}); err != nil || !accepted.EvidenceApplied {
+		t.Fatalf("newer accepted evidence = %+v, %v", accepted, err)
+	}
+	assertMetric(1, 0, 0, 1, false)
+}
+
 func TestArchiveObservationFreshnessUsesSequenceForEqualSource(t *testing.T) {
 	const source = "2026-07-12T12:00:00Z"
 	if archiveObservationAtOrAfter(source, 10, source, 11) {
