@@ -162,8 +162,8 @@ func (s *Store) threadRevisionFreshnessPredicate(
 		sequenceFresh := sequenceFloor + " > 0 and " +
 			revision + "observation_sequence > 0 and " +
 			revision + "observation_sequence >= " + sequenceFloor
-		return "((" + sequenceFresh + ") and (" + sourceClockFresh + ")) or (" +
-			sequenceFloor + " = 0 and (" + legacyClockFresh + "))"
+		return "(((" + sequenceFresh + ") and (" + sourceClockFresh + ")) or (" +
+			sequenceFloor + " = 0 and (" + legacyClockFresh + ")))"
 	}
 
 	return legacyClockFresh

@@ -7,6 +7,128 @@ import (
 	"testing"
 )
 
+func TestRevisionFreshnessKeepsLegacyRowsScoped(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	type seededThread struct {
+		repoID     int64
+		threadID   int64
+		revisionID int64
+		number     int
+		summary    string
+	}
+	seed := func(owner, name string, number int, summary, createdAt string) seededThread {
+		t.Helper()
+		repoID, err := st.UpsertRepository(ctx, Repository{
+			Owner: owner, Name: name, FullName: owner + "/" + name,
+			RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatalf("repository %s/%s: %v", owner, name, err)
+		}
+		thread := Thread{
+			RepoID: repoID, GitHubID: name, Number: number, Kind: "issue", State: "open",
+			Title: summary, Body: summary,
+			HTMLURL:       "https://github.com/" + owner + "/" + name + "/issues/1",
+			LabelsJSON:    "[]",
+			AssigneesJSON: "[]",
+			RawJSON:       "{}",
+			ContentHash:   name + "-thread",
+			UpdatedAt:     "2026-07-12T00:00:00Z",
+		}
+		thread.ID, err = st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("thread %s/%s: %v", owner, name, err)
+		}
+		var sequence int64
+		if err := st.DB().QueryRowContext(
+			ctx,
+			`select observation_sequence from threads where id = ?`,
+			thread.ID,
+		).Scan(&sequence); err != nil {
+			t.Fatalf("thread sequence %s/%s: %v", owner, name, err)
+		}
+		enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+			Thread: thread, ObservationSequence: sequence,
+		}, createdAt)
+		if err != nil {
+			t.Fatalf("revision %s/%s: %v", owner, name, err)
+		}
+		if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+			ThreadRevisionID: enrichment.RevisionID,
+			SummaryKind:      SummaryKindLLMKey,
+			PromptVersion:    SummaryPromptVersionV1,
+			Provider:         "test",
+			Model:            "test",
+			InputHash:        name + "-input",
+			OutputHash:       name + "-output",
+			KeyText:          summary,
+			CreatedAt:        createdAt,
+		}); err != nil {
+			t.Fatalf("summary %s/%s: %v", owner, name, err)
+		}
+		if _, err := st.DB().ExecContext(ctx, `
+			update threads
+			set observation_sequence = 0, evidence_observation_sequence = 0
+			where id = ?;
+			update thread_revisions
+			set observation_sequence = 0
+			where id = ?
+		`, thread.ID, enrichment.RevisionID); err != nil {
+			t.Fatalf("legacy sequences %s/%s: %v", owner, name, err)
+		}
+		return seededThread{
+			repoID: repoID, threadID: thread.ID, revisionID: enrichment.RevisionID,
+			number: number, summary: summary,
+		}
+	}
+
+	requested := seed("openclaw", "requested", 41, "requested summary", "2026-07-12T00:01:00Z")
+	unrelated := seed("openclaw", "unrelated", 42, "unrelated summary", "2026-07-12T00:02:00Z")
+
+	summaryTasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+		RepoID: requested.repoID, Provider: "test", Model: "test",
+		SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1,
+		Number: requested.number, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("summary tasks: %v", err)
+	}
+	if len(summaryTasks) != 1 || summaryTasks[0].ThreadID != requested.threadID {
+		t.Fatalf("scoped summary tasks = %+v", summaryTasks)
+	}
+
+	embeddingTasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: requested.repoID, Basis: "llm_key_summary", Model: "test",
+		Number: requested.number, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("embedding tasks: %v", err)
+	}
+	if len(embeddingTasks) != 1 ||
+		embeddingTasks[0].ThreadID != requested.threadID ||
+		!strings.Contains(embeddingTasks[0].Text, requested.summary) ||
+		strings.Contains(embeddingTasks[0].Text, unrelated.summary) {
+		t.Fatalf("scoped embedding tasks = %+v", embeddingTasks)
+	}
+
+	summaries, err := st.summariesByThreadIDs(ctx, []int64{requested.threadID})
+	if err != nil {
+		t.Fatalf("cluster summaries: %v", err)
+	}
+	if summaries[requested.threadID][SummaryKindLLMKey] != requested.summary {
+		t.Fatalf("requested cluster summaries = %+v", summaries)
+	}
+	if _, ok := summaries[unrelated.threadID]; ok {
+		t.Fatalf("unrelated cluster summary escaped scope: %+v", summaries)
+	}
+}
+
 func TestClocklessRevisionConsumersUseObservationSequence(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
