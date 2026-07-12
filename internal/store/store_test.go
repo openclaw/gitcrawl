@@ -218,6 +218,27 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 		_ = raw.Close()
 		t.Fatalf("begin legacy schema fixture: %v", err)
 	}
+	migratedThreadID := threadID + 1000
+	if _, err := tx.ExecContext(
+		ctx,
+		`update thread_revisions set thread_id = ? where thread_id = ?`,
+		migratedThreadID,
+		threadID,
+	); err != nil {
+		_ = tx.Rollback()
+		_ = raw.Close()
+		t.Fatalf("move legacy revision to high thread id: %v", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`update threads set id = ? where id = ?`,
+		migratedThreadID,
+		threadID,
+	); err != nil {
+		_ = tx.Rollback()
+		_ = raw.Close()
+		t.Fatalf("move legacy thread above revision id: %v", err)
+	}
 	for _, stmt := range []string{
 		`create table thread_revisions_legacy (
 			id integer primary key,
@@ -309,7 +330,7 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 		select observation_sequence
 		from threads
 		where id = ?
-	`, threadID).Scan(&threadObservationSequence); err != nil {
+	`, migratedThreadID).Scan(&threadObservationSequence); err != nil {
 		t.Fatalf("read migrated thread observation sequence: %v", err)
 	}
 	if threadObservationSequence != result.RevisionID {
@@ -318,6 +339,15 @@ func TestOpenMigratesPortableVersionFourThreadRevisionHistory(t *testing.T) {
 			threadObservationSequence,
 			result.RevisionID,
 		)
+	}
+	coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+	if err != nil {
+		t.Fatalf("archive coverage after migration: %v", err)
+	}
+	if len(coverage.Rows) != 1 ||
+		coverage.Rows[0].Enrichment.Revisions.Fresh != 1 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Fresh != 1 {
+		t.Fatalf("migrated enrichment freshness = %+v", coverage.Rows)
 	}
 	nextObservationSequence, err := st.NextThreadObservationSequence(
 		ctx,

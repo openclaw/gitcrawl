@@ -282,13 +282,13 @@ func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		update threads
-		set observation_sequence = max(
-			id,
-			coalesce((
+		set observation_sequence = coalesce(
+			(
 				select max(tr.observation_sequence)
 				from thread_revisions tr
 				where tr.thread_id = threads.id
-			), 0)
+			),
+			id
 		)
 		where observation_sequence <= 0
 	`); err != nil {
