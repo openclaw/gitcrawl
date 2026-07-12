@@ -218,6 +218,84 @@ func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
 	}
 }
 
+func TestArchiveCoverageClocklessFreshnessUsesObservationSequence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := archiveCoverageThread(repoID, 1, "issue")
+	thread.UpdatedAtGitHub = ""
+	thread.UpdatedAt = "2026-07-12T12:00:00Z"
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(
+		ctx,
+		ThreadEvidence{Thread: thread},
+		"2026-07-12T12:00:01Z",
+	)
+	if err != nil {
+		t.Fatalf("revision and fingerprint: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: enrichment.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "openai",
+		Model:            "summary-test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "Current clockless evidence.",
+		CreatedAt:        "2026-07-12T12:00:02Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	assertFresh := func(want int) {
+		t.Helper()
+		coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+		if err != nil {
+			t.Fatalf("archive coverage: %v", err)
+		}
+		if len(coverage.Rows) != 1 {
+			t.Fatalf("coverage rows = %d, want 1", len(coverage.Rows))
+		}
+		for name, metric := range map[string]EnrichmentCoverageMetric{
+			"revisions":    coverage.Rows[0].Enrichment.Revisions,
+			"fingerprints": coverage.Rows[0].Enrichment.Fingerprints,
+			"summaries":    coverage.Rows[0].Enrichment.Summaries,
+		} {
+			if metric.Eligible != 1 || metric.Covered != 1 || metric.Fresh != want ||
+				metric.Stale != 1-want {
+				t.Fatalf("%s coverage = %+v", name, metric)
+			}
+		}
+	}
+	assertFresh(1)
+
+	thread.Title = "Advanced without a source clock"
+	thread.ContentHash = "clockless-advanced"
+	thread.UpdatedAt = "2026-07-12T12:00:03Z"
+	if _, err := st.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("advance thread: %v", err)
+	}
+	assertFresh(0)
+}
+
 func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 	ctx := context.Background()
 

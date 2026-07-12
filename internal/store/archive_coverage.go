@@ -365,16 +365,15 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 	if !s.archiveCoverageHasColumns(ctx, "thread_revisions", "id", "thread_id", "source_updated_at", "created_at") {
 		return EnrichmentCoverageMetric{}, nil
 	}
-	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
 	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+	revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 	rows, err := s.q().QueryContext(ctx, `
-		select case when tr.id is null then 0 else 1 end,
-			coalesce(nullif(tr.source_updated_at, ''), ''),
-			coalesce(tr.created_at, ''),
-			`+threadUpdatedAt+`
-		from threads t
-			left join thread_revisions tr on tr.id = (
-				select latest.id
+			select case when tr.id is null then 0 else 1 end,
+				coalesce(tr.created_at, ''),
+				case when tr.id is not null and (`+revisionFresh+`) then 1 else 0 end
+			from threads t
+				left join thread_revisions tr on tr.id = (
+					select latest.id
 					from thread_revisions latest
 					where latest.thread_id = t.id
 					order by `+revisionOrder+`
@@ -390,9 +389,9 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 	metric := EnrichmentCoverageMetric{Supported: true}
 	var latestCreatedAt time.Time
 	for rows.Next() {
-		var hasRevision int
-		var revisionUpdatedAt, createdAt, sourceUpdatedAt string
-		if err := rows.Scan(&hasRevision, &revisionUpdatedAt, &createdAt, &sourceUpdatedAt); err != nil {
+		var hasRevision, fresh int
+		var createdAt string
+		if err := rows.Scan(&hasRevision, &createdAt, &fresh); err != nil {
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive revision coverage: %w", err)
 		}
 		metric.Eligible++
@@ -403,7 +402,7 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 		if parsed, ok := parseArchiveCoverageTimestamp(createdAt); ok && (latestCreatedAt.IsZero() || parsed.After(latestCreatedAt)) {
 			latestCreatedAt = parsed
 		}
-		if archiveCoverageTimestampAtOrAfter(revisionUpdatedAt, sourceUpdatedAt) {
+		if fresh != 0 {
 			metric.Fresh++
 		}
 	}
@@ -433,17 +432,16 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 		condition = " and latest_child." + sqliteIdentifier(conditionColumn) + " = ?"
 		args = append(args, conditionValue)
 	}
-	threadUpdatedAt := archiveThreadUpdatedAtExpression(s, ctx, "t")
 	revisionOrder := s.latestThreadRevisionOrder(ctx, "latest")
+	revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 	args = append(args, repoID)
 	rows, err := s.q().QueryContext(ctx, `
-		select case when child.id is null then 0 else 1 end,
-			coalesce(nullif(tr.source_updated_at, ''), ''),
-			coalesce(child.created_at, ''),
-			`+threadUpdatedAt+`
-		from threads t
-			left join thread_revisions tr on tr.id = (
-				select latest.id
+			select case when child.id is null then 0 else 1 end,
+				coalesce(child.created_at, ''),
+				case when child.id is not null and (`+revisionFresh+`) then 1 else 0 end
+			from threads t
+				left join thread_revisions tr on tr.id = (
+					select latest.id
 					from thread_revisions latest
 					where latest.thread_id = t.id
 					order by `+revisionOrder+`
@@ -466,9 +464,9 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 	metric := EnrichmentCoverageMetric{Supported: true}
 	var latestObservationAt time.Time
 	for rows.Next() {
-		var hasChild int
-		var revisionUpdatedAt, childCreatedAt, sourceUpdatedAt string
-		if err := rows.Scan(&hasChild, &revisionUpdatedAt, &childCreatedAt, &sourceUpdatedAt); err != nil {
+		var hasChild, fresh int
+		var childCreatedAt string
+		if err := rows.Scan(&hasChild, &childCreatedAt, &fresh); err != nil {
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive revision child coverage: %w", err)
 		}
 		metric.Eligible++
@@ -479,7 +477,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 		if parsed, ok := parseArchiveCoverageTimestamp(childCreatedAt); ok && (latestObservationAt.IsZero() || parsed.After(latestObservationAt)) {
 			latestObservationAt = parsed
 		}
-		if archiveCoverageTimestampAtOrAfter(revisionUpdatedAt, sourceUpdatedAt) {
+		if fresh != 0 {
 			metric.Fresh++
 		}
 	}
