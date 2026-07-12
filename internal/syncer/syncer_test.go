@@ -3196,10 +3196,10 @@ func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
 		t.Fatalf("archive coverage: %v", err)
 	}
 	if len(coverage.Rows) != 1 ||
-		coverage.Rows[0].Enrichment.Revisions.Fresh != 1 ||
-		coverage.Rows[0].Enrichment.Revisions.Stale != 1 ||
-		coverage.Rows[0].Enrichment.Fingerprints.Fresh != 1 ||
-		coverage.Rows[0].Enrichment.Fingerprints.Stale != 1 {
+		coverage.Rows[0].Enrichment.Revisions.Fresh != 0 ||
+		coverage.Rows[0].Enrichment.Revisions.Stale != 2 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Fresh != 0 ||
+		coverage.Rows[0].Enrichment.Fingerprints.Stale != 2 {
 		t.Fatalf("metadata-only enrichment coverage = %+v", coverage)
 	}
 }

@@ -355,21 +355,20 @@ func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 
 	if _, err := st.DB().ExecContext(
 		ctx,
-		`update thread_revisions set source_updated_at = 'malformed' where id = ?`,
-		enrichment.RevisionID,
+		`update threads set evidence_source_updated_at = 'malformed' where id = ?`,
+		thread.ID,
 	); err != nil {
-		t.Fatalf("malform revision clock: %v", err)
+		t.Fatalf("malform accepted parent clock: %v", err)
 	}
-	assertConsumersStale("malformed revision clock")
+	assertConsumersStale("malformed accepted parent clock")
 
 	if _, err := st.DB().ExecContext(
 		ctx,
-		`update thread_revisions set source_updated_at = ?, observation_sequence = ? where id = ?`,
+		`update threads set evidence_source_updated_at = ? where id = ?`,
 		thread.UpdatedAtGitHub,
-		observationSequence,
-		enrichment.RevisionID,
+		thread.ID,
 	); err != nil {
-		t.Fatalf("restore revision clock: %v", err)
+		t.Fatalf("restore accepted parent clock: %v", err)
 	}
 	if _, err := st.DB().ExecContext(
 		ctx,
@@ -579,6 +578,181 @@ func TestRevisionConsumersRequireAcceptedEvidenceGenerationAfterNewerFetch(t *te
 			t.Fatalf("%s coverage = %+v, want fresh source revision", name, metric)
 		}
 	}
+}
+
+func TestRevisionConsumersRejectChildClockMaskingStaleParentAfterReopen(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "masked-parent", Number: 92, Kind: "issue", State: "open",
+		Title: "Stable parent content", Body: "Only the parent observation clock changes.",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/92",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         `{"parent":"t1"}`,
+		ContentHash:     "parent-t1",
+		UpdatedAtGitHub: "2026-07-12T00:01:00Z",
+		UpdatedAt:       "2026-07-12T00:01:00Z",
+	}
+	initial, err := st.UpsertThreadObservation(
+		ctx,
+		thread,
+		UpsertThreadOptions{ObservationSequence: 1},
+	)
+	if err != nil {
+		t.Fatalf("initial complete observation: %v", err)
+	}
+	if !initial.Applied || !initial.EvidenceApplied {
+		t.Fatalf("initial complete observation = %+v", initial)
+	}
+	thread.ID = initial.ID
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: 1,
+		Comments: []Comment{{
+			ThreadID: thread.ID, GitHubID: "later-child", CommentType: "issue_comment",
+			Body:            "child activity after both parent observations",
+			CreatedAtGitHub: "2026-07-12T00:03:00Z",
+			UpdatedAtGitHub: "2026-07-12T00:03:00Z",
+		}},
+	}, "2026-07-12T00:03:01Z")
+	if err != nil {
+		t.Fatalf("initial enrichment: %v", err)
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: enrichment.RevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "test",
+		Model:            "test",
+		InputHash:        "masked-parent-input",
+		OutputHash:       "masked-parent-output",
+		KeyText:          "summary from parent T1",
+		CreatedAt:        "2026-07-12T00:03:02Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	assertConsumers := func(label string, wantFresh bool) {
+		t.Helper()
+		summaryTasks, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{
+			RepoID: repoID, Provider: "test", Model: "test",
+			SummaryKind: SummaryKindLLMKey, PromptVersion: SummaryPromptVersionV1,
+			Number: thread.Number, Force: true,
+		})
+		if err != nil {
+			t.Fatalf("%s summary tasks: %v", label, err)
+		}
+		embeddingTasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+			RepoID: repoID, Basis: "llm_key_summary", Model: "test",
+			Number: thread.Number, Force: true,
+		})
+		if err != nil {
+			t.Fatalf("%s embedding tasks: %v", label, err)
+		}
+		summaries, err := st.summariesByThreadIDs(ctx, []int64{thread.ID})
+		if err != nil {
+			t.Fatalf("%s cluster summaries: %v", label, err)
+		}
+		coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+		if err != nil {
+			t.Fatalf("%s archive coverage: %v", label, err)
+		}
+		wantCount := 0
+		wantSummary := ""
+		wantCoverage := 0
+		if wantFresh {
+			wantCount = 1
+			wantSummary = "summary from parent T1"
+			wantCoverage = 1
+		}
+		if len(summaryTasks) != wantCount {
+			t.Fatalf("%s summary tasks = %+v, want %d", label, summaryTasks, wantCount)
+		}
+		if len(embeddingTasks) != wantCount {
+			t.Fatalf("%s embedding tasks = %+v, want %d", label, embeddingTasks, wantCount)
+		}
+		if summaries[thread.ID][SummaryKindLLMKey] != wantSummary {
+			t.Fatalf("%s cluster summaries = %+v, want %q", label, summaries, wantSummary)
+		}
+		for name, metric := range map[string]EnrichmentCoverageMetric{
+			"revisions":    coverage.Rows[0].Enrichment.Revisions,
+			"fingerprints": coverage.Rows[0].Enrichment.Fingerprints,
+			"summaries":    coverage.Rows[0].Enrichment.Summaries,
+		} {
+			if metric.Fresh != wantCoverage {
+				t.Fatalf("%s %s coverage = %+v, want fresh=%d", label, name, metric, wantCoverage)
+			}
+		}
+	}
+	assertConsumers("complete parent T1 evidence", true)
+
+	thread.RawJSON = `{"parent":"t2"}`
+	thread.ContentHash = "parent-t2"
+	thread.UpdatedAtGitHub = "2026-07-12T00:02:00Z"
+	thread.UpdatedAt = "2026-07-12T00:02:00Z"
+	metadata, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{
+		IncompleteEvidence:  true,
+		ObservationSequence: 2,
+	})
+	if err != nil {
+		t.Fatalf("metadata-only parent T2 observation: %v", err)
+	}
+	if !metadata.Applied || metadata.EvidenceApplied {
+		t.Fatalf("metadata-only parent T2 observation = %+v", metadata)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	var revisionSource, evidenceSource, parentSource string
+	var evidenceSequence int64
+	if err := st.DB().QueryRowContext(ctx, `
+		select coalesce(tr.source_updated_at, ''),
+			t.evidence_source_updated_at,
+			coalesce(t.updated_at_gh, ''),
+			t.evidence_observation_sequence
+		from thread_revisions tr
+		join threads t on t.id = tr.thread_id
+		where tr.id = ?
+	`, enrichment.RevisionID).Scan(
+		&revisionSource,
+		&evidenceSource,
+		&parentSource,
+		&evidenceSequence,
+	); err != nil {
+		t.Fatalf("read reopened observation clocks: %v", err)
+	}
+	if revisionSource != "2026-07-12T00:03:00Z" ||
+		evidenceSource != "2026-07-12T00:01:00Z" ||
+		parentSource != "2026-07-12T00:02:00Z" ||
+		evidenceSequence != 1 {
+		t.Fatalf(
+			"reopened clocks = revision %q evidence %q parent %q sequence %d",
+			revisionSource,
+			evidenceSource,
+			parentSource,
+			evidenceSequence,
+		)
+	}
+	assertConsumers("metadata-only parent T2 after reopen", false)
 }
 
 func TestRevisionConsumersRemainFreshAfterReopenWithNewerSourceLowerSequence(t *testing.T) {

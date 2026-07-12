@@ -215,6 +215,19 @@ func (s *Store) threadRevisionFreshnessPredicate(
 			") and (" + revisionSourceTimestamp + " is null or " +
 			threadSourceTimestamp + " is null or " +
 			revisionSourceTimestamp + " >= " + threadSourceTimestamp + ")"
+		// Revision source clocks include child activity; parent freshness comes
+		// from the accepted evidence fence when the canonical columns exist.
+		if s.hasColumn(ctx, "threads", "evidence_source_updated_at") &&
+			s.hasColumn(ctx, "threads", "updated_at_gh") {
+			evidenceSource := thread + "evidence_source_updated_at"
+			evidenceSourceTimestamp := "gitcrawl_timestamp_key(nullif(" +
+				evidenceSource + ", ''))"
+			evidenceSourceUsable := evidenceSourceTimestamp +
+				" is not null or trim(coalesce(" + evidenceSource + ", '')) = ''"
+			sourceClockFresh = "(" + evidenceSourceUsable + ") and (" +
+				threadSourceUsable + ") and " +
+				observationSourceEquivalentSQL(evidenceSource, thread+"updated_at_gh")
+		}
 		sequenceFresh := sequenceFloor + " > 0 and " +
 			revision + "observation_sequence > 0 and " +
 			revision + "observation_sequence = " + sequenceFloor
