@@ -191,6 +191,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runConfigure(rest[1:])
 	case "refresh":
 		return a.runRefresh(ctx, rest[1:])
+	case "summarize":
+		return a.runSummarize(ctx, rest[1:])
 	case "embed":
 		return a.runEmbed(ctx, rest[1:])
 	case "clusters":
@@ -211,7 +213,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "summarize", "key-summaries", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "key-summaries", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -3718,7 +3720,7 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "summaries", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
@@ -4626,6 +4628,7 @@ Core commands:
   sync                 sync GitHub issue and pull request metadata
   coverage             report local archive PR-detail completeness
   refresh              run sync, enrichment, embedding, and clustering pipeline
+  summarize            generate key summaries for current thread revisions
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
   code index           index tracked text files from a local Git checkout
@@ -4718,6 +4721,11 @@ Usage:
 
 Usage:
   gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--json]
+`,
+	"summarize": `gitcrawl summarize generates key summaries for current thread revisions.
+
+Usage:
+  gitcrawl summarize owner/repo [--number ref] [--limit N] [--force] [--include-closed] [--json]
 `,
 	"embed": `gitcrawl embed generates OpenAI embeddings for local thread documents.
 

@@ -69,8 +69,15 @@ Commands that accept a thread number also accept thread references:
 - scoped references: `owner/repo#123`
 - full GitHub issue or pull request URLs
 
-This applies to `sync --numbers`, `threads --numbers`, `embed --number`,
+This applies to `sync --numbers`, `threads --numbers`, `summarize --number`, `embed --number`,
 `neighbors --number`, all governance `--number` flags, and TUI jump input.
+
+## Summaries and embeddings
+
+| Command | Purpose |
+| --- | --- |
+| `gitcrawl summarize owner/repo [--number --limit --force --include-closed --json]` | Generate compact key summaries for current thread revisions |
+| `gitcrawl embed owner/repo [--number --limit --force --include-closed --json]` | Generate thread vectors using the configured embedding basis |
 
 ## Cluster
 
@@ -124,6 +131,6 @@ octopool gh api repos/openclaw/openclaw/pulls/123
 
 These appear in `SPEC.md` but currently return a "not implemented" error. They are reserved for future versions:
 
-`summarize`, `key-summaries`, `merge-clusters`, `split-cluster`, `export-sync`, `import-sync`, `validate-sync`, `portable-size`, `sync-status`, `optimize`, `completion`
+`key-summaries`, `merge-clusters`, `split-cluster`, `export-sync`, `import-sync`, `validate-sync`, `portable-size`, `sync-status`, `optimize`, `completion`
 
 If you need any of these to land sooner, [open an issue](https://github.com/openclaw/gitcrawl/issues).

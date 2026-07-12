@@ -15,7 +15,7 @@ permalink: /installation/
 - **Go 1.26+** if building from source
 - **Git** for cloning the repository (and for portable stores)
 - **A GitHub token** for any command that talks to GitHub (`sync`, `refresh`)
-- **An OpenAI API key** only for `embed`, `refresh` (embed stage), and any future summary commands
+- **An OpenAI API key** for `summarize`, `embed`, and the embedding stage of `refresh`
 - **`gh` CLI** optional, used by gitcrawl only as a token source via `gh auth token`
 
 gitcrawl runs on macOS and Linux. Windows is not actively tested.

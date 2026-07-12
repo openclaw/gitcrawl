@@ -43,13 +43,13 @@ path with `--config <path>` or `GITCRAWL_CONFIG`.
 | `GITCRAWL_DB_PATH` | Platform default database path | All commands | Override database path |
 | `GITCRAWL_TUI_LAYOUT` | `columns` | `tui` | Override default wide-screen layout |
 | `GITHUB_TOKEN` | _(none)_ | `sync` | GitHub API token |
-| `OPENAI_API_KEY` | _(none)_ | `embed`, `refresh` | OpenAI API key |
+| `OPENAI_API_KEY` | _(none)_ | `summarize`, `embed`, `refresh` | OpenAI API key |
 
 ### Models
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GITCRAWL_SUMMARY_MODEL` | `gpt-5.4` | Summary model (reserved for future commands) |
+| `GITCRAWL_SUMMARY_MODEL` | `gpt-5.4` | OpenAI summary model |
 | `GITCRAWL_EMBED_MODEL` | `text-embedding-3-small` | OpenAI embedding model |
 | `GITCRAWL_OPENAI_RETRY_DISABLED` | _(off)_ | Set `1` to disable OpenAI retry/backoff |
 | `GITCRAWL_OPENAI_BASE_URL` / `OPENAI_BASE_URL` | OpenAI default | Custom OpenAI endpoint |
@@ -75,7 +75,7 @@ path with `--config <path>` or `GITCRAWL_CONFIG`.
 | `embedding_basis` | `title_original` |
 | `vector_backend` | `exact`; `turbovec` requires Python `turbovec` and dimensions divisible by 8 |
 | `batch_size` (embeddings) | `64` |
-| `concurrency` (embeddings) | `2` |
+| `concurrency` (summaries) | `2` |
 | `tui_default_sort` | `size` |
 | `tui_default_layout` | `columns` |
 

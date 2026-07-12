@@ -21,7 +21,7 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	parts := []string{fmt.Sprintf("openai embeddings status=%d", e.Status)}
+	parts := []string{fmt.Sprintf("openai request status=%d", e.Status)}
 	if e.Type != "" {
 		parts = append(parts, "type="+e.Type)
 	}
@@ -32,6 +32,21 @@ func (e *APIError) Error() string {
 		parts = append(parts, "message="+e.Message)
 	}
 	return strings.Join(parts, " ")
+}
+
+func apiErrorFromHTTP(status int, header http.Header, body []byte, now time.Time) *APIError {
+	apiErr := &APIError{
+		Status:     status,
+		Message:    strings.TrimSpace(string(body)),
+		RetryAfter: parseRetryAfter(header.Get("Retry-After"), now),
+	}
+	var parsed summaryResponse
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != nil {
+		apiErr.Message = parsed.Error.Message
+		apiErr.Type = parsed.Error.Type
+		apiErr.Code = parsed.Error.Code
+	}
+	return apiErr
 }
 
 func (e *APIError) Retryable() bool {

@@ -370,8 +370,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 	rows, err := s.q().QueryContext(ctx, `
 		select case when child.id is null then 0 else 1 end,
 			coalesce(nullif(tr.source_updated_at, ''), tr.created_at, ''),
-			`+threadUpdatedAt+`,
-			coalesce(child.created_at, '')
+			`+threadUpdatedAt+`
 		from threads t
 		left join thread_revisions tr on tr.id = (
 			select latest.id
@@ -395,11 +394,11 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 	defer rows.Close()
 
 	metric := EnrichmentCoverageMetric{Supported: true}
-	var latestCreatedAt time.Time
+	var latestObservationAt time.Time
 	for rows.Next() {
 		var hasChild int
-		var revisionUpdatedAt, sourceUpdatedAt, childCreatedAt string
-		if err := rows.Scan(&hasChild, &revisionUpdatedAt, &sourceUpdatedAt, &childCreatedAt); err != nil {
+		var revisionUpdatedAt, sourceUpdatedAt string
+		if err := rows.Scan(&hasChild, &revisionUpdatedAt, &sourceUpdatedAt); err != nil {
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive revision child coverage: %w", err)
 		}
 		metric.Eligible++
@@ -407,8 +406,8 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 			continue
 		}
 		metric.Covered++
-		if parsed, ok := parseArchiveCoverageTimestamp(childCreatedAt); ok && (latestCreatedAt.IsZero() || parsed.After(latestCreatedAt)) {
-			latestCreatedAt = parsed
+		if parsed, ok := parseArchiveCoverageTimestamp(revisionUpdatedAt); ok && (latestObservationAt.IsZero() || parsed.After(latestObservationAt)) {
+			latestObservationAt = parsed
 		}
 		if archiveCoverageTimestampAtOrAfter(revisionUpdatedAt, sourceUpdatedAt) {
 			metric.Fresh++
@@ -417,8 +416,8 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 	if err := rows.Err(); err != nil {
 		return EnrichmentCoverageMetric{}, fmt.Errorf("iterate archive revision child coverage: %w", err)
 	}
-	if !latestCreatedAt.IsZero() {
-		metric.LatestAt = formatArchiveCoverageTimestamp(latestCreatedAt)
+	if !latestObservationAt.IsZero() {
+		metric.LatestAt = formatArchiveCoverageTimestamp(latestObservationAt)
 	}
 	finalizeEnrichmentCoverageMetric(&metric)
 	return metric, nil

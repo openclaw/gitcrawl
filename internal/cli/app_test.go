@@ -1099,7 +1099,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.Contains(helpOut.String(), "cluster browser") {
 		t.Fatalf("tui help output = %q", helpOut.String())
 	}
-	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
+	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "summarize", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
 		helpOut.Reset()
 		if err := help.printCommandUsage(topic); err != nil {
 			t.Fatalf("%s help: %v", topic, err)

@@ -359,6 +359,10 @@ func TestCLIAppUsageBranches(t *testing.T) {
 		{"embed", "bad-repo"},
 		{"embed", "openclaw/openclaw", "--number", "bad"},
 		{"embed", "openclaw/openclaw", "--limit", "bad"},
+		{"summarize"},
+		{"summarize", "bad-repo"},
+		{"summarize", "openclaw/openclaw", "--number", "bad"},
+		{"summarize", "openclaw/openclaw", "--limit", "bad"},
 		{"tui", "one", "two"},
 		{"tui", "--sort", "bad"},
 	}
