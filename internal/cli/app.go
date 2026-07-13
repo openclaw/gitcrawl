@@ -1993,7 +1993,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Repository:         repo.FullName,
 		InferredRepository: inferred,
 		Mode:               "cluster-browser",
-		DBSource:           databaseSourceKind(rt.SourceDBPath),
+		DBSource:           databaseSourceKind(ctx, rt.SourceDBPath),
 		DBLocation:         databaseSourceLocation(ctx, rt.SourceDBPath),
 		DBRefreshSource:    remoteRefreshSource(rt),
 		DBRuntimePath:      remoteRuntimePath(rt),
@@ -2048,7 +2048,7 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 	}
 	return clusterBrowserPayload{
 		Mode:           "cluster-browser",
-		DBSource:       databaseSourceKind(sourceDBPath),
+		DBSource:       databaseSourceKind(ctx, sourceDBPath),
 		DBLocation:     databaseSourceLocation(ctx, sourceDBPath),
 		Sort:           sort,
 		Layout:         layout,
@@ -2062,8 +2062,8 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 	}
 }
 
-func databaseSourceKind(dbPath string) string {
-	if _, ok := portableStoreRoot(dbPath); ok {
+func databaseSourceKind(ctx context.Context, dbPath string) string {
+	if _, ok := portableStoreRoot(ctx, dbPath); ok {
 		return "remote"
 	}
 	return "local"
@@ -2085,7 +2085,7 @@ func remoteRuntimePath(rt localRuntime) string {
 
 func databaseSourceLocation(ctx context.Context, dbPath string) string {
 	filename := filepath.Base(dbPath)
-	root, ok := portableStoreRoot(dbPath)
+	root, ok := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return filename
 	}
@@ -3716,7 +3716,7 @@ func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[stri
 
 func portableStoreGitStatus(ctx context.Context, dbPath string) map[string]any {
 	result := map[string]any{}
-	root, ok := portableStoreRoot(dbPath)
+	root, ok := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		result["state"] = "not_portable"
 		return result

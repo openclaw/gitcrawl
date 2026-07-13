@@ -44,7 +44,7 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
-	if _, ok := portableStoreRoot(cfg.DBPath); ok {
+	if _, ok := portableStoreRoot(ctx, cfg.DBPath); ok {
 		mirrorPath, _, err := a.ensurePortableRuntimeDB(ctx, cfg.DBPath, false)
 		if err != nil {
 			return localRuntime{}, err
@@ -73,7 +73,7 @@ func (a *App) openLocalRuntimeReadOnlyWithConfig(ctx context.Context, cfg config
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
-	if _, ok := portableStoreRoot(cfg.DBPath); ok {
+	if _, ok := portableStoreRoot(ctx, cfg.DBPath); ok {
 		mirrorPath, _, err := a.ensurePortableRuntimeDB(ctx, cfg.DBPath, true)
 		if err != nil {
 			return localRuntime{}, err
@@ -104,7 +104,7 @@ func (rt localRuntime) defaultRepository(ctx context.Context) (store.Repository,
 }
 
 func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
-	root, ok := portableStoreRoot(dbPath)
+	root, ok := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return nil
 	}
@@ -131,7 +131,7 @@ type portableRepairResult struct {
 
 func repairMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath string) (portableRepairResult, error) {
 	result := portableRepairResult{Action: "reset-pulled"}
-	root, ok := portableStoreRoot(dbPath)
+	root, ok := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return result, nil
 	}
@@ -165,7 +165,7 @@ func repairMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath s
 
 func recloneMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath string) (portableRepairResult, error) {
 	result := portableRepairResult{Action: "recloned"}
-	root, ok := portableStoreRoot(dbPath)
+	root, ok := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return result, nil
 	}
@@ -210,7 +210,7 @@ func recloneMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath 
 var portableRuntimeMu sync.Mutex
 
 func (a *App) ensurePortableRuntimeDB(ctx context.Context, sourceDBPath string, refresh bool) (string, bool, error) {
-	mirrorPath, err := a.portableRuntimeDBPath(sourceDBPath)
+	mirrorPath, err := a.portableRuntimeDBPath(ctx, sourceDBPath)
 	if err != nil {
 		return "", false, err
 	}
@@ -218,8 +218,8 @@ func (a *App) ensurePortableRuntimeDB(ctx context.Context, sourceDBPath string, 
 	return mirrorPath, changed, err
 }
 
-func (a *App) portableRuntimeDBPath(sourceDBPath string) (string, error) {
-	root, ok := portableStoreRoot(sourceDBPath)
+func (a *App) portableRuntimeDBPath(ctx context.Context, sourceDBPath string) (string, error) {
+	root, ok := portableStoreRoot(ctx, sourceDBPath)
 	if !ok {
 		return "", fmt.Errorf("portable store root not found for %s", sourceDBPath)
 	}
@@ -237,7 +237,7 @@ func (a *App) portableRuntimeDBPath(sourceDBPath string) (string, error) {
 func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath string, refresh bool, configPath string) (bool, error) {
 	portableRuntimeMu.Lock()
 	defer portableRuntimeMu.Unlock()
-	portableRoot, isPortableSource := portableStoreRoot(sourceDBPath)
+	portableRoot, isPortableSource := portableStoreRoot(ctx, sourceDBPath)
 	isRepairablePortableSource := isPortableSource && portableStoreIsGitWorktree(ctx, portableRoot)
 	if refresh {
 		_ = refreshPortableStoreForDBIfDue(ctx, sourceDBPath, mirrorPath)
@@ -768,10 +768,10 @@ func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath st
 	return nil
 }
 
-func portableStoreRoot(dbPath string) (string, bool) {
+func portableStoreRoot(ctx context.Context, dbPath string) (string, bool) {
 	dir := filepath.Clean(filepath.Dir(dbPath))
 	for {
-		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() && portableStoreIsGitWorktree(ctx, dir) {
 			return dir, true
 		}
 		parent := filepath.Dir(dir)

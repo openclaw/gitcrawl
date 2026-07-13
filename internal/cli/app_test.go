@@ -2688,7 +2688,7 @@ func TestDefaultPortableStoreDir(t *testing.T) {
 
 func TestDatabaseSourceLocationLocal(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	if got := databaseSourceKind(dbPath); got != "local" {
+	if got := databaseSourceKind(context.Background(), dbPath); got != "local" {
 		t.Fatalf("source kind = %q, want local", got)
 	}
 	if got := databaseSourceLocation(context.Background(), dbPath); got != "gitcrawl.db" {
@@ -2711,7 +2711,7 @@ func TestDatabaseSourceLocationRemoteGitHubStore(t *testing.T) {
 		t.Fatalf("git remote add: %v", err)
 	}
 
-	if got := databaseSourceKind(dbPath); got != "remote" {
+	if got := databaseSourceKind(ctx, dbPath); got != "remote" {
 		t.Fatalf("source kind = %q, want remote", got)
 	}
 	want := "openclaw/gitcrawl-store:openclaw__openclaw.sync.db"
@@ -3094,7 +3094,7 @@ func TestReadCommandRefreshesPortableStore(t *testing.T) {
 	if !gitWorktreeClean(ctx, checkoutDir) {
 		t.Fatal("portable checkout should stay clean after read-only command")
 	}
-	mirrorPath, err := run.portableRuntimeDBPath(filepath.Join(checkoutDir, dbRel))
+	mirrorPath, err := run.portableRuntimeDBPath(ctx, filepath.Join(checkoutDir, dbRel))
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
@@ -3205,7 +3205,7 @@ func TestReadCommandRepairsMalformedDirtyPortableStore(t *testing.T) {
 	}
 	run := New()
 	run.configPath = configPath
-	mirrorPath, err := run.portableRuntimeDBPath(checkoutDB)
+	mirrorPath, err := run.portableRuntimeDBPath(ctx, checkoutDB)
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
@@ -3331,7 +3331,7 @@ func TestPortableRuntimePropagatesNonCorruptionSourceErrors(t *testing.T) {
 	checkoutDB := filepath.Join(checkoutDir, dbRel)
 	run := New()
 	run.configPath = filepath.Join(dir, "config.toml")
-	mirrorPath, err := run.portableRuntimeDBPath(checkoutDB)
+	mirrorPath, err := run.portableRuntimeDBPath(ctx, checkoutDB)
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
@@ -3473,6 +3473,53 @@ func TestPortableRuntimeRejectsManifestMismatchBeforeReplacingMirror(t *testing.
 	err = validatePortableSQLiteFile(ctx, checkoutDB, checkoutDB)
 	if err == nil || !isPortableSourceRepairableHealthError(err) {
 		t.Fatalf("malformed manifest should be a repairable health error, got %v", err)
+	}
+}
+
+func TestSyncCreatesLocalDatabaseBelowUnrelatedGitMetadata(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dataRoot := filepath.Join(dir, "data-root")
+	if err := os.MkdirAll(filepath.Join(dataRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir unrelated git metadata: %v", err)
+	}
+
+	dbPath := filepath.Join(dataRoot, "gitcrawl", "gitcrawl.db")
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/openclaw/openclaw":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/openclaw"})
+		case "/repos/openclaw/openclaw/issues/101":
+			_ = json.NewEncoder(w).Encode(githubIssueJSON(101, "issue", "Git metadata regression"))
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+
+	if err := New().Run(ctx, []string{"--config", configPath, "sync", "openclaw/openclaw", "--numbers", "101", "--json"}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	st, err := store.OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open local database: %v", err)
+	}
+	defer st.Close()
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatalf("local database status: %v", err)
+	}
+	if status.ThreadCount != 1 {
+		t.Fatalf("local database thread count = %d, want 1", status.ThreadCount)
 	}
 }
 
