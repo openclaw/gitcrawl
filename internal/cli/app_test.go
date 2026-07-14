@@ -3635,10 +3635,10 @@ func TestDoctorJSONReportsCurrentSchemaDiagnosticsWithoutMutation(t *testing.T) 
 	if got := schema["state"]; got != "current" {
 		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
 	}
-	if got := schema["current_version"]; got != float64(10) {
+	if got := schema["current_version"]; got != float64(11) {
 		t.Fatalf("db_schema.current_version = %#v, payload=%#v", got, schema)
 	}
-	if got := schema["supported_version"]; got != float64(10) {
+	if got := schema["supported_version"]; got != float64(11) {
 		t.Fatalf("db_schema.supported_version = %#v, payload=%#v", got, schema)
 	}
 	if got := schema["child_observation_reservations"]; got != true {
@@ -3900,7 +3900,7 @@ func TestDoctorJSONReportsLegacyPendingSchemaWithoutMutation(t *testing.T) {
 		t.Fatalf("pr_details.duplicate_path_files_supported = %#v, payload=%#v", got, prDetails)
 	}
 	pending := doctorStringList(t, schema, "pending_migrations")
-	if !doctorListContains(pending, "schema_version_3_to_10") ||
+	if !doctorListContains(pending, "schema_version_3_to_11") ||
 		!doctorListContains(pending, "pull_request_files_position_key") ||
 		!doctorListContains(pending, "thread_child_observation_reservations_table") {
 		t.Fatalf("pending_migrations = %#v", pending)

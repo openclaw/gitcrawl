@@ -748,7 +748,7 @@ func TestInspectSchemaClassifiesBoundaryStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open newer-schema fixture: %v", err)
 	}
-	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 11`); err != nil {
+	if _, err := st.DB().ExecContext(ctx, `pragma user_version = 12`); err != nil {
 		_ = st.Close()
 		t.Fatalf("mark newer-schema fixture: %v", err)
 	}

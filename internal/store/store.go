@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	schemaVersion = 10
+	schemaVersion = 11
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -308,6 +308,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensurePullRequestFilesPositionKey(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureLegacyThreadKeySummaryKinds(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureObservationSchemaConvergence(ctx); err != nil {
 		return err
 	}
@@ -327,6 +330,25 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("schema migration left pending convergence: %s", strings.Join(pending, ", "))
 	}
 	return s.markObservationSchemaConverged(ctx)
+}
+
+func (s *Store) ensureLegacyThreadKeySummaryKinds(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		insert into thread_key_summaries(
+			thread_revision_id, summary_kind, prompt_version, provider, model,
+			input_hash, output_hash, key_text, created_at
+		)
+		select
+			thread_revision_id, ?, prompt_version, provider, model,
+			input_hash, output_hash, key_text, created_at
+		from thread_key_summaries
+		where summary_kind = ?
+		on conflict(thread_revision_id, summary_kind, prompt_version, provider, model)
+			do nothing
+	`, SummaryKindLLMKey, summaryKindLegacyLLMKey3Line); err != nil {
+		return fmt.Errorf("migrate legacy thread key summaries: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) ensureLegacyPortableColumns(ctx context.Context) error {

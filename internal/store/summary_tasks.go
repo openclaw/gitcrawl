@@ -10,11 +10,12 @@ import (
 )
 
 const (
-	SummaryKindLLMKey       = "llm_key_summary"
-	SummaryPromptVersionV1  = "key-summary-v1"
-	MaxSummaryTextRunes     = 12_000
-	MaxSummaryTextBytes     = 24_000
-	summaryInputHashVersion = "summary-input:v2"
+	SummaryKindLLMKey            = "llm_key_summary"
+	SummaryPromptVersionV1       = "key-summary-v1"
+	MaxSummaryTextRunes          = 12_000
+	MaxSummaryTextBytes          = 24_000
+	summaryInputHashVersion      = "summary-input:v2"
+	summaryKindLegacyLLMKey3Line = "llm_key_3line"
 )
 
 type SummaryTask struct {

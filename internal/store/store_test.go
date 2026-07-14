@@ -89,6 +89,152 @@ func TestOpenMigratesSchema(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesLegacyThreadKeySummaryKinds(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	thread := Thread{
+		RepoID:          repoID,
+		GitHubID:        "101",
+		Number:          101,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "reuse legacy summary",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/101",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "thread",
+		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
+		UpdatedAt:       "2026-07-12T00:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	enrichment, err := st.UpsertThreadRevisionAndFingerprint(
+		ctx,
+		ThreadEvidence{Thread: thread},
+		"2026-07-12T00:00:00Z",
+	)
+	if err != nil {
+		t.Fatalf("enrichment: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_key_summaries(
+			thread_revision_id, summary_kind, prompt_version, provider, model,
+			input_hash, output_hash, key_text, created_at
+		)
+		values
+			(?, 'llm_key_3line', 'llm-key-summary-v1', 'openai', 'gpt-5-mini',
+				'legacy-input-v1', 'legacy-output-v1', 'legacy summary v1', '2026-07-12T00:01:00Z'),
+			(?, 'llm_key_3line', 'llm-key-summary-v2', 'openai', 'gpt-5-mini',
+				'legacy-input-v2', 'legacy-output-v2', 'legacy summary v2', '2026-07-12T00:02:00Z'),
+			(?, 'llm_key_summary', 'llm-key-summary-v2', 'openai', 'gpt-5-mini',
+				'canonical-input-v2', 'canonical-output-v2', 'canonical summary v2', '2026-07-12T00:03:00Z');
+		pragma user_version = 10;
+	`, enrichment.RevisionID, enrichment.RevisionID, enrichment.RevisionID); err != nil {
+		_ = st.Close()
+		t.Fatalf("seed legacy summaries: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer st.Close()
+
+	var version int
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
+	for _, test := range []struct {
+		promptVersion string
+		inputHash     string
+		outputHash    string
+		keyText       string
+		createdAt     string
+	}{
+		{
+			promptVersion: "llm-key-summary-v1",
+			inputHash:     "legacy-input-v1",
+			outputHash:    "legacy-output-v1",
+			keyText:       "legacy summary v1",
+			createdAt:     "2026-07-12T00:01:00Z",
+		},
+		{
+			promptVersion: "llm-key-summary-v2",
+			inputHash:     "canonical-input-v2",
+			outputHash:    "canonical-output-v2",
+			keyText:       "canonical summary v2",
+			createdAt:     "2026-07-12T00:03:00Z",
+		},
+	} {
+		var inputHash, outputHash, keyText, createdAt string
+		if err := st.DB().QueryRowContext(ctx, `
+			select input_hash, output_hash, key_text, created_at
+			from thread_key_summaries
+			where thread_revision_id = ?
+				and summary_kind = ?
+				and prompt_version = ?
+				and provider = 'openai'
+				and model = 'gpt-5-mini'
+		`, enrichment.RevisionID, SummaryKindLLMKey, test.promptVersion).Scan(
+			&inputHash,
+			&outputHash,
+			&keyText,
+			&createdAt,
+		); err != nil {
+			t.Fatalf("read canonical %s summary: %v", test.promptVersion, err)
+		}
+		if inputHash != test.inputHash || outputHash != test.outputHash ||
+			keyText != test.keyText || createdAt != test.createdAt {
+			t.Fatalf(
+				"canonical %s summary = %q/%q/%q/%q, want %q/%q/%q/%q",
+				test.promptVersion,
+				inputHash,
+				outputHash,
+				keyText,
+				createdAt,
+				test.inputHash,
+				test.outputHash,
+				test.keyText,
+				test.createdAt,
+			)
+		}
+	}
+	var legacyCount int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from thread_key_summaries
+		where thread_revision_id = ? and summary_kind = 'llm_key_3line'
+	`, enrichment.RevisionID).Scan(&legacyCount); err != nil {
+		t.Fatalf("count preserved legacy summaries: %v", err)
+	}
+	if legacyCount != 2 {
+		t.Fatalf("legacy summaries = %d, want 2", legacyCount)
+	}
+}
+
 func TestOpenMigratesAuthorAssociationFromVersionFour(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
@@ -1246,7 +1392,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_10") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_11") {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -1279,7 +1425,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 10;
+		pragma user_version = 11;
 	`)
 	if err != nil {
 		_ = db.Close()
@@ -1389,7 +1535,7 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_10") ||
+	if !containsString(diag.PendingMigrations, "schema_version_3_to_11") ||
 		!containsString(diag.PendingMigrations, "pull_request_files_position_key") ||
 		!containsString(diag.PendingMigrations, "thread_child_observation_reservations_table") ||
 		!containsString(diag.PendingMigrations, "workflow_run_observation_reservations_table") {

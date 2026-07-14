@@ -2,6 +2,7 @@
 
 ## 0.7.2 - Unreleased
 
+- Reuse legacy `llm_key_3line` summaries as canonical key-summary evidence during schema migration so existing archives can embed, cluster, and publish without regenerating every summary first.
 - Require every Gitcrawl cloud publisher manifest to opt into snapshot staging so `--stage-only` and normal publish-then-cutover runs cannot activate serving state through the legacy compatibility path.
 - Update CrawlKit to v0.14.2 and bind publisher resume plus post-cutover verification to the exact snapshot ID, so a newer concurrently staged candidate cannot be mistaken for the snapshot this publisher owns.
 - Fail cloud publication before any remote mutation when local enrichment coverage is incomplete unless operators explicitly pass `--allow-incomplete`.
