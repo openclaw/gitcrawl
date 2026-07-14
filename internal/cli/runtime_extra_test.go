@@ -2,11 +2,26 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestPortableStoreRootPropagatesGitProbeFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := runGit(context.Background(), "", "init", dir); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := portableStoreRoot(ctx, filepath.Join(dir, "gitcrawl.db"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("portable store root error = %v, want context canceled", err)
+	}
+}
 
 func TestPortableRuntimeUtilityBranches(t *testing.T) {
 	dir := t.TempDir()

@@ -2063,7 +2063,7 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 }
 
 func databaseSourceKind(ctx context.Context, dbPath string) string {
-	if _, ok := portableStoreRoot(ctx, dbPath); ok {
+	if _, ok, _ := portableStoreRoot(ctx, dbPath); ok {
 		return "remote"
 	}
 	return "local"
@@ -2085,7 +2085,7 @@ func remoteRuntimePath(rt localRuntime) string {
 
 func databaseSourceLocation(ctx context.Context, dbPath string) string {
 	filename := filepath.Base(dbPath)
-	root, ok := portableStoreRoot(ctx, dbPath)
+	root, ok, _ := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return filename
 	}
@@ -3716,16 +3716,17 @@ func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[stri
 
 func portableStoreGitStatus(ctx context.Context, dbPath string) map[string]any {
 	result := map[string]any{}
-	root, ok := portableStoreRoot(ctx, dbPath)
+	root, ok, err := portableStoreRoot(ctx, dbPath)
+	if err != nil {
+		result["state"] = "error"
+		result["error"] = err.Error()
+		return result
+	}
 	if !ok {
 		result["state"] = "not_portable"
 		return result
 	}
 	result["root"] = root
-	if !portableStoreIsGitWorktree(ctx, root) {
-		result["state"] = "not_git"
-		return result
-	}
 	if gitWorktreeClean(ctx, root) {
 		result["state"] = "clean"
 	} else {
