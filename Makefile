@@ -1,7 +1,7 @@
 BINARY := gitcrawl
 VERSION ?= dev
 
-.PHONY: build generate-sqlc test test-coverage run clean
+.PHONY: build generate-sqlc test test-coverage run clean release-artifacts
 
 build:
 	mkdir -p bin
@@ -25,3 +25,8 @@ run:
 
 clean:
 	rm -rf bin
+
+release-artifacts:
+	@test -n "$(VERSION)" && [ "$(VERSION)" != dev ] || (echo "usage: make release-artifacts VERSION=vX.Y.Z" >&2; exit 2)
+	@helper="$${MAC_RELEASE_HELPER:-$$HOME/Projects/agent-scripts/skills/release-mac-app/scripts/mac-release}"; \
+	"$$helper" codesign-run -- ./scripts/package-release.sh "$(VERSION)"

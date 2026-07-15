@@ -49,17 +49,17 @@ order by coalesce(updated_at, '') desc, id desc;
 
 -- name: UpsertThread :one
 insert into threads(
-  repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+  repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, raw_json, content_hash, is_draft,
   created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
-  first_pulled_at, last_pulled_at, updated_at
+  first_pulled_at, last_pulled_at, observation_sequence, updated_at
 )
 values(
   sqlc.arg(repo_id), sqlc.arg(github_id), sqlc.arg(number), sqlc.arg(kind), sqlc.arg(state), sqlc.arg(title),
-  sqlc.narg(body), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.arg(html_url),
+  sqlc.narg(body), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.narg(author_association), sqlc.arg(html_url),
   sqlc.arg(labels_json), sqlc.arg(assignees_json), sqlc.arg(raw_json), sqlc.arg(content_hash), sqlc.arg(is_draft),
   sqlc.narg(created_at_gh), sqlc.narg(updated_at_gh), sqlc.narg(closed_at_gh), sqlc.narg(merged_at_gh),
-  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(updated_at)
+  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(observation_sequence), sqlc.arg(updated_at)
 )
 on conflict(repo_id, kind, number) do update set
   github_id=excluded.github_id,
@@ -68,6 +68,7 @@ on conflict(repo_id, kind, number) do update set
   body=excluded.body,
   author_login=excluded.author_login,
   author_type=excluded.author_type,
+  author_association=excluded.author_association,
   html_url=excluded.html_url,
   labels_json=excluded.labels_json,
   assignees_json=excluded.assignees_json,
@@ -79,6 +80,44 @@ on conflict(repo_id, kind, number) do update set
   closed_at_gh=excluded.closed_at_gh,
   merged_at_gh=excluded.merged_at_gh,
   last_pulled_at=excluded.last_pulled_at,
+  observation_sequence=excluded.observation_sequence,
+  updated_at=excluded.updated_at
+returning id;
+
+-- name: UpsertThreadPreservingDraft :one
+insert into threads(
+  repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
+  labels_json, assignees_json, raw_json, content_hash, is_draft,
+  created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh,
+  first_pulled_at, last_pulled_at, observation_sequence, updated_at
+)
+values(
+  sqlc.arg(repo_id), sqlc.arg(github_id), sqlc.arg(number), sqlc.arg(kind), sqlc.arg(state), sqlc.arg(title),
+  sqlc.narg(body), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.narg(author_association), sqlc.arg(html_url),
+  sqlc.arg(labels_json), sqlc.arg(assignees_json), sqlc.arg(raw_json), sqlc.arg(content_hash), sqlc.arg(is_draft),
+  sqlc.narg(created_at_gh), sqlc.narg(updated_at_gh), sqlc.narg(closed_at_gh), sqlc.narg(merged_at_gh),
+  sqlc.narg(first_pulled_at), sqlc.narg(last_pulled_at), sqlc.arg(observation_sequence), sqlc.arg(updated_at)
+)
+on conflict(repo_id, kind, number) do update set
+  github_id=excluded.github_id,
+  state=excluded.state,
+  title=excluded.title,
+  body=excluded.body,
+  author_login=excluded.author_login,
+  author_type=excluded.author_type,
+  author_association=excluded.author_association,
+  html_url=excluded.html_url,
+  labels_json=excluded.labels_json,
+  assignees_json=excluded.assignees_json,
+  raw_json=excluded.raw_json,
+  content_hash=excluded.content_hash,
+  is_draft=threads.is_draft,
+  created_at_gh=excluded.created_at_gh,
+  updated_at_gh=excluded.updated_at_gh,
+  closed_at_gh=excluded.closed_at_gh,
+  merged_at_gh=excluded.merged_at_gh,
+  last_pulled_at=excluded.last_pulled_at,
+  observation_sequence=excluded.observation_sequence,
   updated_at=excluded.updated_at
 returning id;
 
@@ -90,12 +129,12 @@ set github_id = sqlc.arg(github_id),
   body = sqlc.narg(body),
   author_login = sqlc.narg(author_login),
   author_type = sqlc.narg(author_type),
+  author_association = sqlc.narg(author_association),
   html_url = sqlc.arg(html_url),
   labels_json = sqlc.arg(labels_json),
   assignees_json = sqlc.arg(assignees_json),
   raw_json = sqlc.arg(raw_json),
   content_hash = sqlc.arg(content_hash),
-  is_draft = sqlc.arg(is_draft),
   created_at_gh = sqlc.narg(created_at_gh),
   updated_at_gh = sqlc.narg(updated_at_gh),
   closed_at_gh = sqlc.narg(closed_at_gh),
@@ -109,7 +148,7 @@ where repo_id = sqlc.arg(repo_id)
   and closed_at_local is null;
 
 -- name: ListThreadsCurrentSchema :many
-select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, coalesce(raw_json, '') as raw_json, content_hash, is_draft, created_at_gh, updated_at_gh,
   closed_at_gh, merged_at_gh, first_pulled_at, last_pulled_at, updated_at, closed_at_local, close_reason_local
 from threads
@@ -161,28 +200,6 @@ where documents.title is not excluded.title
    or documents.raw_text is not excluded.raw_text
    or documents.dedupe_text is not excluded.dedupe_text
 returning id;
-
--- name: ListEmbeddingTasks :many
-select t.id, t.number, t.kind, t.title, coalesce(d.body, t.body, '') as body, coalesce(d.raw_text, t.body, '') as raw_text,
-  coalesce(d.dedupe_text, t.title || ' ' || coalesce(t.body, '')) as dedupe_text,
-  cast(coalesce((
-    select tks.key_text
-    from thread_key_summaries tks
-    join thread_revisions tr on tr.id = tks.thread_revision_id
-    where tr.thread_id = t.id
-      and tks.summary_kind in ('llm_key_summary', 'llm_key_3line')
-    order by tks.created_at desc, tr.created_at desc, tks.id desc
-    limit 1
-  ), '') as text) as key_summary,
-  coalesce(tv.content_hash, '') as existing_hash
-from threads t
-left join documents d on d.thread_id = t.id
-left join thread_vectors tv on tv.thread_id = t.id and tv.basis = sqlc.arg(basis) and tv.model = sqlc.arg(model)
-where t.repo_id = sqlc.arg(repo_id)
-  and (sqlc.arg(include_closed) != 0 or (t.state = 'open' and t.closed_at_local is null))
-  and (sqlc.narg(number) is null or t.number = sqlc.narg(number))
-order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
-limit case when sqlc.arg(row_limit) <= 0 then -1 else sqlc.arg(row_limit) end;
 
 -- name: RecordSyncRun :one
 insert into sync_runs(repo_id, scope, status, started_at, finished_at, stats_json, error_text)

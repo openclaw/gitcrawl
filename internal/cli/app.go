@@ -193,6 +193,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runConfigure(rest[1:])
 	case "refresh":
 		return a.runRefresh(ctx, rest[1:])
+	case "summarize":
+		return a.runSummarize(ctx, rest[1:])
 	case "embed":
 		return a.runEmbed(ctx, rest[1:])
 	case "clusters":
@@ -213,7 +215,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPortable(ctx, rest[1:])
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
-	case "summarize", "key-summaries", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
+	case "key-summaries", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
 		_ = ctx
 		return notImplemented(rest[0])
 	default:
@@ -338,6 +340,8 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	noEmbed := fs.Bool("no-embed", false, "skip embedding stage")
 	noCluster := fs.Bool("no-cluster", false, "skip clustering stage")
 	includeComments := fs.Bool("include-comments", false, "hydrate comments during sync")
+	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, workflow runs, and review threads")
+	withRaw := fs.String("with", "", "additional sync hydration: pr-details")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	since := fs.String("since", "", "GitHub since timestamp")
 	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
@@ -347,8 +351,9 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	maxClusterSizeRaw := fs.String("max-cluster-size", strconv.Itoa(defaultClusterMaxSize), "maximum members per generated cluster")
 	fanoutRaw := fs.String("k", strconv.Itoa(defaultClusterFanout), "nearest-neighbor fanout per thread")
 	crossKindThresholdRaw := fs.String("cross-kind-threshold", fmt.Sprintf("%.2f", defaultCrossKindMinScore), "minimum score for issue/pull request edges")
+	strictVectors := fs.Bool("strict-vectors", false, "require complete fresh configured vectors before clustering")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true, "threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"since": true, "state": true, "limit": true, "threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true, "with": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -357,6 +362,10 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	}
 	if *noSync && *noEmbed && *noCluster {
 		return usageErr(fmt.Errorf("refresh requires at least one selected stage"))
+	}
+	with, err := parseSyncWith(*withRaw)
+	if err != nil {
+		return usageErr(err)
 	}
 	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
 	if err != nil {
@@ -396,10 +405,11 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	if !*noSync {
 		fmt.Fprintln(a.Stderr, "[refresh] sync")
 		stats, err := a.syncRepository(ctx, owner, repoName, syncOptions{
-			Since:           strings.TrimSpace(*since),
-			State:           strings.TrimSpace(*state),
-			Limit:           limit,
-			IncludeComments: *includeComments,
+			Since:            strings.TrimSpace(*since),
+			State:            strings.TrimSpace(*state),
+			Limit:            limit,
+			IncludeComments:  *includeComments,
+			IncludePRDetails: *includePRDetails || with["pr-details"],
 		})
 		if err != nil {
 			return err
@@ -434,7 +444,19 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			_ = rt.Store.Close()
 			return err
 		}
-		if len(vectors) == 0 {
+		coverage, freshVectors, err := evaluateClusterVectorCoverage(ctx, rt.Store, query, vectors)
+		if err != nil {
+			_ = rt.Store.Close()
+			return err
+		}
+		if *strictVectors {
+			if err := requireCompleteClusterVectorCoverage(owner, repoName, query, coverage, len(freshVectors), false); err != nil {
+				_ = rt.Store.Close()
+				return err
+			}
+		}
+		vectors = freshVectors
+		if len(vectors) == 0 && !*strictVectors {
 			fallbackQuery := store.ThreadVectorQuery{RepoID: repo.ID, IncludeClosed: stateIncludesClosed(*state)}
 			fallbackVectors, err := rt.Store.ListThreadVectorsFiltered(ctx, fallbackQuery)
 			if err != nil {
@@ -443,17 +465,20 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			}
 			if len(fallbackVectors) > 0 {
 				query = fallbackQuery
-				vectors = dedupeThreadVectorsByThread(fallbackVectors)
+				vectors, err = freshFallbackClusterVectors(ctx, rt.Store, fallbackQuery, fallbackVectors)
+				if err != nil {
+					_ = rt.Store.Close()
+					return err
+				}
+				coverage.Fallback = true
 			}
 		}
-		retireMissing := minSize <= 1 && !stateIncludesClosed(*state)
-		if retireMissing {
-			retireMissing, err = completeClusterVectorCoverage(ctx, rt.Store, query, vectors)
-			if err != nil {
-				_ = rt.Store.Close()
-				return err
-			}
+		coverage.Processed = len(vectors)
+		coverage.Partial = coverage.Fallback || !coverage.Complete
+		if coverage.Partial {
+			coverage.Complete = false
 		}
+		retireMissing := minSize <= 1 && !stateIncludesClosed(*state) && coverage.Complete
 		clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, clusterBuildOptions{
 			Threshold:          threshold,
 			MinSize:            minSize,
@@ -468,16 +493,17 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 		}
 		result.Repository = repo.FullName
 		result.Cluster = map[string]any{
-			"threshold":     threshold,
-			"cross_kind":    crossKindThreshold,
-			"min_size":      minSize,
-			"max_size":      maxClusterSize,
-			"k":             fanout,
-			"vector_count":  len(vectors),
-			"edge_count":    clusterResult.EdgeCount,
-			"cluster_count": clusterResult.ClusterCount,
-			"member_count":  clusterResult.MemberCount,
-			"run_id":        clusterResult.RunID,
+			"threshold":       threshold,
+			"cross_kind":      crossKindThreshold,
+			"min_size":        minSize,
+			"max_size":        maxClusterSize,
+			"k":               fanout,
+			"vector_count":    len(vectors),
+			"edge_count":      clusterResult.EdgeCount,
+			"cluster_count":   clusterResult.ClusterCount,
+			"member_count":    clusterResult.MemberCount,
+			"run_id":          clusterResult.RunID,
+			"vector_coverage": coverage,
 		}
 	}
 	return a.writeOutput("refresh", result, true)
@@ -1057,6 +1083,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	model := fs.String("model", "", "embedding model")
 	basis := fs.String("basis", "", "embedding basis")
 	includeClosed := fs.Bool("include-closed", false, "include closed issue and pull request vectors")
+	strictVectors := fs.Bool("strict-vectors", false, "require complete fresh configured vectors before clustering")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"threshold": true, "min-size": true, "max-cluster-size": true, "k": true, "cross-kind-threshold": true, "limit": true, "model": true, "basis": true})); err != nil {
 		return usageErr(err)
@@ -1110,7 +1137,18 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(vectors) == 0 && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" {
+	coverage, freshVectors, err := evaluateClusterVectorCoverage(ctx, rt.Store, query, vectors)
+	if err != nil {
+		return err
+	}
+	partial := limit > 0
+	if *strictVectors {
+		if err := requireCompleteClusterVectorCoverage(owner, repoName, query, coverage, len(freshVectors), partial); err != nil {
+			return err
+		}
+	}
+	vectors = freshVectors
+	if len(vectors) == 0 && !*strictVectors && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" {
 		fallbackQuery := store.ThreadVectorQuery{RepoID: repo.ID, IncludeClosed: *includeClosed}
 		fallbackVectors, err := rt.Store.ListThreadVectorsFiltered(ctx, fallbackQuery)
 		if err != nil {
@@ -1118,19 +1156,23 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		}
 		if len(fallbackVectors) > 0 {
 			query = fallbackQuery
-			vectors = dedupeThreadVectorsByThread(fallbackVectors)
+			vectors, err = freshFallbackClusterVectors(ctx, rt.Store, fallbackQuery, fallbackVectors)
+			if err != nil {
+				return err
+			}
+			coverage.Fallback = true
 		}
 	}
+	availableFresh := len(vectors)
 	if limit > 0 && len(vectors) > limit {
 		vectors = vectors[:limit]
 	}
-	retireMissing := minSize <= 1 && limit == 0 && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" && !*includeClosed
-	if retireMissing {
-		retireMissing, err = completeClusterVectorCoverage(ctx, rt.Store, query, vectors)
-		if err != nil {
-			return err
-		}
+	coverage.Processed = len(vectors)
+	coverage.Partial = coverage.Fallback || !coverage.Complete || len(vectors) < availableFresh
+	if coverage.Partial {
+		coverage.Complete = false
 	}
+	retireMissing := minSize <= 1 && limit == 0 && strings.TrimSpace(*model) == "" && strings.TrimSpace(*basis) == "" && !*includeClosed && coverage.Complete
 	clusterResult, err := clusterRepository(ctx, rt.Store, repo.ID, vectors, clusterBuildOptions{
 		Threshold:          threshold,
 		MinSize:            minSize,
@@ -1143,17 +1185,18 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 		return err
 	}
 	return a.writeOutput("cluster", map[string]any{
-		"repository":    repo.FullName,
-		"threshold":     threshold,
-		"cross_kind":    crossKindThreshold,
-		"min_size":      minSize,
-		"max_size":      maxClusterSize,
-		"k":             fanout,
-		"vector_count":  len(vectors),
-		"edge_count":    clusterResult.EdgeCount,
-		"cluster_count": clusterResult.ClusterCount,
-		"member_count":  clusterResult.MemberCount,
-		"run_id":        clusterResult.RunID,
+		"repository":      repo.FullName,
+		"threshold":       threshold,
+		"cross_kind":      crossKindThreshold,
+		"min_size":        minSize,
+		"max_size":        maxClusterSize,
+		"k":               fanout,
+		"vector_count":    len(vectors),
+		"edge_count":      clusterResult.EdgeCount,
+		"cluster_count":   clusterResult.ClusterCount,
+		"member_count":    clusterResult.MemberCount,
+		"run_id":          clusterResult.RunID,
+		"vector_coverage": coverage,
 	}, true)
 }
 
@@ -3769,7 +3812,7 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "summaries", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: false, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
 		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
@@ -4383,23 +4426,143 @@ type clusterRepositoryResult struct {
 	RunID        int64
 }
 
-func completeClusterVectorCoverage(ctx context.Context, st *store.Store, query store.ThreadVectorQuery, storedVectors []store.ThreadVector) (bool, error) {
-	if strings.TrimSpace(query.Model) == "" || strings.TrimSpace(query.Basis) == "" {
-		return false, nil
+type clusterVectorCoverage struct {
+	Supported    bool `json:"supported"`
+	Fallback     bool `json:"fallback"`
+	Eligible     int  `json:"eligible"`
+	Covered      int  `json:"covered"`
+	Fresh        int  `json:"fresh"`
+	Processed    int  `json:"processed"`
+	Missing      int  `json:"missing"`
+	MissingInput int  `json:"missing_input"`
+	Stale        int  `json:"stale"`
+	Partial      bool `json:"partial"`
+	Complete     bool `json:"complete"`
+}
+
+func evaluateClusterVectorCoverage(ctx context.Context, st *store.Store, query store.ThreadVectorQuery, storedVectors []store.ThreadVector) (clusterVectorCoverage, []store.ThreadVector, error) {
+	coverage := clusterVectorCoverage{
+		Covered:   len(storedVectors),
+		Fresh:     len(storedVectors),
+		Processed: len(storedVectors),
 	}
-	if !store.SupportsEmbeddingBasis(query.Basis) {
-		return false, nil
+	if strings.TrimSpace(query.Model) == "" || strings.TrimSpace(query.Basis) == "" || !store.SupportsEmbeddingBasis(query.Basis) {
+		return coverage, storedVectors, nil
 	}
-	pending, err := st.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
+	coverage.Supported = true
+	eligible, err := st.CountThreadVectorScope(ctx, query)
+	if err != nil {
+		return clusterVectorCoverage{}, nil, err
+	}
+	coverage.Eligible = eligible
+	tasks, err := st.ListEmbeddingTasks(ctx, store.EmbeddingTaskOptions{
 		RepoID:        query.RepoID,
 		Basis:         query.Basis,
 		Model:         query.Model,
+		Force:         true,
 		IncludeClosed: query.IncludeClosed,
 	})
 	if err != nil {
-		return false, err
+		return clusterVectorCoverage{}, nil, err
 	}
-	return len(pending) == 0, nil
+	hashByThread := make(map[int64]string, len(tasks))
+	for _, task := range tasks {
+		hashByThread[task.ThreadID] = task.ContentHash
+	}
+	coverage.MissingInput = max(0, coverage.Eligible-len(hashByThread))
+	fresh := make([]store.ThreadVector, 0, len(storedVectors))
+	for _, vector := range storedVectors {
+		if hashByThread[vector.ThreadID] == vector.ContentHash && vector.ContentHash != "" {
+			fresh = append(fresh, vector)
+			continue
+		}
+		coverage.Stale++
+	}
+	coverage.Fresh = len(fresh)
+	coverage.Processed = len(fresh)
+	coverage.Missing = max(0, coverage.Eligible-coverage.Covered)
+	coverage.Complete = coverage.Fresh == coverage.Eligible && coverage.Missing == 0 && coverage.MissingInput == 0 && coverage.Stale == 0
+	return coverage, fresh, nil
+}
+
+func freshFallbackClusterVectors(ctx context.Context, st *store.Store, query store.ThreadVectorQuery, vectors []store.ThreadVector) ([]store.ThreadVector, error) {
+	type vectorGroup struct {
+		query   store.ThreadVectorQuery
+		vectors []store.ThreadVector
+	}
+	groups := map[string]*vectorGroup{}
+	groupOrder := make([]string, 0)
+	passthrough := make([]store.ThreadVector, 0, len(vectors))
+	for _, vector := range vectors {
+		if strings.TrimSpace(vector.Model) == "" || strings.TrimSpace(vector.Basis) == "" || !store.SupportsEmbeddingBasis(vector.Basis) {
+			passthrough = append(passthrough, vector)
+			continue
+		}
+		key := vector.Model + "\x00" + vector.Basis
+		group := groups[key]
+		if group == nil {
+			group = &vectorGroup{
+				query: store.ThreadVectorQuery{
+					RepoID:        query.RepoID,
+					Model:         vector.Model,
+					Basis:         vector.Basis,
+					IncludeClosed: query.IncludeClosed,
+				},
+			}
+			groups[key] = group
+			groupOrder = append(groupOrder, key)
+		}
+		group.vectors = append(group.vectors, vector)
+	}
+	for _, key := range groupOrder {
+		group := groups[key]
+		_, fresh, err := evaluateClusterVectorCoverage(ctx, st, group.query, group.vectors)
+		if err != nil {
+			return nil, err
+		}
+		passthrough = append(passthrough, fresh...)
+	}
+	return dedupeThreadVectorsByThread(passthrough), nil
+}
+
+func requireCompleteClusterVectorCoverage(owner, repoName string, query store.ThreadVectorQuery, coverage clusterVectorCoverage, freshVectorCount int, allowPartial bool) error {
+	if !coverage.Supported {
+		return clusterVectorCoverageError(owner, repoName, query, coverage, "vector coverage cannot be verified")
+	}
+	if coverage.Eligible == 0 && coverage.Supported {
+		return nil
+	}
+	if freshVectorCount == 0 {
+		return clusterVectorCoverageError(owner, repoName, query, coverage, "no fresh vectors are available")
+	}
+	if coverage.Supported && !coverage.Complete && !allowPartial {
+		return clusterVectorCoverageError(owner, repoName, query, coverage, "vector coverage is incomplete")
+	}
+	return nil
+}
+
+func clusterVectorCoverageError(owner, repoName string, query store.ThreadVectorQuery, coverage clusterVectorCoverage, reason string) error {
+	cmd := fmt.Sprintf("gitcrawl embed %s/%s", owner, repoName)
+	if query.IncludeClosed {
+		cmd += " --include-closed"
+	}
+	recovery := fmt.Sprintf("run `%s` and retry", cmd)
+	if !coverage.Supported {
+		recovery = fmt.Sprintf("populate exact vectors for model %q basis %q and retry", query.Model, query.Basis)
+	} else if query.Basis == "llm_key_summary" && coverage.MissingInput > 0 {
+		recovery = "populate missing key summaries, then " + recovery
+	}
+	return fmt.Errorf("%s for model %q basis %q (eligible=%d fresh=%d missing=%d missing_input=%d stale=%d); %s",
+		reason,
+		query.Model,
+		query.Basis,
+		coverage.Eligible,
+		coverage.Fresh,
+		coverage.Missing,
+		coverage.MissingInput,
+		coverage.Stale,
+		recovery,
+	)
 }
 
 func clusterRepository(ctx context.Context, st *store.Store, repoID int64, storedVectors []store.ThreadVector, options clusterBuildOptions) (clusterRepositoryResult, error) {
@@ -4411,7 +4574,7 @@ func clusterRepository(ctx context.Context, st *store.Store, repoID int64, store
 	if options.RetireMissing {
 		saveResult, err = st.SaveCompleteDurableClusters(ctx, repoID, inputs)
 	} else {
-		saveResult, err = st.SaveDurableClusters(ctx, repoID, inputs)
+		saveResult, err = st.SavePartialDurableClusters(ctx, repoID, inputs)
 	}
 	if err != nil {
 		return clusterRepositoryResult{}, err
@@ -4605,6 +4768,7 @@ Core commands:
   sync-failures        list failed sync hydration attempts
   coverage             report local archive PR-detail completeness
   refresh              run sync, enrichment, embedding, and clustering pipeline
+  summarize            generate key summaries for current thread revisions
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
   code index           index tracked text files from a local Git checkout
@@ -4656,7 +4820,7 @@ Usage:
 	"cloud": `gitcrawl cloud manages Worker-backed remote archives.
 
 Usage:
-  gitcrawl cloud publish --remote URL --archive id [--json]
+  gitcrawl cloud publish --remote URL --archive id [--allow-incomplete] [--observation-order] [--stage-only] [--json]
 `,
 	"whoami": `gitcrawl whoami prints the configured remote archive identity.
 
@@ -4701,7 +4865,12 @@ Usage:
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 
 Usage:
-  gitcrawl refresh owner/repo [--state open|closed|all] [--no-sync] [--no-embed] [--no-cluster] [--json]
+  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--strict-vectors] [--json]
+`,
+	"summarize": `gitcrawl summarize generates key summaries for current thread revisions.
+
+Usage:
+  gitcrawl summarize owner/repo [--number ref] [--limit N] [--force] [--include-closed] [--json]
 `,
 	"embed": `gitcrawl embed generates OpenAI embeddings for local thread documents.
 
@@ -4727,7 +4896,7 @@ Usage:
 	"cluster": `gitcrawl cluster builds durable clusters from local thread vectors.
 
 Usage:
-  gitcrawl cluster owner/repo [--threshold N] [--min-size N] [--max-cluster-size N] [--k N] [--cross-kind-threshold N] [--limit N] [--model name] [--basis semantic|references|hybrid] [--include-closed] [--json]
+  gitcrawl cluster owner/repo [--threshold N] [--min-size N] [--max-cluster-size N] [--k N] [--cross-kind-threshold N] [--limit N] [--model name] [--basis semantic|references|hybrid] [--include-closed] [--strict-vectors] [--json]
 `,
 	"clusters": `gitcrawl clusters lists latest display clusters with durable fallback.
 

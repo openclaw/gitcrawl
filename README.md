@@ -67,7 +67,34 @@ gitcrawl tui owner/repo
 The remote service is deployed separately from gitcrawl in `openclaw/crawl-remote` with Wrangler. gitcrawl only stores the Worker endpoint/archive in config and calls that service.
 `gitcrawl remote login` starts the Worker GitHub OAuth flow, verifies org/team membership server-side, and stores the signed bearer token in the OS keyring.
 Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser bootstrap; the Worker verifies that GitHub token against the same org/team policy and stores only the returned remote session token locally.
-`gitcrawl cloud publish` sends the local SQLite repositories and thread rows to a Worker archive through the role-gated ingest endpoint.
+`gitcrawl cloud publish` freezes and sanitizes one local SQLite image, uses its
+SHA-256 as the snapshot identity, exports repositories, threads, revisions,
+fingerprints, summaries, durable clusters, and PR detail/file rows from that
+same image, negotiates the remote snapshot-provenance contract before touching
+R2, uploads its digest-scoped bundle, and completes staged D1 coverage through
+row- and encoded-byte-bounded ingest requests.
+Publishing moves unpinned reads to the complete snapshot by default, preserving
+the existing reader-refresh behavior. The remote must advertise
+`gitcrawl.snapshot.staging.v1`; `--stage-only` keeps the immutable snapshot
+staged without changing serving state. A later publish verifies the
+candidate through the publisher-only status projection, skips repeated ingest
+when its digest, source sync, schema, resolved publication profile, persisted
+generation timestamp, and coverage match, then cuts it over. Cutover requires
+the remote contract to advertise reader-authenticated `GET /sqlite`; Gitcrawl
+validates the cutover acknowledgement, retries the scoped reader projection
+until its digest, profile, generation, and dataset coverage are exact, rechecks
+the exact publisher metadata, and hashes the downloaded bound SQLite image
+before reporting success. Before any upload or ingest, Gitcrawl verifies
+the configured credential through the advertised `/v1/whoami` route and
+requires both publisher and reader roles, including for stage-only publication.
+Incomplete local enrichment fails before any remote mutation;
+`--allow-incomplete` is an explicit escape hatch, and `--observation-order`
+publishes durable fetch ordering after the remote operator fence is enabled.
+Digest-scoped SQLite bundles can contain private issue and pull-request text.
+Gitcrawl intentionally exposes no remote deletion command: operators must only
+enable publication against a remote deployment with bounded lifecycle rules for
+failed, superseded, and uncut staged bundles. `--stage-only` does not transfer
+that retention responsibility back to the client.
 `gitcrawl clusters-report` writes a Markdown report for the top clusters using the same display view, with an at-a-glance table, per-cluster metadata, member tables, and key snippets. Use `--json` for the hydrated report payload.
 `gitcrawl cluster` and `gitcrawl refresh` build ghcrawl-shaped durable clusters by default (`--threshold 0.80`, `--min-size 1`, `--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`): every active vector-backed thread is represented, singleton rows use `singleton_orphan`, multi-member rows use `duplicate_candidate`, and stable IDs are derived from the representative thread. They also add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
 `gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.

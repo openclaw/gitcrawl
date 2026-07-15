@@ -114,10 +114,16 @@ func TestEmbeddingTaskBasisBranches(t *testing.T) {
 	}
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := st.DB().ExecContext(ctx, `
-		insert into thread_revisions(thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(?, '2026-04-30T00:00:00Z', 'content', 'title', 'body', 'labels', '2026-04-30T00:00:00Z')
-	`, threadIDs[0]); err != nil {
+		insert into thread_revisions(
+			thread_id, source_updated_at, observation_sequence,
+			content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select id, ?, observation_sequence, 'content', 'title', 'body', 'labels', ?
+		from threads
+		where id = ?
+	`, now, now, threadIDs[0]); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
 	var revisionID int64
@@ -237,6 +243,13 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	if schema != "gitcrawl-portable-sync-v2" || !strings.Contains(includes, "comments") || strings.Contains(excluded, "comments") {
 		t.Fatalf("portable metadata schema=%q includes=%q excluded=%q", schema, includes, excluded)
 	}
+	var version int
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatalf("portable user_version: %v", err)
+	}
+	if version != portableSchemaVersion {
+		t.Fatalf("portable user_version = %d, want compatibility version %d", version, portableSchemaVersion)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
@@ -251,6 +264,64 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	}
 	if status.LastSyncAt.IsZero() {
 		t.Fatalf("portable metadata should provide last sync time: %+v", status)
+	}
+}
+
+func TestPortablePruneDeletesOnlyEquivalentLegacyKeySummaries(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	_, threadIDs := seedVectorThreads(t, ctx, st)
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(
+			thread_id, source_updated_at, observation_sequence,
+			content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select id, '2026-07-15T00:00:00Z', observation_sequence,
+			'content', 'title', 'body', 'labels', '2026-07-15T00:00:00Z'
+		from threads
+		where id = ?
+	`, threadIDs[0]); err != nil {
+		t.Fatalf("seed revision: %v", err)
+	}
+	var revisionID int64
+	if err := st.DB().QueryRowContext(ctx, `select id from thread_revisions where thread_id = ?`, threadIDs[0]).Scan(&revisionID); err != nil {
+		t.Fatalf("revision id: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_key_summaries(
+			thread_revision_id, summary_kind, prompt_version, provider, model,
+			input_hash, output_hash, key_text, created_at
+		)
+		values
+			(?, 'llm_key_summary', 'equivalent', 'test', 'test', 'input-1', 'output-1', 'same text', '2026-07-15T00:01:00Z'),
+			(?, 'llm_key_3line', 'equivalent', 'test', 'test', 'input-1', 'output-1', 'same text', '2026-07-15T00:01:00Z'),
+			(?, 'llm_key_3line', 'legacy-only', 'test', 'test', 'input-2', 'output-2', 'legacy only', '2026-07-15T00:02:00Z'),
+			(?, 'llm_key_summary', 'different', 'test', 'test', 'input-3', 'output-3', 'canonical text', '2026-07-15T00:03:00Z'),
+			(?, 'llm_key_3line', 'different', 'test', 'test', 'input-3', 'output-3', 'different legacy text', '2026-07-15T00:03:00Z')
+	`, revisionID, revisionID, revisionID, revisionID, revisionID); err != nil {
+		t.Fatalf("seed key summaries: %v", err)
+	}
+
+	stats, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 5})
+	if err != nil {
+		t.Fatalf("prune portable: %v", err)
+	}
+	if stats.LegacySummariesDeleted != 1 {
+		t.Fatalf("legacy summaries deleted = %d, want 1", stats.LegacySummariesDeleted)
+	}
+	var legacyCount, canonicalCount int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_key_summaries where summary_kind = 'llm_key_3line'`).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy summaries: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_key_summaries where summary_kind = 'llm_key_summary'`).Scan(&canonicalCount); err != nil {
+		t.Fatalf("count canonical summaries: %v", err)
+	}
+	if legacyCount != 2 || canonicalCount != 2 {
+		t.Fatalf("summary counts legacy=%d canonical=%d, want 2/2", legacyCount, canonicalCount)
 	}
 }
 
@@ -733,14 +804,17 @@ func TestOpenBackfillsLegacyPortableColumns(t *testing.T) {
 		t.Fatalf("open migrated legacy db: %v", err)
 	}
 	defer st.Close()
-	if !st.hasColumn(ctx, "repositories", "raw_json") || !st.hasColumn(ctx, "threads", "body") || !st.hasColumn(ctx, "threads", "raw_json") {
+	if !st.hasColumn(ctx, "repositories", "raw_json") ||
+		!st.hasColumn(ctx, "threads", "body") ||
+		!st.hasColumn(ctx, "threads", "raw_json") ||
+		!st.hasColumn(ctx, "threads", "author_association") {
 		t.Fatal("legacy columns were not added")
 	}
 	threads, err := st.ListThreads(ctx, 1, true)
 	if err != nil {
 		t.Fatalf("list migrated threads: %v", err)
 	}
-	if len(threads) != 1 || threads[0].Body != "legacy excerpt" {
+	if len(threads) != 1 || threads[0].Body != "legacy excerpt" || threads[0].AuthorAssociation != "" {
 		t.Fatalf("migrated thread = %+v", threads)
 	}
 }
@@ -788,10 +862,16 @@ func TestClusterErrorBranchesAndSummaryScanning(t *testing.T) {
 	`, threadIDs[0], threadIDs[0]); err != nil {
 		t.Fatalf("seed summaries: %v", err)
 	}
+	freshRevisionAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := st.DB().ExecContext(ctx, `
-		insert into thread_revisions(thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(?, '2026-04-30T00:00:00Z', 'content', 'title', 'body', 'labels', '2026-04-30T00:00:00Z')
-	`, threadIDs[1]); err != nil {
+		insert into thread_revisions(
+			thread_id, source_updated_at, observation_sequence,
+			content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select id, ?, observation_sequence, 'content', 'title', 'body', 'labels', ?
+		from threads
+		where id = ?
+	`, freshRevisionAt, freshRevisionAt, threadIDs[1]); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
 	var revisionID int64

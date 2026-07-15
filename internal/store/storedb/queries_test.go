@@ -54,7 +54,6 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert thread: %v", err)
 	}
-
 	if got, err := q.CountRepositories(ctx); err != nil || got != 1 {
 		t.Fatalf("count repositories = %d, %v", got, err)
 	}
@@ -94,11 +93,6 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	})
 	if err != nil || documentID == 0 {
 		t.Fatalf("upsert document id = %d, %v", documentID, err)
-	}
-	if tasks, err := q.ListEmbeddingTasks(ctx, storedb.ListEmbeddingTasksParams{
-		Basis: "thread", Model: "text-embedding-3-large", RepoID: repoID, IncludeClosed: 1, Number: nil, RowLimit: 10,
-	}); err != nil || len(tasks) != 1 {
-		t.Fatalf("list embedding tasks len = %d, %v", len(tasks), err)
 	}
 
 	runParams := storedb.RecordSyncRunParams{

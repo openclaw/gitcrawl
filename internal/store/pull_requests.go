@@ -89,18 +89,103 @@ type PullRequestCache struct {
 	Checks  []PullRequestCheck  `json:"checks"`
 }
 
+type PullRequestHydrationFamilies struct {
+	Details      bool
+	Files        bool
+	Commits      bool
+	Checks       bool
+	WorkflowRuns bool
+}
+
+var allPullRequestHydrationFamilies = PullRequestHydrationFamilies{
+	Details:      true,
+	Files:        true,
+	Commits:      true,
+	Checks:       true,
+	WorkflowRuns: true,
+}
+
+func (s *Store) PullRequestDetailByThread(ctx context.Context, threadID int64) (PullRequestDetail, bool, error) {
+	if !s.tableExists(ctx, "pull_request_details") {
+		return PullRequestDetail{}, false, nil
+	}
+	var detail PullRequestDetail
+	var baseSHA, headSHA, headRef, headRepoFullName, mergeableState sql.NullString
+	err := s.q().QueryRowContext(ctx, `
+		select thread_id, repo_id, number, base_sha, head_sha, head_ref, head_repo_full_name,
+			mergeable_state, additions, deletions, changed_files, raw_json, fetched_at, updated_at
+		from pull_request_details
+		where thread_id = ?
+	`, threadID).Scan(
+		&detail.ThreadID,
+		&detail.RepoID,
+		&detail.Number,
+		&baseSHA,
+		&headSHA,
+		&headRef,
+		&headRepoFullName,
+		&mergeableState,
+		&detail.Additions,
+		&detail.Deletions,
+		&detail.ChangedFiles,
+		&detail.RawJSON,
+		&detail.FetchedAt,
+		&detail.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return PullRequestDetail{}, false, nil
+	}
+	if err != nil {
+		return PullRequestDetail{}, false, fmt.Errorf("pull request detail by thread: %w", err)
+	}
+	detail.BaseSHA = baseSHA.String
+	detail.HeadSHA = headSHA.String
+	detail.HeadRef = headRef.String
+	detail.HeadRepoFullName = headRepoFullName.String
+	detail.MergeableState = mergeableState.String
+	return detail, true, nil
+}
+
 func (s *Store) UpsertPullRequestCache(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun) error {
+	return s.UpsertPullRequestCacheFamilies(
+		ctx,
+		detail,
+		files,
+		commits,
+		checks,
+		runs,
+		allPullRequestHydrationFamilies,
+	)
+}
+
+func (s *Store) UpsertPullRequestCacheFamilies(
+	ctx context.Context,
+	detail PullRequestDetail,
+	files []PullRequestFile,
+	commits []PullRequestCommit,
+	checks []PullRequestCheck,
+	runs []WorkflowRun,
+	families PullRequestHydrationFamilies,
+) error {
 	if s.queries != nil {
-		return s.upsertPullRequestCache(ctx, detail, files, commits, checks, runs)
+		return s.upsertPullRequestCacheFamilies(ctx, detail, files, commits, checks, runs, families)
 	}
 	return s.WithTx(ctx, func(tx *Store) error {
-		return tx.upsertPullRequestCache(ctx, detail, files, commits, checks, runs)
+		return tx.upsertPullRequestCacheFamilies(ctx, detail, files, commits, checks, runs, families)
 	})
 }
 
 func (s *Store) UpsertPullRequestCacheAndDocument(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun, document Document) error {
 	persist := func(st *Store) error {
-		if err := st.upsertPullRequestCache(ctx, detail, files, commits, checks, runs); err != nil {
+		if err := st.upsertPullRequestCacheFamilies(
+			ctx,
+			detail,
+			files,
+			commits,
+			checks,
+			runs,
+			allPullRequestHydrationFamilies,
+		); err != nil {
 			return err
 		}
 		_, err := st.UpsertDocument(ctx, document)
@@ -112,87 +197,129 @@ func (s *Store) UpsertPullRequestCacheAndDocument(ctx context.Context, detail Pu
 	return persist(s)
 }
 
-func (s *Store) upsertPullRequestCache(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun) error {
-	if err := s.qsql().UpsertPullRequestDetail(ctx, storedb.UpsertPullRequestDetailParams{
-		ThreadID:         detail.ThreadID,
-		RepoID:           detail.RepoID,
-		Number:           int64(detail.Number),
-		BaseSha:          nullString(detail.BaseSHA),
-		HeadSha:          nullString(detail.HeadSHA),
-		HeadRef:          nullString(detail.HeadRef),
-		HeadRepoFullName: nullString(detail.HeadRepoFullName),
-		MergeableState:   nullString(detail.MergeableState),
-		Additions:        int64(detail.Additions),
-		Deletions:        int64(detail.Deletions),
-		ChangedFiles:     int64(detail.ChangedFiles),
-		RawJson:          detail.RawJSON,
-		FetchedAt:        detail.FetchedAt,
-		UpdatedAt:        detail.UpdatedAt,
-	}); err != nil {
-		return fmt.Errorf("upsert pull request detail: %w", err)
-	}
-	if err := s.qsql().DeletePullRequestFiles(ctx, detail.ThreadID); err != nil {
-		return fmt.Errorf("clear pull request files: %w", err)
-	}
-	// The GitHub PR files endpoint returns a snapshot array, not stable file
-	// identities. A path can appear more than once in one response, so replace
-	// the PR's file list and key rows by response position within that snapshot.
-	// See https://github.com/openclaw/gitcrawl/issues/77 for the duplicate-path
-	// bug and why position is snapshot-local rather than a durable file identity.
-	for position, file := range files {
-		if err := s.qsql().InsertPullRequestFile(ctx, storedb.InsertPullRequestFileParams{
-			ThreadID:     detail.ThreadID,
-			Position:     int64(position),
-			Path:         file.Path,
-			Status:       nullString(file.Status),
-			Additions:    int64(file.Additions),
-			Deletions:    int64(file.Deletions),
-			Changes:      int64(file.Changes),
-			PreviousPath: nullString(file.PreviousPath),
-			Patch:        nullString(file.Patch),
-			RawJson:      file.RawJSON,
-			FetchedAt:    file.FetchedAt,
+func (s *Store) upsertPullRequestCacheFamilies(
+	ctx context.Context,
+	detail PullRequestDetail,
+	files []PullRequestFile,
+	commits []PullRequestCommit,
+	checks []PullRequestCheck,
+	runs []WorkflowRun,
+	families PullRequestHydrationFamilies,
+) error {
+	if families.Details {
+		if err := s.qsql().UpsertPullRequestDetail(ctx, storedb.UpsertPullRequestDetailParams{
+			ThreadID:         detail.ThreadID,
+			RepoID:           detail.RepoID,
+			Number:           int64(detail.Number),
+			BaseSha:          nullString(detail.BaseSHA),
+			HeadSha:          nullString(detail.HeadSHA),
+			HeadRef:          nullString(detail.HeadRef),
+			HeadRepoFullName: nullString(detail.HeadRepoFullName),
+			MergeableState:   nullString(detail.MergeableState),
+			Additions:        int64(detail.Additions),
+			Deletions:        int64(detail.Deletions),
+			ChangedFiles:     int64(detail.ChangedFiles),
+			RawJson:          detail.RawJSON,
+			FetchedAt:        detail.FetchedAt,
+			UpdatedAt:        detail.UpdatedAt,
 		}); err != nil {
-			return fmt.Errorf("upsert pull request file: %w", err)
+			return fmt.Errorf("upsert pull request detail: %w", err)
 		}
 	}
-	if err := s.qsql().DeletePullRequestCommits(ctx, detail.ThreadID); err != nil {
-		return fmt.Errorf("clear pull request commits: %w", err)
-	}
-	for _, commit := range commits {
-		if err := s.qsql().InsertPullRequestCommit(ctx, storedb.InsertPullRequestCommitParams{
-			ThreadID:    detail.ThreadID,
-			Sha:         commit.SHA,
-			Message:     nullString(commit.Message),
-			AuthorLogin: nullString(commit.AuthorLogin),
-			AuthorName:  nullString(commit.AuthorName),
-			CommittedAt: nullString(commit.CommittedAt),
-			HtmlUrl:     nullString(commit.HTMLURL),
-			RawJson:     commit.RawJSON,
-			FetchedAt:   commit.FetchedAt,
-		}); err != nil {
-			return fmt.Errorf("upsert pull request commit: %w", err)
+	if families.Files {
+		if err := s.qsql().DeletePullRequestFiles(ctx, detail.ThreadID); err != nil {
+			return fmt.Errorf("clear pull request files: %w", err)
+		}
+		// The GitHub PR files endpoint returns a snapshot array, not stable file
+		// identities. A path can appear more than once in one response, so replace
+		// the PR's file list and key rows by response position within that snapshot.
+		// See https://github.com/openclaw/gitcrawl/issues/77 for the duplicate-path
+		// bug and why position is snapshot-local rather than a durable file identity.
+		for position, file := range files {
+			if err := s.qsql().InsertPullRequestFile(ctx, storedb.InsertPullRequestFileParams{
+				ThreadID:     detail.ThreadID,
+				Position:     int64(position),
+				Path:         file.Path,
+				Status:       nullString(file.Status),
+				Additions:    int64(file.Additions),
+				Deletions:    int64(file.Deletions),
+				Changes:      int64(file.Changes),
+				PreviousPath: nullString(file.PreviousPath),
+				Patch:        nullString(file.Patch),
+				RawJson:      file.RawJSON,
+				FetchedAt:    file.FetchedAt,
+			}); err != nil {
+				return fmt.Errorf("upsert pull request file: %w", err)
+			}
 		}
 	}
-	if err := s.qsql().DeletePullRequestChecks(ctx, detail.ThreadID); err != nil {
-		return fmt.Errorf("clear pull request checks: %w", err)
-	}
-	for _, check := range checks {
-		if err := s.qsql().InsertPullRequestCheck(ctx, storedb.InsertPullRequestCheckParams{
-			ThreadID:     detail.ThreadID,
-			Name:         check.Name,
-			Status:       nullString(check.Status),
-			Conclusion:   nullString(check.Conclusion),
-			DetailsUrl:   nullString(check.DetailsURL),
-			WorkflowName: nullString(check.WorkflowName),
-			StartedAt:    nullString(check.StartedAt),
-			CompletedAt:  nullString(check.CompletedAt),
-			RawJson:      check.RawJSON,
-			FetchedAt:    check.FetchedAt,
-		}); err != nil {
-			return fmt.Errorf("upsert pull request check: %w", err)
+	if families.Commits {
+		if err := s.qsql().DeletePullRequestCommits(ctx, detail.ThreadID); err != nil {
+			return fmt.Errorf("clear pull request commits: %w", err)
+		}
+		for _, commit := range commits {
+			if err := s.qsql().InsertPullRequestCommit(ctx, storedb.InsertPullRequestCommitParams{
+				ThreadID:    detail.ThreadID,
+				Sha:         commit.SHA,
+				Message:     nullString(commit.Message),
+				AuthorLogin: nullString(commit.AuthorLogin),
+				AuthorName:  nullString(commit.AuthorName),
+				CommittedAt: nullString(commit.CommittedAt),
+				HtmlUrl:     nullString(commit.HTMLURL),
+				RawJson:     commit.RawJSON,
+				FetchedAt:   commit.FetchedAt,
+			}); err != nil {
+				return fmt.Errorf("upsert pull request commit: %w", err)
+			}
 		}
 	}
+	if families.Checks {
+		if err := s.qsql().DeletePullRequestChecks(ctx, detail.ThreadID); err != nil {
+			return fmt.Errorf("clear pull request checks: %w", err)
+		}
+		for _, check := range checks {
+			if err := s.qsql().InsertPullRequestCheck(ctx, storedb.InsertPullRequestCheckParams{
+				ThreadID:     detail.ThreadID,
+				Name:         check.Name,
+				Status:       nullString(check.Status),
+				Conclusion:   nullString(check.Conclusion),
+				DetailsUrl:   nullString(check.DetailsURL),
+				WorkflowName: nullString(check.WorkflowName),
+				StartedAt:    nullString(check.StartedAt),
+				CompletedAt:  nullString(check.CompletedAt),
+				RawJson:      check.RawJSON,
+				FetchedAt:    check.FetchedAt,
+			}); err != nil {
+				return fmt.Errorf("upsert pull request check: %w", err)
+			}
+		}
+	}
+	if families.WorkflowRuns {
+		if err := s.applyLegacyWorkflowRunCache(ctx, detail, runs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) replaceWorkflowRuns(
+	ctx context.Context,
+	repoID int64,
+	headSHA string,
+	runs []WorkflowRun,
+) error {
+	if headSHA != "" {
+		if _, err := s.q().ExecContext(ctx, `
+			delete from github_workflow_runs
+			where repo_id = ? and head_sha = ?
+		`, repoID, headSHA); err != nil {
+			return fmt.Errorf("clear workflow runs for head: %w", err)
+		}
+	}
+	return s.upsertWorkflowRuns(ctx, runs)
+}
+
+func (s *Store) upsertWorkflowRuns(ctx context.Context, runs []WorkflowRun) error {
 	for _, run := range runs {
 		if err := s.qsql().UpsertWorkflowRun(ctx, storedb.UpsertWorkflowRunParams{
 			RepoID:       run.RepoID,
@@ -410,7 +537,7 @@ type WorkflowRunListOptions struct {
 
 func (s *Store) ListWorkflowRuns(ctx context.Context, repoID int64, options WorkflowRunListOptions) ([]WorkflowRun, error) {
 	limit := options.Limit
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 20
 	}
 	rows, err := s.qsql().ListWorkflowRuns(ctx, storedb.ListWorkflowRunsParams{

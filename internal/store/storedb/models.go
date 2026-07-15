@@ -252,31 +252,58 @@ type SyncRun struct {
 }
 
 type Thread struct {
-	ID               int64          `json:"id"`
-	RepoID           int64          `json:"repo_id"`
-	GithubID         string         `json:"github_id"`
-	Number           int64          `json:"number"`
-	Kind             string         `json:"kind"`
-	State            string         `json:"state"`
-	Title            string         `json:"title"`
-	Body             sql.NullString `json:"body"`
-	AuthorLogin      sql.NullString `json:"author_login"`
-	AuthorType       sql.NullString `json:"author_type"`
-	HtmlUrl          string         `json:"html_url"`
-	LabelsJson       string         `json:"labels_json"`
-	AssigneesJson    string         `json:"assignees_json"`
-	RawJson          string         `json:"raw_json"`
-	ContentHash      string         `json:"content_hash"`
-	IsDraft          int64          `json:"is_draft"`
-	CreatedAtGh      sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh      sql.NullString `json:"updated_at_gh"`
-	ClosedAtGh       sql.NullString `json:"closed_at_gh"`
-	MergedAtGh       sql.NullString `json:"merged_at_gh"`
-	ClosedAtLocal    sql.NullString `json:"closed_at_local"`
-	CloseReasonLocal sql.NullString `json:"close_reason_local"`
-	FirstPulledAt    sql.NullString `json:"first_pulled_at"`
-	LastPulledAt     sql.NullString `json:"last_pulled_at"`
-	UpdatedAt        string         `json:"updated_at"`
+	ID                          int64          `json:"id"`
+	RepoID                      int64          `json:"repo_id"`
+	GithubID                    string         `json:"github_id"`
+	Number                      int64          `json:"number"`
+	Kind                        string         `json:"kind"`
+	State                       string         `json:"state"`
+	Title                       string         `json:"title"`
+	Body                        sql.NullString `json:"body"`
+	AuthorLogin                 sql.NullString `json:"author_login"`
+	AuthorType                  sql.NullString `json:"author_type"`
+	AuthorAssociation           sql.NullString `json:"author_association"`
+	HtmlUrl                     string         `json:"html_url"`
+	LabelsJson                  string         `json:"labels_json"`
+	AssigneesJson               string         `json:"assignees_json"`
+	RawJson                     string         `json:"raw_json"`
+	ContentHash                 string         `json:"content_hash"`
+	IsDraft                     int64          `json:"is_draft"`
+	CreatedAtGh                 sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh                 sql.NullString `json:"updated_at_gh"`
+	ClosedAtGh                  sql.NullString `json:"closed_at_gh"`
+	MergedAtGh                  sql.NullString `json:"merged_at_gh"`
+	ClosedAtLocal               sql.NullString `json:"closed_at_local"`
+	CloseReasonLocal            sql.NullString `json:"close_reason_local"`
+	FirstPulledAt               sql.NullString `json:"first_pulled_at"`
+	LastPulledAt                sql.NullString `json:"last_pulled_at"`
+	ObservationSequence         int64          `json:"observation_sequence"`
+	EvidenceObservationSequence int64          `json:"evidence_observation_sequence"`
+	EvidenceSourceUpdatedAt     string         `json:"evidence_source_updated_at"`
+	UpdatedAt                   string         `json:"updated_at"`
+}
+
+type ThreadChildObservationReservation struct {
+	ThreadID            int64  `json:"thread_id"`
+	Family              string `json:"family"`
+	SourceUpdatedAt     string `json:"source_updated_at"`
+	ObservationSequence int64  `json:"observation_sequence"`
+}
+
+type ThreadFingerprint struct {
+	ID                int64  `json:"id"`
+	ThreadRevisionID  int64  `json:"thread_revision_id"`
+	AlgorithmVersion  string `json:"algorithm_version"`
+	FingerprintHash   string `json:"fingerprint_hash"`
+	FingerprintSlug   string `json:"fingerprint_slug"`
+	TitleTokensJson   string `json:"title_tokens_json"`
+	BodyTokenHash     string `json:"body_token_hash"`
+	LinkedRefsJson    string `json:"linked_refs_json"`
+	FileSetHash       string `json:"file_set_hash"`
+	ModuleBucketsJson string `json:"module_buckets_json"`
+	Simhash64         string `json:"simhash64"`
+	FeatureJson       string `json:"feature_json"`
+	CreatedAt         string `json:"created_at"`
 }
 
 type ThreadKeySummary struct {
@@ -292,16 +319,23 @@ type ThreadKeySummary struct {
 	CreatedAt        string `json:"created_at"`
 }
 
+type ThreadObservationSequence struct {
+	ID            int64  `json:"id"`
+	Value         int64  `json:"value"`
+	LastStartedAt string `json:"last_started_at"`
+}
+
 type ThreadRevision struct {
-	ID              int64          `json:"id"`
-	ThreadID        int64          `json:"thread_id"`
-	SourceUpdatedAt sql.NullString `json:"source_updated_at"`
-	ContentHash     string         `json:"content_hash"`
-	TitleHash       string         `json:"title_hash"`
-	BodyHash        string         `json:"body_hash"`
-	LabelsHash      string         `json:"labels_hash"`
-	RawJsonBlobID   sql.NullInt64  `json:"raw_json_blob_id"`
-	CreatedAt       string         `json:"created_at"`
+	ID                  int64          `json:"id"`
+	ThreadID            int64          `json:"thread_id"`
+	SourceUpdatedAt     sql.NullString `json:"source_updated_at"`
+	ContentHash         string         `json:"content_hash"`
+	TitleHash           string         `json:"title_hash"`
+	BodyHash            string         `json:"body_hash"`
+	LabelsHash          string         `json:"labels_hash"`
+	RawJsonBlobID       sql.NullInt64  `json:"raw_json_blob_id"`
+	ObservationSequence int64          `json:"observation_sequence"`
+	CreatedAt           string         `json:"created_at"`
 }
 
 type ThreadVector struct {
@@ -314,4 +348,11 @@ type ThreadVector struct {
 	VectorBackend string `json:"vector_backend"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
+}
+
+type WorkflowRunObservationReservation struct {
+	RepoID              int64  `json:"repo_id"`
+	HeadSha             string `json:"head_sha"`
+	SourceUpdatedAt     string `json:"source_updated_at"`
+	ObservationSequence int64  `json:"observation_sequence"`
 }

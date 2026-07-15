@@ -14,18 +14,34 @@ builds:
     ldflags:
       - -s -w -X github.com/openclaw/gitcrawl/internal/cli.version={{ .Version }}
     targets:
-      - darwin_amd64
-      - darwin_arm64
       - linux_amd64
       - linux_arm64
       - windows_amd64
       - windows_arm64
+  - id: gitcrawl_darwin
+    main: ./cmd/gitcrawl
+    binary: gitcrawl
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/openclaw/gitcrawl/internal/cli.version={{ .Version }}
+    targets:
+      - darwin_amd64
+      - darwin_arm64
+    hooks:
+      post:
+        - ./scripts/codesign-macos.sh "{{ .Path }}"
 
 archives:
   - ids:
       - gitcrawl
+      - gitcrawl_darwin
     formats:
       - tar.gz
+    files:
+      - CHANGELOG.md
+      - LICENSE
+      - README.md
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows

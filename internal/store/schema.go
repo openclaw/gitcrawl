@@ -26,6 +26,7 @@ create table if not exists threads (
   body text,
   author_login text,
   author_type text,
+  author_association text,
   html_url text not null,
   labels_json text not null,
   assignees_json text not null,
@@ -40,6 +41,14 @@ create table if not exists threads (
   close_reason_local text,
   first_pulled_at text,
   last_pulled_at text,
+  observation_sequence integer not null default 0
+    check (
+      typeof(observation_sequence) = 'integer'
+      and observation_sequence >= -9223372036854775807
+    ),
+  evidence_observation_sequence integer not null default 0
+    check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
+  evidence_source_updated_at text not null default '',
   updated_at text not null,
   unique(repo_id, kind, number)
 );
@@ -72,6 +81,37 @@ create table if not exists blobs (
   created_at text not null
 );
 
+create table if not exists thread_observation_sequence (
+  id integer primary key check (id = 1),
+  value integer not null check (typeof(value) = 'integer' and value >= 0),
+  last_started_at text not null
+);
+
+create table if not exists thread_child_observation_reservations (
+  thread_id integer not null references threads(id) on delete cascade,
+  family text not null check (family in (
+    'comments',
+    'pull_request_details',
+    'pull_request_files',
+    'pull_request_commits',
+    'pull_request_checks',
+    'pull_request_review_threads'
+  )),
+  source_updated_at text not null default '',
+  observation_sequence integer not null
+    check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
+  primary key(thread_id, family)
+);
+
+create table if not exists workflow_run_observation_reservations (
+  repo_id integer not null references repositories(id) on delete cascade,
+  head_sha text not null check (trim(head_sha) <> ''),
+  source_updated_at text not null default '',
+  observation_sequence integer not null
+    check (typeof(observation_sequence) = 'integer' and observation_sequence > 0),
+  primary key(repo_id, head_sha)
+);
+
 create table if not exists thread_revisions (
   id integer primary key,
   thread_id integer not null references threads(id) on delete cascade,
@@ -81,8 +121,9 @@ create table if not exists thread_revisions (
   body_hash text not null,
   labels_hash text not null,
   raw_json_blob_id integer references blobs(id) on delete set null,
-  created_at text not null,
-  unique(thread_id, content_hash)
+  observation_sequence integer not null default 0
+    check (typeof(observation_sequence) = 'integer' and observation_sequence >= 0),
+  created_at text not null
 );
 
 create table if not exists thread_code_snapshots (

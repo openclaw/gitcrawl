@@ -34,9 +34,10 @@ type GitHubClient interface {
 }
 
 type Syncer struct {
-	client GitHubClient
-	store  *store.Store
-	now    func() time.Time
+	client        GitHubClient
+	store         *store.Store
+	now           func() time.Time
+	beforePersist func()
 }
 
 type Options struct {
@@ -53,39 +54,47 @@ type Options struct {
 }
 
 type Stats struct {
-	Repository          string `json:"repository"`
-	ThreadsSynced       int    `json:"threads_synced"`
-	IssuesSynced        int    `json:"issues_synced"`
-	PullRequestsSynced  int    `json:"pull_requests_synced"`
-	CommentsSynced      int    `json:"comments_synced"`
-	ReviewThreadsSynced int    `json:"review_threads_synced"`
-	PRDetailsSynced     int    `json:"pr_details_synced"`
-	PRFilesSynced       int    `json:"pr_files_synced"`
-	PRCommitsSynced     int    `json:"pr_commits_synced"`
-	PRChecksSynced      int    `json:"pr_checks_synced"`
-	WorkflowRunsSynced  int    `json:"workflow_runs_synced"`
-	ThreadsClosed       int    `json:"threads_closed"`
-	RequestedSince      string `json:"requested_since,omitempty"`
-	Limit               int    `json:"limit,omitempty"`
-	Numbers             []int  `json:"numbers,omitempty"`
-	MetadataOnly        bool   `json:"metadata_only"`
-	StartedAt           string `json:"started_at"`
-	FinishedAt          string `json:"finished_at"`
+	Repository           string `json:"repository"`
+	ThreadsSynced        int    `json:"threads_synced"`
+	IssuesSynced         int    `json:"issues_synced"`
+	PullRequestsSynced   int    `json:"pull_requests_synced"`
+	CommentsSynced       int    `json:"comments_synced"`
+	ReviewThreadsSynced  int    `json:"review_threads_synced"`
+	PRDetailsSynced      int    `json:"pr_details_synced"`
+	PRFilesSynced        int    `json:"pr_files_synced"`
+	PRCommitsSynced      int    `json:"pr_commits_synced"`
+	PRChecksSynced       int    `json:"pr_checks_synced"`
+	WorkflowRunsSynced   int    `json:"workflow_runs_synced"`
+	EvidenceObserved     int    `json:"evidence_observed"`
+	RevisionsCreated     int    `json:"revisions_created"`
+	FingerprintsUpserted int    `json:"fingerprints_upserted"`
+	ThreadsClosed        int    `json:"threads_closed"`
+	ThreadsSkippedStale  int    `json:"threads_skipped_stale"`
+	RequestedSince       string `json:"requested_since,omitempty"`
+	Limit                int    `json:"limit,omitempty"`
+	Numbers              []int  `json:"numbers,omitempty"`
+	MetadataOnly         bool   `json:"metadata_only"`
+	StartedAt            string `json:"started_at"`
+	FinishedAt           string `json:"finished_at"`
 }
 
 type syncPersistStats struct {
-	ThreadsSynced       int
-	IssuesSynced        int
-	PullRequestsSynced  int
-	CommentsSynced      int
-	ReviewThreadsSynced int
-	PRDetailsSynced     int
-	PRFilesSynced       int
-	PRCommitsSynced     int
-	PRChecksSynced      int
-	WorkflowRunsSynced  int
-	ThreadsClosed       int
-	FinishedAt          string
+	ThreadsSynced        int
+	IssuesSynced         int
+	PullRequestsSynced   int
+	CommentsSynced       int
+	ReviewThreadsSynced  int
+	PRDetailsSynced      int
+	PRFilesSynced        int
+	PRCommitsSynced      int
+	PRChecksSynced       int
+	WorkflowRunsSynced   int
+	EvidenceObserved     int
+	RevisionsCreated     int
+	FingerprintsUpserted int
+	ThreadsClosed        int
+	ThreadsSkippedStale  int
+	FinishedAt           string
 }
 
 type threadSyncPayload struct {
@@ -142,7 +151,22 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 	}
 
+	var closedOverlapRows []map[string]any
+	needsClosedOverlap := len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0
+	if needsClosedOverlap {
+		closedOverlapRows, err = s.fetchClosedOverlapRows(ctx, options, since)
+		if err != nil {
+			return Stats{}, err
+		}
+		rows = mergeIssueRows(rows, closedOverlapRows)
+	}
+	closedOverlapNumbers := make(map[int]struct{}, len(closedOverlapRows))
+	for _, row := range closedOverlapRows {
+		closedOverlapNumbers[intValue(row["number"])] = struct{}{}
+	}
+
 	payloads := make([]threadSyncPayload, 0, len(rows))
+	workflowObservationOrder := 0
 	for _, row := range rows {
 		payload := threadSyncPayload{row: row}
 		number := intValue(row["number"])
@@ -171,27 +195,36 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				}
 				return Stats{}, err
 			}
+			workflowObservationOrder++
+			pullDetails.workflowObservationOrder = workflowObservationOrder
 			payload.pullDetails = pullDetails
 			payload.hasPullDetails = true
 		}
 		payloads = append(payloads, payload)
 	}
-	var closedOverlapRows []map[string]any
-	needsClosedOverlap := len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0
-	if needsClosedOverlap {
-		var err error
-		closedOverlapRows, err = s.fetchClosedOverlapRows(ctx, options, since)
-		if err != nil {
-			return Stats{}, err
+	if err := s.consolidateWorkflowSnapshots(ctx, options, payloads); err != nil {
+		return Stats{}, err
+	}
+	// Order replace-all child snapshots when their complete observations are available.
+	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
+	if err != nil {
+		return Stats{}, err
+	}
+	for index := range payloads {
+		if payloads[index].hasPullDetails &&
+			payloads[index].pullDetails.workflowSnapshotFresh {
+			payloads[index].pullDetails.workflowObservationSequence = observationSequence
 		}
 	}
-
+	if s.beforePersist != nil {
+		s.beforePersist()
+	}
 	stats := Stats{
 		Repository:     options.Owner + "/" + options.Repo,
 		RequestedSince: since,
 		Limit:          options.Limit,
 		Numbers:        numbers,
-		MetadataOnly:   !options.IncludeComments,
+		MetadataOnly:   !options.IncludeComments && !options.IncludePRDetails,
 		StartedAt:      started,
 	}
 	tracker := progress.New(options.Logger, progress.Options{
@@ -219,13 +252,99 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		}
 		for _, payload := range payloads {
 			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
-			threadID, err := st.UpsertThread(ctx, thread)
+			_, hasIssueDraft := payload.row["draft"]
+			if payload.hasPullDetails {
+				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
+			}
+			workflowHeadSHA := ""
+			workflowRunsEligible := false
+			if options.IncludePRDetails &&
+				thread.Kind == "pull_request" &&
+				payload.hasPullDetails &&
+				payload.pullDetails.workflowSnapshotFresh {
+				workflowHeadSHA = nestedString(payload.pullDetails.pull, "head", "sha")
+				workflowRunsEligible = workflowHeadSHA != ""
+			}
+			upsert, err := st.UpsertThreadObservation(ctx, thread, store.UpsertThreadOptions{
+				PreserveDraft:       thread.Kind == "pull_request" && !payload.hasPullDetails && !hasIssueDraft,
+				IncompleteEvidence:  !hasFreshThreadEvidence(options, thread),
+				ObservationSequence: observationSequence,
+			})
 			if err != nil {
 				return err
 			}
-			thread.ID = threadID
-			var comments []store.Comment
+			if !upsert.Applied && !upsert.EvidenceApplied {
+				if workflowRunsEligible {
+					count, err := s.persistWorkflowRunSnapshot(
+						ctx,
+						st,
+						thread.RepoID,
+						workflowHeadSHA,
+						payload.pullDetails,
+					)
+					if err != nil {
+						return err
+					}
+					attempt.WorkflowRunsSynced += count
+				}
+				attempt.ThreadsSkippedStale++
+				tracker.Add(1,
+					"number", thread.Number,
+					"kind", thread.Kind,
+					"thread_state", thread.State,
+					"result", "stale_skipped",
+				)
+				continue
+			}
+			thread.ID = upsert.ID
+			completeEvidence := hasFreshThreadEvidence(options, thread)
+			evidenceApplied := completeEvidence && upsert.EvidenceApplied
+			childWritesAllowed := !completeEvidence || evidenceApplied
+			childReservations := make(map[store.ThreadChildObservationFamily]bool)
+			reserveChild := func(family store.ThreadChildObservationFamily) error {
+				if !childWritesAllowed {
+					return nil
+				}
+				applied, err := st.ReserveThreadChildObservation(
+					ctx,
+					thread.ID,
+					family,
+					thread.UpdatedAtGitHub,
+					observationSequence,
+				)
+				if err != nil {
+					return err
+				}
+				childReservations[family] = applied
+				return nil
+			}
 			if options.IncludeComments {
+				if err := reserveChild(store.ThreadChildComments); err != nil {
+					return err
+				}
+			}
+			if options.IncludePRDetails && thread.Kind == "pull_request" {
+				for _, family := range []store.ThreadChildObservationFamily{
+					store.ThreadChildPullRequestDetails,
+					store.ThreadChildPullRequestFiles,
+					store.ThreadChildPullRequestCommits,
+					store.ThreadChildPullRequestChecks,
+					store.ThreadChildReviewThreads,
+				} {
+					if err := reserveChild(family); err != nil {
+						return err
+					}
+				}
+			}
+			if upsert.Applied {
+				if _, overlap := closedOverlapNumbers[thread.Number]; overlap &&
+					upsert.PreviousState == "open" &&
+					thread.State == "closed" {
+					attempt.ThreadsClosed++
+				}
+			}
+			var comments []store.Comment
+			if options.IncludeComments && childReservations[store.ThreadChildComments] {
 				comments, err = persistComments(ctx, st, thread, payload.commentRows)
 				if err != nil {
 					return err
@@ -239,20 +358,36 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				}
 			}
 			if options.IncludePRDetails && thread.Kind == "pull_request" {
-				count, err := s.persistPullReviewThreads(ctx, st, thread, payload.reviewThreads, payload.reviewThreadsFetchedAt)
-				if err != nil {
-					return err
-				}
-				attempt.ReviewThreadsSynced += count
-				if payload.hasPullDetails {
-					detailStats, err := s.persistPullRequestDetails(ctx, st, thread, payload.pullDetails)
+				if childReservations[store.ThreadChildReviewThreads] {
+					count, err := s.persistPullReviewThreads(ctx, st, thread, payload.reviewThreads, payload.reviewThreadsFetchedAt)
 					if err != nil {
 						return err
+					}
+					attempt.ReviewThreadsSynced += count
+				}
+				if payload.hasPullDetails {
+					detailStats, err := s.persistPullRequestDetails(
+						ctx,
+						st,
+						thread,
+						payload.pullDetails,
+						store.PullRequestHydrationFamilies{
+							Details:      childReservations[store.ThreadChildPullRequestDetails],
+							Files:        childReservations[store.ThreadChildPullRequestFiles],
+							Commits:      childReservations[store.ThreadChildPullRequestCommits],
+							Checks:       childReservations[store.ThreadChildPullRequestChecks],
+							WorkflowRuns: workflowRunsEligible,
+						},
+					)
+					if err != nil {
+						return err
+					}
+					if detailStats.details {
+						attempt.PRDetailsSynced++
 					}
 					if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano)); err != nil {
 						return err
 					}
-					attempt.PRDetailsSynced++
 					attempt.PRFilesSynced += detailStats.files
 					attempt.PRCommitsSynced += detailStats.commits
 					attempt.PRChecksSynced += detailStats.checks
@@ -274,6 +409,28 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if _, err := st.UpsertDocument(ctx, documents.BuildWithContext(thread, comments, pullFiles, pullCommits)); err != nil {
 				return err
 			}
+			if evidenceApplied {
+				attempt.EvidenceObserved++
+				enrichment, err := persistThreadEnrichment(
+					ctx,
+					st,
+					thread,
+					comments,
+					pullFiles,
+					pullCommits,
+					s.now().Format(time.RFC3339Nano),
+					upsert.EvidenceObservationSequence,
+				)
+				if err != nil {
+					return err
+				}
+				if enrichment.RevisionCreated {
+					attempt.RevisionsCreated++
+				}
+				if enrichment.FingerprintUpserted {
+					attempt.FingerprintsUpserted++
+				}
+			}
 			attempt.ThreadsSynced++
 			if thread.Kind == "pull_request" {
 				attempt.PullRequestsSynced++
@@ -286,12 +443,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				"thread_state", thread.State,
 			)
 		}
-		if needsClosedOverlap {
-			closed, err := s.applyClosedOverlapRows(ctx, st, repoID, closedOverlapRows, options.Reporter)
-			if err != nil {
-				return err
-			}
-			attempt.ThreadsClosed = closed
+		if attempt.ThreadsClosed > 0 {
+			options.Reporter.Printf(
+				"[sync] closed overlap sweep matched %d stale open thread(s)",
+				attempt.ThreadsClosed,
+			)
 		}
 		attempt.FinishedAt = s.now().Format(time.RFC3339Nano)
 		runStats := stats
@@ -377,7 +533,11 @@ func applySyncPersistStats(stats *Stats, persisted syncPersistStats) {
 	stats.PRCommitsSynced = persisted.PRCommitsSynced
 	stats.PRChecksSynced = persisted.PRChecksSynced
 	stats.WorkflowRunsSynced = persisted.WorkflowRunsSynced
+	stats.EvidenceObserved = persisted.EvidenceObserved
+	stats.RevisionsCreated = persisted.RevisionsCreated
+	stats.FingerprintsUpserted = persisted.FingerprintsUpserted
 	stats.ThreadsClosed = persisted.ThreadsClosed
+	stats.ThreadsSkippedStale = persisted.ThreadsSkippedStale
 	stats.FinishedAt = persisted.FinishedAt
 }
 
@@ -398,6 +558,27 @@ func uniquePositiveNumbers(numbers []int) []int {
 		out = append(out, number)
 	}
 	return out
+}
+
+func mergeIssueRows(primary, overlap []map[string]any) []map[string]any {
+	if len(overlap) == 0 {
+		return primary
+	}
+	merged := append(make([]map[string]any, 0, len(primary)+len(overlap)), primary...)
+	indexByNumber := make(map[int]int, len(merged))
+	for index, row := range merged {
+		indexByNumber[intValue(row["number"])] = index
+	}
+	for _, row := range overlap {
+		number := intValue(row["number"])
+		if index, ok := indexByNumber[number]; ok {
+			merged[index] = row
+			continue
+		}
+		indexByNumber[number] = len(merged)
+		merged = append(merged, row)
+	}
+	return merged
 }
 
 func syncRunScope(state string, numbers []int) string {
@@ -438,22 +619,8 @@ func (s *Syncer) fetchClosedOverlapRows(ctx context.Context, options Options, si
 	}, options.Reporter)
 }
 
-func (s *Syncer) applyClosedOverlapRows(ctx context.Context, st *store.Store, repoID int64, rows []map[string]any, reporter gh.Reporter) (int, error) {
-	closed := 0
-	for _, row := range rows {
-		thread := mapIssueToThread(repoID, row, s.now().Format(time.RFC3339Nano))
-		updated, err := st.MarkOpenThreadClosedFromGitHub(ctx, thread)
-		if err != nil {
-			return 0, err
-		}
-		if updated {
-			closed++
-		}
-	}
-	if closed > 0 {
-		reporter.Printf("[sync] closed overlap sweep matched %d stale open thread(s)", closed)
-	}
-	return closed, nil
+func hasFreshThreadEvidence(options Options, thread store.Thread) bool {
+	return options.IncludeComments && (thread.Kind != "pull_request" || options.IncludePRDetails)
 }
 
 func normalizeSince(value string, now time.Time) (string, error) {
@@ -502,27 +669,98 @@ func mapIssueToThread(repoID int64, row map[string]any, pulledAt string) store.T
 	title := stringValue(row["title"])
 	body := stringValue(row["body"])
 	return store.Thread{
-		RepoID:          repoID,
-		GitHubID:        jsonID(row["id"]),
-		Number:          intValue(row["number"]),
-		Kind:            kind,
-		State:           stringValue(row["state"]),
-		Title:           title,
-		Body:            body,
-		AuthorLogin:     loginFromUser(row["user"]),
-		AuthorType:      typeFromUser(row["user"]),
-		HTMLURL:         stringValue(row["html_url"]),
-		LabelsJSON:      labelsJSON,
-		AssigneesJSON:   assigneesJSON,
-		RawJSON:         mustJSON(row),
-		ContentHash:     contentHash(title, body, labelsJSON),
-		CreatedAtGitHub: stringValue(row["created_at"]),
-		UpdatedAtGitHub: stringValue(row["updated_at"]),
-		ClosedAtGitHub:  stringValue(row["closed_at"]),
-		FirstPulledAt:   pulledAt,
-		LastPulledAt:    pulledAt,
-		UpdatedAt:       pulledAt,
+		RepoID:            repoID,
+		GitHubID:          jsonID(row["id"]),
+		Number:            intValue(row["number"]),
+		Kind:              kind,
+		State:             stringValue(row["state"]),
+		Title:             title,
+		Body:              body,
+		AuthorLogin:       loginFromUser(row["user"]),
+		AuthorType:        typeFromUser(row["user"]),
+		AuthorAssociation: stringValue(row["author_association"]),
+		HTMLURL:           stringValue(row["html_url"]),
+		LabelsJSON:        labelsJSON,
+		AssigneesJSON:     assigneesJSON,
+		RawJSON:           mustJSON(row),
+		ContentHash:       contentHash(title, body, labelsJSON),
+		IsDraft:           boolValue(row["draft"]),
+		CreatedAtGitHub:   stringValue(row["created_at"]),
+		UpdatedAtGitHub:   stringValue(row["updated_at"]),
+		ClosedAtGitHub:    stringValue(row["closed_at"]),
+		FirstPulledAt:     pulledAt,
+		LastPulledAt:      pulledAt,
+		UpdatedAt:         pulledAt,
 	}
+}
+
+func persistThreadEnrichment(
+	ctx context.Context,
+	st *store.Store,
+	thread store.Thread,
+	comments []store.Comment,
+	files []store.PullRequestFile,
+	commits []store.PullRequestCommit,
+	createdAt string,
+	observationSequence int64,
+) (store.ThreadEnrichmentResult, error) {
+	evidence := store.ThreadEvidence{
+		Thread:              thread,
+		ObservationSequence: observationSequence,
+		Comments:            comments,
+		Files:               files,
+		Commits:             commits,
+	}
+	var err error
+	if evidence.Comments == nil {
+		evidence.Comments, err = st.ListComments(ctx, thread.ID)
+		if err != nil {
+			return store.ThreadEnrichmentResult{}, err
+		}
+	}
+	if thread.Kind == "pull_request" {
+		detail, ok, err := st.PullRequestDetailByThread(ctx, thread.ID)
+		if err != nil {
+			return store.ThreadEnrichmentResult{}, err
+		}
+		if ok {
+			evidence.Detail = &detail
+		}
+		if len(evidence.Files) == 0 {
+			evidence.Files, err = st.PullRequestFiles(ctx, thread.ID)
+			if err != nil {
+				return store.ThreadEnrichmentResult{}, err
+			}
+		}
+		if len(evidence.Commits) == 0 {
+			evidence.Commits, err = st.PullRequestCommits(ctx, thread.ID)
+			if err != nil {
+				return store.ThreadEnrichmentResult{}, err
+			}
+		}
+		evidence.ReviewThreads, err = st.PullRequestReviewThreads(ctx, thread.ID)
+		if err != nil {
+			return store.ThreadEnrichmentResult{}, err
+		}
+		evidence.Checks, err = st.PullRequestChecks(ctx, thread.ID)
+		if err != nil {
+			return store.ThreadEnrichmentResult{}, err
+		}
+		headSHA := ""
+		if evidence.Detail != nil {
+			headSHA = evidence.Detail.HeadSHA
+		}
+		if headSHA != "" {
+			evidence.WorkflowRuns, err = st.ListWorkflowRuns(ctx, thread.RepoID, store.WorkflowRunListOptions{
+				HeadSHA: headSHA,
+				Limit:   -1,
+			})
+			if err != nil {
+				return store.ThreadEnrichmentResult{}, err
+			}
+		}
+	}
+	return st.UpsertThreadRevisionAndFingerprint(ctx, evidence, createdAt)
 }
 
 func (s *Syncer) fetchCommentRows(ctx context.Context, options Options, threadKind string, number int) ([]commentRow, error) {
@@ -554,7 +792,10 @@ func (s *Syncer) fetchCommentRows(ctx context.Context, options Options, threadKi
 }
 
 func persistComments(ctx context.Context, st *store.Store, thread store.Thread, rows []commentRow) ([]store.Comment, error) {
-	var comments []store.Comment
+	if err := st.DeleteCommentsForThread(ctx, thread.ID); err != nil {
+		return nil, err
+	}
+	comments := make([]store.Comment, 0, len(rows))
 	for _, row := range rows {
 		comment := mapComment(thread.ID, row.kind, row.raw)
 		if comment.Body == "" && row.kind != "pull_review" {
@@ -641,6 +882,7 @@ func mapComment(threadID int64, kind string, row map[string]any) store.Comment {
 		AuthorType:      authorType,
 		Body:            stringValue(row["body"]),
 		IsBot:           isBot(authorLogin, authorType),
+		ReviewState:     stringValue(row["state"]),
 		RawJSON:         mustJSON(row),
 		CreatedAtGitHub: stringValue(row["created_at"]),
 		UpdatedAtGitHub: stringValue(row["updated_at"]),

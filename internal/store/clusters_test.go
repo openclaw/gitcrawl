@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -869,6 +870,327 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 	}
 	if _, err := st.DurableClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: secondID, IncludeClosed: false, MemberLimit: 5}); err == nil {
 		t.Fatal("locally closed cluster should stay hidden after reappearing")
+	}
+}
+
+func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	input := DurableClusterInput{
+		StableKey:              "members:301,302",
+		StableSlug:             "cluster-301-302",
+		RepresentativeThreadID: threadIDs[0],
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "canonical"},
+			{ThreadID: threadIDs[1], Role: "member"},
+		},
+	}
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("seed durable cluster: %v", err)
+	}
+	input.Members = input.Members[:1]
+	if _, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("partial durable cluster save: %v", err)
+	}
+	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 302, false)
+	if err != nil {
+		t.Fatalf("unobserved member should remain active: %v", err)
+	}
+	detail, err := st.DurableClusterDetail(ctx, ClusterDetailOptions{
+		RepoID:        repoID,
+		ClusterID:     clusterID,
+		IncludeClosed: true,
+		MemberLimit:   10,
+	})
+	if err != nil {
+		t.Fatalf("cluster detail: %v", err)
+	}
+	if len(detail.Members) != 2 || detail.Members[1].State != "active" {
+		t.Fatalf("partial save pruned unobserved member: %+v", detail.Members)
+	}
+}
+
+func TestSavePartialDurableClustersIgnoresDeletedLegacySimilarityIdentity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	result, err := st.DB().ExecContext(ctx, `
+		insert into cluster_groups(
+			repo_id, stable_key, stable_slug, status, cluster_type,
+			representative_thread_id, title, created_at, updated_at
+		)
+		values(?, 'legacy:301', 'legacy-301', 'active', 'similarity', ?, 'legacy similarity', ?, ?)
+	`, repoID, threadIDs[0], "2026-07-12T03:00:00Z", "2026-07-12T03:00:00Z")
+	if err != nil {
+		t.Fatalf("seed legacy similarity cluster: %v", err)
+	}
+	legacyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("legacy similarity cluster id: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into cluster_memberships(
+			cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at
+		)
+		values(?, ?, 'canonical', 'active', 'system', '{}', ?, ?)
+	`, legacyID, threadIDs[0], "2026-07-12T03:00:00Z", "2026-07-12T03:00:00Z"); err != nil {
+		t.Fatalf("seed legacy similarity membership: %v", err)
+	}
+
+	input := DurableClusterInput{
+		StableKey:              "durable:301,302",
+		StableSlug:             "durable-301-302",
+		ClusterType:            "duplicate_candidate",
+		RepresentativeThreadID: threadIDs[0],
+		Title:                  "durable cluster",
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "canonical"},
+			{ThreadID: threadIDs[1], Role: "related"},
+		},
+	}
+	if _, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("partial durable cluster: %v", err)
+	}
+
+	var legacyCount int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from cluster_groups
+		where repo_id = ? and cluster_type = 'similarity'
+	`, repoID).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy similarity clusters: %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("legacy similarity clusters = %d, want 0", legacyCount)
+	}
+	var processedMemberships int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from cluster_memberships cm
+		join cluster_groups cg on cg.id = cm.cluster_id
+		where cg.repo_id = ?
+			and cg.stable_key = ?
+			and cg.cluster_type = 'duplicate_candidate'
+			and cm.state = 'active'
+	`, repoID, input.StableKey).Scan(&processedMemberships); err != nil {
+		t.Fatalf("count processed memberships: %v", err)
+	}
+	if processedMemberships != len(input.Members) {
+		t.Fatalf("processed memberships = %d, want %d", processedMemberships, len(input.Members))
+	}
+}
+
+func TestSavePartialDurableClustersReusesIdentityWhenRepresentativeIsOmitted(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	thirdID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "303", Number: 303, Kind: "issue", State: "open",
+		Title: "third cluster member", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/303",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread-303", UpdatedAt: "2026-07-12T03:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("third thread: %v", err)
+	}
+	initial := DurableClusterInput{
+		StableKey: "representative:303", StableSlug: "representative-303",
+		ClusterType: "duplicate_candidate", RepresentativeThreadID: thirdID, Title: "Original identity",
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "related"},
+			{ThreadID: threadIDs[1], Role: "related"},
+			{ThreadID: thirdID, Role: "canonical"},
+		},
+	}
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{initial}); err != nil {
+		t.Fatalf("seed durable cluster: %v", err)
+	}
+	partial := DurableClusterInput{
+		StableKey: "representative:301", StableSlug: "representative-301",
+		ClusterType: "duplicate_candidate", RepresentativeThreadID: threadIDs[0], Title: "Partial identity",
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "canonical"},
+			{ThreadID: threadIDs[1], Role: "related"},
+		},
+	}
+	if _, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{partial}); err != nil {
+		t.Fatalf("partial durable cluster: %v", err)
+	}
+
+	var clusterCount int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from cluster_groups
+		where repo_id = ? and status = 'active' and closed_at is null
+	`, repoID).Scan(&clusterCount); err != nil {
+		t.Fatalf("active cluster count: %v", err)
+	}
+	if clusterCount != 1 {
+		t.Fatalf("active cluster count = %d, want 1", clusterCount)
+	}
+	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 301, false)
+	if err != nil {
+		t.Fatalf("cluster identity: %v", err)
+	}
+	detail, err := st.DurableClusterDetail(ctx, ClusterDetailOptions{
+		RepoID: repoID, ClusterID: clusterID, IncludeClosed: true, MemberLimit: 10,
+	})
+	if err != nil {
+		t.Fatalf("cluster detail: %v", err)
+	}
+	if detail.Cluster.RepresentativeThreadID != thirdID || detail.Cluster.Title != "Original identity" || len(detail.Members) != 3 {
+		t.Fatalf("reconciled cluster = %+v members=%+v", detail.Cluster, detail.Members)
+	}
+	for _, number := range []int{301, 302} {
+		var memberships int
+		if err := st.DB().QueryRowContext(ctx, `
+			select count(*)
+			from cluster_memberships cm
+			join cluster_groups cg on cg.id = cm.cluster_id
+			join threads t on t.id = cm.thread_id
+			where cg.repo_id = ? and cg.status = 'active' and cg.closed_at is null
+				and cm.state = 'active' and t.number = ?
+		`, repoID, number).Scan(&memberships); err != nil {
+			t.Fatalf("active memberships for #%d: %v", number, err)
+		}
+		if memberships != 1 {
+			t.Fatalf("active memberships for #%d = %d, want 1", number, memberships)
+		}
+	}
+}
+
+func TestSavePartialDurableClustersRejectsAmbiguousActiveIdentities(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, threadIDs := seedVectorThreads(t, ctx, st)
+	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{
+		{
+			StableKey: "cluster:301", RepresentativeThreadID: threadIDs[0],
+			Members: []DurableClusterMemberInput{{ThreadID: threadIDs[0], Role: "canonical"}},
+		},
+		{
+			StableKey: "cluster:302", RepresentativeThreadID: threadIDs[1],
+			Members: []DurableClusterMemberInput{{ThreadID: threadIDs[1], Role: "canonical"}},
+		},
+	}); err != nil {
+		t.Fatalf("seed durable clusters: %v", err)
+	}
+	_, err = st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{{
+		StableKey: "ambiguous", RepresentativeThreadID: threadIDs[0],
+		Members: []DurableClusterMemberInput{
+			{ThreadID: threadIDs[0], Role: "canonical"},
+			{ThreadID: threadIDs[1], Role: "related"},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "overlaps multiple active identities") {
+		t.Fatalf("ambiguous partial save error = %v", err)
+	}
+	var clusterCount int
+	if err := st.DB().QueryRowContext(ctx, `
+		select count(*)
+		from cluster_groups
+		where repo_id = ? and status = 'active' and closed_at is null
+	`, repoID).Scan(&clusterCount); err != nil {
+		t.Fatalf("active cluster count: %v", err)
+	}
+	if clusterCount != 2 {
+		t.Fatalf("active cluster count after rejected save = %d, want 2", clusterCount)
+	}
+}
+
+func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	thread := Thread{
+		RepoID: repoID, GitHubID: "90", Number: 90, Kind: "issue", State: "open",
+		Title: "Current cluster summary", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/90",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
+		UpdatedAtGitHub: "2026-07-12T00:02:00Z", UpdatedAt: "2026-07-12T00:02:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set observation_sequence = 0,
+			evidence_observation_sequence = 0
+		where id = ?
+	`, thread.ID); err != nil {
+		t.Fatalf("mark legacy thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values
+			(900, ?, '2026-07-12T00:01:00Z', 'old', 'title', 'body', 'labels', '2026-07-12T00:01:00Z'),
+			(901, ?, '2026-07-12T00:02:00Z', 'new', 'title', 'body', 'labels', '2026-07-12T00:02:00Z');
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(900, 'llm_key_summary', 'v1', 'test', 'test', 'input-old', 'output-old', 'obsolete summary', '2026-07-12T00:03:00Z')
+	`, thread.ID, thread.ID); err != nil {
+		t.Fatalf("seed revisions: %v", err)
+	}
+	summaries, err := st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("summaries: %v", err)
+	}
+	if summaries[thread.ID]["llm_key_summary"] != "" {
+		t.Fatalf("obsolete summary surfaced for latest revision: %+v", summaries)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(901, 'llm_key_summary', 'v1', 'test', 'test', 'input-new', 'output-new', 'current summary', '2026-07-12T00:04:00Z')
+	`); err != nil {
+		t.Fatalf("current summary: %v", err)
+	}
+	summaries, err = st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("current summaries: %v", err)
+	}
+	if summaries[thread.ID]["llm_key_summary"] != "current summary" {
+		t.Fatalf("current summary missing: %+v", summaries)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values(902, ?, '2026-07-12T00:01:30Z', 'stale-late', 'title', 'body', 'labels', '2026-07-12T00:05:00Z')
+	`, thread.ID); err != nil {
+		t.Fatalf("late stale revision: %v", err)
+	}
+	summaries, err = st.summariesByThreadIDs(ctx, []int64{thread.ID})
+	if err != nil {
+		t.Fatalf("observed summaries: %v", err)
+	}
+	if summaries[thread.ID]["llm_key_summary"] != "current summary" {
+		t.Fatalf("higher stale revision hid current summary: %+v", summaries)
 	}
 }
 

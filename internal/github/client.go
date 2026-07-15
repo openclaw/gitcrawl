@@ -182,6 +182,26 @@ func (c *Client) ListWorkflowRuns(ctx context.Context, owner, repo string, optio
 	return c.paginateEnvelope(ctx, path, options.Limit, 0, "workflow_runs", reporter)
 }
 
+func (c *Client) GetWorkflowRun(
+	ctx context.Context,
+	owner string,
+	repo string,
+	runID string,
+	reporter Reporter,
+) (map[string]any, error) {
+	path := fmt.Sprintf(
+		"/repos/%s/%s/actions/runs/%s",
+		pathEscape(owner),
+		pathEscape(repo),
+		pathEscape(runID),
+	)
+	var run map[string]any
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, reporter, &run); err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
 func (c *Client) paginate(ctx context.Context, firstPath string, limit int, expectedItems int, reporter Reporter) ([]map[string]any, error) {
 	return c.paginatePages(ctx, firstPath, limit, expectedItems, reporter, func(resp *http.Response) ([]map[string]any, error) {
 		var rows []map[string]any

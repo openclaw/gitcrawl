@@ -28,28 +28,37 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 		t.Fatalf("repo: %v", err)
 	}
 	threadID, err := st.UpsertThread(ctx, Thread{
-		RepoID:        repoID,
-		GitHubID:      "1",
-		Number:        7,
-		Kind:          "issue",
-		State:         "open",
-		Title:         "Download stalls",
-		Body:          "Large download stalls near completion.",
-		HTMLURL:       "https://github.com/openclaw/gitcrawl/issues/7",
-		LabelsJSON:    "[]",
-		AssigneesJSON: "[]",
-		RawJSON:       "{}",
-		ContentHash:   "hash",
-		UpdatedAt:     "2026-04-26T00:00:00Z",
+		RepoID:          repoID,
+		GitHubID:        "1",
+		Number:          7,
+		Kind:            "issue",
+		State:           "open",
+		Title:           "Download stalls",
+		Body:            "Large download stalls near completion.",
+		HTMLURL:         "https://github.com/openclaw/gitcrawl/issues/7",
+		LabelsJSON:      "[]",
+		AssigneesJSON:   "[]",
+		RawJSON:         "{}",
+		ContentHash:     "hash",
+		UpdatedAtGitHub: "2026-04-26T00:00:00Z",
+		UpdatedAt:       "2026-04-26T00:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("thread: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
-		insert into thread_revisions(id, thread_id, content_hash, title_hash, body_hash, labels_hash, created_at)
-		values(1, ?, 'hash', 'title', 'body', 'labels', '2026-04-26T00:00:00Z');
+		update threads
+		set observation_sequence = 0,
+			evidence_observation_sequence = 0
+		where id = ?
+	`, threadID); err != nil {
+		t.Fatalf("mark legacy thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values(1, ?, '2026-04-26T00:00:00Z', 'hash', 'title', 'body', 'labels', '2026-04-26T00:00:00Z');
 		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
-		values(1, 'llm_key_3line', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'intent: fix downloads\nsurface: downloader\nmechanism: retry stalled stream', '2026-04-26T00:01:00Z');
+		values(1, 'llm_key_summary', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'intent: fix downloads\nsurface: downloader\nmechanism: retry stalled stream', '2026-04-26T00:01:00Z');
 	`, threadID); err != nil {
 		t.Fatalf("seed summary: %v", err)
 	}
@@ -67,6 +76,205 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	}
 	if !strings.Contains(tasks[0].Text, "title: Download stalls") || !strings.Contains(tasks[0].Text, "key_summary:") {
 		t.Fatalf("unexpected embedding text: %q", tasks[0].Text)
+	}
+
+	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set updated_at_gh = '2026-04-27T00:00:00Z',
+			updated_at = '2026-04-27T00:00:00Z'
+		where id = ?
+	`, threadID); err != nil {
+		t.Fatalf("advance thread without revision hydration: %v", err)
+	}
+	tasks, err = st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID,
+		Basis:  "llm_key_summary",
+		Model:  "text-embedding-3-large",
+		Force:  true,
+	})
+	if err != nil {
+		t.Fatalf("stale revision tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("stale revision summary was embedded: %+v", tasks)
+	}
+}
+
+func TestListEmbeddingTasksUsesLatestObservedRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:02:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "observed", Number: 71, Kind: "issue", State: "open",
+		Title: "Use observed summary", Body: "Current evidence has the lower revision id.",
+		HTMLURL: "https://github.com/openclaw/gitcrawl/issues/71", LabelsJSON: "[]", AssigneesJSON: "[]",
+		RawJSON: "{}", ContentHash: "current", UpdatedAtGitHub: "2026-07-12T00:02:00Z", UpdatedAt: "2026-07-12T00:02:00Z",
+	})
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		update threads
+		set observation_sequence = 0,
+			evidence_observation_sequence = 0
+		where id = ?
+	`, threadID); err != nil {
+		t.Fatalf("mark legacy thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values
+			(710, ?, '2026-07-12T00:02:00Z', 'current', 'title', 'body', 'labels', '2026-07-12T00:02:00Z'),
+			(711, ?, '2026-07-12T00:01:00Z', 'stale', 'title', 'body', 'labels', '2026-07-12T00:03:00Z');
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(710, 'llm_key_summary', 'v1', 'test', 'test', 'input', 'output', 'current observed summary', '2026-07-12T00:04:00Z');
+	`, threadID, threadID); err != nil {
+		t.Fatalf("seed observed revisions: %v", err)
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID,
+		Basis:  "llm_key_summary",
+		Model:  "text-embedding-3-large",
+		Force:  true,
+	})
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(tasks) != 1 || !strings.Contains(tasks[0].Text, "current observed summary") {
+		t.Fatalf("observed summary tasks = %+v", tasks)
+	}
+}
+
+func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner:     "openclaw",
+		Name:      "gitcrawl",
+		FullName:  "openclaw/gitcrawl",
+		RawJSON:   "{}",
+		UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID:        repoID,
+		GitHubID:      "2",
+		Number:        8,
+		Kind:          "pull_request",
+		State:         "open",
+		Title:         "Refresh review evidence",
+		Body:          "The title remains stable while review evidence changes.",
+		HTMLURL:       "https://github.com/openclaw/gitcrawl/pull/8",
+		LabelsJSON:    "[]",
+		AssigneesJSON: "[]",
+		RawJSON:       "{}",
+		ContentHash:   "thread",
+		UpdatedAt:     "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(id, thread_id, content_hash, title_hash, body_hash, labels_hash, created_at)
+		values
+			(1, ?, 'old', 'title', 'body', 'labels', '2026-07-12T00:00:00Z'),
+			(2, ?, 'new', 'title', 'body', 'labels', '2026-07-12T00:02:00Z');
+		insert into thread_key_summaries(thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at)
+		values(1, 'llm_key_summary', 'v1', 'openai', 'gpt-5-mini', 'input', 'output', 'stale review evidence', '2026-07-12T00:01:00Z');
+	`, threadID, threadID); err != nil {
+		t.Fatalf("seed revisions: %v", err)
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID,
+		Basis:  "llm_key_summary",
+		Model:  "text-embedding-3-large",
+		Force:  true,
+	})
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %+v, want no task until the latest revision is summarized", tasks)
+	}
+}
+
+func TestListEmbeddingTasksAppliesSummaryLimitAfterEligibility(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	var oldestRevisionID int64
+	for _, number := range []int{1, 2, 3} {
+		updatedAt := fmt.Sprintf("2026-07-12T00:0%d:00Z", number)
+		thread := Thread{
+			RepoID: repoID, GitHubID: fmt.Sprintf("%d", number), Number: number, Kind: "issue", State: "open",
+			Title: fmt.Sprintf("Issue %d", number), Body: "body",
+			HTMLURL:    fmt.Sprintf("https://github.com/openclaw/gitcrawl/issues/%d", number),
+			LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: fmt.Sprintf("thread-%d", number),
+			UpdatedAtGitHub: updatedAt, UpdatedAt: updatedAt,
+		}
+		thread.ID, err = st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("thread %d: %v", number, err)
+		}
+		enrichment, err := st.UpsertThreadRevisionAndFingerprint(ctx, ThreadEvidence{Thread: thread}, updatedAt)
+		if err != nil {
+			t.Fatalf("enrichment %d: %v", number, err)
+		}
+		if number == 1 {
+			oldestRevisionID = enrichment.RevisionID
+		}
+	}
+	if err := st.UpsertThreadKeySummary(ctx, ThreadKeySummary{
+		ThreadRevisionID: oldestRevisionID,
+		SummaryKind:      SummaryKindLLMKey,
+		PromptVersion:    SummaryPromptVersionV1,
+		Provider:         "openai",
+		Model:            "summary-test",
+		InputHash:        "input",
+		OutputHash:       "output",
+		KeyText:          "Only the oldest thread is currently eligible.",
+		CreatedAt:        "2026-07-12T00:04:00Z",
+	}); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	tasks, err := st.ListEmbeddingTasks(ctx, EmbeddingTaskOptions{
+		RepoID: repoID, Basis: "llm_key_summary", Model: "embedding-test", Limit: 1, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("embedding tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Number != 1 {
+		t.Fatalf("eligible task was starved by newer unsummarized threads: %+v", tasks)
 	}
 }
 

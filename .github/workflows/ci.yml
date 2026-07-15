@@ -54,6 +54,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Vulnerability scan
+        run: GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./...
+
       - name: Deadcode
         run: |
           output_file=$(mktemp)
@@ -82,6 +85,9 @@ jobs:
           output="$(./bin/gitcrawl help tui)"
           printf '%s\n' "$output"
           printf '%s' "$output" | grep -q "gitcrawl tui"
+
+      - name: Test release scripts
+        run: ./scripts/test-release.sh
 
       - name: Snapshot release build
         uses: goreleaser/goreleaser-action@v7.2.3

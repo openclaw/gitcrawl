@@ -52,6 +52,14 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 	if !payload.Totals.HydrationFailuresSupported || payload.Totals.KnownFailedHydrations == nil || *payload.Totals.KnownFailedHydrations != 1 {
 		t.Fatalf("failure ledger totals = %+v", payload.Totals)
 	}
+	if !row.Enrichment.Revisions.Supported ||
+		row.Enrichment.Revisions.Eligible != 4 ||
+		row.Enrichment.Revisions.Covered != 0 ||
+		row.Enrichment.Revisions.CoverageRatio != 0 ||
+		row.Enrichment.PRDetails.Eligible != 3 ||
+		row.Enrichment.PRDetails.Covered != 1 {
+		t.Fatalf("enrichment coverage = %+v", row.Enrichment)
+	}
 
 	tableRun := New()
 	var tableOut bytes.Buffer
@@ -248,6 +256,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 		ThreadID:  detailedPRID,
 		RepoID:    gitcrawlID,
 		Number:    3,
+		HeadSHA:   "coverage-head",
 		RawJSON:   "{}",
 		FetchedAt: "2026-07-03T00:00:00Z",
 		UpdatedAt: "2026-07-03T00:00:00Z",
@@ -269,6 +278,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 	}}, []store.WorkflowRun{{
 		RepoID:    gitcrawlID,
 		RunID:     "99",
+		HeadSHA:   "coverage-head",
 		RawJSON:   "{}",
 		FetchedAt: "2026-07-03T00:00:00Z",
 	}}); err != nil {

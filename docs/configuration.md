@@ -106,10 +106,10 @@ token_env = "CRAWL_REMOTE_TOKEN"
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `summary_model` | `gpt-5.4` | Reserved for future summary commands |
+| `summary_model` | `gpt-5.4` | OpenAI model used by `summarize` |
 | `embed_model` | `text-embedding-3-small` | OpenAI embedding model |
 | `embed_dimensions` | `1024` | Must match the model |
-| `embedding_basis` | `title_original` | Only `title_original` is implemented |
+| `embedding_basis` | `title_original` | Supported: `title_original`, `dedupe_text`, `llm_key_summary` |
 | `vector_backend` | `exact` | Semantic search backend: `exact` or optional `turbovec` via Python `turbovec`; turbovec requires dimensions divisible by 8 |
 | `[tui].default_sort` | `size` | Default TUI cluster ordering |
 | `[tui].default_layout` | `columns` | Default wide-screen TUI layout: `columns`, `right-stack`, or `focus` |
@@ -132,7 +132,7 @@ before updating gitcrawl.
 | `GITCRAWL_DB_PATH` | Override database path |
 | `GITCRAWL_TUI_LAYOUT` | Override default TUI layout (`columns`, `right-stack`, or `focus`) |
 | `GITHUB_TOKEN` | GitHub API token (required for `sync`) |
-| `OPENAI_API_KEY` | OpenAI API key (required for `embed`) |
+| `OPENAI_API_KEY` | OpenAI API key (required for `summarize` and `embed`) |
 
 ### Model overrides
 

@@ -42,8 +42,8 @@ These work on every command.
 | Command | Purpose | Docs |
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
-| `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report per-repository archive and PR-detail completeness | — |
-| `gitcrawl refresh owner/repo [--no-sync --no-embed --no-cluster ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
+| `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report archive, PR-detail, and enrichment coverage/freshness | — |
+| `gitcrawl refresh owner/repo [--with pr-details --no-sync --no-embed --no-cluster --strict-vectors ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
 | `gitcrawl embed owner/repo [--number <ref> --limit --force --include-closed --json]` | Generate OpenAI embeddings for thread documents | [Refresh and embed](/refresh-and-embed/#embed) |
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
 | `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
@@ -69,14 +69,21 @@ Commands that accept a thread number also accept thread references:
 - scoped references: `owner/repo#123`
 - full GitHub issue or pull request URLs
 
-This applies to `sync --numbers`, `threads --numbers`, `embed --number`,
+This applies to `sync --numbers`, `threads --numbers`, `summarize --number`, `embed --number`,
 `neighbors --number`, all governance `--number` flags, and TUI jump input.
+
+## Summaries and embeddings
+
+| Command | Purpose |
+| --- | --- |
+| `gitcrawl summarize owner/repo [--number --limit --force --include-closed --json]` | Generate compact key summaries for current thread revisions |
+| `gitcrawl embed owner/repo [--number --limit --force --include-closed --json]` | Generate thread vectors using the configured embedding basis |
 
 ## Cluster
 
 | Command | Purpose | Docs |
 | --- | --- | --- |
-| `gitcrawl cluster owner/repo [--threshold --min-size --max-cluster-size --k --cross-kind-threshold --limit --model --basis --include-closed --json]` | Build durable clusters from vectors | [Clustering](/clustering/#generate-clusters) |
+| `gitcrawl cluster owner/repo [--threshold --min-size --max-cluster-size --k --cross-kind-threshold --limit --model --basis --include-closed --strict-vectors --json]` | Build durable clusters from vectors | [Clustering](/clustering/#generate-clusters) |
 | `gitcrawl clusters owner/repo [--sort size\|recent\|oldest --min-size --limit --hide-closed --json]` | Latest-run cluster summary, merged with closed durable rows | [Clustering](/clustering/#list-clusters) |
 | `gitcrawl clusters-report owner/repo [--sort size\|recent\|oldest --min-size --limit --member-limit --body-chars --hide-closed --json]` | Markdown or JSON report for top display clusters | [Clustering](/clustering/#cluster-report) |
 | `gitcrawl durable-clusters owner/repo [--include-closed --sort --min-size --limit --json]` | Strict durable-cluster audit view | [Clustering](/clustering/#list-clusters) |
@@ -124,6 +131,6 @@ octopool gh api repos/openclaw/openclaw/pulls/123
 
 These appear in `SPEC.md` but currently return a "not implemented" error. They are reserved for future versions:
 
-`summarize`, `key-summaries`, `merge-clusters`, `split-cluster`, `export-sync`, `import-sync`, `validate-sync`, `portable-size`, `sync-status`, `optimize`, `completion`
+`key-summaries`, `merge-clusters`, `split-cluster`, `export-sync`, `import-sync`, `validate-sync`, `portable-size`, `sync-status`, `optimize`, `completion`
 
 If you need any of these to land sooner, [open an issue](https://github.com/openclaw/gitcrawl/issues).

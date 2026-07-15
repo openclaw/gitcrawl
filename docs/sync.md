@@ -24,9 +24,21 @@ This fetches **open** issues and pull requests for the repository. To keep local
 A sync writes:
 
 - `repositories` — repo metadata
-- `threads` — issues and PRs (titles, bodies, authors, labels, state, timestamps)
+- `threads` — issues and PRs (titles, bodies, authors, author association, labels, state, timestamps)
+- `thread_revisions` — immutable revisions with content-addressed canonical evidence payloads when fully hydrated thread or review evidence changes
+- `thread_fingerprints` — one deterministic `thread-fingerprint-v2` row for each persisted revision
 - `documents` — canonical thread documents (when bodies change)
 - `run_records` — sync run statistics
+
+Revision and fingerprint production fails closed on incomplete evidence. Issues require
+`--include-comments`; pull requests require both `--include-comments` and
+`--include-pr-details` (or `--with pr-details`). Without that hydration, sync still
+updates the thread and document rows but intentionally does not create a revision that
+could appear complete while omitting discussion, review, file, commit, or check evidence.
+Pull request revisions also track draft state, review decisions, workflow runs, and check
+transitions, so those changes invalidate downstream summaries and review evidence even
+when the title and body are unchanged. Summary prompts read the exact canonical payload
+bound to the selected revision and skip revisions whose payload is missing or too large.
 
 ## State filters
 
@@ -73,7 +85,7 @@ issue or pull request URLs.
 
 PR details land in `pr_files`, `pr_commits`, `pr_checks`, and `pr_runs` tables for local review, search, clustering, and TUI workflows.
 
-Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness after a sync. It reports issue, PR, comment, and review counts alongside hydrated PR detail rows, missing PR details, and detail-table row counts per repository. Use `--repos owner/a,owner/b` to compare selected repositories and `--min-missing-pr-details N` to focus backfill work on repositories with gaps. Known failed or skipped hydration attempts are reported as unavailable until the separate failure ledger is present.
+Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness after a sync. It reports issue, PR, comment, and review counts alongside hydrated PR detail rows, missing PR details, and detail-table row counts per repository. The additive `enrichment` object exposes supported, eligible, covered, fresh, missing, stale, completeness, ratios, and latest timestamps for revisions, fingerprints, key summaries, clusters, and PR details. Use `--repos owner/a,owner/b` to compare selected repositories and `--min-missing-pr-details N` to focus backfill work on repositories with gaps. Known failed or skipped hydration attempts are reported as unavailable until the separate failure ledger is present.
 
 `--include-code` is accepted for compatibility but is currently a no-op.
 

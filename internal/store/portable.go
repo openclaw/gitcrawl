@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const portableSchemaVersion = 4
+
 type PortablePruneOptions struct {
 	BodyChars int
 	Vacuum    bool
@@ -30,6 +32,7 @@ type PortablePruneStats struct {
 	RepositoriesPruned       int64    `json:"repositories_pruned"`
 	RawJSONPruned            int64    `json:"raw_json_pruned"`
 	FingerprintsPruned       int64    `json:"fingerprints_pruned"`
+	LegacySummariesDeleted   int64    `json:"legacy_summaries_deleted"`
 	DocumentsDeleted         int64    `json:"documents_deleted"`
 	DocumentsFTSRebuilt      bool     `json:"documents_fts_rebuilt"`
 	DroppedTables            []string `json:"dropped_tables,omitempty"`
@@ -123,6 +126,11 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		}
 		stats.FingerprintsPruned = rowsAffected(result)
 	}
+	if deleted, err := s.pruneEquivalentLegacyKeySummaries(ctx); err != nil {
+		return stats, err
+	} else {
+		stats.LegacySummariesDeleted = deleted
+	}
 	if s.tableExists(ctx, "documents") {
 		result, err := s.db.ExecContext(ctx, `delete from documents`)
 		if err != nil {
@@ -151,6 +159,35 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesAfter = info.Size()
 	}
 	return stats, nil
+}
+
+func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, error) {
+	if !s.hasColumn(ctx, "thread_key_summaries", "summary_kind") {
+		return 0, nil
+	}
+	// Full stores retain the legacy kind for compatibility. Portable snapshots
+	// only drop byte-identical copies after the canonical row is present.
+	result, err := s.db.ExecContext(ctx, `
+		delete from thread_key_summaries
+		where summary_kind = ?
+			and exists (
+				select 1
+				from thread_key_summaries as canonical
+				where canonical.thread_revision_id = thread_key_summaries.thread_revision_id
+					and canonical.summary_kind = ?
+					and canonical.prompt_version = thread_key_summaries.prompt_version
+					and canonical.provider = thread_key_summaries.provider
+					and canonical.model = thread_key_summaries.model
+					and canonical.input_hash = thread_key_summaries.input_hash
+					and canonical.output_hash = thread_key_summaries.output_hash
+					and canonical.key_text = thread_key_summaries.key_text
+					and canonical.created_at = thread_key_summaries.created_at
+			)
+	`, summaryKindLegacyLLMKey3Line, SummaryKindLLMKey)
+	if err != nil {
+		return 0, fmt.Errorf("prune equivalent legacy key summaries: %w", err)
+	}
+	return rowsAffected(result), nil
 }
 
 func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, stats *PortablePruneStats) error {
@@ -205,13 +242,14 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 		return fmt.Errorf("ensure portable metadata: %w", err)
 	}
 	metadata := map[string]string{
-		"schema":       "gitcrawl-portable-sync-v2",
-		"body_chars":   fmt.Sprintf("%d", bodyChars),
-		"capabilities": "body_excerpts,comment_excerpts,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped",
-		"includes":     "repositories,threads,comments,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs,thread_fingerprints",
-		"excluded":     "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs",
-		"exported_at":  time.Now().UTC().Format(timeLayout),
-		"source_path":  s.path,
+		"schema":                "gitcrawl-portable-sync-v2",
+		"body_chars":            fmt.Sprintf("%d", bodyChars),
+		"capabilities":          "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped",
+		"includes":              "repositories,threads,comments,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs",
+		"excluded":              "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs",
+		"exported_at":           time.Now().UTC().Format(timeLayout),
+		"source_path":           s.path,
+		"thread_author_profile": "login,type,association",
 	}
 	for key, value := range metadata {
 		if _, err := s.db.ExecContext(ctx, `
@@ -221,6 +259,9 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 		`, key, value); err != nil {
 			return fmt.Errorf("write portable metadata %s: %w", key, err)
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, portableSchemaVersion)); err != nil {
+		return fmt.Errorf("set portable schema compatibility version: %w", err)
 	}
 	return nil
 }
