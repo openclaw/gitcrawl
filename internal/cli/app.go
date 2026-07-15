@@ -136,7 +136,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		a.printUsage()
 		return nil
 	}
-	a.maybeNotifyRelease(ctx, rest)
+	if releaseNotificationAllowed(rest) {
+		a.maybeNotifyRelease(ctx, rest)
+	}
 
 	switch rest[0] {
 	case "version":
@@ -2845,6 +2847,7 @@ type syncOptions struct {
 	IncludeComments  bool
 	IncludePRDetails bool
 	Quiet            bool
+	RateLimitReserve int
 }
 
 type fillPRDetailsResult struct {
@@ -2889,7 +2892,7 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum missing PR details to hydrate")
 	order := fs.String("order", "newest-first", "missing PR order: newest-first|oldest-first|open-first")
 	batchSizeRaw := fs.String("batch-size", "50", "PRs to hydrate per sync batch")
-	reserveRaw := fs.String("reserve-rate-limit", "", "stop before starting a batch when remaining GitHub quota is at or below this value")
+	reserveRaw := fs.String("reserve-rate-limit", "", "preserve at least this much remaining GitHub quota")
 	jsonProgress := fs.Bool("json-progress", false, "write newline JSON progress events to stderr")
 	includeComments := fs.Bool("include-comments", false, "also hydrate issue comments and PR reviews while filling details")
 	jsonOut := fs.Bool("json", false, "write JSON output")
@@ -2950,7 +2953,7 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 	}
 	for i := 0; i < len(numbers); i += batchSize {
 		if reserve > 0 {
-			if rate, ok := a.currentFillRateLimit(ctx); ok && rate.Remaining <= reserve {
+			if rate, ok := a.currentFillRateLimit(ctx, reserve); ok && rate.Remaining <= reserve {
 				result.StoppedReason = "rate-limit-reserve"
 				result.RateLimit = &rate
 				break
@@ -2974,11 +2977,19 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 			IncludeComments:  *includeComments,
 			IncludePRDetails: true,
 			Quiet:            *jsonProgress,
+			RateLimitReserve: reserve,
 		})
 		if err != nil {
+			var reserveErr *gh.RateLimitReserveError
+			if errors.As(err, &reserveErr) {
+				rate := fillRateLimitResultFromSnapshot(reserveErr.RateLimit, reserve)
+				result.StoppedReason = "rate-limit-reserve"
+				result.RateLimit = &rate
+				break
+			}
 			return err
 		}
-		rate, hasRate := a.currentFillRateLimit(ctx)
+		rate, hasRate := a.currentFillRateLimit(ctx, reserve)
 		batch := fillPRDetailsBatch{
 			Index:              len(result.Batches) + 1,
 			Numbers:            batchNumbers,
@@ -3027,8 +3038,20 @@ func (a *App) writeFillPRDetailsProgress(event fillPRDetailsProgressEvent) {
 	fmt.Fprintln(a.Stderr, string(data))
 }
 
-func (a *App) currentFillRateLimit(ctx context.Context) (fillRateLimitResult, bool) {
-	state, ok := a.sharedRateLimitState(ctx)
+func (a *App) currentFillRateLimit(ctx context.Context, reserve int) (fillRateLimitResult, bool) {
+	cfg, err := config.LoadRuntime(a.configPath)
+	if err != nil {
+		return fillRateLimitResult{}, false
+	}
+	token := a.resolveGitHubToken(ctx, cfg)
+	if token.Value == "" {
+		return fillRateLimitResult{}, false
+	}
+	host := ghRateLimitHostForAPIBaseURL(githubBaseURL())
+	if host == "" {
+		host = "github.com"
+	}
+	state, ok := a.sharedRateLimitStateForTokenHost(token.Value, host)
 	if !ok {
 		return fillRateLimitResult{}, false
 	}
@@ -3040,12 +3063,26 @@ func (a *App) currentFillRateLimit(ctx context.Context) (fillRateLimitResult, bo
 		Resource:  state.Resource,
 		Limit:     state.Limit,
 		Remaining: state.Remaining,
-		Low:       state.Low,
+		Low:       state.Remaining <= reserve,
 	}
 	if !state.ResetAt.IsZero() {
 		result.ResetAt = state.ResetAt.Format(time.RFC3339)
 	}
 	return result, true
+}
+
+func fillRateLimitResultFromSnapshot(snapshot gh.RateLimitSnapshot, reserve int) fillRateLimitResult {
+	result := fillRateLimitResult{
+		Host:      snapshot.Host,
+		Resource:  snapshot.Resource,
+		Limit:     snapshot.Limit,
+		Remaining: snapshot.Remaining,
+		Low:       snapshot.Remaining <= reserve,
+	}
+	if !snapshot.ResetAt.IsZero() {
+		result.ResetAt = snapshot.ResetAt.Format(time.RFC3339)
+	}
+	return result
 }
 
 func fillRateLimitStateFresh(state ghSharedRateLimitState, now time.Time) bool {
@@ -3093,8 +3130,6 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	}
 	defer rt.Store.Close()
 
-	client := gh.New(gh.Options{Token: token.Value, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx, token.Value)})
-	service := syncer.New(client, rt.Store)
 	var reporter gh.Reporter
 	var logger *slog.Logger
 	if !options.Quiet {
@@ -3103,6 +3138,19 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		}
 		logger = progressLogger(a.Stderr)
 	}
+	baseURL := githubBaseURL()
+	client := gh.New(gh.Options{
+		Token:            token.Value,
+		BaseURL:          baseURL,
+		RateLimit:        a.observeGitHubRateLimit(ctx, token.Value),
+		RateLimitReserve: options.RateLimitReserve,
+	})
+	if options.RateLimitReserve > 0 {
+		if _, err := client.GetRateLimits(ctx, reporter); err != nil {
+			return syncer.Stats{}, fmt.Errorf("check GitHub rate limit before sync: %w", err)
+		}
+	}
+	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:            owner,
 		Repo:             repo,
@@ -5020,11 +5068,15 @@ Usage:
 
 Usage:
   gitcrawl coverage [owner/repo | --repos owner/a,owner/b] [--min-missing-pr-details N] [--json]
-	`,
+`,
 	"fill-pr-details": `gitcrawl fill-pr-details hydrates locally missing pull request detail rows.
 
 Usage:
-  gitcrawl fill-pr-details owner/repo [--limit N] [--order newest-first|oldest-first|open-first] [--batch-size N] [--reserve-rate-limit N] [--json-progress] [--json]
+  gitcrawl fill-pr-details owner/repo [--limit N] [--order newest-first|oldest-first|open-first] [--batch-size N] [--reserve-rate-limit N] [--include-comments] [--json-progress] [--json]
+
+The rate-limit reserve is enforced before each GitHub request issued by this
+command. Other command invocations and tools sharing the token are outside its
+accounting.
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 

@@ -25,6 +25,7 @@ import (
 	crawlremote "github.com/openclaw/crawlkit/remote"
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
+	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/zalando/go-keyring"
 )
@@ -2573,7 +2574,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.Contains(helpOut.String(), "cluster browser") {
 		t.Fatalf("tui help output = %q", helpOut.String())
 	}
-	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "summarize", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
+	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "fill-pr-details", "refresh", "summarize", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
 		helpOut.Reset()
 		if err := help.printCommandUsage(topic); err != nil {
 			t.Fatalf("%s help: %v", topic, err)
@@ -2588,6 +2589,20 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	}
 	if strings.Contains(helpOut.String(), "--sync-if-stale") {
 		t.Fatalf("refresh help should not advertise search-only --sync-if-stale: %q", helpOut.String())
+	}
+	helpOut.Reset()
+	if err := help.printCommandUsage("fill-pr-details"); err != nil {
+		t.Fatalf("fill-pr-details help: %v", err)
+	}
+	if !strings.Contains(helpOut.String(), "--include-comments") || !strings.Contains(helpOut.String(), "Other command invocations") {
+		t.Fatalf("fill-pr-details help output = %q", helpOut.String())
+	}
+	helpOut.Reset()
+	if err := help.printCommandUsage("coverage"); err != nil {
+		t.Fatalf("coverage help: %v", err)
+	}
+	if !strings.HasSuffix(helpOut.String(), "[--json]\n") {
+		t.Fatalf("coverage help has unexpected suffix: %q", helpOut.String())
 	}
 	if err := New().Run(ctx, []string{"--config", configPath, "status", "extra"}); err == nil {
 		t.Fatal("status extra arg should fail")
@@ -5314,12 +5329,19 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 		w.Header().Set("X-RateLimit-Remaining", "4990")
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
 		switch r.URL.Path {
+		case "/rate_limit":
+			resetAt := time.Now().Add(time.Hour).Unix()
+			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+				"core":    map[string]any{"limit": 5000, "remaining": 4990, "reset": resetAt},
+				"graphql": map[string]any{"limit": 5000, "remaining": 4990, "reset": resetAt},
+			}})
 		case "/repos/openclaw/gitcrawl":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/gitcrawl"})
 		case "/repos/openclaw/gitcrawl/issues/102":
 			row := githubIssueJSON(102, "pull_request", "Fill details")
 			row["html_url"] = "https://github.com/openclaw/gitcrawl/pull/102"
 			row["pull_request"] = map[string]any{"url": githubServerURL(r) + "/repos/openclaw/gitcrawl/pulls/102"}
+			row["updated_at"] = "2026-06-20T12:01:00Z"
 			_ = json.NewEncoder(w).Encode(row)
 		case "/graphql":
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -5354,7 +5376,7 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 			if r.URL.Query().Get("head_sha") != "head-sha" {
 				t.Fatalf("workflow runs query = %s", r.URL.RawQuery)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 99, "run_number": 7, "head_sha": "head-sha", "status": "completed", "conclusion": "success", "name": "CI", "html_url": "https://example.invalid/run"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 99, "run_number": 7, "head_sha": "head-sha", "status": "completed", "conclusion": "success", "name": "CI", "html_url": "https://example.invalid/run", "created_at": now, "updated_at": now}}})
 		default:
 			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
 		}
@@ -5456,6 +5478,144 @@ func TestFillPRDetailsReserveRateLimitStopsOnFreshLowCache(t *testing.T) {
 	}
 	if result.RateLimit == nil || result.RateLimit.Remaining != 5 {
 		t.Fatalf("rate limit = %+v", result.RateLimit)
+	}
+}
+
+func TestCurrentFillRateLimitUsesConfiguredAPIHost(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", "https://ghe.example/api/v3")
+	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1h")
+
+	app := New()
+	app.configPath = configPath
+	resetAt := time.Now().Add(time.Hour).UTC()
+	if err := app.writeSharedRateLimit(ctx, "test-gh-token", gh.RateLimitSnapshot{
+		Host:      "ghe.example",
+		Limit:     5000,
+		Remaining: 7,
+		ResetAt:   resetAt,
+		Resource:  "core",
+	}, "test"); err != nil {
+		t.Fatalf("write rate limit: %v", err)
+	}
+
+	rate, ok := app.currentFillRateLimit(ctx, 10)
+	if !ok || rate.Host != "ghe.example" || rate.Remaining != 7 || !rate.Low || rate.ResetAt != resetAt.Format(time.RFC3339) {
+		t.Fatalf("current fill rate limit = %+v ok=%v", rate, ok)
+	}
+}
+
+func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := "2026-06-20T12:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "104", Number: 104, Kind: "pull_request", State: "open",
+		Title: "Fill details", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/104",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h104",
+		UpdatedAtGitHub: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	resetAt := time.Now().Add(time.Hour).Unix()
+	var rateStatusCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if r.URL.Path == "/rate_limit" {
+			rateStatusCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+				"core":    map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt},
+				"graphql": map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt},
+			}})
+			return
+		}
+		call := coreCalls.Add(1)
+		remaining := 11 - int(call)
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt, 10))
+		w.Header().Set("X-RateLimit-Resource", "core")
+		if call > 1 {
+			http.Error(w, "request crossed configured reserve", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path != "/repos/openclaw/gitcrawl" {
+			t.Fatalf("first guarded request path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/gitcrawl"})
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 11, time.Unix(resetAt, 0), time.Now())
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--reserve-rate-limit", "10", "--json"}); err != nil {
+		t.Fatalf("fill-pr-details: %v", err)
+	}
+	var result struct {
+		Selected      int                  `json:"selected"`
+		Filled        int                  `json:"filled"`
+		Remaining     int                  `json:"remaining"`
+		StoppedReason string               `json:"stopped_reason"`
+		RateLimit     *fillRateLimitResult `json:"rate_limit"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
+	}
+	if result.Selected != 1 || result.Filled != 0 || result.Remaining != 1 || result.StoppedReason != "rate-limit-reserve" {
+		t.Fatalf("fill result = %+v", result)
+	}
+	if result.RateLimit == nil || result.RateLimit.Resource != "core" || result.RateLimit.Remaining != 10 {
+		t.Fatalf("rate limit = %+v", result.RateLimit)
+	}
+	if got := rateStatusCalls.Load(); got != 1 {
+		t.Fatalf("rate status calls = %d, want 1", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store after reserve stop: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.PullRequestCache(ctx, repoID, 104); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pull request cache after reserve stop error = %v, want no detail row", err)
 	}
 }
 

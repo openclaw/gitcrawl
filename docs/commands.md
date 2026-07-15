@@ -43,10 +43,15 @@ These work on every command.
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
 | `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report archive, PR-detail, and enrichment coverage/freshness | — |
+| `gitcrawl fill-pr-details owner/repo [--limit --order --batch-size --reserve-rate-limit --include-comments --json-progress --json]` | Hydrate locally missing pull request detail rows in bounded batches | — |
 | `gitcrawl refresh owner/repo [--with pr-details --no-sync --no-embed --no-cluster --strict-vectors ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
 | `gitcrawl embed owner/repo [--number <ref> --limit --force --include-closed --json]` | Generate OpenAI embeddings for thread documents | [Refresh and embed](/refresh-and-embed/#embed) |
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
 | `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
+
+`fill-pr-details --reserve-rate-limit` reserves quota before each GitHub request
+issued by that command. Other command invocations and tools sharing the token
+are outside the command's accounting.
 
 For an end-to-end first-run sequence that combines `status --json`, `doctor --json`, `sync --numbers`, bounded `--sync-if-stale` search, `gitcrawl runs`, and Octopool live reads, see the [maintainer archive workflow](/maintainer-archive/).
 
