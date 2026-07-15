@@ -267,6 +267,64 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	}
 }
 
+func TestPortablePruneDeletesOnlyEquivalentLegacyKeySummaries(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	_, threadIDs := seedVectorThreads(t, ctx, st)
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_revisions(
+			thread_id, source_updated_at, observation_sequence,
+			content_hash, title_hash, body_hash, labels_hash, created_at
+		)
+		select id, '2026-07-15T00:00:00Z', observation_sequence,
+			'content', 'title', 'body', 'labels', '2026-07-15T00:00:00Z'
+		from threads
+		where id = ?
+	`, threadIDs[0]); err != nil {
+		t.Fatalf("seed revision: %v", err)
+	}
+	var revisionID int64
+	if err := st.DB().QueryRowContext(ctx, `select id from thread_revisions where thread_id = ?`, threadIDs[0]).Scan(&revisionID); err != nil {
+		t.Fatalf("revision id: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into thread_key_summaries(
+			thread_revision_id, summary_kind, prompt_version, provider, model,
+			input_hash, output_hash, key_text, created_at
+		)
+		values
+			(?, 'llm_key_summary', 'equivalent', 'test', 'test', 'input-1', 'output-1', 'same text', '2026-07-15T00:01:00Z'),
+			(?, 'llm_key_3line', 'equivalent', 'test', 'test', 'input-1', 'output-1', 'same text', '2026-07-15T00:01:00Z'),
+			(?, 'llm_key_3line', 'legacy-only', 'test', 'test', 'input-2', 'output-2', 'legacy only', '2026-07-15T00:02:00Z'),
+			(?, 'llm_key_summary', 'different', 'test', 'test', 'input-3', 'output-3', 'canonical text', '2026-07-15T00:03:00Z'),
+			(?, 'llm_key_3line', 'different', 'test', 'test', 'input-3', 'output-3', 'different legacy text', '2026-07-15T00:03:00Z')
+	`, revisionID, revisionID, revisionID, revisionID, revisionID); err != nil {
+		t.Fatalf("seed key summaries: %v", err)
+	}
+
+	stats, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 5})
+	if err != nil {
+		t.Fatalf("prune portable: %v", err)
+	}
+	if stats.LegacySummariesDeleted != 1 {
+		t.Fatalf("legacy summaries deleted = %d, want 1", stats.LegacySummariesDeleted)
+	}
+	var legacyCount, canonicalCount int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_key_summaries where summary_kind = 'llm_key_3line'`).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy summaries: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from thread_key_summaries where summary_kind = 'llm_key_summary'`).Scan(&canonicalCount); err != nil {
+		t.Fatalf("count canonical summaries: %v", err)
+	}
+	if legacyCount != 2 || canonicalCount != 2 {
+		t.Fatalf("summary counts legacy=%d canonical=%d, want 2/2", legacyCount, canonicalCount)
+	}
+}
+
 func TestPortablePruneClearsPRRawJSONBlobPointersAndFingerprints(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

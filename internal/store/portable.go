@@ -32,6 +32,7 @@ type PortablePruneStats struct {
 	RepositoriesPruned       int64    `json:"repositories_pruned"`
 	RawJSONPruned            int64    `json:"raw_json_pruned"`
 	FingerprintsPruned       int64    `json:"fingerprints_pruned"`
+	LegacySummariesDeleted   int64    `json:"legacy_summaries_deleted"`
 	DocumentsDeleted         int64    `json:"documents_deleted"`
 	DocumentsFTSRebuilt      bool     `json:"documents_fts_rebuilt"`
 	DroppedTables            []string `json:"dropped_tables,omitempty"`
@@ -125,6 +126,11 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		}
 		stats.FingerprintsPruned = rowsAffected(result)
 	}
+	if deleted, err := s.pruneEquivalentLegacyKeySummaries(ctx); err != nil {
+		return stats, err
+	} else {
+		stats.LegacySummariesDeleted = deleted
+	}
 	if s.tableExists(ctx, "documents") {
 		result, err := s.db.ExecContext(ctx, `delete from documents`)
 		if err != nil {
@@ -153,6 +159,35 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesAfter = info.Size()
 	}
 	return stats, nil
+}
+
+func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, error) {
+	if !s.hasColumn(ctx, "thread_key_summaries", "summary_kind") {
+		return 0, nil
+	}
+	// Full stores retain the legacy kind for compatibility. Portable snapshots
+	// only drop byte-identical copies after the canonical row is present.
+	result, err := s.db.ExecContext(ctx, `
+		delete from thread_key_summaries
+		where summary_kind = ?
+			and exists (
+				select 1
+				from thread_key_summaries as canonical
+				where canonical.thread_revision_id = thread_key_summaries.thread_revision_id
+					and canonical.summary_kind = ?
+					and canonical.prompt_version = thread_key_summaries.prompt_version
+					and canonical.provider = thread_key_summaries.provider
+					and canonical.model = thread_key_summaries.model
+					and canonical.input_hash = thread_key_summaries.input_hash
+					and canonical.output_hash = thread_key_summaries.output_hash
+					and canonical.key_text = thread_key_summaries.key_text
+					and canonical.created_at = thread_key_summaries.created_at
+			)
+	`, summaryKindLegacyLLMKey3Line, SummaryKindLLMKey)
+	if err != nil {
+		return 0, fmt.Errorf("prune equivalent legacy key summaries: %w", err)
+	}
+	return rowsAffected(result), nil
 }
 
 func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, stats *PortablePruneStats) error {
