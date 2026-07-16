@@ -7124,6 +7124,92 @@ func TestBuildDurableClusterInputsIgnoresCrossRepoQualifiedReferences(t *testing
 	}
 }
 
+func TestBuildDurableClusterInputsScopesURLReferencesToRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantEdges int
+	}{
+		{name: "cross-repo pull URL", body: "Bumps fast-uri from 3.0.5 to 3.0.6, see https://redirect.github.com/fastify/fast-uri/pull/901 for the upstream change.", wantEdges: 0},
+		{name: "cross-repo issues URL", body: "Upstream breakage is tracked in https://github.com/fastify/fast-uri/issues/901 before this bump.", wantEdges: 0},
+		{name: "same-repo issues URL", body: "Fixes https://github.com/openclaw/openclaw/issues/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "same-repo pull URL", body: "Supersedes https://github.com/openclaw/openclaw/pull/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "same-repo qualified ref", body: "Fixes openclaw/openclaw#901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "same-repo bare ref", body: "Fixes #901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+			repoID, err := st.UpsertRepository(ctx, store.Repository{
+				Owner:     "openclaw",
+				Name:      "openclaw",
+				FullName:  "openclaw/openclaw",
+				RawJSON:   "{}",
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if err != nil {
+				t.Fatalf("seed repository: %v", err)
+			}
+			issueID, err := st.UpsertThread(ctx, store.Thread{
+				RepoID:        repoID,
+				GitHubID:      "901",
+				Number:        901,
+				Kind:          "issue",
+				State:         "open",
+				Title:         "Gateway token regression",
+				Body:          "Users cannot authorize device tokens.",
+				HTMLURL:       "https://github.com/openclaw/openclaw/issues/901",
+				LabelsJSON:    "[]",
+				AssigneesJSON: "[]",
+				RawJSON:       "{}",
+				ContentHash:   "hash-901",
+				UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if err != nil {
+				t.Fatalf("seed issue: %v", err)
+			}
+			prID, err := st.UpsertThread(ctx, store.Thread{
+				RepoID:        repoID,
+				GitHubID:      "902",
+				Number:        902,
+				Kind:          "pull_request",
+				State:         "open",
+				Title:         "Repair auth scope migration",
+				Body:          tc.body,
+				HTMLURL:       "https://github.com/openclaw/openclaw/pull/902",
+				LabelsJSON:    "[]",
+				AssigneesJSON: "[]",
+				RawJSON:       "{}",
+				ContentHash:   "hash-902",
+				UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if err != nil {
+				t.Fatalf("seed pull request: %v", err)
+			}
+			inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, []store.ThreadVector{
+				{ThreadID: issueID, Vector: []float64{1, 0}},
+				{ThreadID: prID, Vector: []float64{0, 1}},
+			}, clusterBuildOptions{
+				Threshold:          0.99,
+				MinSize:            2,
+				MaxClusterSize:     defaultClusterMaxSize,
+				Fanout:             16,
+				CrossKindThreshold: 0.99,
+			})
+			if err != nil {
+				t.Fatalf("build inputs: %v", err)
+			}
+			if edgeCount != tc.wantEdges || len(inputs) != tc.wantEdges {
+				t.Fatalf("edges=%d inputs=%#v, want %d evidence edges", edgeCount, inputs, tc.wantEdges)
+			}
+		})
+	}
+}
+
 func TestBuildDurableClusterInputsIgnoresBareOneDigitProseRefs(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
