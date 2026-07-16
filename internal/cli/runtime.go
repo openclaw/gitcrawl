@@ -44,7 +44,9 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
-	if _, ok := portableStoreRoot(cfg.DBPath); ok {
+	if _, ok, err := portableStoreRoot(ctx, cfg.DBPath); err != nil {
+		return localRuntime{}, err
+	} else if ok {
 		mirrorPath, _, err := a.ensurePortableRuntimeDB(ctx, cfg.DBPath, false)
 		if err != nil {
 			return localRuntime{}, err
@@ -73,7 +75,9 @@ func (a *App) openLocalRuntimeReadOnlyWithConfig(ctx context.Context, cfg config
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
-	if _, ok := portableStoreRoot(cfg.DBPath); ok {
+	if _, ok, err := portableStoreRoot(ctx, cfg.DBPath); err != nil {
+		return localRuntime{}, err
+	} else if ok {
 		mirrorPath, _, err := a.ensurePortableRuntimeDB(ctx, cfg.DBPath, true)
 		if err != nil {
 			return localRuntime{}, err
@@ -104,11 +108,11 @@ func (rt localRuntime) defaultRepository(ctx context.Context) (store.Repository,
 }
 
 func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
-	root, ok := portableStoreRoot(dbPath)
-	if !ok {
-		return nil
+	root, ok, err := portableStoreRoot(ctx, dbPath)
+	if err != nil {
+		return err
 	}
-	if !portableStoreIsGitWorktree(ctx, root) {
+	if !ok {
 		return nil
 	}
 	if !gitWorktreeClean(ctx, root) {
@@ -131,11 +135,11 @@ type portableRepairResult struct {
 
 func repairMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath string) (portableRepairResult, error) {
 	result := portableRepairResult{Action: "reset-pulled"}
-	root, ok := portableStoreRoot(dbPath)
-	if !ok {
-		return result, nil
+	root, ok, err := portableStoreRoot(ctx, dbPath)
+	if err != nil {
+		return result, err
 	}
-	if !portableStoreIsGitWorktree(ctx, root) {
+	if !ok {
 		return result, nil
 	}
 	if !portableStoreRepairAllowed(root, configPath) {
@@ -165,11 +169,11 @@ func repairMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath s
 
 func recloneMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath string) (portableRepairResult, error) {
 	result := portableRepairResult{Action: "recloned"}
-	root, ok := portableStoreRoot(dbPath)
-	if !ok {
-		return result, nil
+	root, ok, err := portableStoreRoot(ctx, dbPath)
+	if err != nil {
+		return result, err
 	}
-	if !portableStoreIsGitWorktree(ctx, root) {
+	if !ok {
 		return result, nil
 	}
 	if !portableStoreRepairAllowed(root, configPath) {
@@ -210,7 +214,7 @@ func recloneMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath 
 var portableRuntimeMu sync.Mutex
 
 func (a *App) ensurePortableRuntimeDB(ctx context.Context, sourceDBPath string, refresh bool) (string, bool, error) {
-	mirrorPath, err := a.portableRuntimeDBPath(sourceDBPath)
+	mirrorPath, err := a.portableRuntimeDBPath(ctx, sourceDBPath)
 	if err != nil {
 		return "", false, err
 	}
@@ -218,8 +222,11 @@ func (a *App) ensurePortableRuntimeDB(ctx context.Context, sourceDBPath string, 
 	return mirrorPath, changed, err
 }
 
-func (a *App) portableRuntimeDBPath(sourceDBPath string) (string, error) {
-	root, ok := portableStoreRoot(sourceDBPath)
+func (a *App) portableRuntimeDBPath(ctx context.Context, sourceDBPath string) (string, error) {
+	root, ok, err := portableStoreRoot(ctx, sourceDBPath)
+	if err != nil {
+		return "", err
+	}
 	if !ok {
 		return "", fmt.Errorf("portable store root not found for %s", sourceDBPath)
 	}
@@ -237,8 +244,11 @@ func (a *App) portableRuntimeDBPath(sourceDBPath string) (string, error) {
 func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath string, refresh bool, configPath string) (bool, error) {
 	portableRuntimeMu.Lock()
 	defer portableRuntimeMu.Unlock()
-	portableRoot, isPortableSource := portableStoreRoot(sourceDBPath)
-	isRepairablePortableSource := isPortableSource && portableStoreIsGitWorktree(ctx, portableRoot)
+	_, isPortableSource, err := portableStoreRoot(ctx, sourceDBPath)
+	if err != nil {
+		return false, err
+	}
+	isRepairablePortableSource := isPortableSource
 	if refresh {
 		_ = refreshPortableStoreForDBIfDue(ctx, sourceDBPath, mirrorPath)
 	}
@@ -768,23 +778,111 @@ func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath st
 	return nil
 }
 
-func portableStoreRoot(dbPath string) (string, bool) {
+func portableStoreRoot(ctx context.Context, dbPath string) (string, bool, error) {
 	dir := filepath.Clean(filepath.Dir(dbPath))
 	for {
-		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
-			return dir, true
+		info, statErr := os.Stat(filepath.Join(dir, ".git"))
+		if statErr == nil && info.IsDir() {
+			isWorktree, err := probePortableStoreGitWorktree(ctx, dir)
+			if err != nil {
+				return "", false, fmt.Errorf("verify portable store candidate %s: %w", dir, err)
+			}
+			if isWorktree {
+				return dir, true, nil
+			}
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return "", false, fmt.Errorf("inspect portable store candidate %s: %w", dir, statErr)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", false
+			return "", false, nil
 		}
 		dir = parent
 	}
 }
 
-func portableStoreIsGitWorktree(ctx context.Context, dir string) bool {
-	out, err := gitOutput(ctx, "", "-C", dir, "rev-parse", "--is-inside-work-tree")
-	return err == nil && strings.TrimSpace(out) == "true"
+func probePortableStoreGitWorktree(ctx context.Context, dir string) (bool, error) {
+	initialized, err := gitMetadataLooksInitialized(filepath.Join(dir, ".git"))
+	if err != nil {
+		return false, err
+	}
+	if !initialized {
+		return false, nil
+	}
+
+	topLevel, stderr, err := runGitCommandOutputWithEnvSeparate(ctx, "", portableStoreGitProbeEnv(), "-C", dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return false, fmt.Errorf("resolve portable store worktree: %w\n%s", err, strings.TrimSpace(stderr))
+	}
+	if !sameExistingPath(strings.TrimSpace(topLevel), dir) {
+		return false, fmt.Errorf("Git resolved portable store candidate %s to worktree %s", dir, strings.TrimSpace(topLevel))
+	}
+
+	gitDir, stderr, err := runGitCommandOutputWithEnvSeparate(ctx, "", portableStoreGitProbeEnv(), "-C", dir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return false, fmt.Errorf("resolve portable store Git directory: %w\n%s", err, strings.TrimSpace(stderr))
+	}
+	if !sameExistingPath(strings.TrimSpace(gitDir), filepath.Join(dir, ".git")) {
+		return false, fmt.Errorf("Git resolved portable store candidate %s to Git directory %s", dir, strings.TrimSpace(gitDir))
+	}
+	return true, nil
+}
+
+func gitMetadataLooksInitialized(gitDir string) (bool, error) {
+	for _, name := range []string{"HEAD", "config", "objects", "refs"} {
+		_, err := os.Lstat(filepath.Join(gitDir, name))
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		default:
+			return false, fmt.Errorf("inspect Git metadata %s: %w", gitDir, err)
+		}
+	}
+	return false, nil
+}
+
+func sameExistingPath(left, right string) bool {
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		return false
+	}
+	rightInfo, err := os.Stat(right)
+	return err == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+func portableStoreGitProbeEnv() []string {
+	repositoryEnv := map[string]struct{}{
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
+		"GIT_CEILING_DIRECTORIES":          {},
+		"GIT_COMMON_DIR":                   {},
+		"GIT_DIR":                          {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
+		"GIT_GRAFT_FILE":                   {},
+		"GIT_INDEX_FILE":                   {},
+		"GIT_NAMESPACE":                    {},
+		"GIT_OBJECT_DIRECTORY":             {},
+		"GIT_PREFIX":                       {},
+		"GIT_QUARANTINE_PATH":              {},
+		"GIT_SHALLOW_FILE":                 {},
+		"GIT_WORK_TREE":                    {},
+	}
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		upperName := strings.ToUpper(name)
+		_, excluded := repositoryEnv[upperName]
+		if excluded || upperName == "GIT_CONFIG_COUNT" || upperName == "GIT_CONFIG_PARAMETERS" ||
+			strings.HasPrefix(upperName, "GIT_CONFIG_KEY_") || strings.HasPrefix(upperName, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
 }
 
 func portableStoreRemoteURL(ctx context.Context, root string) string {

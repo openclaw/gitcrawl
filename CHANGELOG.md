@@ -3,6 +3,7 @@
 ## 0.7.2 - Unreleased
 
 - Ignore cross-repository issue and pull request links when building deterministic cluster edges for the current repository, so an upstream link such as `https://github.com/other/repo/pull/169` no longer clusters the unrelated local thread numbered 169, while unqualified `issues/123` and `pull/123` references still resolve locally.
+- Ignore stray ancestor `.git` directories when resolving local databases while preserving verified legacy portable-store worktrees and fail-closed probe errors. Thanks @morluto.
 - Remove byte-identical legacy key-summary copies from portable exports after canonicalization, keeping archive snapshots below GitHub's blob limit without dropping distinct legacy evidence.
 - Reuse legacy `llm_key_3line` summaries as canonical key-summary evidence during schema migration so existing archives can embed, cluster, and publish without regenerating every summary first.
 - Require every Gitcrawl cloud publisher manifest to opt into snapshot staging so `--stage-only` and normal publish-then-cutover runs cannot activate serving state through the legacy compatibility path.

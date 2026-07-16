@@ -2,11 +2,104 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestPortableStoreRootPropagatesGitProbeFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := runGit(context.Background(), "", "init", dir); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := portableStoreRoot(ctx, filepath.Join(dir, "gitcrawl.db"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("portable store root error = %v, want context canceled", err)
+	}
+}
+
+func TestPortableStoreRootBindsCandidateToOwningWorktree(t *testing.T) {
+	ctx := context.Background()
+	outer := t.TempDir()
+	if err := runGit(ctx, "", "init", outer); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	nested := filepath.Join(outer, "data")
+	if err := os.MkdirAll(filepath.Join(nested, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir stray Git metadata: %v", err)
+	}
+
+	root, ok, err := portableStoreRoot(ctx, filepath.Join(nested, "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("portable store root: %v", err)
+	}
+	if !ok || !sameExistingPath(root, outer) {
+		t.Fatalf("portable store root = %q, ok=%v, want outer worktree %q", root, ok, outer)
+	}
+}
+
+func TestPortableStoreRootIgnoresInheritedGitSelection(t *testing.T) {
+	ctx := context.Background()
+	portable := t.TempDir()
+	if err := runGit(ctx, "", "init", portable); err != nil {
+		t.Fatalf("git init portable: %v", err)
+	}
+	other := t.TempDir()
+	if err := runGit(ctx, "", "init", other); err != nil {
+		t.Fatalf("git init other: %v", err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+
+	root, ok, err := portableStoreRoot(ctx, filepath.Join(portable, "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("portable store root: %v", err)
+	}
+	if !ok || !sameExistingPath(root, portable) {
+		t.Fatalf("portable store root = %q, ok=%v, want %q", root, ok, portable)
+	}
+}
+
+func TestPortableStoreRootIgnoresGitTraceOutput(t *testing.T) {
+	ctx := context.Background()
+	portable := t.TempDir()
+	if err := runGit(ctx, "", "init", portable); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	t.Setenv("GIT_TRACE", "1")
+
+	root, ok, err := portableStoreRoot(ctx, filepath.Join(portable, "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("portable store root: %v", err)
+	}
+	if !ok || !sameExistingPath(root, portable) {
+		t.Fatalf("portable store root = %q, ok=%v, want %q", root, ok, portable)
+	}
+}
+
+func TestPortableStoreRootIgnoresCommandScopeGitConfig(t *testing.T) {
+	ctx := context.Background()
+	portable := t.TempDir()
+	if err := runGit(ctx, "", "init", portable); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.bare")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+
+	root, ok, err := portableStoreRoot(ctx, filepath.Join(portable, "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("portable store root: %v", err)
+	}
+	if !ok || !sameExistingPath(root, portable) {
+		t.Fatalf("portable store root = %q, ok=%v, want %q", root, ok, portable)
+	}
+}
 
 func TestPortableRuntimeUtilityBranches(t *testing.T) {
 	dir := t.TempDir()
