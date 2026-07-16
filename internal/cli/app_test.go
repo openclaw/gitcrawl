@@ -7136,6 +7136,9 @@ func TestBuildDurableClusterInputsScopesURLReferencesToRepository(t *testing.T) 
 		{name: "same-repo pull URL", body: "Supersedes https://github.com/openclaw/openclaw/pull/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
 		{name: "same-repo qualified ref", body: "Fixes openclaw/openclaw#901 by preserving the device-token scope during upgrade.", wantEdges: 1},
 		{name: "same-repo bare ref", body: "Fixes #901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "unqualified issues path", body: "Fixes issues/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "unqualified pull path", body: "Supersedes pull/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "unqualified rooted issues path", body: "Fixes /issues/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

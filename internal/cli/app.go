@@ -50,7 +50,7 @@ const (
 
 var errNoSemanticVectors = errors.New("no semantic vectors")
 
-var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b([\w.-]+/[\w.-]+)#(\d+)|\b([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)|#(\d{2,}))`)
+var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b([\w.-]+/[\w.-]+)#(\d+)|(?:\b([\w.-]+/[\w.-]+)/)?(?:issues|pull)/(\d+)|#(\d{2,}))`)
 var githubThreadURLPattern = regexp.MustCompile(`(?i)^https?://github\.com/([\w.-]+)/([\w.-]+)/(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
 var ownerRepoThreadPattern = regexp.MustCompile(`(?i)^([\w.-]+)/([\w.-]+)#(\d+)$`)
 var pathThreadPattern = regexp.MustCompile(`(?i)(?:^|/)(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
@@ -4282,10 +4282,12 @@ func collectReferencedThreadNumbers(refs map[int]referenceEvidence, threadNumber
 				continue
 			}
 			numberText = value[match[4]:match[5]]
-		} else if match[6] >= 0 {
-			refRepo := value[match[6]:match[7]]
-			if !strings.EqualFold(refRepo, repoFullName) {
-				continue
+		} else if match[8] >= 0 {
+			if match[6] >= 0 {
+				refRepo := value[match[6]:match[7]]
+				if !strings.EqualFold(refRepo, repoFullName) {
+					continue
+				}
 			}
 			numberText = value[match[8]:match[9]]
 		} else if match[10] >= 0 {
