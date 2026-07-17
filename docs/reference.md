@@ -53,6 +53,7 @@ path with `--config <path>` or `GITCRAWL_CONFIG`.
 | `GITCRAWL_EMBED_MODEL` | `text-embedding-3-small` | OpenAI embedding model |
 | `GITCRAWL_OPENAI_RETRY_DISABLED` | _(off)_ | Set `1` to disable OpenAI retry/backoff |
 | `GITCRAWL_OPENAI_BASE_URL` / `OPENAI_BASE_URL` | OpenAI default | Custom OpenAI endpoint |
+| `GITCRAWL_EMBED_BASE_URL` | Shared OpenAI endpoint | Embedding-only OpenAI-compatible endpoint |
 
 ### GitHub overrides
 
@@ -71,6 +72,7 @@ path with `--config <path>` or `GITCRAWL_CONFIG`.
 | --- | --- |
 | `summary_model` | `gpt-5.4` |
 | `embed_model` | `text-embedding-3-small` |
+| `embed_base_url` | _(empty; uses the shared OpenAI endpoint)_ |
 | `embed_dimensions` | `1024` |
 | `embedding_basis` | `title_original` |
 | `vector_backend` | `exact`; `turbovec` requires Python `turbovec` and dimensions divisible by 8 |

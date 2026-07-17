@@ -4442,6 +4442,13 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	if got := openAIBaseURL(); got != "https://gitcrawl-openai.example/v1" {
 		t.Fatalf("openAIBaseURL override = %q", got)
 	}
+	if got := embedBaseURL(config.Config{}); got != "https://gitcrawl-openai.example/v1" {
+		t.Fatalf("embedBaseURL fallback = %q", got)
+	}
+	embedCfg := config.Config{OpenAI: config.OpenAIConfig{EmbedBaseURL: " https://embed.example/v1 "}}
+	if got := embedBaseURL(embedCfg); got != "https://embed.example/v1" {
+		t.Fatalf("embedBaseURL override = %q", got)
+	}
 	t.Setenv("GITHUB_BASE_URL", "https://github.example")
 	if got := githubBaseURL(); got != "https://github.example" {
 		t.Fatalf("githubBaseURL fallback = %q", got)
@@ -4452,6 +4459,95 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	}
 	if got := formatOptionalTime(time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)); got == "" {
 		t.Fatal("non-zero optional time should be formatted")
+	}
+}
+
+func TestConfigureEmbedBaseURL(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	var stdout bytes.Buffer
+	app := New()
+	app.Stdout = &stdout
+	if err := app.Run(ctx, []string{"--config", configPath, "configure", "--embed-base-url", "https://embed.example/v1", "--json"}); err != nil {
+		t.Fatalf("configure embed base URL: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.OpenAI.EmbedBaseURL != "https://embed.example/v1" {
+		t.Fatalf("saved embed_base_url = %q", cfg.OpenAI.EmbedBaseURL)
+	}
+	if !strings.Contains(stdout.String(), `"embed_base_url": "https://embed.example/v1"`) {
+		t.Fatalf("configure output = %q", stdout.String())
+	}
+
+	if err := app.Run(ctx, []string{"--config", configPath, "configure", "--embed-base-url", ""}); err != nil {
+		t.Fatalf("clear embed base URL: %v", err)
+	}
+	cfg, err = config.Load(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if cfg.OpenAI.EmbedBaseURL != "" {
+		t.Fatalf("cleared embed_base_url = %q", cfg.OpenAI.EmbedBaseURL)
+	}
+}
+
+func TestEmbedUsesConfiguredBaseURL(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	seedCommandFlowStore(t, dbPath)
+
+	var configuredCalls atomic.Int64
+	configured := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configuredCalls.Add(1)
+		if r.URL.Path != "/embeddings" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Input) == 0 {
+			http.Error(w, "missing input", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"index": 0, "embedding": []float64{0.25, 0.75}}},
+		})
+	}))
+	defer configured.Close()
+	var sharedCalls atomic.Int64
+	shared := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sharedCalls.Add(1)
+		http.Error(w, "shared endpoint should not be used", http.StatusInternalServerError)
+	}))
+	defer shared.Close()
+
+	configure := New()
+	if err := configure.Run(ctx, []string{"--config", configPath, "configure", "--embed-base-url", configured.URL}); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "x")
+	t.Setenv("GITCRAWL_OPENAI_BASE_URL", shared.URL)
+	var stdout bytes.Buffer
+	embed := New()
+	embed.Stdout = &stdout
+	if err := embed.Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw", "--limit", "1", "--json"}); err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if configuredCalls.Load() != 1 || sharedCalls.Load() != 0 {
+		t.Fatalf("endpoint calls: configured=%d shared=%d", configuredCalls.Load(), sharedCalls.Load())
+	}
+	if !strings.Contains(stdout.String(), `"embedded": 1`) {
+		t.Fatalf("embed output = %q", stdout.String())
 	}
 }
 

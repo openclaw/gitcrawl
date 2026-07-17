@@ -451,6 +451,34 @@ GITCRAWL_EMBED_MODEL = "embed-from-config-env"
 	}
 }
 
+func TestLoadRuntimeAppliesEmbedBaseURLOverride(t *testing.T) {
+	t.Setenv("GITCRAWL_EMBED_BASE_URL", "https://process.example.com/v1")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[openai]
+embed_base_url = "https://config.example.com/v1"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if loaded.OpenAI.EmbedBaseURL != "https://config.example.com/v1" {
+		t.Fatalf("config embed_base_url = %q", loaded.OpenAI.EmbedBaseURL)
+	}
+
+	runtime, err := LoadRuntime(path)
+	if err != nil {
+		t.Fatalf("load runtime config: %v", err)
+	}
+	if runtime.OpenAI.EmbedBaseURL != "https://process.example.com/v1" {
+		t.Fatalf("runtime embed_base_url = %q", runtime.OpenAI.EmbedBaseURL)
+	}
+}
+
 func TestLoadDoesNotApplyRuntimeEnvFallback(t *testing.T) {
 	t.Setenv("GITCRAWL_SUMMARY_MODEL", "summary-from-process")
 	t.Setenv("GITCRAWL_EMBED_MODEL", "")
