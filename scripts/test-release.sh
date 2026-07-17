@@ -25,6 +25,9 @@ EOF
 cat > "$FAKE_BIN/codesign" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${MOCK_CODESIGN_LOG:?}"
+if [[ " $* " == *' --check-notarization '* && "${MOCK_NOTARIZATION_REJECT:-0}" == 1 ]]; then
+  exit 1
+fi
 case " $* " in
   *' -dvvv '*)
     {
@@ -33,6 +36,32 @@ case " $* " in
       echo "TeamIdentifier=${MOCK_CODESIGN_TEAM_ID:-FWJYW4S8P8}"
     } >&2
     ;;
+esac
+EOF
+
+cat > "$FAKE_BIN/ditto" <<'EOF'
+#!/usr/bin/env bash
+previous=
+for arg in "$@"; do
+  source=$previous
+  previous=$arg
+done
+cp "$source" "$previous"
+printf 'ditto %s\n' "$*" >> "${MOCK_CODESIGN_LOG:?}"
+EOF
+
+cat > "$FAKE_BIN/xcrun" <<'EOF'
+#!/usr/bin/env bash
+printf 'xcrun %s\n' "$*" >> "${MOCK_CODESIGN_LOG:?}"
+printf '{"id":"12345678-1234-1234-1234-123456789abc","status":"%s"}\n' "${MOCK_NOTARY_STATUS:-Accepted}"
+EOF
+
+cat > "$FAKE_BIN/plutil" <<'EOF'
+#!/usr/bin/env bash
+case "${2:-}" in
+  status) printf '%s\n' "${MOCK_NOTARY_STATUS:-Accepted}" ;;
+  id) printf '%s\n' '12345678-1234-1234-1234-123456789abc' ;;
+  *) exit 1 ;;
 esac
 EOF
 
@@ -47,6 +76,7 @@ EOF
 chmod 0755 "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
 export MOCK_CODESIGN_LOG="$WORK_DIR/codesign.log"
+unset NOTARYTOOL_KEYCHAIN_PROFILE
 
 test_binary="$WORK_DIR/gitcrawl"
 cat > "$test_binary" <<'EOF'
@@ -62,15 +92,48 @@ if CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' 
   echo "package script accepted personal signing identity" >&2
   exit 1
 fi
+if CODESIGN_IDENTITY="$EXPECTED_AUTHORITY" \
+  "$ROOT/scripts/package-release.sh" v0.7.1 >/dev/null 2>&1; then
+  echo "package script accepted a missing notary profile" >&2
+  exit 1
+fi
 if GITCRAWL_REQUIRE_CODESIGN=1 \
   CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
   "$ROOT/scripts/codesign-macos.sh" "$test_binary" >/dev/null 2>&1; then
   echo "personal signing identity was accepted" >&2
   exit 1
 fi
+if GITCRAWL_REQUIRE_CODESIGN=1 \
+  CODESIGN_IDENTITY="$EXPECTED_AUTHORITY" \
+  "$ROOT/scripts/codesign-macos.sh" "$test_binary" >/dev/null 2>&1; then
+  echo "official signing accepted a missing notary profile" >&2
+  exit 1
+fi
 GITCRAWL_REQUIRE_CODESIGN=1 \
   CODESIGN_IDENTITY="$EXPECTED_AUTHORITY" \
+  NOTARYTOOL_KEYCHAIN_PROFILE=test-profile \
   "$ROOT/scripts/codesign-macos.sh" "$test_binary"
+grep -F -- '--identifier org.openclaw.gitcrawl' "$MOCK_CODESIGN_LOG" >/dev/null
+grep -F 'FWJYW4S8P8' "$MOCK_CODESIGN_LOG" >/dev/null
+grep -F -- 'notarytool submit' "$MOCK_CODESIGN_LOG" >/dev/null
+grep -F -- '--keychain-profile test-profile --no-s3-acceleration --wait --output-format json' "$MOCK_CODESIGN_LOG" >/dev/null
+signed_hash=$(shasum -a 256 "$test_binary" | awk '{ print $1 }')
+if GITCRAWL_REQUIRE_CODESIGN=1 \
+  CODESIGN_IDENTITY="$EXPECTED_AUTHORITY" \
+  NOTARYTOOL_KEYCHAIN_PROFILE=test-profile \
+  MOCK_NOTARY_STATUS=Invalid \
+  "$ROOT/scripts/codesign-macos.sh" "$test_binary" >/dev/null 2>&1; then
+  echo "invalid notarization status was accepted" >&2
+  exit 1
+fi
+[[ "$(shasum -a 256 "$test_binary" | awk '{ print $1 }')" == "$signed_hash" ]] || {
+  echo "failed notarization mutated the release binary" >&2
+  exit 1
+}
+if find "$WORK_DIR" -maxdepth 1 -name '.gitcrawl-notary.*' | grep -q .; then
+  echo "ephemeral notarization files were not removed" >&2
+  exit 1
+fi
 
 ARTIFACTS="$WORK_DIR/artifacts"
 mkdir -p "$ARTIFACTS"
@@ -84,7 +147,14 @@ for arch in amd64 arm64; do
   shasum -a 256 "$ARTIFACTS/$archive" | awk -v name="$archive" '{ print $1 "  " name }' >> "$ARTIFACTS/checksums.txt"
 done
 
+: > "$MOCK_CODESIGN_LOG"
 "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS"
+[[ "$(grep -F -c -- '--verify --strict --check-notarization -R=notarized' "$MOCK_CODESIGN_LOG")" == 2 ]]
+if MOCK_NOTARIZATION_REJECT=1 \
+  "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" >/dev/null 2>&1; then
+  echo "release verifier accepted a missing notarization ticket" >&2
+  exit 1
+fi
 if MOCK_CODESIGN_AUTHORITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
   "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" >/dev/null 2>&1; then
   echo "personal signature was accepted" >&2
@@ -104,9 +174,6 @@ if "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" >/dev/null 2>&1; then
   exit 1
 fi
 
-grep -F -- '--identifier org.openclaw.gitcrawl' "$MOCK_CODESIGN_LOG" >/dev/null
-grep -F 'FWJYW4S8P8' "$MOCK_CODESIGN_LOG" >/dev/null
-
 release_workflow="$ROOT/.github/workflows/release-assets.yml"
 grep -F 'contents: write' "$release_workflow" >/dev/null
 grep -F "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" "$release_workflow" >/dev/null
@@ -121,6 +188,10 @@ grep -F 'persist-credentials: false' "$release_workflow" >/dev/null
 grep -F 'tag_name == $tag and (.draft == ($draft == "true"))' "$release_workflow" >/dev/null
 grep -F 'Accept: application/octet-stream' "$release_workflow" >/dev/null
 grep -F 'unset GH_TOKEN GITHUB_TOKEN' "$release_workflow" >/dev/null
+if grep -R -F 'NOTARYTOOL_KEYCHAIN_PROFILE' "$ROOT/.github/workflows" >/dev/null; then
+  echo "notary profile must not be configured in GitHub Actions" >&2
+  exit 1
+fi
 if grep -F 'gh release download' "$release_workflow" >/dev/null; then
   echo "release workflow cannot resolve draft assets through gh release download" >&2
   exit 1

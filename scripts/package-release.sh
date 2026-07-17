@@ -21,8 +21,12 @@ fi
   echo "official releases require $EXPECTED_AUTHORITY" >&2
   exit 1
 }
+[[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]] || {
+  echo "official releases require NOTARYTOOL_KEYCHAIN_PROFILE at runtime" >&2
+  exit 1
+}
 
-for tool in codesign git go goreleaser lipo shasum tar; do
+for tool in codesign ditto git go goreleaser lipo plutil shasum tar xcrun; do
   command -v "$tool" >/dev/null || {
     echo "missing required tool: $tool" >&2
     exit 1

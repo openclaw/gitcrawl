@@ -2,6 +2,7 @@
 
 ## 0.8.1 - Unreleased
 
+- Require every official macOS release binary to pass hardened-runtime signing, Apple notarization, and independent Foundation and notarized-requirement verification before packaging.
 - Route embedding and semantic-search requests through a configurable embedding-only OpenAI-compatible endpoint while preserving the shared endpoint fallback. Thanks @larroy.
 
 ## 0.8.0 - 2026-07-17
