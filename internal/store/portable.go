@@ -14,6 +14,8 @@ const portableSchemaVersion = 4
 
 const portableSyncFailureErrorRedaction = "[redacted for portable export]"
 
+const portableSyncFailureScrubPendingKey = "sync_failure_scrub_pending"
+
 type PortablePruneOptions struct {
 	BodyChars           int
 	Vacuum              bool
@@ -149,23 +151,28 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		}
 		stats.DocumentsFTSRebuilt = true
 	}
-	hadSyncFailures, err := s.scrubPortableSyncFailures(ctx, options.IncludeSyncFailures, &stats)
+	syncFailureScrubRequired, err := s.scrubPortableSyncFailures(ctx, options.IncludeSyncFailures, &stats)
 	if err != nil {
 		return stats, err
+	}
+	if syncFailureScrubRequired {
+		if err := s.vacuumPortableDatabase(ctx); err != nil {
+			return stats, err
+		}
+		stats.Vacuumed = true
+		stats.SyncFailureVacuumForced = !options.Vacuum
+		if _, err := s.db.ExecContext(ctx, `delete from portable_metadata where key = ?`, portableSyncFailureScrubPendingKey); err != nil {
+			return stats, fmt.Errorf("clear portable sync failure scrub marker: %w", err)
+		}
 	}
 	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, options.IncludeSyncFailures, &stats); err != nil {
 		return stats, err
 	}
-	vacuum := options.Vacuum || hadSyncFailures
-	stats.Vacuumed = vacuum
-	stats.SyncFailureVacuumForced = hadSyncFailures && !options.Vacuum
-	if vacuum {
-		if _, err := s.db.ExecContext(ctx, `pragma wal_checkpoint(TRUNCATE)`); err != nil {
-			return stats, fmt.Errorf("checkpoint wal: %w", err)
+	if options.Vacuum {
+		if err := s.vacuumPortableDatabase(ctx); err != nil {
+			return stats, err
 		}
-		if _, err := s.db.ExecContext(ctx, `vacuum`); err != nil {
-			return stats, fmt.Errorf("vacuum database: %w", err)
-		}
+		stats.Vacuumed = true
 	}
 	if info, err := os.Stat(s.path); err == nil {
 		stats.BytesAfter = info.Size()
@@ -173,9 +180,43 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	return stats, nil
 }
 
+func (s *Store) vacuumPortableDatabase(ctx context.Context) error {
+	var busy, logFrames, checkpointedFrames int
+	if err := s.db.QueryRowContext(ctx, `pragma wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
+		return fmt.Errorf("checkpoint wal: %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("checkpoint wal: busy with %d of %d frames checkpointed", checkpointedFrames, logFrames)
+	}
+	if _, err := s.db.ExecContext(ctx, `vacuum`); err != nil {
+		return fmt.Errorf("vacuum database: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) scrubPortableSyncFailures(ctx context.Context, include bool, stats *PortablePruneStats) (bool, error) {
-	if !s.tableExists(ctx, "sync_attempt_failures") {
+	ledgerExists := s.tableExists(ctx, "sync_attempt_failures")
+	pending, err := s.portableSyncFailureScrubPending(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !ledgerExists && !pending {
 		return false, nil
+	}
+	if !pending {
+		if err := s.ensurePortableMetadata(ctx); err != nil {
+			return false, err
+		}
+		if _, err := s.db.ExecContext(ctx, `
+			insert into portable_metadata(key, value)
+			values(?, '1')
+			on conflict(key) do update set value = excluded.value
+		`, portableSyncFailureScrubPendingKey); err != nil {
+			return false, fmt.Errorf("mark portable sync failure scrub pending: %w", err)
+		}
+	}
+	if !ledgerExists {
+		return true, nil
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -190,7 +231,7 @@ func (s *Store) scrubPortableSyncFailures(ctx context.Context, include bool, sta
 		stats.SyncFailuresIncluded = true
 	}
 	if !hasRows {
-		return false, nil
+		return true, nil
 	}
 	// VACUUM is optional, so securely overwrite private error bytes before the
 	// table is dropped or its visible values are replaced. The caller also
@@ -210,6 +251,33 @@ func (s *Store) scrubPortableSyncFailures(ctx context.Context, include bool, sta
 	}
 	stats.SyncFailureErrorsRedacted = rowsAffected(result)
 	return true, nil
+}
+
+func (s *Store) portableSyncFailureScrubPending(ctx context.Context) (bool, error) {
+	if !s.tableExists(ctx, "portable_metadata") {
+		return false, nil
+	}
+	var value string
+	err := s.db.QueryRowContext(ctx, `select value from portable_metadata where key = ?`, portableSyncFailureScrubPendingKey).Scan(&value)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read portable sync failure scrub marker: %w", err)
+	}
+	return value == "1", nil
+}
+
+func (s *Store) ensurePortableMetadata(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+		create table if not exists portable_metadata (
+			key text primary key,
+			value text not null
+		)
+	`); err != nil {
+		return fmt.Errorf("ensure portable metadata: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, error) {
@@ -287,13 +355,8 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		}
 		stats.DroppedTables = append(stats.DroppedTables, table)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		create table if not exists portable_metadata (
-			key text primary key,
-			value text not null
-		)
-	`); err != nil {
-		return fmt.Errorf("ensure portable metadata: %w", err)
+	if err := s.ensurePortableMetadata(ctx); err != nil {
+		return err
 	}
 	capabilities := "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped"
 	includes := "repositories,threads,comments,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs"

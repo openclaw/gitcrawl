@@ -5277,6 +5277,6 @@ Subcommands:
   prune               prune volatile payloads from the configured portable store
 
 The sync failure ledger is excluded by default. --include-sync-failures keeps
-the ledger but replaces every error message with a redaction marker. Failure
-history forces a secure database rewrite even when --no-vacuum is passed.
+the ledger but replaces every error message with a redaction marker. A present
+or pending ledger forces a secure database rewrite even with --no-vacuum.
 `

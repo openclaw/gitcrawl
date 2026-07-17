@@ -4764,6 +4764,30 @@ func TestSyncFailuresListsUnresolvedAndHistory(t *testing.T) {
 	if len(history.Failures) != 2 {
 		t.Fatalf("history failures = %+v", history.Failures)
 	}
+
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, 84, "2026-06-06T00:10:00Z"); err != nil {
+		t.Fatalf("resolve final failure: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close resolved store: %v", err)
+	}
+	stdout.Reset()
+	if err := run.Run(ctx, []string{"--config", configPath, "--json", "sync-failures", "openclaw/gitcrawl"}); err != nil {
+		t.Fatalf("sync-failures empty: %v", err)
+	}
+	var empty struct {
+		Failures []store.SyncAttemptFailure `json:"failures"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &empty); err != nil {
+		t.Fatalf("decode empty failures: %v\n%s", err, stdout.String())
+	}
+	if empty.Failures == nil || len(empty.Failures) != 0 {
+		t.Fatalf("empty failures = %+v; JSON = %s", empty.Failures, stdout.String())
+	}
 }
 
 func TestTUIJSONUsesDefaultsWhenConfigMissing(t *testing.T) {

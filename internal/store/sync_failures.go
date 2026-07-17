@@ -137,7 +137,7 @@ limit ?`, options.RepoID, limit)
 		return nil, fmt.Errorf("list sync attempt failures: %w", err)
 	}
 	defer rows.Close()
-	var out []SyncAttemptFailure
+	out := make([]SyncAttemptFailure, 0)
 	for rows.Next() {
 		var failure SyncAttemptFailure
 		var threadID sql.NullInt64
