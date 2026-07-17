@@ -4,6 +4,7 @@
 
 - Require every official macOS release binary to pass hardened-runtime signing, Apple notarization, and independent Foundation and notarized-requirement verification before packaging.
 - Route embedding and semantic-search requests through a configurable embedding-only OpenAI-compatible endpoint while preserving the shared endpoint fallback. Thanks @larroy.
+- Update CrawlKit to v0.14.3, Alpine to 3.24, `actions/setup-node` to v7, govulncheck to v1.6.0, and deadcode to v0.48.0.
 
 ## 0.8.0 - 2026-07-17
 

@@ -55,12 +55,12 @@ jobs:
         run: go vet ./...
 
       - name: Vulnerability scan
-        run: GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./...
+        run: GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
       - name: Deadcode
         run: |
           output_file=$(mktemp)
-          go run golang.org/x/tools/cmd/deadcode@v0.45.0 -test ./... > "$output_file"
+          go run golang.org/x/tools/cmd/deadcode@v0.48.0 -test ./... > "$output_file"
           if [ -s "$output_file" ]; then
             cat "$output_file"
             exit 1
