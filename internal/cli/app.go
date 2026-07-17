@@ -50,7 +50,7 @@ const (
 
 var errNoSemanticVectors = errors.New("no semantic vectors")
 
-var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b([\w.-]+/[\w.-]+)#(\d+)|(?:issues|pull)/(\d+)|#(\d{2,}))`)
+var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b([\w.-]+/[\w.-]+)#(\d+)|(?:\b([\w.-]+/[\w.-]+)/)?(?:issues|pull)/(\d+)|#(\d{2,}))`)
 var githubThreadURLPattern = regexp.MustCompile(`(?i)^https?://github\.com/([\w.-]+)/([\w.-]+)/(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
 var ownerRepoThreadPattern = regexp.MustCompile(`(?i)^([\w.-]+)/([\w.-]+)#(\d+)$`)
 var pathThreadPattern = regexp.MustCompile(`(?i)(?:^|/)(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
@@ -1997,7 +1997,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Repository:         repo.FullName,
 		InferredRepository: inferred,
 		Mode:               "cluster-browser",
-		DBSource:           databaseSourceKind(rt.SourceDBPath),
+		DBSource:           databaseSourceKind(ctx, rt.SourceDBPath),
 		DBLocation:         databaseSourceLocation(ctx, rt.SourceDBPath),
 		DBRefreshSource:    remoteRefreshSource(rt),
 		DBRuntimePath:      remoteRuntimePath(rt),
@@ -2052,7 +2052,7 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 	}
 	return clusterBrowserPayload{
 		Mode:           "cluster-browser",
-		DBSource:       databaseSourceKind(sourceDBPath),
+		DBSource:       databaseSourceKind(ctx, sourceDBPath),
 		DBLocation:     databaseSourceLocation(ctx, sourceDBPath),
 		Sort:           sort,
 		Layout:         layout,
@@ -2066,8 +2066,8 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 	}
 }
 
-func databaseSourceKind(dbPath string) string {
-	if _, ok := portableStoreRoot(dbPath); ok {
+func databaseSourceKind(ctx context.Context, dbPath string) string {
+	if _, ok, _ := portableStoreRoot(ctx, dbPath); ok {
 		return "remote"
 	}
 	return "local"
@@ -2089,7 +2089,7 @@ func remoteRuntimePath(rt localRuntime) string {
 
 func databaseSourceLocation(ctx context.Context, dbPath string) string {
 	filename := filepath.Base(dbPath)
-	root, ok := portableStoreRoot(dbPath)
+	root, ok, _ := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return filename
 	}
@@ -3661,28 +3661,38 @@ func runGit(ctx context.Context, workdir string, args ...string) error {
 }
 
 func runGitCommandOutput(ctx context.Context, workdir string, args ...string) (string, error) {
+	return runGitCommandOutputWithEnv(ctx, workdir, os.Environ(), args...)
+}
+
+func runGitCommandOutputWithEnv(ctx context.Context, workdir string, env []string, args ...string) (string, error) {
+	stdout, stderr, err := runGitCommandOutputWithEnvSeparate(ctx, workdir, env, args...)
+	return stdout + stderr, err
+}
+
+func runGitCommandOutputWithEnvSeparate(ctx context.Context, workdir string, env []string, args ...string) (string, string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(append([]string(nil), env...),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
 	)
 	configureCommandGroup(cmd)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		cleanupCommandGroup(cmd)
-		return out.String(), err
+		return stdout.String(), stderr.String(), err
 	}
 	if err := attachCommandGroup(cmd); err != nil {
 		killCommandGroup(cmd)
 		_ = cmd.Wait()
 		cleanupCommandGroup(cmd)
-		return out.String(), err
+		return stdout.String(), stderr.String(), err
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -3691,7 +3701,7 @@ func runGitCommandOutput(ctx context.Context, workdir string, args ...string) (s
 	select {
 	case err := <-done:
 		cleanupCommandGroup(cmd)
-		return out.String(), err
+		return stdout.String(), stderr.String(), err
 	case <-ctx.Done():
 		killCommandGroup(cmd)
 		err := <-done
@@ -3699,7 +3709,7 @@ func runGitCommandOutput(ctx context.Context, workdir string, args ...string) (s
 		if err == nil {
 			err = ctx.Err()
 		}
-		return out.String(), fmt.Errorf("%w: %v", ctx.Err(), err)
+		return stdout.String(), stderr.String(), fmt.Errorf("%w: %v", ctx.Err(), err)
 	}
 }
 
@@ -3977,16 +3987,17 @@ func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[stri
 
 func portableStoreGitStatus(ctx context.Context, dbPath string) map[string]any {
 	result := map[string]any{}
-	root, ok := portableStoreRoot(dbPath)
+	root, ok, err := portableStoreRoot(ctx, dbPath)
+	if err != nil {
+		result["state"] = "error"
+		result["error"] = err.Error()
+		return result
+	}
 	if !ok {
 		result["state"] = "not_portable"
 		return result
 	}
 	result["root"] = root
-	if !portableStoreIsGitWorktree(ctx, root) {
-		result["state"] = "not_git"
-		return result
-	}
 	if gitWorktreeClean(ctx, root) {
 		result["state"] = "clean"
 	} else {
@@ -4543,10 +4554,16 @@ func collectReferencedThreadNumbers(refs map[int]referenceEvidence, threadNumber
 				continue
 			}
 			numberText = value[match[4]:match[5]]
-		} else if match[6] >= 0 {
-			numberText = value[match[6]:match[7]]
 		} else if match[8] >= 0 {
+			if match[6] >= 0 {
+				refRepo := value[match[6]:match[7]]
+				if !strings.EqualFold(refRepo, repoFullName) {
+					continue
+				}
+			}
 			numberText = value[match[8]:match[9]]
+		} else if match[10] >= 0 {
+			numberText = value[match[10]:match[11]]
 		}
 		number, err := strconv.Atoi(numberText)
 		if err != nil || number <= 0 || number == threadNumber {
