@@ -7,11 +7,23 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func writeRateLimits(t *testing.T, w http.ResponseWriter, resetAt time.Time, coreRemaining, graphqlRemaining int) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+		"core":    map[string]any{"limit": 5000, "remaining": coreRemaining, "reset": resetAt.Unix()},
+		"graphql": map[string]any{"limit": 5000, "remaining": graphqlRemaining, "reset": resetAt.Unix()},
+	}}); err != nil {
+		t.Fatalf("encode rate limits: %v", err)
+	}
+}
 
 func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -517,6 +529,533 @@ func TestRateLimitRetriesOn403WithRemainingZero(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Fatalf("calls = %d want 2", got)
+	}
+}
+
+func TestGetRateLimitsDecodesCoreAndGraphQLResources(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rate_limit" {
+			t.Fatalf("path = %q, want /rate_limit", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+			"core":    map[string]any{"limit": 5000, "remaining": 101, "reset": resetAt},
+			"graphql": map[string]any{"limit": 5000, "remaining": 202, "reset": resetAt},
+		}})
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL})
+	snapshots, err := client.GetRateLimits(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("get rate limits: %v", err)
+	}
+	byResource := make(map[string]RateLimitSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		byResource[snapshot.Resource] = snapshot
+	}
+	if got := byResource["core"]; got.Limit != 5000 || got.Remaining != 101 || got.ResetAt.Unix() != resetAt {
+		t.Fatalf("core rate limit = %+v", got)
+	}
+	if got := byResource["graphql"]; got.Limit != 5000 || got.Remaining != 202 || got.ResetAt.Unix() != resetAt {
+		t.Fatalf("graphql rate limit = %+v", got)
+	}
+}
+
+func TestRateLimitReserveStopsCoreRequestBeforeCrossing(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	var rateCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			remaining := 12 - int(rateCalls.Add(1))
+			writeRateLimits(t, w, resetAt, remaining, 100)
+			return
+		}
+		call := coreCalls.Add(1)
+		if call > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "10")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+		w.Header().Set("X-RateLimit-Resource", "core")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 11, ResetAt: resetAt, Resource: "core",
+		}},
+	})
+	if _, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	_, err := client.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		t.Fatalf("second request error = %v, want RateLimitReserveError", err)
+	}
+	if reserveErr.RateLimit.Resource != "core" || reserveErr.RateLimit.Remaining != 10 || reserveErr.Reserve != 10 {
+		t.Fatalf("reserve error = %+v", reserveErr)
+	}
+	if got := rateCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveSerializesConcurrentRequestsAtThreshold(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var rateCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			remaining := 12 - int(rateCalls.Add(1))
+			writeRateLimits(t, w, resetAt, remaining, 100)
+			return
+		}
+		if coreCalls.Add(1) > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		close(firstStarted)
+		<-releaseFirst
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 11, ResetAt: resetAt, Resource: "core",
+		}},
+	})
+	errs := make(chan error, 2)
+	go func() {
+		_, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+		errs <- err
+	}()
+	<-firstStarted
+	go func() {
+		_, err := client.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
+		errs <- err
+	}()
+	close(releaseFirst)
+
+	var succeeded int
+	var stopped int
+	for range 2 {
+		err := <-errs
+		if err == nil {
+			succeeded++
+			continue
+		}
+		var reserveErr *RateLimitReserveError
+		if errors.As(err, &reserveErr) {
+			stopped++
+			continue
+		}
+		t.Fatalf("request error = %v", err)
+	}
+	if succeeded != 1 || stopped != 1 {
+		t.Fatalf("succeeded = %d, stopped = %d", succeeded, stopped)
+	}
+	if got := rateCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveSeparateClientsObserveSharedQuota(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	firstDispatched := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var rateCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			rateCalls.Add(1)
+			writeRateLimits(t, w, resetAt, 11-int(coreCalls.Load()), 100)
+			return
+		}
+		if coreCalls.Add(1) > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		close(firstDispatched)
+		<-releaseFirst
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	firstClient := New(Options{BaseURL: server.URL, RateLimitReserve: 10})
+	secondClient := New(Options{BaseURL: server.URL, RateLimitReserve: 10})
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := firstClient.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+		firstErr <- err
+	}()
+	<-firstDispatched
+
+	_, err := secondClient.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		close(releaseFirst)
+		<-firstErr
+		t.Fatalf("second client error = %v, want RateLimitReserveError", err)
+	}
+	close(releaseFirst)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first client request: %v", err)
+	}
+	if reserveErr.RateLimit.Remaining != 10 {
+		t.Fatalf("reserve error = %+v", reserveErr)
+	}
+	if got := rateCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveSerializesConcurrentRateStatus(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	var coreCalls atomic.Int32
+	var rateCalls atomic.Int32
+	var observedMu sync.Mutex
+	var observed []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			call := rateCalls.Add(1)
+			if call == 1 {
+				close(probeStarted)
+				<-releaseProbe
+			}
+			remaining := 11
+			if call >= 3 {
+				remaining = 10
+			}
+			writeRateLimits(t, w, resetAt, remaining, 100)
+			return
+		}
+		if coreCalls.Add(1) > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 11, ResetAt: resetAt, Resource: "core",
+		}},
+		RateLimit: func(snapshot RateLimitSnapshot) {
+			observedMu.Lock()
+			defer observedMu.Unlock()
+			observed = append(observed, snapshot.Remaining)
+		},
+	})
+	probeErr := make(chan error, 1)
+	go func() {
+		_, err := client.GetRateLimits(context.Background(), nil)
+		probeErr <- err
+	}()
+	<-probeStarted
+	if client.reserve.requestMu.TryLock() {
+		client.reserve.requestMu.Unlock()
+		close(releaseProbe)
+		<-probeErr
+		t.Fatal("rate status request did not hold the guarded request lock")
+	}
+	requestErr := make(chan error, 1)
+	go func() {
+		_, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+		requestErr <- err
+	}()
+	close(releaseProbe)
+	if err := <-probeErr; err != nil {
+		t.Fatalf("rate status request: %v", err)
+	}
+	if err := <-requestErr; err != nil {
+		t.Fatalf("guarded request: %v", err)
+	}
+	observedMu.Lock()
+	gotObserved := append([]int(nil), observed...)
+	observedMu.Unlock()
+	if len(gotObserved) != 3 || gotObserved[0] != 11 || gotObserved[1] != 11 || gotObserved[2] != 10 {
+		t.Fatalf("observed remaining = %v, want [11 11 10]", gotObserved)
+	}
+
+	_, err := client.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		t.Fatalf("request after delayed status error = %v, want RateLimitReserveError", err)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveStopsBeforeFollowingRedirect(t *testing.T) {
+	var calls atomic.Int32
+	resetAt := time.Now().Add(time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			writeRateLimits(t, w, resetAt, 11, 100)
+			return
+		}
+		calls.Add(1)
+		if r.URL.Path == "/repos/openclaw/gitcrawl" {
+			http.Redirect(w, r, "/repos/openclaw/redirected", http.StatusFound)
+			return
+		}
+		http.Error(w, "reserve crossed", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 11, ResetAt: time.Now().Add(time.Hour), Resource: "core",
+		}},
+	})
+	_, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) || requestErr.Status != http.StatusFound {
+		t.Fatalf("redirect error = %v, want status %d RequestError", err, http.StatusFound)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveBootstrapStopsBeforeFollowingRedirect(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path == "/rate_limit" {
+			http.Redirect(w, r, "/costful", http.StatusTemporaryRedirect)
+			return
+		}
+		http.Error(w, "reserve crossed", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, RateLimitReserve: 10})
+	_, err := client.GetRateLimits(context.Background(), nil)
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) || requestErr.Status != http.StatusTemporaryRedirect {
+		t.Fatalf("bootstrap redirect error = %v, want status %d RequestError", err, http.StatusTemporaryRedirect)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveChargesNonGETRateLimitRequest(t *testing.T) {
+	var calls atomic.Int32
+	resetAt := time.Now().Add(time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/rate_limit" {
+			writeRateLimits(t, w, resetAt, 10, 100)
+			return
+		}
+		calls.Add(1)
+		http.Error(w, "reserve crossed", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 10, ResetAt: time.Now().Add(time.Hour), Resource: "core",
+		}},
+	})
+	var out map[string]any
+	err := client.doJSON(context.Background(), http.MethodPost, "/rate_limit", strings.NewReader(`{}`), nil, &out)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		t.Fatalf("POST rate_limit error = %v, want RateLimitReserveError", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestRateLimitObserverUsesFinalRedirectResource(t *testing.T) {
+	var snapshot RateLimitSnapshot
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			http.Redirect(w, r, "/repos/openclaw/gitcrawl", http.StatusFound)
+			return
+		}
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "99")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL: server.URL,
+		RateLimit: func(value RateLimitSnapshot) {
+			snapshot = value
+		},
+	})
+	var out map[string]any
+	if err := client.doJSON(context.Background(), http.MethodPost, client.graphQLURL, strings.NewReader(`{}`), nil, &out); err != nil {
+		t.Fatalf("redirected request: %v", err)
+	}
+	if snapshot.Resource != "core" || snapshot.Remaining != 99 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestRateLimitReserveCountsRepositoryNamedRateLimit(t *testing.T) {
+	var calls atomic.Int32
+	resetAt := time.Now().Add(time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			writeRateLimits(t, w, resetAt, 10, 100)
+			return
+		}
+		calls.Add(1)
+		http.Error(w, "reserve crossed", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 10, ResetAt: time.Now().Add(time.Hour), Resource: "core",
+		}},
+	})
+	_, err := client.GetRepo(context.Background(), "openclaw", "rate_limit", nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		t.Fatalf("repository request error = %v, want RateLimitReserveError", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestRateLimitReserveRefreshesSharedTokenBeforeEveryRequest(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	var rateStatusCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			remaining := 12 - int(rateStatusCalls.Add(1))
+			writeRateLimits(t, w, resetAt, remaining, 100)
+			return
+		}
+		call := coreCalls.Add(1)
+		if call > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{{
+			Limit: 5000, Remaining: 100, ResetAt: time.Now().Add(-time.Minute), Resource: "core",
+		}},
+	})
+	if _, err := client.GetRepo(context.Background(), "openclaw", "gitcrawl", nil); err != nil {
+		t.Fatalf("first request after refresh: %v", err)
+	}
+	_, err := client.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		t.Fatalf("second request error = %v, want RateLimitReserveError", err)
+	}
+	if reserveErr.RateLimit.Remaining != 10 {
+		t.Fatalf("reserve error = %+v", reserveErr)
+	}
+	if got := rateStatusCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveTracksGraphQLSeparately(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	var calls atomic.Int32
+	var rateCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			graphqlRemaining := 12 - int(rateCalls.Add(1))
+			writeRateLimits(t, w, resetAt, 100, graphqlRemaining)
+			return
+		}
+		call := calls.Add(1)
+		if call > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path != "/graphql" {
+			t.Fatalf("path = %q, want /graphql", r.URL.Path)
+		}
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "10")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+		w.Header().Set("X-RateLimit-Resource", "graphql")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"repository": map[string]any{"pullRequest": map[string]any{"reviewThreads": map[string]any{
+				"nodes": []map[string]any{}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+			}}},
+		}})
+	}))
+	defer server.Close()
+
+	client := New(Options{
+		BaseURL:          server.URL,
+		RateLimitReserve: 10,
+		InitialRateLimits: []RateLimitSnapshot{
+			{Limit: 5000, Remaining: 100, ResetAt: resetAt, Resource: "core"},
+			{Limit: 5000, Remaining: 11, ResetAt: resetAt, Resource: "graphql"},
+		},
+	})
+	if _, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 1, nil); err != nil {
+		t.Fatalf("first GraphQL request: %v", err)
+	}
+	_, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 1, nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		t.Fatalf("second GraphQL request error = %v, want RateLimitReserveError", err)
+	}
+	if reserveErr.RateLimit.Resource != "graphql" || reserveErr.RateLimit.Remaining != 10 {
+		t.Fatalf("reserve error = %+v", reserveErr)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("GraphQL requests = %d, want 1", got)
 	}
 }
 

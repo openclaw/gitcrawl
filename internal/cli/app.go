@@ -50,7 +50,7 @@ const (
 
 var errNoSemanticVectors = errors.New("no semantic vectors")
 
-var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b([\w.-]+/[\w.-]+)#(\d+)|(?:issues|pull)/(\d+)|#(\d{2,}))`)
+var threadReferencePattern = regexp.MustCompile(`(?i)(?:\b([\w.-]+/[\w.-]+)#(\d+)|(?:\b([\w.-]+/[\w.-]+)/)?(?:issues|pull)/(\d+)|#(\d{2,}))`)
 var githubThreadURLPattern = regexp.MustCompile(`(?i)^https?://github\.com/([\w.-]+)/([\w.-]+)/(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
 var ownerRepoThreadPattern = regexp.MustCompile(`(?i)^([\w.-]+)/([\w.-]+)#(\d+)$`)
 var pathThreadPattern = regexp.MustCompile(`(?i)(?:^|/)(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
@@ -136,7 +136,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		a.printUsage()
 		return nil
 	}
-	a.maybeNotifyRelease(ctx, rest)
+	if releaseNotificationAllowed(rest) {
+		a.maybeNotifyRelease(ctx, rest)
+	}
 
 	switch rest[0] {
 	case "version":
@@ -161,6 +163,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runStatus(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
+	case "fill-pr-details":
+		return a.runFillPRDetails(ctx, rest[1:])
 	case "threads":
 		return a.runThreads(ctx, rest[1:])
 	case "close-thread":
@@ -1995,7 +1999,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 		Repository:         repo.FullName,
 		InferredRepository: inferred,
 		Mode:               "cluster-browser",
-		DBSource:           databaseSourceKind(rt.SourceDBPath),
+		DBSource:           databaseSourceKind(ctx, rt.SourceDBPath),
 		DBLocation:         databaseSourceLocation(ctx, rt.SourceDBPath),
 		DBRefreshSource:    remoteRefreshSource(rt),
 		DBRuntimePath:      remoteRuntimePath(rt),
@@ -2050,7 +2054,7 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 	}
 	return clusterBrowserPayload{
 		Mode:           "cluster-browser",
-		DBSource:       databaseSourceKind(sourceDBPath),
+		DBSource:       databaseSourceKind(ctx, sourceDBPath),
 		DBLocation:     databaseSourceLocation(ctx, sourceDBPath),
 		Sort:           sort,
 		Layout:         layout,
@@ -2064,8 +2068,8 @@ func emptyClusterBrowserPayload(ctx context.Context, cfg config.Config, sourceDB
 	}
 }
 
-func databaseSourceKind(dbPath string) string {
-	if _, ok := portableStoreRoot(dbPath); ok {
+func databaseSourceKind(ctx context.Context, dbPath string) string {
+	if _, ok, _ := portableStoreRoot(ctx, dbPath); ok {
 		return "remote"
 	}
 	return "local"
@@ -2087,7 +2091,7 @@ func remoteRuntimePath(rt localRuntime) string {
 
 func databaseSourceLocation(ctx context.Context, dbPath string) string {
 	filename := filepath.Base(dbPath)
-	root, ok := portableStoreRoot(dbPath)
+	root, ok, _ := portableStoreRoot(ctx, dbPath)
 	if !ok {
 		return filename
 	}
@@ -2892,6 +2896,245 @@ type syncOptions struct {
 	IncludeComments  bool
 	IncludePRDetails bool
 	Quiet            bool
+	RateLimitReserve int
+}
+
+type fillPRDetailsResult struct {
+	Repository       string               `json:"repository"`
+	Selected         int                  `json:"selected"`
+	Filled           int                  `json:"filled"`
+	Remaining        int                  `json:"remaining"`
+	Numbers          []int                `json:"numbers,omitempty"`
+	Order            string               `json:"order"`
+	Limit            int                  `json:"limit,omitempty"`
+	BatchSize        int                  `json:"batch_size"`
+	StoppedReason    string               `json:"stopped_reason,omitempty"`
+	RateLimit        *fillRateLimitResult `json:"rate_limit,omitempty"`
+	StartedAt        string               `json:"started_at"`
+	FinishedAt       string               `json:"finished_at"`
+	Batches          []fillPRDetailsBatch `json:"batches,omitempty"`
+	IncludeComments  bool                 `json:"include_comments,omitempty"`
+	JSONProgress     bool                 `json:"json_progress,omitempty"`
+	ReserveRateLimit int                  `json:"reserve_rate_limit,omitempty"`
+}
+
+type fillPRDetailsBatch struct {
+	Index              int                  `json:"index"`
+	Numbers            []int                `json:"numbers"`
+	PullRequestsSynced int                  `json:"pull_requests_synced"`
+	PRDetailsSynced    int                  `json:"pr_details_synced"`
+	RateLimit          *fillRateLimitResult `json:"rate_limit,omitempty"`
+}
+
+type fillRateLimitResult struct {
+	Host      string `json:"host,omitempty"`
+	Resource  string `json:"resource,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	Remaining int    `json:"remaining"`
+	ResetAt   string `json:"reset_at,omitempty"`
+	Low       bool   `json:"low,omitempty"`
+}
+
+func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("fill-pr-details", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	limitRaw := fs.String("limit", "", "maximum missing PR details to hydrate")
+	order := fs.String("order", "newest-first", "missing PR order: newest-first|oldest-first|open-first")
+	batchSizeRaw := fs.String("batch-size", "50", "PRs to hydrate per sync batch")
+	reserveRaw := fs.String("reserve-rate-limit", "1500", "keep this best-effort observed floor for shared-token GitHub quota")
+	jsonProgress := fs.Bool("json-progress", false, "write newline JSON progress events to stderr")
+	includeComments := fs.Bool("include-comments", false, "also hydrate issue comments and PR reviews while filling details")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"limit": true, "order": true, "batch-size": true, "reserve-rate-limit": true})); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 1 {
+		return usageErr(fmt.Errorf("fill-pr-details requires owner/repo"))
+	}
+	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
+	if err != nil {
+		return usageErr(err)
+	}
+	limit, err := parseOptionalPositiveInt(*limitRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	batchSize, err := parseOptionalPositiveInt(*batchSizeRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+	reserve, err := parseOptionalPositiveInt(*reserveRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	rt, err := a.openLocalRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	repo, err := rt.repository(ctx, owner, repoName)
+	if err != nil {
+		_ = rt.Store.Close()
+		return fmt.Errorf("repository %s/%s is not in the local archive; run gitcrawl sync first: %w", owner, repoName, err)
+	}
+	numbers, err := rt.Store.MissingPullRequestDetailNumbers(ctx, repo.ID, store.MissingPullRequestDetailOptions{Limit: limit, Order: *order})
+	if closeErr := rt.Store.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	result := fillPRDetailsResult{
+		Repository:       repo.FullName,
+		Selected:         len(numbers),
+		Numbers:          numbers,
+		Order:            strings.TrimSpace(*order),
+		Limit:            limit,
+		BatchSize:        batchSize,
+		StartedAt:        startedAt,
+		IncludeComments:  *includeComments,
+		JSONProgress:     *jsonProgress,
+		ReserveRateLimit: reserve,
+	}
+	for i := 0; i < len(numbers); i += batchSize {
+		end := i + batchSize
+		if end > len(numbers) {
+			end = len(numbers)
+		}
+		batchNumbers := append([]int(nil), numbers[i:end]...)
+		if *jsonProgress {
+			a.writeFillPRDetailsProgress(fillPRDetailsProgressEvent{
+				Event:      "batch_start",
+				Repository: repo.FullName,
+				Batch:      len(result.Batches) + 1,
+				Numbers:    batchNumbers,
+			})
+		}
+		stats, err := a.syncRepository(ctx, owner, repoName, syncOptions{
+			Numbers:          batchNumbers,
+			IncludeComments:  *includeComments,
+			IncludePRDetails: true,
+			Quiet:            *jsonProgress,
+			RateLimitReserve: reserve,
+		})
+		if err != nil {
+			var reserveErr *gh.RateLimitReserveError
+			if errors.As(err, &reserveErr) {
+				rate := fillRateLimitResultFromSnapshot(reserveErr.RateLimit, reserve)
+				result.StoppedReason = "rate-limit-reserve"
+				result.RateLimit = &rate
+				break
+			}
+			return err
+		}
+		rate, hasRate := a.currentFillRateLimit(ctx, reserve)
+		batch := fillPRDetailsBatch{
+			Index:              len(result.Batches) + 1,
+			Numbers:            batchNumbers,
+			PullRequestsSynced: stats.PullRequestsSynced,
+			PRDetailsSynced:    stats.PRDetailsSynced,
+		}
+		if hasRate {
+			batch.RateLimit = &rate
+			result.RateLimit = &rate
+		}
+		result.Batches = append(result.Batches, batch)
+		result.Filled += stats.PRDetailsSynced
+		if *jsonProgress {
+			a.writeFillPRDetailsProgress(fillPRDetailsProgressEvent{
+				Event:      "batch_done",
+				Repository: repo.FullName,
+				Batch:      batch.Index,
+				Numbers:    batchNumbers,
+				Filled:     result.Filled,
+				RateLimit:  batch.RateLimit,
+			})
+		}
+	}
+	result.Remaining = result.Selected - result.Filled
+	if result.Remaining < 0 {
+		result.Remaining = 0
+	}
+	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return a.writeOutput("fill-pr-details", result, true)
+}
+
+type fillPRDetailsProgressEvent struct {
+	Event      string               `json:"event"`
+	Repository string               `json:"repository"`
+	Batch      int                  `json:"batch"`
+	Numbers    []int                `json:"numbers"`
+	Filled     int                  `json:"filled,omitempty"`
+	RateLimit  *fillRateLimitResult `json:"rate_limit,omitempty"`
+}
+
+func (a *App) writeFillPRDetailsProgress(event fillPRDetailsProgressEvent) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(a.Stderr, string(data))
+}
+
+func (a *App) currentFillRateLimit(ctx context.Context, reserve int) (fillRateLimitResult, bool) {
+	cfg, err := config.LoadRuntime(a.configPath)
+	if err != nil {
+		return fillRateLimitResult{}, false
+	}
+	token := a.resolveGitHubToken(ctx, cfg)
+	if token.Value == "" {
+		return fillRateLimitResult{}, false
+	}
+	host := ghRateLimitHostForAPIBaseURL(githubBaseURL())
+	if host == "" {
+		host = "github.com"
+	}
+	state, ok := a.sharedRateLimitStateForTokenHost(token.Value, host)
+	if !ok {
+		return fillRateLimitResult{}, false
+	}
+	if !fillRateLimitStateFresh(state, time.Now().UTC()) {
+		return fillRateLimitResult{}, false
+	}
+	result := fillRateLimitResult{
+		Host:      state.Host,
+		Resource:  state.Resource,
+		Limit:     state.Limit,
+		Remaining: state.Remaining,
+		Low:       state.Remaining <= reserve,
+	}
+	if !state.ResetAt.IsZero() {
+		result.ResetAt = state.ResetAt.Format(time.RFC3339)
+	}
+	return result, true
+}
+
+func fillRateLimitResultFromSnapshot(snapshot gh.RateLimitSnapshot, reserve int) fillRateLimitResult {
+	result := fillRateLimitResult{
+		Host:      snapshot.Host,
+		Resource:  snapshot.Resource,
+		Limit:     snapshot.Limit,
+		Remaining: snapshot.Remaining,
+		Low:       snapshot.Remaining <= reserve,
+	}
+	if !snapshot.ResetAt.IsZero() {
+		result.ResetAt = snapshot.ResetAt.Format(time.RFC3339)
+	}
+	return result
+}
+
+func fillRateLimitStateFresh(state ghSharedRateLimitState, now time.Time) bool {
+	if !state.ResetAt.IsZero() && !now.Before(state.ResetAt) {
+		return false
+	}
+	if !state.UpdatedAt.IsZero() && now.Sub(state.UpdatedAt) > ghRateLimitStateMaxAge() {
+		return false
+	}
+	return true
 }
 
 func parseSyncWith(value string) (map[string]bool, error) {
@@ -2929,8 +3172,6 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	}
 	defer rt.Store.Close()
 
-	client := gh.New(gh.Options{Token: token.Value, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx, token.Value)})
-	service := syncer.New(client, rt.Store)
 	var reporter gh.Reporter
 	var logger *slog.Logger
 	if !options.Quiet {
@@ -2939,6 +3180,14 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		}
 		logger = progressLogger(a.Stderr)
 	}
+	baseURL := githubBaseURL()
+	client := gh.New(gh.Options{
+		Token:            token.Value,
+		BaseURL:          baseURL,
+		RateLimit:        a.observeGitHubRateLimit(ctx, token.Value),
+		RateLimitReserve: options.RateLimitReserve,
+	})
+	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:            owner,
 		Repo:             repo,
@@ -3449,28 +3698,38 @@ func runGit(ctx context.Context, workdir string, args ...string) error {
 }
 
 func runGitCommandOutput(ctx context.Context, workdir string, args ...string) (string, error) {
+	return runGitCommandOutputWithEnv(ctx, workdir, os.Environ(), args...)
+}
+
+func runGitCommandOutputWithEnv(ctx context.Context, workdir string, env []string, args ...string) (string, error) {
+	stdout, stderr, err := runGitCommandOutputWithEnvSeparate(ctx, workdir, env, args...)
+	return stdout + stderr, err
+}
+
+func runGitCommandOutputWithEnvSeparate(ctx context.Context, workdir string, env []string, args ...string) (string, string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(append([]string(nil), env...),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10",
 	)
 	configureCommandGroup(cmd)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		cleanupCommandGroup(cmd)
-		return out.String(), err
+		return stdout.String(), stderr.String(), err
 	}
 	if err := attachCommandGroup(cmd); err != nil {
 		killCommandGroup(cmd)
 		_ = cmd.Wait()
 		cleanupCommandGroup(cmd)
-		return out.String(), err
+		return stdout.String(), stderr.String(), err
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -3479,7 +3738,7 @@ func runGitCommandOutput(ctx context.Context, workdir string, args ...string) (s
 	select {
 	case err := <-done:
 		cleanupCommandGroup(cmd)
-		return out.String(), err
+		return stdout.String(), stderr.String(), err
 	case <-ctx.Done():
 		killCommandGroup(cmd)
 		err := <-done
@@ -3487,7 +3746,7 @@ func runGitCommandOutput(ctx context.Context, workdir string, args ...string) (s
 		if err == nil {
 			err = ctx.Err()
 		}
-		return out.String(), fmt.Errorf("%w: %v", ctx.Err(), err)
+		return stdout.String(), stderr.String(), fmt.Errorf("%w: %v", ctx.Err(), err)
 	}
 }
 
@@ -3765,16 +4024,17 @@ func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[stri
 
 func portableStoreGitStatus(ctx context.Context, dbPath string) map[string]any {
 	result := map[string]any{}
-	root, ok := portableStoreRoot(dbPath)
+	root, ok, err := portableStoreRoot(ctx, dbPath)
+	if err != nil {
+		result["state"] = "error"
+		result["error"] = err.Error()
+		return result
+	}
 	if !ok {
 		result["state"] = "not_portable"
 		return result
 	}
 	result["root"] = root
-	if !portableStoreIsGitWorktree(ctx, root) {
-		result["state"] = "not_git"
-		return result
-	}
 	if gitWorktreeClean(ctx, root) {
 		result["state"] = "clean"
 	} else {
@@ -4331,10 +4591,16 @@ func collectReferencedThreadNumbers(refs map[int]referenceEvidence, threadNumber
 				continue
 			}
 			numberText = value[match[4]:match[5]]
-		} else if match[6] >= 0 {
-			numberText = value[match[6]:match[7]]
 		} else if match[8] >= 0 {
+			if match[6] >= 0 {
+				refRepo := value[match[6]:match[7]]
+				if !strings.EqualFold(refRepo, repoFullName) {
+					continue
+				}
+			}
 			numberText = value[match[8]:match[9]]
+		} else if match[10] >= 0 {
+			numberText = value[match[10]:match[11]]
 		}
 		number, err := strconv.Atoi(numberText)
 		if err != nil || number <= 0 || number == threadNumber {
@@ -4767,6 +5033,7 @@ Core commands:
   sync                 sync GitHub issue and pull request metadata
   sync-failures        list failed sync hydration attempts
   coverage             report local archive PR-detail completeness
+  fill-pr-details      hydrate locally missing pull request detail rows
   refresh              run sync, enrichment, embedding, and clustering pipeline
   summarize            generate key summaries for current thread revisions
   embed                generate OpenAI embeddings for local thread documents
@@ -4861,6 +5128,18 @@ Usage:
 
 Usage:
   gitcrawl coverage [owner/repo | --repos owner/a,owner/b] [--min-missing-pr-details N] [--json]
+`,
+	"fill-pr-details": `gitcrawl fill-pr-details hydrates locally missing pull request detail rows.
+
+Usage:
+  gitcrawl fill-pr-details owner/repo [--limit N] [--order newest-first|oldest-first|open-first] [--batch-size N] [--reserve-rate-limit N] [--include-comments] [--json-progress] [--json]
+
+Before each GitHub request issued by this command, Gitcrawl refreshes GitHub's
+/rate_limit view of the shared token and stops if that observed quota would
+cross the reserve. The default floor is 1500 remaining requests, providing
+headroom for concurrent consumers. This is best-effort: another process can
+spend quota between the probe and request. Pass --reserve-rate-limit N to
+choose a different floor.
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 

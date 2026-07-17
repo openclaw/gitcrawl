@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
+// Reporter receives synchronous request progress. A reporter used by a
+// reserve-guarded client must not call back into that same Client.
 type Reporter func(message string)
 
 type Client struct {
@@ -23,6 +27,7 @@ type Client struct {
 	userAgent  string
 	pageDelay  time.Duration
 	rateLimit  RateLimitObserver
+	reserve    *rateLimitReserve
 }
 
 type Options struct {
@@ -32,8 +37,16 @@ type Options struct {
 	HTTPClient *http.Client
 	PageDelay  time.Duration
 	RateLimit  RateLimitObserver
+	// RateLimitReserve preserves a best-effort observed floor for the shared
+	// token. Guarded requests refresh /rate_limit before dispatch so other token
+	// consumers are observed, but unrelated consumers cannot be locked between
+	// that probe and dispatch.
+	RateLimitReserve  int
+	InitialRateLimits []RateLimitSnapshot
 }
 
+// RateLimitObserver receives synchronous quota snapshots. An observer used by
+// a reserve-guarded client must not call back into that same Client.
 type RateLimitObserver func(RateLimitSnapshot)
 
 type RateLimitSnapshot struct {
@@ -42,6 +55,37 @@ type RateLimitSnapshot struct {
 	Remaining int
 	ResetAt   time.Time
 	Resource  string
+}
+
+type RateLimitReserveError struct {
+	RateLimit RateLimitSnapshot
+	Reserve   int
+}
+
+func (e *RateLimitReserveError) Error() string {
+	return fmt.Sprintf(
+		"github %s rate limit reserve %d reached with %d remaining",
+		e.RateLimit.Resource,
+		e.Reserve,
+		e.RateLimit.Remaining,
+	)
+}
+
+type rateLimitReserve struct {
+	requestMu sync.Mutex
+	mu        sync.Mutex
+	reserve   int
+	snapshots map[string]RateLimitSnapshot
+}
+
+type rateLimitRequestLockKey struct{}
+
+type rateLimitStatusExpiredError struct {
+	RateLimit RateLimitSnapshot
+}
+
+func (e *rateLimitStatusExpiredError) Error() string {
+	return fmt.Sprintf("github %s rate limit status expired at %s", e.RateLimit.Resource, e.RateLimit.ResetAt.Format(time.RFC3339))
 }
 
 type ListIssuesOptions struct {
@@ -85,7 +129,7 @@ func New(options Options) *Client {
 	if userAgent == "" {
 		userAgent = "gitcrawl"
 	}
-	return &Client{
+	client := &Client{
 		httpClient: httpClient,
 		baseURL:    baseURL,
 		graphQLURL: graphQLURLForBaseURL(baseURL),
@@ -94,12 +138,124 @@ func New(options Options) *Client {
 		pageDelay:  options.PageDelay,
 		rateLimit:  options.RateLimit,
 	}
+	if options.RateLimitReserve > 0 {
+		client.reserve = newRateLimitReserve(options.RateLimitReserve, options.InitialRateLimits)
+	}
+	return client
+}
+
+func newRateLimitReserve(reserve int, initial []RateLimitSnapshot) *rateLimitReserve {
+	guard := &rateLimitReserve{
+		reserve:   reserve,
+		snapshots: make(map[string]RateLimitSnapshot, len(initial)),
+	}
+	guard.replace(initial)
+	return guard
+}
+
+func (r *rateLimitReserve) beforeRequest(resource string, cost int) error {
+	if r == nil || cost <= 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snapshot, ok := r.snapshots[resource]
+	if !ok {
+		return fmt.Errorf("github %s rate limit status unavailable; cannot preserve reserve %d", resource, r.reserve)
+	}
+	if !snapshot.ResetAt.IsZero() && !time.Now().UTC().Before(snapshot.ResetAt) {
+		return &rateLimitStatusExpiredError{RateLimit: snapshot}
+	}
+	if snapshot.Remaining-cost < r.reserve {
+		return &RateLimitReserveError{RateLimit: snapshot, Reserve: r.reserve}
+	}
+	snapshot.Remaining -= cost
+	r.snapshots[resource] = snapshot
+	return nil
+}
+
+func (r *rateLimitReserve) observe(snapshot RateLimitSnapshot) {
+	if r == nil || strings.TrimSpace(snapshot.Resource) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshots[snapshot.Resource] = snapshot
+}
+
+func (r *rateLimitReserve) replace(snapshots []RateLimitSnapshot) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshots = make(map[string]RateLimitSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		if strings.TrimSpace(snapshot.Resource) != "" {
+			r.snapshots[snapshot.Resource] = snapshot
+		}
+	}
+}
+
+func (r *rateLimitReserve) snapshot(resource string) (RateLimitSnapshot, bool) {
+	if r == nil {
+		return RateLimitSnapshot{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snapshot, ok := r.snapshots[resource]
+	return snapshot, ok
 }
 
 func (c *Client) GetRepo(ctx context.Context, owner, repo string, reporter Reporter) (map[string]any, error) {
 	var out map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s", pathEscape(owner), pathEscape(repo)), nil, reporter, &out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetRateLimits(ctx context.Context, reporter Reporter) ([]RateLimitSnapshot, error) {
+	if c.reserve != nil {
+		lockedReserve, _ := ctx.Value(rateLimitRequestLockKey{}).(*rateLimitReserve)
+		if lockedReserve != c.reserve {
+			c.reserve.requestMu.Lock()
+			defer c.reserve.requestMu.Unlock()
+			ctx = context.WithValue(ctx, rateLimitRequestLockKey{}, c.reserve)
+		}
+	}
+	var payload struct {
+		Resources map[string]struct {
+			Limit     int   `json:"limit"`
+			Remaining int   `json:"remaining"`
+			Reset     int64 `json:"reset"`
+		} `json:"resources"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/rate_limit", nil, reporter, &payload); err != nil {
+		return nil, err
+	}
+	host := rateLimitHostForBaseURL(c.baseURL)
+	out := make([]RateLimitSnapshot, 0, len(payload.Resources))
+	for resource, value := range payload.Resources {
+		snapshot := RateLimitSnapshot{
+			Host:      host,
+			Limit:     value.Limit,
+			Remaining: value.Remaining,
+			Resource:  resource,
+		}
+		if value.Reset > 0 {
+			snapshot.ResetAt = time.Unix(value.Reset, 0).UTC()
+		}
+		out = append(out, snapshot)
+	}
+	c.reserve.replace(out)
+	if c.rateLimit != nil {
+		for _, snapshot := range out {
+			if snapshot.Resource == "core" {
+				c.rateLimit(snapshot)
+				break
+			}
+		}
 	}
 	return out, nil
 }
@@ -332,6 +488,33 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 	if !isAbsoluteURL(path) {
 		fullURL = c.baseURL + path
 	}
+	resource, cost := c.requestRateLimit(method, fullURL)
+	if c.reserve != nil {
+		lockedReserve, _ := ctx.Value(rateLimitRequestLockKey{}).(*rateLimitReserve)
+		if lockedReserve != c.reserve {
+			c.reserve.requestMu.Lock()
+			defer c.reserve.requestMu.Unlock()
+			ctx = context.WithValue(ctx, rateLimitRequestLockKey{}, c.reserve)
+		}
+	}
+	if c.reserve != nil && cost > 0 {
+		if _, err := c.GetRateLimits(ctx, reporter); err != nil {
+			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", err)
+		}
+	}
+	if err := c.reserve.beforeRequest(resource, cost); err != nil {
+		var expired *rateLimitStatusExpiredError
+		if !errors.As(err, &expired) {
+			return nil, err
+		}
+		_, refreshErr := c.GetRateLimits(ctx, reporter)
+		if refreshErr != nil {
+			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", refreshErr)
+		}
+		if err := c.reserve.beforeRequest(resource, cost); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
 		return nil, err
@@ -346,11 +529,14 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	reporter.Printf("[github] request %s %s", method, path)
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.guardedHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("github request: %w", err)
 	}
-	c.observeRateLimit(resp.Header)
+	responseResource, responseCost := c.requestRateLimit(resp.Request.Method, resp.Request.URL.String())
+	if responseCost > 0 && !c.observeRateLimit(resp.Header, responseResource) {
+		c.observeReservedRateLimit(responseResource)
+	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
 	}
@@ -363,6 +549,34 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		Body:    strings.TrimSpace(string(data)),
 		Headers: resp.Header,
 	}
+}
+
+func (c *Client) guardedHTTPClient() *http.Client {
+	if c.reserve == nil {
+		return c.httpClient
+	}
+	client := *c.httpClient
+	checkRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if checkRedirect != nil {
+			if err := checkRedirect(req, via); err != nil {
+				return err
+			}
+		}
+		return http.ErrUseLastResponse
+	}
+	return &client
+}
+
+func (c *Client) requestRateLimit(method, fullURL string) (string, int) {
+	if method == http.MethodPost && fullURL == c.graphQLURL {
+		// The read-only GraphQL queries in this client each have a calculated cost of one point.
+		return "graphql", 1
+	}
+	if method == http.MethodGet && fullURL == c.baseURL+"/rate_limit" {
+		return "core", 0
+	}
+	return "core", 1
 }
 
 func isAbsoluteURL(value string) bool {
@@ -386,13 +600,10 @@ func graphQLURLForBaseURL(baseURL string) string {
 	return parsed.String()
 }
 
-func (c *Client) observeRateLimit(header http.Header) {
-	if c.rateLimit == nil {
-		return
-	}
+func (c *Client) observeRateLimit(header http.Header, fallbackResource string) bool {
 	remaining, err := strconv.Atoi(strings.TrimSpace(header.Get("X-RateLimit-Remaining")))
 	if err != nil {
-		return
+		return false
 	}
 	limit, _ := strconv.Atoi(strings.TrimSpace(header.Get("X-RateLimit-Limit")))
 	var resetAt time.Time
@@ -401,13 +612,31 @@ func (c *Client) observeRateLimit(header http.Header) {
 			resetAt = time.Unix(secs, 0).UTC()
 		}
 	}
-	c.rateLimit(RateLimitSnapshot{
+	resource := strings.TrimSpace(header.Get("X-RateLimit-Resource"))
+	if resource == "" {
+		resource = fallbackResource
+	}
+	snapshot := RateLimitSnapshot{
 		Host:      rateLimitHostForBaseURL(c.baseURL),
 		Limit:     limit,
 		Remaining: remaining,
 		ResetAt:   resetAt,
-		Resource:  strings.TrimSpace(header.Get("X-RateLimit-Resource")),
-	})
+		Resource:  resource,
+	}
+	c.reserve.observe(snapshot)
+	if c.rateLimit != nil {
+		c.rateLimit(snapshot)
+	}
+	return true
+}
+
+func (c *Client) observeReservedRateLimit(resource string) {
+	snapshot, ok := c.reserve.snapshot(resource)
+	if !ok || c.rateLimit == nil {
+		return
+	}
+	snapshot.Host = rateLimitHostForBaseURL(c.baseURL)
+	c.rateLimit(snapshot)
 }
 
 func rateLimitHostForBaseURL(baseURL string) string {

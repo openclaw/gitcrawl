@@ -25,6 +25,7 @@ import (
 	crawlremote "github.com/openclaw/crawlkit/remote"
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
+	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/zalando/go-keyring"
 )
@@ -2573,7 +2574,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.Contains(helpOut.String(), "cluster browser") {
 		t.Fatalf("tui help output = %q", helpOut.String())
 	}
-	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "refresh", "summarize", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
+	for _, topic := range []string{"metadata", "status", "remote", "whoami", "init", "configure", "doctor", "sync", "fill-pr-details", "refresh", "summarize", "embed", "threads", "search", "code", "cluster", "clusters", "clusters-report", "durable-clusters", "cluster-detail", "cluster-explain", "neighbors", "runs", "close-thread", "reopen-thread", "close-cluster", "reopen-cluster", "exclude-cluster-member", "include-cluster-member", "set-cluster-canonical", "gh"} {
 		helpOut.Reset()
 		if err := help.printCommandUsage(topic); err != nil {
 			t.Fatalf("%s help: %v", topic, err)
@@ -2588,6 +2589,20 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	}
 	if strings.Contains(helpOut.String(), "--sync-if-stale") {
 		t.Fatalf("refresh help should not advertise search-only --sync-if-stale: %q", helpOut.String())
+	}
+	helpOut.Reset()
+	if err := help.printCommandUsage("fill-pr-details"); err != nil {
+		t.Fatalf("fill-pr-details help: %v", err)
+	}
+	if !strings.Contains(helpOut.String(), "--include-comments") || !strings.Contains(helpOut.String(), "default floor is 1500") || !strings.Contains(helpOut.String(), "/rate_limit") || !strings.Contains(helpOut.String(), "best-effort") {
+		t.Fatalf("fill-pr-details help output = %q", helpOut.String())
+	}
+	helpOut.Reset()
+	if err := help.printCommandUsage("coverage"); err != nil {
+		t.Fatalf("coverage help: %v", err)
+	}
+	if !strings.HasSuffix(helpOut.String(), "[--json]\n") {
+		t.Fatalf("coverage help has unexpected suffix: %q", helpOut.String())
 	}
 	if err := New().Run(ctx, []string{"--config", configPath, "status", "extra"}); err == nil {
 		t.Fatal("status extra arg should fail")
@@ -2688,7 +2703,7 @@ func TestDefaultPortableStoreDir(t *testing.T) {
 
 func TestDatabaseSourceLocationLocal(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	if got := databaseSourceKind(dbPath); got != "local" {
+	if got := databaseSourceKind(context.Background(), dbPath); got != "local" {
 		t.Fatalf("source kind = %q, want local", got)
 	}
 	if got := databaseSourceLocation(context.Background(), dbPath); got != "gitcrawl.db" {
@@ -2711,7 +2726,7 @@ func TestDatabaseSourceLocationRemoteGitHubStore(t *testing.T) {
 		t.Fatalf("git remote add: %v", err)
 	}
 
-	if got := databaseSourceKind(dbPath); got != "remote" {
+	if got := databaseSourceKind(ctx, dbPath); got != "remote" {
 		t.Fatalf("source kind = %q, want remote", got)
 	}
 	want := "openclaw/gitcrawl-store:openclaw__openclaw.sync.db"
@@ -3094,7 +3109,7 @@ func TestReadCommandRefreshesPortableStore(t *testing.T) {
 	if !gitWorktreeClean(ctx, checkoutDir) {
 		t.Fatal("portable checkout should stay clean after read-only command")
 	}
-	mirrorPath, err := run.portableRuntimeDBPath(filepath.Join(checkoutDir, dbRel))
+	mirrorPath, err := run.portableRuntimeDBPath(ctx, filepath.Join(checkoutDir, dbRel))
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
@@ -3205,7 +3220,7 @@ func TestReadCommandRepairsMalformedDirtyPortableStore(t *testing.T) {
 	}
 	run := New()
 	run.configPath = configPath
-	mirrorPath, err := run.portableRuntimeDBPath(checkoutDB)
+	mirrorPath, err := run.portableRuntimeDBPath(ctx, checkoutDB)
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
@@ -3331,7 +3346,7 @@ func TestPortableRuntimePropagatesNonCorruptionSourceErrors(t *testing.T) {
 	checkoutDB := filepath.Join(checkoutDir, dbRel)
 	run := New()
 	run.configPath = filepath.Join(dir, "config.toml")
-	mirrorPath, err := run.portableRuntimeDBPath(checkoutDB)
+	mirrorPath, err := run.portableRuntimeDBPath(ctx, checkoutDB)
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
@@ -3473,6 +3488,53 @@ func TestPortableRuntimeRejectsManifestMismatchBeforeReplacingMirror(t *testing.
 	err = validatePortableSQLiteFile(ctx, checkoutDB, checkoutDB)
 	if err == nil || !isPortableSourceRepairableHealthError(err) {
 		t.Fatalf("malformed manifest should be a repairable health error, got %v", err)
+	}
+}
+
+func TestSyncCreatesLocalDatabaseBelowUnrelatedGitMetadata(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dataRoot := filepath.Join(dir, "data-root")
+	if err := os.MkdirAll(filepath.Join(dataRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir unrelated git metadata: %v", err)
+	}
+
+	dbPath := filepath.Join(dataRoot, "gitcrawl", "gitcrawl.db")
+	configPath := filepath.Join(dir, "config.toml")
+	app := New()
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/openclaw/openclaw":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/openclaw"})
+		case "/repos/openclaw/openclaw/issues/101":
+			_ = json.NewEncoder(w).Encode(githubIssueJSON(101, "issue", "Git metadata regression"))
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+
+	if err := New().Run(ctx, []string{"--config", configPath, "sync", "openclaw/openclaw", "--numbers", "101", "--json"}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	st, err := store.OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open local database: %v", err)
+	}
+	defer st.Close()
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatalf("local database status: %v", err)
+	}
+	if status.ThreadCount != 1 {
+		t.Fatalf("local database thread count = %d, want 1", status.ThreadCount)
 	}
 }
 
@@ -5353,6 +5415,406 @@ func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T)
 	}
 }
 
+func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := "2026-06-20T12:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "102", Number: 102, Kind: "pull_request", State: "open",
+		Title: "Fill details", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/102",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h102",
+		UpdatedAtGitHub: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "4990")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		switch r.URL.Path {
+		case "/rate_limit":
+			resetAt := time.Now().Add(time.Hour).Unix()
+			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+				"core":    map[string]any{"limit": 5000, "remaining": 4990, "reset": resetAt},
+				"graphql": map[string]any{"limit": 5000, "remaining": 4990, "reset": resetAt},
+			}})
+		case "/repos/openclaw/gitcrawl":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/gitcrawl"})
+		case "/repos/openclaw/gitcrawl/issues/102":
+			row := githubIssueJSON(102, "pull_request", "Fill details")
+			row["html_url"] = "https://github.com/openclaw/gitcrawl/pull/102"
+			row["pull_request"] = map[string]any{"url": githubServerURL(r) + "/repos/openclaw/gitcrawl/pulls/102"}
+			row["updated_at"] = "2026-06-20T12:01:00Z"
+			_ = json.NewEncoder(w).Encode(row)
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"repository": map[string]any{
+						"pullRequest": map[string]any{
+							"reviewThreads": map[string]any{
+								"nodes":    []map[string]any{},
+								"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							},
+						},
+					},
+				},
+			})
+		case "/repos/openclaw/gitcrawl/pulls/102":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number":          102,
+				"base":            map[string]any{"sha": "base-sha"},
+				"head":            map[string]any{"sha": "head-sha", "ref": "fill-details", "repo": map[string]any{"full_name": "openclaw/gitcrawl"}},
+				"mergeable_state": "clean",
+				"additions":       3,
+				"deletions":       1,
+				"changed_files":   1,
+			})
+		case "/repos/openclaw/gitcrawl/pulls/102/files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"filename": "internal/cli/app.go", "status": "modified", "additions": 3, "deletions": 1, "changes": 4}})
+		case "/repos/openclaw/gitcrawl/pulls/102/commits":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"sha": "commit-sha", "commit": map[string]any{"message": "feat: fill details", "author": map[string]any{"name": "Andy", "date": now}}, "html_url": "https://github.com/openclaw/gitcrawl/commit/commit-sha"}})
+		case "/repos/openclaw/gitcrawl/commits/head-sha/check-runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://example.invalid/check"}}})
+		case "/repos/openclaw/gitcrawl/actions/runs":
+			if r.URL.Query().Get("head_sha") != "head-sha" {
+				t.Fatalf("workflow runs query = %s", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 99, "run_number": 7, "head_sha": "head-sha", "status": "completed", "conclusion": "success", "name": "CI", "html_url": "https://example.invalid/run", "created_at": now, "updated_at": now}}})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1m")
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 1, time.Now().Add(-time.Minute), time.Now().Add(-time.Hour))
+
+	run := New()
+	var stdout, stderr bytes.Buffer
+	run.Stdout = &stdout
+	run.Stderr = &stderr
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--batch-size", "1", "--reserve-rate-limit", "10", "--json-progress", "--json"}); err != nil {
+		t.Fatalf("fill-pr-details: %v\nstderr=%s", err, stderr.String())
+	}
+	var result struct {
+		Selected int `json:"selected"`
+		Filled   int `json:"filled"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
+	}
+	if result.Selected != 1 || result.Filled != 1 {
+		t.Fatalf("fill result = %+v", result)
+	}
+	if !strings.Contains(stderr.String(), `"event":"batch_start"`) || !strings.Contains(stderr.String(), `"event":"batch_done"`) {
+		t.Fatalf("missing json progress events: %s", stderr.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st.Close()
+	cache, err := st.PullRequestCache(ctx, repoID, 102)
+	if err != nil {
+		t.Fatalf("pull request cache: %v", err)
+	}
+	if cache.Detail.HeadSHA != "head-sha" || len(cache.Files) != 1 || len(cache.Commits) != 1 || len(cache.Checks) != 1 {
+		t.Fatalf("cache after fill = %+v", cache)
+	}
+}
+
+func TestFillPRDetailsDefaultRateLimitFloorUsesLiveSharedQuota(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := "2026-06-20T12:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "103", Number: 103, Kind: "pull_request", State: "open",
+		Title: "Fill details", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/103",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h103",
+		UpdatedAtGitHub: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	resetAt := time.Now().Add(time.Hour)
+	var rateStatusCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rate_limit" {
+			t.Fatalf("unexpected request after low shared quota: %s", r.URL.Path)
+		}
+		rateStatusCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+			"core":    map[string]any{"limit": 5000, "remaining": 1500, "reset": resetAt.Unix()},
+			"graphql": map[string]any{"limit": 5000, "remaining": 5000, "reset": resetAt.Unix()},
+		}})
+	}))
+	defer server.Close()
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1m")
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 5000, time.Now().Add(time.Hour), time.Now())
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--json"}); err != nil {
+		t.Fatalf("fill-pr-details: %v", err)
+	}
+	var result struct {
+		Selected      int                  `json:"selected"`
+		Filled        int                  `json:"filled"`
+		Remaining     int                  `json:"remaining"`
+		StoppedReason string               `json:"stopped_reason"`
+		RateLimit     *fillRateLimitResult `json:"rate_limit"`
+		Floor         int                  `json:"reserve_rate_limit"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
+	}
+	if result.Selected != 1 || result.Filled != 0 || result.Remaining != 1 || result.StoppedReason != "rate-limit-reserve" {
+		t.Fatalf("fill result = %+v", result)
+	}
+	if result.RateLimit == nil || result.RateLimit.Remaining != 1500 || result.Floor != 1500 {
+		t.Fatalf("rate limit = %+v", result.RateLimit)
+	}
+	if got := rateStatusCalls.Load(); got != 1 {
+		t.Fatalf("rate status calls = %d, want 1", got)
+	}
+}
+
+func TestCurrentFillRateLimitUsesConfiguredAPIHost(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", "https://ghe.example/api/v3")
+	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1h")
+
+	app := New()
+	app.configPath = configPath
+	resetAt := time.Now().Add(time.Hour).UTC()
+	if err := app.writeSharedRateLimit(ctx, "test-gh-token", gh.RateLimitSnapshot{
+		Host:      "ghe.example",
+		Limit:     5000,
+		Remaining: 7,
+		ResetAt:   resetAt,
+		Resource:  "core",
+	}, "test"); err != nil {
+		t.Fatalf("write rate limit: %v", err)
+	}
+
+	rate, ok := app.currentFillRateLimit(ctx, 10)
+	if !ok || rate.Host != "ghe.example" || rate.Remaining != 7 || !rate.Low || rate.ResetAt != resetAt.Format(time.RFC3339) {
+		t.Fatalf("current fill rate limit = %+v ok=%v", rate, ok)
+	}
+}
+
+func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	init := New()
+	if err := init.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := "2026-06-20T12:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	if _, err := st.UpsertThread(ctx, store.Thread{
+		RepoID: repoID, GitHubID: "104", Number: 104, Kind: "pull_request", State: "open",
+		Title: "Fill details", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/104",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h104",
+		UpdatedAtGitHub: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	resetAt := time.Now().Add(time.Hour).Unix()
+	var rateStatusCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if r.URL.Path == "/rate_limit" {
+			remaining := 12 - int(rateStatusCalls.Add(1))
+			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+				"core":    map[string]any{"limit": 5000, "remaining": remaining, "reset": resetAt},
+				"graphql": map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt},
+			}})
+			return
+		}
+		call := coreCalls.Add(1)
+		remaining := 11 - int(call)
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt, 10))
+		w.Header().Set("X-RateLimit-Resource", "core")
+		if call > 1 {
+			http.Error(w, "request crossed configured reserve", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path != "/repos/openclaw/gitcrawl" {
+			t.Fatalf("first guarded request path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/gitcrawl"})
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 11, time.Unix(resetAt, 0), time.Now())
+
+	run := New()
+	var stdout bytes.Buffer
+	run.Stdout = &stdout
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--reserve-rate-limit", "10", "--json"}); err != nil {
+		t.Fatalf("fill-pr-details: %v", err)
+	}
+	var result struct {
+		Selected      int                  `json:"selected"`
+		Filled        int                  `json:"filled"`
+		Remaining     int                  `json:"remaining"`
+		StoppedReason string               `json:"stopped_reason"`
+		RateLimit     *fillRateLimitResult `json:"rate_limit"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
+	}
+	if result.Selected != 1 || result.Filled != 0 || result.Remaining != 1 || result.StoppedReason != "rate-limit-reserve" {
+		t.Fatalf("fill result = %+v", result)
+	}
+	if result.RateLimit == nil || result.RateLimit.Resource != "core" || result.RateLimit.Remaining != 10 {
+		t.Fatalf("rate limit = %+v", result.RateLimit)
+	}
+	if got := rateStatusCalls.Load(); got != 2 {
+		t.Fatalf("rate status calls = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen store after reserve stop: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.PullRequestCache(ctx, repoID, 104); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pull request cache after reserve stop error = %v, want no detail row", err)
+	}
+}
+
+func configureTestGitHubCache(t *testing.T, configPath, cacheDir, token string) {
+	t.Helper()
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.CacheDir = cacheDir
+	if cfg.Env == nil {
+		cfg.Env = map[string]string{}
+	}
+	cfg.Env["GITHUB_TOKEN"] = token
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+}
+
+func writeFillPRDetailsRateLimitState(t *testing.T, cacheDir, token string, remaining int, resetAt, updatedAt time.Time) {
+	t.Helper()
+	dir := filepath.Join(cacheDir, "octopool-migrated-gh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	state := ghSharedRateLimitState{
+		Host:      "github.com",
+		TokenHash: ghRateLimitTokenHash(token),
+		Limit:     5000,
+		Remaining: remaining,
+		ResetAt:   resetAt.UTC(),
+		Resource:  "core",
+		UpdatedAt: updatedAt.UTC(),
+		Source:    "test",
+		Low:       true,
+		Threshold: 10,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal rate limit state: %v", err)
+	}
+	path := filepath.Join(dir, ghSharedRateLimitFilePrefix+"github.com_"+ghRateLimitTokenHash(token)+".json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write rate limit state: %v", err)
+	}
+}
+
+func githubServerURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
 func TestRefreshRunsSyncEmbedAndClusterWithLocalServers(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -7200,6 +7662,95 @@ func TestBuildDurableClusterInputsIgnoresCrossRepoQualifiedReferences(t *testing
 	}
 	if edgeCount != 0 || len(inputs) != 0 {
 		t.Fatalf("cross-repo qualified refs should not form evidence edges, edges=%d inputs=%#v", edgeCount, inputs)
+	}
+}
+
+func TestBuildDurableClusterInputsScopesURLReferencesToRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantEdges int
+	}{
+		{name: "cross-repo pull URL", body: "Bumps fast-uri from 3.0.5 to 3.0.6, see https://redirect.github.com/fastify/fast-uri/pull/901 for the upstream change.", wantEdges: 0},
+		{name: "cross-repo issues URL", body: "Upstream breakage is tracked in https://github.com/fastify/fast-uri/issues/901 before this bump.", wantEdges: 0},
+		{name: "same-repo issues URL", body: "Fixes https://github.com/openclaw/openclaw/issues/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "same-repo pull URL", body: "Supersedes https://github.com/openclaw/openclaw/pull/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "same-repo qualified ref", body: "Fixes openclaw/openclaw#901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "same-repo bare ref", body: "Fixes #901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "unqualified issues path", body: "Fixes issues/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "unqualified pull path", body: "Supersedes pull/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+		{name: "unqualified rooted issues path", body: "Fixes /issues/901 by preserving the device-token scope during upgrade.", wantEdges: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer st.Close()
+			repoID, err := st.UpsertRepository(ctx, store.Repository{
+				Owner:     "openclaw",
+				Name:      "openclaw",
+				FullName:  "openclaw/openclaw",
+				RawJSON:   "{}",
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if err != nil {
+				t.Fatalf("seed repository: %v", err)
+			}
+			issueID, err := st.UpsertThread(ctx, store.Thread{
+				RepoID:        repoID,
+				GitHubID:      "901",
+				Number:        901,
+				Kind:          "issue",
+				State:         "open",
+				Title:         "Gateway token regression",
+				Body:          "Users cannot authorize device tokens.",
+				HTMLURL:       "https://github.com/openclaw/openclaw/issues/901",
+				LabelsJSON:    "[]",
+				AssigneesJSON: "[]",
+				RawJSON:       "{}",
+				ContentHash:   "hash-901",
+				UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if err != nil {
+				t.Fatalf("seed issue: %v", err)
+			}
+			prID, err := st.UpsertThread(ctx, store.Thread{
+				RepoID:        repoID,
+				GitHubID:      "902",
+				Number:        902,
+				Kind:          "pull_request",
+				State:         "open",
+				Title:         "Repair auth scope migration",
+				Body:          tc.body,
+				HTMLURL:       "https://github.com/openclaw/openclaw/pull/902",
+				LabelsJSON:    "[]",
+				AssigneesJSON: "[]",
+				RawJSON:       "{}",
+				ContentHash:   "hash-902",
+				UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if err != nil {
+				t.Fatalf("seed pull request: %v", err)
+			}
+			inputs, edgeCount, err := buildDurableClusterInputs(ctx, st, repoID, []store.ThreadVector{
+				{ThreadID: issueID, Vector: []float64{1, 0}},
+				{ThreadID: prID, Vector: []float64{0, 1}},
+			}, clusterBuildOptions{
+				Threshold:          0.99,
+				MinSize:            2,
+				MaxClusterSize:     defaultClusterMaxSize,
+				Fanout:             16,
+				CrossKindThreshold: 0.99,
+			})
+			if err != nil {
+				t.Fatalf("build inputs: %v", err)
+			}
+			if edgeCount != tc.wantEdges || len(inputs) != tc.wantEdges {
+				t.Fatalf("edges=%d inputs=%#v, want %d evidence edges", edgeCount, inputs, tc.wantEdges)
+			}
+		})
 	}
 }
 

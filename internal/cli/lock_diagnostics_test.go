@@ -90,7 +90,7 @@ func TestDoctorLocksUsesPortableRuntimeDB(t *testing.T) {
 	}
 	expected := New()
 	expected.configPath = configPath
-	expectedRuntimeDB, err := expected.portableRuntimeDBPath(sourceDB)
+	expectedRuntimeDB, err := expected.portableRuntimeDBPath(ctx, sourceDB)
 	if err != nil {
 		t.Fatalf("runtime db path: %v", err)
 	}
