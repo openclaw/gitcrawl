@@ -29,9 +29,10 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 		t.Fatalf("coverage json: %v", err)
 	}
 	var payload struct {
-		RepositoryFilters []string                   `json:"repository_filters"`
-		Repositories      []store.ArchiveCoverageRow `json:"repositories"`
-		Totals            store.ArchiveCoverageRow   `json:"totals"`
+		RepositoryFilters          []string                   `json:"repository_filters"`
+		HydrationFailuresAvailable bool                       `json:"hydration_failures_available"`
+		Repositories               []store.ArchiveCoverageRow `json:"repositories"`
+		Totals                     store.ArchiveCoverageRow   `json:"totals"`
 	}
 	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
 		t.Fatalf("decode coverage json: %v\n%s", err, jsonOut.String())
@@ -99,6 +100,9 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 	}
 	if payload.Repositories == nil || len(payload.Repositories) != 0 {
 		t.Fatalf("empty repositories should encode as an array: %+v", payload.Repositories)
+	}
+	if !payload.HydrationFailuresAvailable || !payload.Totals.HydrationFailuresSupported || payload.Totals.KnownFailedHydrations == nil || *payload.Totals.KnownFailedHydrations != 0 {
+		t.Fatalf("empty filtered failure ledger totals = %+v available=%v", payload.Totals, payload.HydrationFailuresAvailable)
 	}
 
 	for _, args := range [][]string{

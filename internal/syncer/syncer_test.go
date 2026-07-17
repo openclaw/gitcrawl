@@ -3668,6 +3668,41 @@ func TestSyncAttemptErrorClass(t *testing.T) {
 	}
 }
 
+func TestRecordPullRequestSyncFailureOutlivesCanceledFetchContext(t *testing.T) {
+	background := context.Background()
+	st, err := store.Open(background, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	s := New(fakeGitHub{}, st)
+	s.now = func() time.Time { return time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC) }
+	repoRaw, err := (fakeGitHub{}).GetRepo(background, "openclaw", "gitcrawl", nil)
+	if err != nil {
+		t.Fatalf("fixture repository: %v", err)
+	}
+	row, err := (fakeGitHub{}).GetIssue(background, "openclaw", "gitcrawl", 8, nil)
+	if err != nil {
+		t.Fatalf("fixture pull request: %v", err)
+	}
+	canceled, cancel := context.WithCancel(background)
+	cancel()
+	if err := s.recordPullRequestSyncFailure(canceled, Options{Owner: "openclaw", Repo: "gitcrawl"}, repoRaw, row, "pull_request_details", context.Canceled); err != nil {
+		t.Fatalf("record canceled sync failure: %v", err)
+	}
+	repo, err := st.RepositoryByFullName(background, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatalf("read repository: %v", err)
+	}
+	failures, err := st.ListSyncAttemptFailures(background, store.SyncAttemptFailureListOptions{RepoID: repo.ID})
+	if err != nil {
+		t.Fatalf("list sync failures: %v", err)
+	}
+	if len(failures) != 1 || failures[0].ErrorClass != "context_canceled" || failures[0].Operation != "pull_request_details" {
+		t.Fatalf("canceled sync failures = %+v", failures)
+	}
+}
+
 func TestSyncPullRequestDetailsSkipsCheckAndWorkflowFetchWithoutHeadSHA(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

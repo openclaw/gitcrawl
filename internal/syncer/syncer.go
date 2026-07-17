@@ -479,9 +479,11 @@ func (s *Syncer) recordPullRequestSyncFailure(ctx context.Context, options Optio
 	if syncErr == nil {
 		return nil
 	}
-	return s.store.WithTx(ctx, func(st *store.Store) error {
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.store.WithTx(recordCtx, func(st *store.Store) error {
 		now := s.now().Format(time.RFC3339Nano)
-		repoID, err := st.UpsertRepository(ctx, store.Repository{
+		repoID, err := st.UpsertRepository(recordCtx, store.Repository{
 			Owner:        options.Owner,
 			Name:         options.Repo,
 			FullName:     options.Owner + "/" + options.Repo,
@@ -493,11 +495,11 @@ func (s *Syncer) recordPullRequestSyncFailure(ctx context.Context, options Optio
 			return err
 		}
 		thread := mapIssueToThread(repoID, row, now)
-		threadID, err := st.UpsertThread(ctx, thread)
+		threadID, err := st.UpsertThread(recordCtx, thread)
 		if err != nil {
 			return err
 		}
-		_, err = st.RecordSyncAttemptFailure(ctx, store.SyncAttemptFailure{
+		_, err = st.RecordSyncAttemptFailure(recordCtx, store.SyncAttemptFailure{
 			RepoID:       repoID,
 			ThreadID:     threadID,
 			Number:       thread.Number,

@@ -157,7 +157,15 @@ func (s *Store) ArchiveCoverage(ctx context.Context, opts ArchiveCoverageOptions
 	}
 	defer rows.Close()
 
-	coverage := ArchiveCoverage{Rows: []ArchiveCoverageRow{}}
+	coverage := ArchiveCoverage{
+		Rows: []ArchiveCoverageRow{},
+		Totals: ArchiveCoverageRow{
+			HydrationFailuresSupported: hydrationFailuresSupported,
+		},
+	}
+	if hydrationFailuresSupported {
+		coverage.Totals.KnownFailedHydrations = new(int)
+	}
 	for rows.Next() {
 		var row ArchiveCoverageRow
 		var lastSync sql.NullString
