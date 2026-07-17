@@ -2564,7 +2564,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if err := help.printCommandUsage("portable"); err != nil {
 		t.Fatalf("portable help: %v", err)
 	}
-	if !strings.Contains(helpOut.String(), "portable") {
+	if !strings.Contains(helpOut.String(), "portable") || !strings.Contains(helpOut.String(), "--include-sync-failures") || !strings.Contains(helpOut.String(), "redact") {
 		t.Fatalf("portable help output = %q", helpOut.String())
 	}
 	helpOut.Reset()
@@ -3697,10 +3697,10 @@ func TestDoctorJSONReportsCurrentSchemaDiagnosticsWithoutMutation(t *testing.T) 
 	if got := schema["state"]; got != "current" {
 		t.Fatalf("db_schema.state = %#v, payload=%#v", got, schema)
 	}
-	if got := schema["current_version"]; got != float64(11) {
+	if got := schema["current_version"]; got != float64(12) {
 		t.Fatalf("db_schema.current_version = %#v, payload=%#v", got, schema)
 	}
-	if got := schema["supported_version"]; got != float64(11) {
+	if got := schema["supported_version"]; got != float64(12) {
 		t.Fatalf("db_schema.supported_version = %#v, payload=%#v", got, schema)
 	}
 	if got := schema["child_observation_reservations"]; got != true {
@@ -3962,7 +3962,7 @@ func TestDoctorJSONReportsLegacyPendingSchemaWithoutMutation(t *testing.T) {
 		t.Fatalf("pr_details.duplicate_path_files_supported = %#v, payload=%#v", got, prDetails)
 	}
 	pending := doctorStringList(t, schema, "pending_migrations")
-	if !doctorListContains(pending, "schema_version_3_to_11") ||
+	if !doctorListContains(pending, "schema_version_3_to_12") ||
 		!doctorListContains(pending, "pull_request_files_position_key") ||
 		!doctorListContains(pending, "thread_child_observation_reservations_table") {
 		t.Fatalf("pending_migrations = %#v", pending)
@@ -4194,6 +4194,66 @@ func TestPortablePruneCommand(t *testing.T) {
 	}
 	if err := validatePortableSQLiteFile(context.Background(), dbPath, dbPath); err != nil {
 		t.Fatalf("portable prune should leave valid db + manifest: %v", err)
+	}
+}
+
+func TestPortablePruneCommandCanIncludeRedactedSyncFailures(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-16T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("upsert repository: %v", err)
+	}
+	if _, err := st.RecordSyncAttemptFailure(ctx, store.SyncAttemptFailure{
+		RepoID: repoID, Number: 90, Operation: "pull_request_details", ErrorClass: "network",
+		ErrorMessage: "private endpoint detail", FirstSeenAt: "2026-07-16T00:00:00Z", LastSeenAt: "2026-07-16T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("record sync failure: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+	if err := app.Run(ctx, []string{"--config", configPath, "portable", "prune", "--include-sync-failures", "--no-vacuum", "--json"}); err != nil {
+		t.Fatalf("portable prune: %v", err)
+	}
+	var payload struct {
+		Included     bool  `json:"sync_failures_included"`
+		Redacted     int64 `json:"sync_failure_errors_redacted"`
+		Vacuumed     bool  `json:"vacuumed"`
+		VacuumForced bool  `json:"sync_failure_vacuum_forced"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("parse prune json: %v\n%s", err, stdout.String())
+	}
+	if !payload.Included || payload.Redacted != 1 || !payload.Vacuumed || !payload.VacuumForced {
+		t.Fatalf("portable prune payload = %+v", payload)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open portable db: %v", err)
+	}
+	defer db.Close()
+	var message string
+	if err := db.QueryRowContext(ctx, `select error_message from sync_attempt_failures`).Scan(&message); err != nil {
+		t.Fatalf("read portable sync failure: %v", err)
+	}
+	if message != "[redacted for portable export]" || strings.Contains(message, "private endpoint detail") {
+		t.Fatalf("portable error message = %q", message)
 	}
 }
 

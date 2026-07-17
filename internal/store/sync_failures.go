@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const syncAttemptFailuresSchemaVersion = 5
+const syncAttemptFailuresSchemaVersion = 12
 
 type SyncAttemptFailure struct {
 	ID           int64  `json:"id"`

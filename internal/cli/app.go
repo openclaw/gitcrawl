@@ -3365,7 +3365,8 @@ func (a *App) runPortablePrune(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("portable prune", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	bodyCharsRaw := fs.String("body-chars", "256", "maximum thread body characters to keep")
-	noVacuum := fs.Bool("no-vacuum", false, "skip SQLite vacuum after pruning")
+	noVacuum := fs.Bool("no-vacuum", false, "skip size-reclaim vacuum unless needed to scrub failure history")
+	includeSyncFailures := fs.Bool("include-sync-failures", false, "include the sync failure ledger with redacted error messages")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"body-chars": true})); err != nil {
 		return usageErr(err)
@@ -3387,8 +3388,9 @@ func (a *App) runPortablePrune(ctx context.Context, args []string) error {
 		return err
 	}
 	stats, err := rt.Store.PrunePortablePayloads(ctx, store.PortablePruneOptions{
-		BodyChars: bodyChars,
-		Vacuum:    !*noVacuum,
+		BodyChars:           bodyChars,
+		Vacuum:              !*noVacuum,
+		IncludeSyncFailures: *includeSyncFailures,
 	})
 	closeErr := rt.Store.Close()
 	if err != nil {
@@ -5269,8 +5271,12 @@ The TUI quietly refreshes from the local store every 15 seconds and leaves the c
 const portableUsageText = `gitcrawl portable manages local portable-store snapshots.
 
 Usage:
-  gitcrawl portable prune [--body-chars N] [--no-vacuum] [--json]
+  gitcrawl portable prune [--body-chars N] [--no-vacuum] [--include-sync-failures] [--json]
 
 Subcommands:
   prune               prune volatile payloads from the configured portable store
+
+The sync failure ledger is excluded by default. --include-sync-failures keeps
+the ledger but replaces every error message with a redaction marker. Failure
+history forces a secure database rewrite even when --no-vacuum is passed.
 `

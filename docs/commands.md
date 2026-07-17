@@ -42,6 +42,7 @@ These work on every command.
 | Command | Purpose | Docs |
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
+| `gitcrawl sync-failures owner/repo [--include-resolved --limit N --json]` | List failed PR hydration attempts and optional resolved history | [Sync](/sync/#hydration-depth) |
 | `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report archive, PR-detail, and enrichment coverage/freshness | — |
 | `gitcrawl fill-pr-details owner/repo [--limit --order --batch-size --reserve-rate-limit --include-comments --json-progress --json]` | Hydrate locally missing pull request detail rows in bounded batches | — |
 | `gitcrawl refresh owner/repo [--with pr-details --no-sync --no-embed --no-cluster --strict-vectors ...]` | Wrapper that runs sync → embed → cluster | [Refresh and embed](/refresh-and-embed/) |
@@ -134,7 +135,7 @@ octopool gh api repos/openclaw/openclaw/pulls/123
 
 | Command | Purpose | Docs |
 | --- | --- | --- |
-| `gitcrawl portable prune [--body-chars --no-vacuum --json]` | Build a compact portable v2 backup and (optionally) `VACUUM` for publishing | [Portable stores](/portable-stores/#publishing-gitcrawl-portable-prune) |
+| `gitcrawl portable prune [--body-chars --no-vacuum --include-sync-failures --json]` | Build a compact portable v2 backup and (optionally) `VACUUM` for publishing | [Portable stores](/portable-stores/#publishing-gitcrawl-portable-prune) |
 
 ## Not yet implemented
 

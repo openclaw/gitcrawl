@@ -74,6 +74,7 @@ This separation means:
 gitcrawl portable prune
 gitcrawl portable prune --body-chars 256       # default
 gitcrawl portable prune --body-chars 512 --no-vacuum
+gitcrawl portable prune --include-sync-failures # opt-in, error text redacted
 gitcrawl portable prune --json
 ```
 
@@ -89,14 +90,15 @@ Portable v2 keeps the data agents most often need for offline GitHub reads:
 - PR details, files, commits, status checks, and workflow runs
 - Thread revisions, deterministic fingerprints, and key summaries used by duplicate and cluster-oriented workflows
 
-It strips the data that is large, easy to regenerate, or mainly useful for exact API replay: raw GitHub JSON, generated documents and FTS indexes, embeddings and vectors, code snapshots and diff blobs, cluster run history, similarity edges, and blob storage. The database records this contract in `portable_metadata` with `schema=gitcrawl-portable-sync-v2`, `includes`, `excluded`, `capabilities`, and `thread_author_profile` keys. The added revision, fingerprint, summary, and author-association fields are additive; the portable schema identifier remains v2 so older readers can continue using the columns and tables they understand.
+It strips the data that is large, private, easy to regenerate, or mainly useful for exact API replay: raw GitHub JSON, generated documents and FTS indexes, embeddings and vectors, code snapshots and diff blobs, cluster run history, the sync failure ledger, similarity edges, and blob storage. Pass `--include-sync-failures` only when failure history is useful to portable-store readers; the table is retained but every `error_message` is replaced with `[redacted for portable export]`. Whenever the ledger contains rows, pruning securely rewrites the database even with `--no-vacuum` so current and historical retry text cannot remain in free pages. The database records this contract in `portable_metadata` with `schema=gitcrawl-portable-sync-v2`, `includes`, `excluded`, `capabilities`, and `thread_author_profile` keys. The added revision, fingerprint, summary, and author-association fields are additive; the portable schema identifier remains v2 so older readers can continue using the columns and tables they understand.
 
 Portable mirrors retain existing revision-bound key summaries, but do not regenerate them from compact body excerpts. Pruning removes canonical revision evidence blobs, so run a fully hydrated sync in a writable archive before `summarize`; the summary queue requires the exact content-addressed payload bound to the revision.
 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--body-chars <n>` | `256` | Maximum body characters to keep per thread/comment excerpt |
-| `--no-vacuum` | _(off)_ | Skip the post-prune `VACUUM` |
+| `--no-vacuum` | _(off)_ | Skip size-reclaim `VACUUM`; failure-ledger rows still force a secure rewrite |
+| `--include-sync-failures` | _(off)_ | Keep the sync failure ledger while replacing every error message with a redaction marker |
 | `--json` | _(off)_ | JSON output |
 
 After pruning, commit and push the database file from the portable checkout the way you would for any Git repository.

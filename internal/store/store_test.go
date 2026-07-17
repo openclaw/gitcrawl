@@ -1392,7 +1392,7 @@ func TestInspectSchemaReportsEmptyDatabaseMigration(t *testing.T) {
 	}
 
 	diag := InspectSchema(ctx, dbPath)
-	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, "schema_version_0_to_11") {
+	if diag.State != "pending_migration" || diag.CurrentVersion != 0 || !containsString(diag.PendingMigrations, fmt.Sprintf("schema_version_0_to_%d", schemaVersion)) {
 		t.Fatalf("schema diag = %#v, want empty database migration", diag)
 	}
 }
@@ -1416,7 +1416,7 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 	if err != nil {
 		t.Fatalf("open seed db: %v", err)
 	}
-	_, err = db.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
 		create table repositories (id integer primary key);
 		create table threads (id integer primary key);
 		create table thread_vectors (
@@ -1425,8 +1425,8 @@ func TestInspectSchemaReportsCurrentVersionCompatibilityDriftWithoutMutation(t *
 			model text
 		);
 		create table pull_request_details (thread_id integer primary key);
-		pragma user_version = 11;
-	`)
+		pragma user_version = %d;
+	`, schemaVersion))
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("seed compatibility drift: %v", err)
@@ -1535,7 +1535,7 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 	if diag.PRDetails.State != "legacy" || diag.PRDetails.FilesPositionKey || diag.PRDetails.DuplicatePathFilesSupported {
 		t.Fatalf("pr detail diag = %#v, want legacy", diag.PRDetails)
 	}
-	if !containsString(diag.PendingMigrations, "schema_version_3_to_11") ||
+	if !containsString(diag.PendingMigrations, fmt.Sprintf("schema_version_3_to_%d", schemaVersion)) ||
 		!containsString(diag.PendingMigrations, "pull_request_files_position_key") ||
 		!containsString(diag.PendingMigrations, "thread_child_observation_reservations_table") ||
 		!containsString(diag.PendingMigrations, "workflow_run_observation_reservations_table") {

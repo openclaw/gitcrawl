@@ -12,32 +12,38 @@ import (
 
 const portableSchemaVersion = 4
 
+const portableSyncFailureErrorRedaction = "[redacted for portable export]"
+
 type PortablePruneOptions struct {
-	BodyChars int
-	Vacuum    bool
+	BodyChars           int
+	Vacuum              bool
+	IncludeSyncFailures bool
 }
 
 type PortablePruneStats struct {
-	DBPath                   string   `json:"db_path"`
-	ManifestPath             string   `json:"manifest_path,omitempty"`
-	SHA256                   string   `json:"sha256,omitempty"`
-	BodyChars                int      `json:"body_chars"`
-	BytesBefore              int64    `json:"bytes_before"`
-	BytesAfter               int64    `json:"bytes_after"`
-	QuickCheck               string   `json:"quick_check,omitempty"`
-	ThreadsPruned            int64    `json:"threads_pruned"`
-	CommentsPruned           int64    `json:"comments_pruned"`
-	ThreadLabelsCompacted    int64    `json:"thread_labels_compacted"`
-	ThreadAssigneesCompacted int64    `json:"thread_assignees_compacted"`
-	RepositoriesPruned       int64    `json:"repositories_pruned"`
-	RawJSONPruned            int64    `json:"raw_json_pruned"`
-	FingerprintsPruned       int64    `json:"fingerprints_pruned"`
-	LegacySummariesDeleted   int64    `json:"legacy_summaries_deleted"`
-	DocumentsDeleted         int64    `json:"documents_deleted"`
-	DocumentsFTSRebuilt      bool     `json:"documents_fts_rebuilt"`
-	DroppedTables            []string `json:"dropped_tables,omitempty"`
-	DroppedColumns           []string `json:"dropped_columns,omitempty"`
-	Vacuumed                 bool     `json:"vacuumed"`
+	DBPath                    string   `json:"db_path"`
+	ManifestPath              string   `json:"manifest_path,omitempty"`
+	SHA256                    string   `json:"sha256,omitempty"`
+	BodyChars                 int      `json:"body_chars"`
+	BytesBefore               int64    `json:"bytes_before"`
+	BytesAfter                int64    `json:"bytes_after"`
+	QuickCheck                string   `json:"quick_check,omitempty"`
+	ThreadsPruned             int64    `json:"threads_pruned"`
+	CommentsPruned            int64    `json:"comments_pruned"`
+	ThreadLabelsCompacted     int64    `json:"thread_labels_compacted"`
+	ThreadAssigneesCompacted  int64    `json:"thread_assignees_compacted"`
+	RepositoriesPruned        int64    `json:"repositories_pruned"`
+	RawJSONPruned             int64    `json:"raw_json_pruned"`
+	FingerprintsPruned        int64    `json:"fingerprints_pruned"`
+	LegacySummariesDeleted    int64    `json:"legacy_summaries_deleted"`
+	DocumentsDeleted          int64    `json:"documents_deleted"`
+	DocumentsFTSRebuilt       bool     `json:"documents_fts_rebuilt"`
+	SyncFailuresIncluded      bool     `json:"sync_failures_included"`
+	SyncFailureErrorsRedacted int64    `json:"sync_failure_errors_redacted"`
+	SyncFailureVacuumForced   bool     `json:"sync_failure_vacuum_forced"`
+	DroppedTables             []string `json:"dropped_tables,omitempty"`
+	DroppedColumns            []string `json:"dropped_columns,omitempty"`
+	Vacuumed                  bool     `json:"vacuumed"`
 }
 
 func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePruneOptions) (PortablePruneStats, error) {
@@ -47,7 +53,6 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	stats := PortablePruneStats{
 		DBPath:    s.path,
 		BodyChars: options.BodyChars,
-		Vacuumed:  options.Vacuum,
 	}
 	if info, err := os.Stat(s.path); err == nil {
 		stats.BytesBefore = info.Size()
@@ -144,10 +149,17 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		}
 		stats.DocumentsFTSRebuilt = true
 	}
-	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, &stats); err != nil {
+	hadSyncFailures, err := s.scrubPortableSyncFailures(ctx, options.IncludeSyncFailures, &stats)
+	if err != nil {
 		return stats, err
 	}
-	if options.Vacuum {
+	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, options.IncludeSyncFailures, &stats); err != nil {
+		return stats, err
+	}
+	vacuum := options.Vacuum || hadSyncFailures
+	stats.Vacuumed = vacuum
+	stats.SyncFailureVacuumForced = hadSyncFailures && !options.Vacuum
+	if vacuum {
 		if _, err := s.db.ExecContext(ctx, `pragma wal_checkpoint(TRUNCATE)`); err != nil {
 			return stats, fmt.Errorf("checkpoint wal: %w", err)
 		}
@@ -159,6 +171,45 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesAfter = info.Size()
 	}
 	return stats, nil
+}
+
+func (s *Store) scrubPortableSyncFailures(ctx context.Context, include bool, stats *PortablePruneStats) (bool, error) {
+	if !s.tableExists(ctx, "sync_attempt_failures") {
+		return false, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return false, fmt.Errorf("open portable sync failure scrub connection: %w", err)
+	}
+	defer conn.Close()
+	var hasRows bool
+	if err := conn.QueryRowContext(ctx, `select exists(select 1 from sync_attempt_failures limit 1)`).Scan(&hasRows); err != nil {
+		return false, fmt.Errorf("inspect portable sync failures: %w", err)
+	}
+	if include {
+		stats.SyncFailuresIncluded = true
+	}
+	if !hasRows {
+		return false, nil
+	}
+	// VACUUM is optional, so securely overwrite private error bytes before the
+	// table is dropped or its visible values are replaced. The caller also
+	// rewrites the database to remove older retry values already on the freelist.
+	if _, err := conn.ExecContext(ctx, `pragma secure_delete = on`); err != nil {
+		return false, fmt.Errorf("enable secure deletion for portable sync failures: %w", err)
+	}
+	if !include {
+		if _, err := conn.ExecContext(ctx, `delete from sync_attempt_failures`); err != nil {
+			return false, fmt.Errorf("scrub portable sync failures: %w", err)
+		}
+		return true, nil
+	}
+	result, err := conn.ExecContext(ctx, `update sync_attempt_failures set error_message = ?`, portableSyncFailureErrorRedaction)
+	if err != nil {
+		return false, fmt.Errorf("redact portable sync failure errors: %w", err)
+	}
+	stats.SyncFailureErrorsRedacted = rowsAffected(result)
+	return true, nil
 }
 
 func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, error) {
@@ -190,7 +241,7 @@ func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, e
 	return rowsAffected(result), nil
 }
 
-func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, stats *PortablePruneStats) error {
+func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, includeSyncFailures bool, stats *PortablePruneStats) error {
 	if s.hasColumn(ctx, "threads", "body") && !s.hasColumn(ctx, "threads", "body_excerpt") {
 		if _, err := s.db.ExecContext(ctx, `alter table threads add column body_excerpt text`); err != nil {
 			return fmt.Errorf("add portable threads.body_excerpt: %w", err)
@@ -225,6 +276,9 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 		stats.DroppedColumns = append(stats.DroppedColumns, column.table+"."+column.name)
 	}
 	for _, table := range canonicalPortableDroppedTables() {
+		if table == "sync_attempt_failures" && includeSyncFailures {
+			continue
+		}
 		if !s.tableExists(ctx, table) {
 			continue
 		}
@@ -241,12 +295,20 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, s
 	`); err != nil {
 		return fmt.Errorf("ensure portable metadata: %w", err)
 	}
+	capabilities := "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped"
+	includes := "repositories,threads,comments,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs"
+	excluded := "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs,sync_attempt_failures"
+	if stats.SyncFailuresIncluded {
+		capabilities += ",sync_failure_ledger_redacted"
+		includes += ",sync_attempt_failures"
+		excluded = strings.ReplaceAll(excluded, ",sync_attempt_failures", "")
+	}
 	metadata := map[string]string{
 		"schema":                "gitcrawl-portable-sync-v2",
 		"body_chars":            fmt.Sprintf("%d", bodyChars),
-		"capabilities":          "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped",
-		"includes":              "repositories,threads,comments,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs",
-		"excluded":              "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs",
+		"capabilities":          capabilities,
+		"includes":              includes,
+		"excluded":              excluded,
 		"exported_at":           time.Now().UTC().Format(timeLayout),
 		"source_path":           s.path,
 		"thread_author_profile": "login,type,association",
@@ -446,6 +508,7 @@ func canonicalPortableDroppedTables() []string {
 		"cluster_runs",
 		"similarity_edges",
 		"blobs",
+		"sync_attempt_failures",
 	}
 }
 

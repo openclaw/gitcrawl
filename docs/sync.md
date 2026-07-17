@@ -85,7 +85,9 @@ issue or pull request URLs.
 
 PR details land in `pr_files`, `pr_commits`, `pr_checks`, and `pr_runs` tables for local review, search, clustering, and TUI workflows.
 
-Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness after a sync. It reports issue, PR, comment, and review counts alongside hydrated PR detail rows, missing PR details, and detail-table row counts per repository. The additive `enrichment` object exposes supported, eligible, covered, fresh, missing, stale, completeness, ratios, and latest timestamps for revisions, fingerprints, key summaries, clusters, and PR details. Use `--repos owner/a,owner/b` to compare selected repositories and `--min-missing-pr-details N` to focus backfill work on repositories with gaps. Known failed or skipped hydration attempts are reported as unavailable until the separate failure ledger is present.
+Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness after a sync. It reports issue, PR, comment, and review counts alongside hydrated PR detail rows, missing PR details, known failed hydrations, and detail-table row counts per repository. The additive `enrichment` object exposes supported, eligible, covered, fresh, missing, stale, completeness, ratios, and latest timestamps for revisions, fingerprints, key summaries, clusters, and PR details. Use `--repos owner/a,owner/b` to compare selected repositories and `--min-missing-pr-details N` to focus backfill work on repositories with gaps.
+
+`gitcrawl sync-failures owner/repo --json` lists unresolved PR hydration failures with their operation, error class and message, timestamps, and retry count. Add `--include-resolved` to inspect failures cleared by a later successful hydration. This operational ledger stays local when `portable prune` runs unless the publisher explicitly passes `--include-sync-failures`, which retains the ledger only after replacing every error message with a redaction marker.
 
 `--include-code` is accepted for compatibility but is currently a no-op.
 

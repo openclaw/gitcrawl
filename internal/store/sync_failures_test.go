@@ -1,9 +1,14 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -109,10 +114,10 @@ func TestListSyncAttemptFailuresTreatsPreLedgerReadOnlyStoreAsEmpty(t *testing.T
 	if err != nil {
 		t.Fatalf("open raw db: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`
 drop table sync_attempt_failures;
-pragma user_version = 4;
-`); err != nil {
+pragma user_version = %d;
+`, syncAttemptFailuresSchemaVersion-1)); err != nil {
 		t.Fatalf("downgrade ledger schema: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -130,5 +135,136 @@ pragma user_version = 4;
 	}
 	if len(failures) != 0 {
 		t.Fatalf("failures = %+v, want empty", failures)
+	}
+}
+
+func TestPortablePruneDropsSyncFailureLedgerByDefault(t *testing.T) {
+	ctx := context.Background()
+	st, repoID, historicalMessage, currentMessage := seedPortableSyncFailureHistory(t, ctx)
+	dbPath := st.Path()
+
+	stats, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 64, Vacuum: false})
+	if err != nil {
+		t.Fatalf("portable prune: %v", err)
+	}
+	if st.tableExists(ctx, "sync_attempt_failures") {
+		t.Fatal("portable prune retained sync_attempt_failures by default")
+	}
+	if !slices.Contains(stats.DroppedTables, "sync_attempt_failures") || stats.SyncFailuresIncluded || stats.SyncFailureErrorsRedacted != 0 || !stats.SyncFailureVacuumForced || !stats.Vacuumed {
+		t.Fatalf("portable prune stats = %+v", stats)
+	}
+	var excluded string
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'excluded'`).Scan(&excluded); err != nil {
+		t.Fatalf("read excluded metadata: %v", err)
+	}
+	if !strings.Contains(excluded, "sync_attempt_failures") {
+		t.Fatalf("excluded metadata = %q", excluded)
+	}
+	failures, err := st.ListSyncAttemptFailures(ctx, SyncAttemptFailureListOptions{RepoID: repoID})
+	if err != nil {
+		t.Fatalf("list omitted portable sync failures: %v", err)
+	}
+	if len(failures) != 0 {
+		t.Fatalf("omitted portable sync failures = %+v, want empty", failures)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close portable store: %v", err)
+	}
+	assertPortableFileDoesNotContain(t, dbPath, historicalMessage)
+	assertPortableFileDoesNotContain(t, dbPath, currentMessage)
+}
+
+func TestPortablePruneCanIncludeRedactedSyncFailureLedger(t *testing.T) {
+	ctx := context.Background()
+	st, repoID, historicalMessage, currentMessage := seedPortableSyncFailureHistory(t, ctx)
+	dbPath := st.Path()
+
+	stats, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
+		BodyChars:           64,
+		Vacuum:              false,
+		IncludeSyncFailures: true,
+	})
+	if err != nil {
+		t.Fatalf("portable prune with failures: %v", err)
+	}
+	if !st.tableExists(ctx, "sync_attempt_failures") {
+		t.Fatal("portable prune dropped opted-in sync_attempt_failures")
+	}
+	if !stats.SyncFailuresIncluded || stats.SyncFailureErrorsRedacted != 1 || !stats.SyncFailureVacuumForced || !stats.Vacuumed || slices.Contains(stats.DroppedTables, "sync_attempt_failures") {
+		t.Fatalf("portable prune stats = %+v", stats)
+	}
+	failures, err := st.ListSyncAttemptFailures(ctx, SyncAttemptFailureListOptions{RepoID: repoID})
+	if err != nil {
+		t.Fatalf("list portable sync failures: %v", err)
+	}
+	if len(failures) != 1 || failures[0].ErrorMessage != portableSyncFailureErrorRedaction || strings.Contains(failures[0].ErrorMessage, currentMessage) {
+		t.Fatalf("portable failures = %+v", failures)
+	}
+	var includes, excluded, capabilities string
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'includes'`).Scan(&includes); err != nil {
+		t.Fatalf("read includes metadata: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'excluded'`).Scan(&excluded); err != nil {
+		t.Fatalf("read excluded metadata: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'capabilities'`).Scan(&capabilities); err != nil {
+		t.Fatalf("read capabilities metadata: %v", err)
+	}
+	if !strings.Contains(includes, "sync_attempt_failures") || strings.Contains(excluded, "sync_attempt_failures") || !strings.Contains(capabilities, "sync_failure_ledger_redacted") {
+		t.Fatalf("portable metadata includes=%q excluded=%q capabilities=%q", includes, excluded, capabilities)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close portable store: %v", err)
+	}
+	assertPortableFileDoesNotContain(t, dbPath, historicalMessage)
+	assertPortableFileDoesNotContain(t, dbPath, currentMessage)
+}
+
+func seedPortableSyncFailureHistory(t *testing.T, ctx context.Context) (*Store, int64, string, string) {
+	t.Helper()
+	historicalMessage := strings.Repeat("historical private endpoint detail ", 1024)
+	currentMessage := "current private endpoint detail"
+	st, repoID := seedPortableSyncFailure(t, ctx, historicalMessage)
+	if _, err := st.RecordSyncAttemptFailure(ctx, SyncAttemptFailure{
+		RepoID: repoID, Number: 90, Operation: "pull_request_details", ErrorClass: "network",
+		ErrorMessage: currentMessage, LastSeenAt: "2026-07-16T00:05:00Z",
+	}); err != nil {
+		_ = st.Close()
+		t.Fatalf("record sync failure retry: %v", err)
+	}
+	return st, repoID, historicalMessage, currentMessage
+}
+
+func seedPortableSyncFailure(t *testing.T, ctx context.Context, message string) (*Store, int64) {
+	t.Helper()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-16T00:00:00Z",
+	})
+	if err != nil {
+		_ = st.Close()
+		t.Fatalf("upsert repository: %v", err)
+	}
+	if _, err := st.RecordSyncAttemptFailure(ctx, SyncAttemptFailure{
+		RepoID: repoID, Number: 90, Operation: "pull_request_details", ErrorClass: "network",
+		ErrorMessage: message, FirstSeenAt: "2026-07-16T00:00:00Z", LastSeenAt: "2026-07-16T00:00:00Z",
+	}); err != nil {
+		_ = st.Close()
+		t.Fatalf("record sync failure: %v", err)
+	}
+	return st, repoID
+}
+
+func assertPortableFileDoesNotContain(t *testing.T, path, value string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read portable database bytes: %v", err)
+	}
+	if bytes.Contains(data, []byte(value)) {
+		t.Fatalf("portable database retains scrubbed value %q", value)
 	}
 }
