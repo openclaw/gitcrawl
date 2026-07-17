@@ -37,8 +37,10 @@ type Options struct {
 	HTTPClient *http.Client
 	PageDelay  time.Duration
 	RateLimit  RateLimitObserver
-	// RateLimitReserve budgets requests issued by this Client. Separate clients
-	// and processes that share a token are outside this Client's accounting.
+	// RateLimitReserve preserves a best-effort observed floor for the shared
+	// token. Guarded requests refresh /rate_limit before dispatch so other token
+	// consumers are observed, but unrelated consumers cannot be locked between
+	// that probe and dispatch.
 	RateLimitReserve  int
 	InitialRateLimits []RateLimitSnapshot
 }
@@ -493,6 +495,11 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 			c.reserve.requestMu.Lock()
 			defer c.reserve.requestMu.Unlock()
 			ctx = context.WithValue(ctx, rateLimitRequestLockKey{}, c.reserve)
+		}
+	}
+	if c.reserve != nil && cost > 0 {
+		if _, err := c.GetRateLimits(ctx, reporter); err != nil {
+			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", err)
 		}
 	}
 	if err := c.reserve.beforeRequest(resource, cost); err != nil {

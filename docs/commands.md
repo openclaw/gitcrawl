@@ -49,9 +49,13 @@ These work on every command.
 | `gitcrawl runs owner/repo [--kind sync\|embedding\|cluster --limit --json]` | List recorded run history | [Refresh and embed](/refresh-and-embed/#runs) |
 | `gitcrawl code index owner/repo [--path --max-file-bytes --max-total-bytes --max-files --json]` | Index tracked text files from a local Git checkout | [Code indexing](/code-index/) |
 
-`fill-pr-details --reserve-rate-limit` reserves quota before each GitHub request
-issued by that command. Other command invocations and tools sharing the token
-are outside the command's accounting.
+`fill-pr-details --reserve-rate-limit` defaults to a floor of 1500 remaining
+requests. Before every costful GitHub request, Gitcrawl reads `/rate_limit` and
+stops when the latest shared-token snapshot shows that dispatching the next
+request would cross that floor. The live probe observes other processes and
+tools that share the token. This is best-effort because an unrelated consumer
+can spend quota between the probe and request; the 1500 default provides
+concurrency headroom. Pass `--reserve-rate-limit N` to choose another floor.
 
 For an end-to-end first-run sequence that combines `status --json`, `doctor --json`, `sync --numbers`, bounded `--sync-if-stale` search, `gitcrawl runs`, and Octopool live reads, see the [maintainer archive workflow](/maintainer-archive/).
 

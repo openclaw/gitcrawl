@@ -2892,7 +2892,7 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum missing PR details to hydrate")
 	order := fs.String("order", "newest-first", "missing PR order: newest-first|oldest-first|open-first")
 	batchSizeRaw := fs.String("batch-size", "50", "PRs to hydrate per sync batch")
-	reserveRaw := fs.String("reserve-rate-limit", "", "preserve at least this much remaining GitHub quota")
+	reserveRaw := fs.String("reserve-rate-limit", "1500", "keep this best-effort observed floor for shared-token GitHub quota")
 	jsonProgress := fs.Bool("json-progress", false, "write newline JSON progress events to stderr")
 	includeComments := fs.Bool("include-comments", false, "also hydrate issue comments and PR reviews while filling details")
 	jsonOut := fs.Bool("json", false, "write JSON output")
@@ -2952,13 +2952,6 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 		ReserveRateLimit: reserve,
 	}
 	for i := 0; i < len(numbers); i += batchSize {
-		if reserve > 0 {
-			if rate, ok := a.currentFillRateLimit(ctx, reserve); ok && rate.Remaining <= reserve {
-				result.StoppedReason = "rate-limit-reserve"
-				result.RateLimit = &rate
-				break
-			}
-		}
 		end := i + batchSize
 		if end > len(numbers) {
 			end = len(numbers)
@@ -3145,11 +3138,6 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		RateLimit:        a.observeGitHubRateLimit(ctx, token.Value),
 		RateLimitReserve: options.RateLimitReserve,
 	})
-	if options.RateLimitReserve > 0 {
-		if _, err := client.GetRateLimits(ctx, reporter); err != nil {
-			return syncer.Stats{}, fmt.Errorf("check GitHub rate limit before sync: %w", err)
-		}
-	}
 	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
 		Owner:            owner,
@@ -5091,9 +5079,12 @@ Usage:
 Usage:
   gitcrawl fill-pr-details owner/repo [--limit N] [--order newest-first|oldest-first|open-first] [--batch-size N] [--reserve-rate-limit N] [--include-comments] [--json-progress] [--json]
 
-The rate-limit reserve is enforced before each GitHub request issued by this
-command. Other command invocations and tools sharing the token are outside its
-accounting.
+Before each GitHub request issued by this command, Gitcrawl refreshes GitHub's
+/rate_limit view of the shared token and stops if that observed quota would
+cross the reserve. The default floor is 1500 remaining requests, providing
+headroom for concurrent consumers. This is best-effort: another process can
+spend quota between the probe and request. Pass --reserve-rate-limit N to
+choose a different floor.
 `,
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 

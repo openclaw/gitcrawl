@@ -2594,7 +2594,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if err := help.printCommandUsage("fill-pr-details"); err != nil {
 		t.Fatalf("fill-pr-details help: %v", err)
 	}
-	if !strings.Contains(helpOut.String(), "--include-comments") || !strings.Contains(helpOut.String(), "Other command invocations") {
+	if !strings.Contains(helpOut.String(), "--include-comments") || !strings.Contains(helpOut.String(), "default floor is 1500") || !strings.Contains(helpOut.String(), "/rate_limit") || !strings.Contains(helpOut.String(), "best-effort") {
 		t.Fatalf("fill-pr-details help output = %q", helpOut.String())
 	}
 	helpOut.Reset()
@@ -5468,7 +5468,7 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 	}
 }
 
-func TestFillPRDetailsReserveRateLimitStopsOnFreshLowCache(t *testing.T) {
+func TestFillPRDetailsDefaultRateLimitFloorUsesLiveSharedQuota(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -5501,13 +5501,27 @@ func TestFillPRDetailsReserveRateLimitStopsOnFreshLowCache(t *testing.T) {
 	}
 
 	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+	resetAt := time.Now().Add(time.Hour)
+	var rateStatusCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rate_limit" {
+			t.Fatalf("unexpected request after low shared quota: %s", r.URL.Path)
+		}
+		rateStatusCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+			"core":    map[string]any{"limit": 5000, "remaining": 1500, "reset": resetAt.Unix()},
+			"graphql": map[string]any{"limit": 5000, "remaining": 5000, "reset": resetAt.Unix()},
+		}})
+	}))
+	defer server.Close()
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1m")
-	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 5, time.Now().Add(time.Hour), time.Now())
+	writeFillPRDetailsRateLimitState(t, cacheDir, "test-gh-token", 5000, time.Now().Add(time.Hour), time.Now())
 
 	run := New()
 	var stdout bytes.Buffer
 	run.Stdout = &stdout
-	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--reserve-rate-limit", "10", "--json"}); err != nil {
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--json"}); err != nil {
 		t.Fatalf("fill-pr-details: %v", err)
 	}
 	var result struct {
@@ -5516,6 +5530,7 @@ func TestFillPRDetailsReserveRateLimitStopsOnFreshLowCache(t *testing.T) {
 		Remaining     int                  `json:"remaining"`
 		StoppedReason string               `json:"stopped_reason"`
 		RateLimit     *fillRateLimitResult `json:"rate_limit"`
+		Floor         int                  `json:"reserve_rate_limit"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("decode fill result: %v\n%s", err, stdout.String())
@@ -5523,8 +5538,11 @@ func TestFillPRDetailsReserveRateLimitStopsOnFreshLowCache(t *testing.T) {
 	if result.Selected != 1 || result.Filled != 0 || result.Remaining != 1 || result.StoppedReason != "rate-limit-reserve" {
 		t.Fatalf("fill result = %+v", result)
 	}
-	if result.RateLimit == nil || result.RateLimit.Remaining != 5 {
+	if result.RateLimit == nil || result.RateLimit.Remaining != 1500 || result.Floor != 1500 {
 		t.Fatalf("rate limit = %+v", result.RateLimit)
+	}
+	if got := rateStatusCalls.Load(); got != 1 {
+		t.Fatalf("rate status calls = %d, want 1", got)
 	}
 }
 
@@ -5601,9 +5619,9 @@ func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.
 			t.Fatalf("authorization = %q", got)
 		}
 		if r.URL.Path == "/rate_limit" {
-			rateStatusCalls.Add(1)
+			remaining := 12 - int(rateStatusCalls.Add(1))
 			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
-				"core":    map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt},
+				"core":    map[string]any{"limit": 5000, "remaining": remaining, "reset": resetAt},
 				"graphql": map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt},
 			}})
 			return
@@ -5650,8 +5668,8 @@ func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.
 	if result.RateLimit == nil || result.RateLimit.Resource != "core" || result.RateLimit.Remaining != 10 {
 		t.Fatalf("rate limit = %+v", result.RateLimit)
 	}
-	if got := rateStatusCalls.Load(); got != 1 {
-		t.Fatalf("rate status calls = %d, want 1", got)
+	if got := rateStatusCalls.Load(); got != 2 {
+		t.Fatalf("rate status calls = %d, want 2", got)
 	}
 	if got := coreCalls.Load(); got != 1 {
 		t.Fatalf("core requests = %d, want 1", got)

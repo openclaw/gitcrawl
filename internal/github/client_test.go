@@ -15,6 +15,16 @@ import (
 	"time"
 )
 
+func writeRateLimits(t *testing.T, w http.ResponseWriter, resetAt time.Time, coreRemaining, graphqlRemaining int) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
+		"core":    map[string]any{"limit": 5000, "remaining": coreRemaining, "reset": resetAt.Unix()},
+		"graphql": map[string]any{"limit": 5000, "remaining": graphqlRemaining, "reset": resetAt.Unix()},
+	}}); err != nil {
+		t.Fatalf("encode rate limits: %v", err)
+	}
+}
+
 func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer token" {
@@ -554,9 +564,15 @@ func TestGetRateLimitsDecodesCoreAndGraphQLResources(t *testing.T) {
 
 func TestRateLimitReserveStopsCoreRequestBeforeCrossing(t *testing.T) {
 	resetAt := time.Now().Add(time.Hour).UTC()
-	var calls atomic.Int32
+	var rateCalls atomic.Int32
+	var coreCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := calls.Add(1)
+		if r.URL.Path == "/rate_limit" {
+			remaining := 12 - int(rateCalls.Add(1))
+			writeRateLimits(t, w, resetAt, remaining, 100)
+			return
+		}
+		call := coreCalls.Add(1)
 		if call > 1 {
 			http.Error(w, "reserve crossed", http.StatusInternalServerError)
 			return
@@ -587,8 +603,11 @@ func TestRateLimitReserveStopsCoreRequestBeforeCrossing(t *testing.T) {
 	if reserveErr.RateLimit.Resource != "core" || reserveErr.RateLimit.Remaining != 10 || reserveErr.Reserve != 10 {
 		t.Fatalf("reserve error = %+v", reserveErr)
 	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("requests = %d, want 1", got)
+	if got := rateCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
 	}
 }
 
@@ -596,9 +615,15 @@ func TestRateLimitReserveSerializesConcurrentRequestsAtThreshold(t *testing.T) {
 	resetAt := time.Now().Add(time.Hour).UTC()
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
-	var calls atomic.Int32
+	var rateCalls atomic.Int32
+	var coreCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) > 1 {
+		if r.URL.Path == "/rate_limit" {
+			remaining := 12 - int(rateCalls.Add(1))
+			writeRateLimits(t, w, resetAt, remaining, 100)
+			return
+		}
+		if coreCalls.Add(1) > 1 {
 			http.Error(w, "reserve crossed", http.StatusInternalServerError)
 			return
 		}
@@ -645,8 +670,64 @@ func TestRateLimitReserveSerializesConcurrentRequestsAtThreshold(t *testing.T) {
 	if succeeded != 1 || stopped != 1 {
 		t.Fatalf("succeeded = %d, stopped = %d", succeeded, stopped)
 	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("requests = %d, want 1", got)
+	if got := rateCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
+	}
+}
+
+func TestRateLimitReserveSeparateClientsObserveSharedQuota(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).UTC()
+	firstDispatched := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var rateCalls atomic.Int32
+	var coreCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			rateCalls.Add(1)
+			writeRateLimits(t, w, resetAt, 11-int(coreCalls.Load()), 100)
+			return
+		}
+		if coreCalls.Add(1) > 1 {
+			http.Error(w, "reserve crossed", http.StatusInternalServerError)
+			return
+		}
+		close(firstDispatched)
+		<-releaseFirst
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	}))
+	defer server.Close()
+
+	firstClient := New(Options{BaseURL: server.URL, RateLimitReserve: 10})
+	secondClient := New(Options{BaseURL: server.URL, RateLimitReserve: 10})
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := firstClient.GetRepo(context.Background(), "openclaw", "gitcrawl", nil)
+		firstErr <- err
+	}()
+	<-firstDispatched
+
+	_, err := secondClient.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
+	var reserveErr *RateLimitReserveError
+	if !errors.As(err, &reserveErr) {
+		close(releaseFirst)
+		<-firstErr
+		t.Fatalf("second client error = %v, want RateLimitReserveError", err)
+	}
+	close(releaseFirst)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first client request: %v", err)
+	}
+	if reserveErr.RateLimit.Remaining != 10 {
+		t.Fatalf("reserve error = %+v", reserveErr)
+	}
+	if got := rateCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
+	}
+	if got := coreCalls.Load(); got != 1 {
+		t.Fatalf("core requests = %d, want 1", got)
 	}
 }
 
@@ -655,20 +736,21 @@ func TestRateLimitReserveSerializesConcurrentRateStatus(t *testing.T) {
 	probeStarted := make(chan struct{})
 	releaseProbe := make(chan struct{})
 	var coreCalls atomic.Int32
+	var rateCalls atomic.Int32
 	var observedMu sync.Mutex
 	var observed []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/rate_limit" {
-			close(probeStarted)
-			<-releaseProbe
-			w.Header().Set("X-RateLimit-Limit", "5000")
-			w.Header().Set("X-RateLimit-Remaining", "11")
-			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
-			w.Header().Set("X-RateLimit-Resource", "core")
-			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
-				"core":    map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt.Unix()},
-				"graphql": map[string]any{"limit": 5000, "remaining": 100, "reset": resetAt.Unix()},
-			}})
+			call := rateCalls.Add(1)
+			if call == 1 {
+				close(probeStarted)
+				<-releaseProbe
+			}
+			remaining := 11
+			if call >= 3 {
+				remaining = 10
+			}
+			writeRateLimits(t, w, resetAt, remaining, 100)
 			return
 		}
 		if coreCalls.Add(1) > 1 {
@@ -718,8 +800,8 @@ func TestRateLimitReserveSerializesConcurrentRateStatus(t *testing.T) {
 	observedMu.Lock()
 	gotObserved := append([]int(nil), observed...)
 	observedMu.Unlock()
-	if len(gotObserved) != 2 || gotObserved[0] != 11 || gotObserved[1] != 10 {
-		t.Fatalf("observed remaining = %v, want [11 10]", gotObserved)
+	if len(gotObserved) != 3 || gotObserved[0] != 11 || gotObserved[1] != 11 || gotObserved[2] != 10 {
+		t.Fatalf("observed remaining = %v, want [11 11 10]", gotObserved)
 	}
 
 	_, err := client.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
@@ -734,7 +816,12 @@ func TestRateLimitReserveSerializesConcurrentRateStatus(t *testing.T) {
 
 func TestRateLimitReserveStopsBeforeFollowingRedirect(t *testing.T) {
 	var calls atomic.Int32
+	resetAt := time.Now().Add(time.Hour)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			writeRateLimits(t, w, resetAt, 11, 100)
+			return
+		}
 		calls.Add(1)
 		if r.URL.Path == "/repos/openclaw/gitcrawl" {
 			http.Redirect(w, r, "/repos/openclaw/redirected", http.StatusFound)
@@ -786,7 +873,12 @@ func TestRateLimitReserveBootstrapStopsBeforeFollowingRedirect(t *testing.T) {
 
 func TestRateLimitReserveChargesNonGETRateLimitRequest(t *testing.T) {
 	var calls atomic.Int32
+	resetAt := time.Now().Add(time.Hour)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/rate_limit" {
+			writeRateLimits(t, w, resetAt, 10, 100)
+			return
+		}
 		calls.Add(1)
 		http.Error(w, "reserve crossed", http.StatusInternalServerError)
 	}))
@@ -840,7 +932,12 @@ func TestRateLimitObserverUsesFinalRedirectResource(t *testing.T) {
 
 func TestRateLimitReserveCountsRepositoryNamedRateLimit(t *testing.T) {
 	var calls atomic.Int32
+	resetAt := time.Now().Add(time.Hour)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			writeRateLimits(t, w, resetAt, 10, 100)
+			return
+		}
 		calls.Add(1)
 		http.Error(w, "reserve crossed", http.StatusInternalServerError)
 	}))
@@ -863,17 +960,14 @@ func TestRateLimitReserveCountsRepositoryNamedRateLimit(t *testing.T) {
 	}
 }
 
-func TestRateLimitReserveRefreshesExpiredStatusBeforeRequest(t *testing.T) {
+func TestRateLimitReserveRefreshesSharedTokenBeforeEveryRequest(t *testing.T) {
 	resetAt := time.Now().Add(time.Hour).UTC()
 	var rateStatusCalls atomic.Int32
 	var coreCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/rate_limit" {
-			rateStatusCalls.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
-				"core":    map[string]any{"limit": 5000, "remaining": 11, "reset": resetAt.Unix()},
-				"graphql": map[string]any{"limit": 5000, "remaining": 100, "reset": resetAt.Unix()},
-			}})
+			remaining := 12 - int(rateStatusCalls.Add(1))
+			writeRateLimits(t, w, resetAt, remaining, 100)
 			return
 		}
 		call := coreCalls.Add(1)
@@ -903,8 +997,8 @@ func TestRateLimitReserveRefreshesExpiredStatusBeforeRequest(t *testing.T) {
 	if reserveErr.RateLimit.Remaining != 10 {
 		t.Fatalf("reserve error = %+v", reserveErr)
 	}
-	if got := rateStatusCalls.Load(); got != 1 {
-		t.Fatalf("rate status requests = %d, want 1", got)
+	if got := rateStatusCalls.Load(); got != 2 {
+		t.Fatalf("rate status requests = %d, want 2", got)
 	}
 	if got := coreCalls.Load(); got != 1 {
 		t.Fatalf("core requests = %d, want 1", got)
@@ -914,7 +1008,13 @@ func TestRateLimitReserveRefreshesExpiredStatusBeforeRequest(t *testing.T) {
 func TestRateLimitReserveTracksGraphQLSeparately(t *testing.T) {
 	resetAt := time.Now().Add(time.Hour).UTC()
 	var calls atomic.Int32
+	var rateCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			graphqlRemaining := 12 - int(rateCalls.Add(1))
+			writeRateLimits(t, w, resetAt, 100, graphqlRemaining)
+			return
+		}
 		call := calls.Add(1)
 		if call > 1 {
 			http.Error(w, "reserve crossed", http.StatusInternalServerError)
