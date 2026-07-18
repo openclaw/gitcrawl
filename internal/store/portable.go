@@ -109,6 +109,17 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 			stats.CommentsPruned = rowsAffected(result)
 		}
 	}
+	if s.tableExists(ctx, "comment_revisions") {
+		if _, err := s.db.ExecContext(ctx, `
+			update comment_revisions
+			set body = case when length(body) > ? then substr(body, 1, ?) else body end
+		`, options.BodyChars, options.BodyChars); err != nil {
+			return stats, fmt.Errorf("prune comment revision bodies: %w", err)
+		}
+	}
+	if err := s.compactPortableReviewThreadBodies(ctx, options.BodyChars); err != nil {
+		return stats, err
+	}
 	if labels, assignees, err := s.compactPortableThreadMetadata(ctx); err != nil {
 		return stats, err
 	} else {
@@ -358,8 +369,8 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 	if err := s.ensurePortableMetadata(ctx); err != nil {
 		return err
 	}
-	capabilities := "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,raw_json_stripped"
-	includes := "repositories,threads,comments,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_syncs,github_workflow_runs"
+	capabilities := "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,family_tombstones,comment_revisions,pr_review_thread_revisions,raw_json_stripped"
+	includes := "repositories,threads,comments,comment_revisions,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_revisions,pull_request_review_thread_syncs,github_workflow_runs"
 	excluded := "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs,sync_attempt_failures"
 	if stats.SyncFailuresIncluded {
 		capabilities += ",sync_failure_ledger_redacted"
@@ -459,6 +470,106 @@ func (s *Store) compactPortableThreadMetadata(ctx context.Context) (int64, int64
 	return labelsCompacted, assigneesCompacted, nil
 }
 
+func (s *Store) compactPortableReviewThreadBodies(ctx context.Context, bodyChars int) error {
+	for _, table := range []string{"pull_request_review_threads", "pull_request_review_thread_revisions"} {
+		if !s.hasColumns(ctx, table, "first_comment_body", "comments_json") {
+			continue
+		}
+		rows, err := s.db.QueryContext(ctx, `
+			select rowid, first_comment_body, comments_json
+			from `+sqliteIdentifier(table)+`
+			order by rowid
+		`)
+		if err != nil {
+			return fmt.Errorf("read portable review bodies from %s: %w", table, err)
+		}
+		type update struct {
+			rowID        int64
+			firstBody    sql.NullString
+			commentsJSON string
+		}
+		var updates []update
+		for rows.Next() {
+			var rowID int64
+			var firstBody sql.NullString
+			var commentsJSON string
+			if err := rows.Scan(&rowID, &firstBody, &commentsJSON); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan portable review bodies from %s: %w", table, err)
+			}
+			nextFirst := firstBody
+			if nextFirst.Valid {
+				nextFirst.String = truncatePortableText(nextFirst.String, bodyChars)
+			}
+			nextComments := compactPortableReviewComments(commentsJSON, bodyChars)
+			if nextFirst == firstBody && nextComments == commentsJSON {
+				continue
+			}
+			updates = append(updates, update{rowID: rowID, firstBody: nextFirst, commentsJSON: nextComments})
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read portable review bodies from %s: %w", table, err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close portable review bodies from %s: %w", table, err)
+		}
+		for _, update := range updates {
+			if _, err := s.db.ExecContext(ctx, `
+				update `+sqliteIdentifier(table)+`
+				set first_comment_body = ?, comments_json = ?
+				where rowid = ?
+			`, update.firstBody, update.commentsJSON, update.rowID); err != nil {
+				return fmt.Errorf("compact portable review bodies in %s: %w", table, err)
+			}
+		}
+	}
+	return nil
+}
+
+func compactPortableReviewComments(raw string, bodyChars int) string {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return "[]"
+	}
+	truncatePortableReviewBodies(value, bodyChars)
+	compact, err := json.Marshal(value)
+	if err != nil {
+		return "[]"
+	}
+	return string(compact)
+}
+
+func truncatePortableReviewBodies(value any, bodyChars int) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			truncatePortableReviewBodies(item, bodyChars)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			if key == "body" || key == "bodyText" {
+				if text, ok := item.(string); ok {
+					typed[key] = truncatePortableText(text, bodyChars)
+				}
+				continue
+			}
+			truncatePortableReviewBodies(item, bodyChars)
+		}
+	}
+}
+
+func truncatePortableText(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
 func compactPortableNameList(raw, field string) string {
 	var values []any
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
@@ -508,11 +619,13 @@ func (s *Store) clearPortableRawJSON(ctx context.Context) (int64, error) {
 		name  string
 	}{
 		{table: "comments", name: "raw_json"},
+		{table: "comment_revisions", name: "raw_json"},
 		{table: "pull_request_details", name: "raw_json"},
 		{table: "pull_request_files", name: "raw_json"},
 		{table: "pull_request_commits", name: "raw_json"},
 		{table: "pull_request_checks", name: "raw_json"},
 		{table: "pull_request_review_threads", name: "raw_json"},
+		{table: "pull_request_review_thread_revisions", name: "raw_json"},
 		{table: "github_workflow_runs", name: "raw_json"},
 	} {
 		if !s.hasColumn(ctx, column.table, column.name) {

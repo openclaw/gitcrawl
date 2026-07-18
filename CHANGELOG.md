@@ -2,6 +2,8 @@
 
 ## 0.8.3 - Unreleased
 
+- Preserve comments, pull-request reviews, review threads, and commit references as explicit tombstones; comments and review threads retain edit history, and child hydration now merges by identity so only a sourced deletion event deletes an item while a later live observation restores it.
+
 ## 0.8.2 - 2026-07-18
 
 ### Highlights

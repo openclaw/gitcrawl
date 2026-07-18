@@ -69,18 +69,35 @@ type CodeSnapshot struct {
 }
 
 type Comment struct {
-	ID            int64          `json:"id"`
-	ThreadID      int64          `json:"thread_id"`
-	GithubID      string         `json:"github_id"`
-	CommentType   string         `json:"comment_type"`
-	AuthorLogin   sql.NullString `json:"author_login"`
-	AuthorType    sql.NullString `json:"author_type"`
-	Body          string         `json:"body"`
-	IsBot         int64          `json:"is_bot"`
-	RawJson       string         `json:"raw_json"`
-	RawJsonBlobID sql.NullInt64  `json:"raw_json_blob_id"`
-	CreatedAtGh   sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh   sql.NullString `json:"updated_at_gh"`
+	ID             int64          `json:"id"`
+	ThreadID       int64          `json:"thread_id"`
+	GithubID       string         `json:"github_id"`
+	CommentType    string         `json:"comment_type"`
+	AuthorLogin    sql.NullString `json:"author_login"`
+	AuthorType     sql.NullString `json:"author_type"`
+	Body           string         `json:"body"`
+	IsBot          int64          `json:"is_bot"`
+	RawJson        string         `json:"raw_json"`
+	RawJsonBlobID  sql.NullInt64  `json:"raw_json_blob_id"`
+	CreatedAtGh    sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh    sql.NullString `json:"updated_at_gh"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
+}
+
+type CommentRevision struct {
+	ID             int64          `json:"id"`
+	CommentID      int64          `json:"comment_id"`
+	AuthorLogin    sql.NullString `json:"author_login"`
+	AuthorType     sql.NullString `json:"author_type"`
+	Body           string         `json:"body"`
+	IsBot          int64          `json:"is_bot"`
+	RawJson        string         `json:"raw_json"`
+	CreatedAtGh    sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh    sql.NullString `json:"updated_at_gh"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
+	RecordedAt     string         `json:"recorded_at"`
 }
 
 type Document struct {
@@ -141,15 +158,17 @@ type PullRequestCheck struct {
 }
 
 type PullRequestCommit struct {
-	ThreadID    int64          `json:"thread_id"`
-	Sha         string         `json:"sha"`
-	Message     sql.NullString `json:"message"`
-	AuthorLogin sql.NullString `json:"author_login"`
-	AuthorName  sql.NullString `json:"author_name"`
-	CommittedAt sql.NullString `json:"committed_at"`
-	HtmlUrl     sql.NullString `json:"html_url"`
-	RawJson     string         `json:"raw_json"`
-	FetchedAt   string         `json:"fetched_at"`
+	ThreadID       int64          `json:"thread_id"`
+	Sha            string         `json:"sha"`
+	Message        sql.NullString `json:"message"`
+	AuthorLogin    sql.NullString `json:"author_login"`
+	AuthorName     sql.NullString `json:"author_name"`
+	CommittedAt    sql.NullString `json:"committed_at"`
+	HtmlUrl        sql.NullString `json:"html_url"`
+	RawJson        string         `json:"raw_json"`
+	FetchedAt      string         `json:"fetched_at"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
 }
 
 type PullRequestDetail struct {
@@ -203,6 +222,34 @@ type PullRequestReviewThread struct {
 	CommentsJson          string         `json:"comments_json"`
 	RawJson               string         `json:"raw_json"`
 	FetchedAt             string         `json:"fetched_at"`
+	DeletedAt             sql.NullString `json:"deleted_at"`
+	DeletionReason        sql.NullString `json:"deletion_reason"`
+}
+
+type PullRequestReviewThreadRevision struct {
+	ID                    int64          `json:"id"`
+	ThreadID              int64          `json:"thread_id"`
+	ReviewThreadID        string         `json:"review_thread_id"`
+	Path                  sql.NullString `json:"path"`
+	Line                  int64          `json:"line"`
+	StartLine             int64          `json:"start_line"`
+	IsResolved            int64          `json:"is_resolved"`
+	IsOutdated            int64          `json:"is_outdated"`
+	ViewerCanResolve      int64          `json:"viewer_can_resolve"`
+	ViewerCanUnresolve    int64          `json:"viewer_can_unresolve"`
+	ViewerCanReply        int64          `json:"viewer_can_reply"`
+	FirstAuthorLogin      sql.NullString `json:"first_author_login"`
+	FirstAuthorType       sql.NullString `json:"first_author_type"`
+	FirstCommentBody      sql.NullString `json:"first_comment_body"`
+	FirstCommentUrl       sql.NullString `json:"first_comment_url"`
+	FirstCommentCreatedAt sql.NullString `json:"first_comment_created_at"`
+	FirstCommentUpdatedAt sql.NullString `json:"first_comment_updated_at"`
+	CommentsJson          string         `json:"comments_json"`
+	RawJson               string         `json:"raw_json"`
+	FetchedAt             string         `json:"fetched_at"`
+	DeletedAt             sql.NullString `json:"deleted_at"`
+	DeletionReason        sql.NullString `json:"deletion_reason"`
+	RecordedAt            string         `json:"recorded_at"`
 }
 
 type PullRequestReviewThreadSync struct {
@@ -238,6 +285,20 @@ type SummaryRun struct {
 	FinishedAt sql.NullString `json:"finished_at"`
 	StatsJson  sql.NullString `json:"stats_json"`
 	ErrorText  sql.NullString `json:"error_text"`
+}
+
+type SyncAttemptFailure struct {
+	ID           int64          `json:"id"`
+	RepoID       int64          `json:"repo_id"`
+	ThreadID     sql.NullInt64  `json:"thread_id"`
+	Number       int64          `json:"number"`
+	Operation    string         `json:"operation"`
+	ErrorClass   string         `json:"error_class"`
+	ErrorMessage string         `json:"error_message"`
+	FirstSeenAt  string         `json:"first_seen_at"`
+	LastSeenAt   string         `json:"last_seen_at"`
+	RetryCount   int64          `json:"retry_count"`
+	ResolvedAt   sql.NullString `json:"resolved_at"`
 }
 
 type SyncRun struct {

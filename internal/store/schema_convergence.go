@@ -21,6 +21,7 @@ const (
 	migrationWorkflowRunReservationsShape      = "workflow_run_observation_reservations_shape"
 	migrationWorkflowRunReservationsBackfill   = "workflow_run_observation_reservations_backfill"
 	migrationObservationSchemaConvergence      = "observation_schema_convergence"
+	migrationFamilyTombstoneSchema             = "family_tombstone_schema"
 )
 
 func inspectCompatibilityMigrations(
@@ -100,6 +101,9 @@ func inspectCompatibilityMigrationsMode(
 		if !revisionsCanonical {
 			add(migrationThreadRevisionsCanonicalSchema)
 		}
+	}
+	if current > 0 && !st.familyTombstoneSchemaHasCurrentShape(ctx) {
+		add(migrationFamilyTombstoneSchema)
 	}
 
 	allocatorCurrent := false

@@ -345,11 +345,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			}
 			var comments []store.Comment
 			if options.IncludeComments && childReservations[store.ThreadChildComments] {
-				comments, err = persistComments(ctx, st, thread, payload.commentRows)
+				var synced int
+				comments, synced, err = persistComments(ctx, st, thread, payload.commentRows)
 				if err != nil {
 					return err
 				}
-				attempt.CommentsSynced += len(comments)
+				attempt.CommentsSynced += synced
 			} else {
 				var err error
 				comments, err = st.ListComments(ctx, thread.ID)
@@ -793,22 +794,23 @@ func (s *Syncer) fetchCommentRows(ctx context.Context, options Options, threadKi
 	return rows, nil
 }
 
-func persistComments(ctx context.Context, st *store.Store, thread store.Thread, rows []commentRow) ([]store.Comment, error) {
-	if err := st.DeleteCommentsForThread(ctx, thread.ID); err != nil {
-		return nil, err
-	}
-	comments := make([]store.Comment, 0, len(rows))
+func persistComments(ctx context.Context, st *store.Store, thread store.Thread, rows []commentRow) ([]store.Comment, int, error) {
+	synced := 0
 	for _, row := range rows {
 		comment := mapComment(thread.ID, row.kind, row.raw)
-		if comment.Body == "" && row.kind != "pull_review" {
+		if comment.Body == "" && row.kind != "pull_review" && comment.DeletedAt == "" {
 			continue
 		}
 		if _, err := st.UpsertComment(ctx, comment); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		comments = append(comments, comment)
+		synced++
 	}
-	return comments, nil
+	comments, err := st.ListComments(ctx, thread.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return comments, synced, nil
 }
 
 func (s *Syncer) fetchPullReviewThreadRows(ctx context.Context, options Options, number int) ([]map[string]any, string, error) {
@@ -865,6 +867,8 @@ func mapPullReviewThread(threadID int64, row map[string]any, fetchedAt string) s
 		CommentsJSON:          mustJSON(comments),
 		RawJSON:               mustJSON(row),
 		FetchedAt:             fetchedAt,
+		DeletedAt:             stringValue(row["deleted_at"]),
+		DeletionReason:        stringValue(row["deletion_reason"]),
 	}
 }
 
@@ -888,6 +892,8 @@ func mapComment(threadID int64, kind string, row map[string]any) store.Comment {
 		RawJSON:         mustJSON(row),
 		CreatedAtGitHub: stringValue(row["created_at"]),
 		UpdatedAtGitHub: stringValue(row["updated_at"]),
+		DeletedAt:       stringValue(row["deleted_at"]),
+		DeletionReason:  stringValue(row["deletion_reason"]),
 	}
 }
 

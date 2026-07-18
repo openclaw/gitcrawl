@@ -695,15 +695,17 @@ func mapPullCommits(threadID int64, rows []map[string]any, fetchedAt string) []s
 			continue
 		}
 		out = append(out, store.PullRequestCommit{
-			ThreadID:    threadID,
-			SHA:         sha,
-			Message:     nestedString(row, "commit", "message"),
-			AuthorLogin: nestedString(row, "author", "login"),
-			AuthorName:  nestedString(row, "commit", "author", "name"),
-			CommittedAt: nestedString(row, "commit", "author", "date"),
-			HTMLURL:     stringValue(row["html_url"]),
-			RawJSON:     mustJSON(row),
-			FetchedAt:   fetchedAt,
+			ThreadID:       threadID,
+			SHA:            sha,
+			Message:        nestedString(row, "commit", "message"),
+			AuthorLogin:    nestedString(row, "author", "login"),
+			AuthorName:     nestedString(row, "commit", "author", "name"),
+			CommittedAt:    nestedString(row, "commit", "author", "date"),
+			HTMLURL:        stringValue(row["html_url"]),
+			RawJSON:        mustJSON(row),
+			FetchedAt:      fetchedAt,
+			DeletedAt:      stringValue(row["deleted_at"]),
+			DeletionReason: stringValue(row["deletion_reason"]),
 		})
 	}
 	return out

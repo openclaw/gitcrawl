@@ -1781,12 +1781,8 @@ func TestSyncPartialPRCommentsUseParentObservationGeneration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("comments: %v", err)
 			}
-			wantBody := "comment-v2"
-			if test.secondPersistsFirst {
-				wantBody = "comment-v1"
-			}
-			if len(comments) != 1 || comments[0].Body != wantBody {
-				t.Fatalf("comments = %+v, want latest completed snapshot %s", comments, wantBody)
+			if len(comments) != 2 || comments[0].Body == comments[1].Body {
+				t.Fatalf("comments = %+v, want both independently observed rows", comments)
 			}
 			assertChildReservation(
 				t,
@@ -3010,8 +3006,13 @@ func assertVersionedPRHydration(
 	if err != nil {
 		t.Fatalf("commits: %v", err)
 	}
-	if len(commits) != 1 || commits[0].SHA != fmt.Sprintf("commit-v%d", version) {
-		t.Fatalf("commits = %+v, want version %d", commits, version)
+	wantCommit := fmt.Sprintf("commit-v%d", version)
+	foundCommit := false
+	for _, commit := range commits {
+		foundCommit = foundCommit || commit.SHA == wantCommit
+	}
+	if !foundCommit {
+		t.Fatalf("commits = %+v, want merged row %s", commits, wantCommit)
 	}
 	checks, err := st.PullRequestChecks(ctx, thread.ID)
 	if err != nil {
@@ -3024,9 +3025,13 @@ func assertVersionedPRHydration(
 	if err != nil {
 		t.Fatalf("review threads: %v", err)
 	}
-	if len(reviewThreads) != 1 ||
-		reviewThreads[0].ReviewThreadID != fmt.Sprintf("review-thread-v%d", version) {
-		t.Fatalf("review threads = %+v, want version %d", reviewThreads, version)
+	wantReviewThread := fmt.Sprintf("review-thread-v%d", version)
+	foundReviewThread := false
+	for _, reviewThread := range reviewThreads {
+		foundReviewThread = foundReviewThread || reviewThread.ReviewThreadID == wantReviewThread
+	}
+	if !foundReviewThread {
+		t.Fatalf("review threads = %+v, want merged row %s", reviewThreads, wantReviewThread)
 	}
 	runs, err := st.ListWorkflowRuns(ctx, repo.ID, store.WorkflowRunListOptions{
 		HeadSHA: detail.HeadSHA,
@@ -3321,7 +3326,7 @@ func assertStoredPullDraft(t *testing.T, ctx context.Context, st *store.Store, w
 	t.Fatal("pull request was not stored")
 }
 
-func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) {
+func TestCommentHydrationDoesNotTreatNotSeenAsDeleted(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -3343,11 +3348,11 @@ func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatalf("empty comment sync: %v", err)
 	}
-	if stats.CommentsSynced != 0 || stats.RevisionsCreated != 1 {
+	if stats.CommentsSynced != 0 || stats.RevisionsCreated != 0 {
 		t.Fatalf("empty comment sync stats = %#v", stats)
 	}
-	assertTableRowCount(t, st, "comments", 0)
-	assertDocumentFTSCount(t, st, "same", 0)
+	assertTableRowCount(t, st, "comments", 1)
+	assertDocumentFTSCount(t, st, "same", 1)
 	coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
 	if err != nil {
 		t.Fatalf("archive coverage after empty snapshot: %v", err)
@@ -3361,8 +3366,51 @@ func TestCommentHydrationReplacesDeletedCommentsWithEmptySnapshot(t *testing.T) 
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{7}}); err != nil {
 		t.Fatalf("metadata sync after empty snapshot: %v", err)
 	}
-	assertTableRowCount(t, st, "comments", 0)
-	assertDocumentFTSCount(t, st, "same", 0)
+	assertTableRowCount(t, st, "comments", 1)
+	assertDocumentFTSCount(t, st, "same", 1)
+}
+
+func TestPersistCommentsAppliesSparseExplicitTombstone(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-18T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	thread := store.Thread{
+		RepoID: repoID, GitHubID: "18", Number: 18, Kind: "issue", State: "open",
+		Title: "sparse tombstone", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/18",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "hash", UpdatedAt: "2026-07-18T00:00:00Z",
+	}
+	thread.ID, err = st.UpsertThread(ctx, thread)
+	if err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	if _, _, err := persistComments(ctx, st, thread, []commentRow{{kind: "issue_comment", raw: map[string]any{
+		"id": 1801, "body": "retain this body", "created_at": "2026-07-18T00:01:00Z",
+	}}}); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+	comments, synced, err := persistComments(ctx, st, thread, []commentRow{{kind: "issue_comment", raw: map[string]any{
+		"id": 1801, "deleted_at": "2026-07-18T00:02:00Z", "deletion_reason": "explicit-source-delete",
+	}}})
+	if err != nil {
+		t.Fatalf("persist sparse tombstone: %v", err)
+	}
+	if synced != 1 || len(comments) != 0 {
+		t.Fatalf("sparse tombstone result: synced=%d comments=%+v", synced, comments)
+	}
+	var body, deletedAt, reason string
+	if err := st.DB().QueryRowContext(ctx, `select body, deleted_at, deletion_reason from comments where thread_id = ? and github_id = '1801'`, thread.ID).Scan(&body, &deletedAt, &reason); err != nil {
+		t.Fatalf("read sparse tombstone: %v", err)
+	}
+	if body != "retain this body" || deletedAt == "" || reason != "explicit-source-delete" {
+		t.Fatalf("sparse tombstone row = body %q deleted_at %q reason %q", body, deletedAt, reason)
+	}
 }
 
 func TestSyncHydratesPullReviewComments(t *testing.T) {

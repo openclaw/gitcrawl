@@ -89,30 +89,12 @@ func (q *Queries) DeletePullRequestChecks(ctx context.Context, threadID int64) e
 	return err
 }
 
-const deletePullRequestCommits = `-- name: DeletePullRequestCommits :exec
-delete from pull_request_commits where thread_id = ?1
-`
-
-func (q *Queries) DeletePullRequestCommits(ctx context.Context, threadID int64) error {
-	_, err := q.db.ExecContext(ctx, deletePullRequestCommits, threadID)
-	return err
-}
-
 const deletePullRequestFiles = `-- name: DeletePullRequestFiles :exec
 delete from pull_request_files where thread_id = ?1
 `
 
 func (q *Queries) DeletePullRequestFiles(ctx context.Context, threadID int64) error {
 	_, err := q.db.ExecContext(ctx, deletePullRequestFiles, threadID)
-	return err
-}
-
-const deletePullRequestReviewThreads = `-- name: DeletePullRequestReviewThreads :exec
-delete from pull_request_review_threads where thread_id = ?1
-`
-
-func (q *Queries) DeletePullRequestReviewThreads(ctx context.Context, threadID int64) error {
-	_, err := q.db.ExecContext(ctx, deletePullRequestReviewThreads, threadID)
 	return err
 }
 
@@ -144,38 +126,6 @@ func (q *Queries) InsertPullRequestCheck(ctx context.Context, arg InsertPullRequ
 		arg.WorkflowName,
 		arg.StartedAt,
 		arg.CompletedAt,
-		arg.RawJson,
-		arg.FetchedAt,
-	)
-	return err
-}
-
-const insertPullRequestCommit = `-- name: InsertPullRequestCommit :exec
-insert into pull_request_commits(thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at)
-values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-`
-
-type InsertPullRequestCommitParams struct {
-	ThreadID    int64          `json:"thread_id"`
-	Sha         string         `json:"sha"`
-	Message     sql.NullString `json:"message"`
-	AuthorLogin sql.NullString `json:"author_login"`
-	AuthorName  sql.NullString `json:"author_name"`
-	CommittedAt sql.NullString `json:"committed_at"`
-	HtmlUrl     sql.NullString `json:"html_url"`
-	RawJson     string         `json:"raw_json"`
-	FetchedAt   string         `json:"fetched_at"`
-}
-
-func (q *Queries) InsertPullRequestCommit(ctx context.Context, arg InsertPullRequestCommitParams) error {
-	_, err := q.db.ExecContext(ctx, insertPullRequestCommit,
-		arg.ThreadID,
-		arg.Sha,
-		arg.Message,
-		arg.AuthorLogin,
-		arg.AuthorName,
-		arg.CommittedAt,
-		arg.HtmlUrl,
 		arg.RawJson,
 		arg.FetchedAt,
 	)
@@ -301,24 +251,27 @@ func (q *Queries) ListClusterRuns(ctx context.Context, arg ListClusterRunsParams
 }
 
 const listComments = `-- name: ListComments :many
-select id, thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh
+select id, thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh, deleted_at, deletion_reason
 from comments
 where thread_id = ?1
+  and deleted_at is null
 order by created_at_gh, id
 `
 
 type ListCommentsRow struct {
-	ID          int64          `json:"id"`
-	ThreadID    int64          `json:"thread_id"`
-	GithubID    string         `json:"github_id"`
-	CommentType string         `json:"comment_type"`
-	AuthorLogin sql.NullString `json:"author_login"`
-	AuthorType  sql.NullString `json:"author_type"`
-	Body        string         `json:"body"`
-	IsBot       int64          `json:"is_bot"`
-	RawJson     string         `json:"raw_json"`
-	CreatedAtGh sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh sql.NullString `json:"updated_at_gh"`
+	ID             int64          `json:"id"`
+	ThreadID       int64          `json:"thread_id"`
+	GithubID       string         `json:"github_id"`
+	CommentType    string         `json:"comment_type"`
+	AuthorLogin    sql.NullString `json:"author_login"`
+	AuthorType     sql.NullString `json:"author_type"`
+	Body           string         `json:"body"`
+	IsBot          int64          `json:"is_bot"`
+	RawJson        string         `json:"raw_json"`
+	CreatedAtGh    sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh    sql.NullString `json:"updated_at_gh"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
 }
 
 func (q *Queries) ListComments(ctx context.Context, threadID int64) ([]ListCommentsRow, error) {
@@ -342,6 +295,8 @@ func (q *Queries) ListComments(ctx context.Context, threadID int64) ([]ListComme
 			&i.RawJson,
 			&i.CreatedAtGh,
 			&i.UpdatedAtGh,
+			&i.DeletedAt,
+			&i.DeletionReason,
 		); err != nil {
 			return nil, err
 		}
@@ -830,9 +785,10 @@ func (q *Queries) PullRequestChecks(ctx context.Context, threadID int64) ([]Pull
 }
 
 const pullRequestCommits = `-- name: PullRequestCommits :many
-select thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at
+select thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at, deleted_at, deletion_reason
 from pull_request_commits
 where thread_id = ?1
+  and deleted_at is null
 order by rowid
 `
 
@@ -855,6 +811,8 @@ func (q *Queries) PullRequestCommits(ctx context.Context, threadID int64) ([]Pul
 			&i.HtmlUrl,
 			&i.RawJson,
 			&i.FetchedAt,
+			&i.DeletedAt,
+			&i.DeletionReason,
 		); err != nil {
 			return nil, err
 		}
@@ -948,9 +906,11 @@ const pullRequestReviewThreads = `-- name: PullRequestReviewThreads :many
 select thread_id, review_thread_id, path, line, start_line, is_resolved, is_outdated,
   viewer_can_resolve, viewer_can_unresolve, viewer_can_reply,
   first_author_login, first_author_type, first_comment_body, first_comment_url,
-  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at
+  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at,
+  deleted_at, deletion_reason
 from pull_request_review_threads
 where thread_id = ?1
+  and deleted_at is null
 order by is_resolved, path, line, review_thread_id
 `
 
@@ -983,6 +943,8 @@ func (q *Queries) PullRequestReviewThreads(ctx context.Context, threadID int64) 
 			&i.CommentsJson,
 			&i.RawJson,
 			&i.FetchedAt,
+			&i.DeletedAt,
+			&i.DeletionReason,
 		); err != nil {
 			return nil, err
 		}
@@ -1192,8 +1154,8 @@ func (q *Queries) RepositoryByFullName(ctx context.Context, fullName string) (Re
 }
 
 const upsertComment = `-- name: UpsertComment :one
-insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh)
-values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh, deleted_at, deletion_reason)
+values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 on conflict(thread_id, comment_type, github_id) do update set
   author_login=excluded.author_login,
   author_type=excluded.author_type,
@@ -1201,21 +1163,25 @@ on conflict(thread_id, comment_type, github_id) do update set
   is_bot=excluded.is_bot,
   raw_json=excluded.raw_json,
   created_at_gh=excluded.created_at_gh,
-  updated_at_gh=excluded.updated_at_gh
+  updated_at_gh=excluded.updated_at_gh,
+  deleted_at=excluded.deleted_at,
+  deletion_reason=excluded.deletion_reason
 returning id
 `
 
 type UpsertCommentParams struct {
-	ThreadID    int64          `json:"thread_id"`
-	GithubID    string         `json:"github_id"`
-	CommentType string         `json:"comment_type"`
-	AuthorLogin sql.NullString `json:"author_login"`
-	AuthorType  sql.NullString `json:"author_type"`
-	Body        string         `json:"body"`
-	IsBot       int64          `json:"is_bot"`
-	RawJson     string         `json:"raw_json"`
-	CreatedAtGh sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh sql.NullString `json:"updated_at_gh"`
+	ThreadID       int64          `json:"thread_id"`
+	GithubID       string         `json:"github_id"`
+	CommentType    string         `json:"comment_type"`
+	AuthorLogin    sql.NullString `json:"author_login"`
+	AuthorType     sql.NullString `json:"author_type"`
+	Body           string         `json:"body"`
+	IsBot          int64          `json:"is_bot"`
+	RawJson        string         `json:"raw_json"`
+	CreatedAtGh    sql.NullString `json:"created_at_gh"`
+	UpdatedAtGh    sql.NullString `json:"updated_at_gh"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
 }
 
 func (q *Queries) UpsertComment(ctx context.Context, arg UpsertCommentParams) (int64, error) {
@@ -1230,6 +1196,8 @@ func (q *Queries) UpsertComment(ctx context.Context, arg UpsertCommentParams) (i
 		arg.RawJson,
 		arg.CreatedAtGh,
 		arg.UpdatedAtGh,
+		arg.DeletedAt,
+		arg.DeletionReason,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -1273,6 +1241,52 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const upsertPullRequestCommit = `-- name: UpsertPullRequestCommit :exec
+insert into pull_request_commits(thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at, deleted_at, deletion_reason)
+values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+on conflict(thread_id, sha) do update set
+  message=excluded.message,
+  author_login=excluded.author_login,
+  author_name=excluded.author_name,
+  committed_at=excluded.committed_at,
+  html_url=excluded.html_url,
+  raw_json=excluded.raw_json,
+  fetched_at=excluded.fetched_at,
+  deleted_at=excluded.deleted_at,
+  deletion_reason=excluded.deletion_reason
+`
+
+type UpsertPullRequestCommitParams struct {
+	ThreadID       int64          `json:"thread_id"`
+	Sha            string         `json:"sha"`
+	Message        sql.NullString `json:"message"`
+	AuthorLogin    sql.NullString `json:"author_login"`
+	AuthorName     sql.NullString `json:"author_name"`
+	CommittedAt    sql.NullString `json:"committed_at"`
+	HtmlUrl        sql.NullString `json:"html_url"`
+	RawJson        string         `json:"raw_json"`
+	FetchedAt      string         `json:"fetched_at"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
+}
+
+func (q *Queries) UpsertPullRequestCommit(ctx context.Context, arg UpsertPullRequestCommitParams) error {
+	_, err := q.db.ExecContext(ctx, upsertPullRequestCommit,
+		arg.ThreadID,
+		arg.Sha,
+		arg.Message,
+		arg.AuthorLogin,
+		arg.AuthorName,
+		arg.CommittedAt,
+		arg.HtmlUrl,
+		arg.RawJson,
+		arg.FetchedAt,
+		arg.DeletedAt,
+		arg.DeletionReason,
+	)
+	return err
 }
 
 const upsertPullRequestDetail = `-- name: UpsertPullRequestDetail :exec
@@ -1336,13 +1350,15 @@ insert into pull_request_review_threads(
   thread_id, review_thread_id, path, line, start_line, is_resolved, is_outdated,
   viewer_can_resolve, viewer_can_unresolve, viewer_can_reply,
   first_author_login, first_author_type, first_comment_body, first_comment_url,
-  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at
+  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at,
+  deleted_at, deletion_reason
 )
 values(
   ?1, ?2, ?3, ?4, ?5, ?6, ?7,
   ?8, ?9, ?10,
   ?11, ?12, ?13, ?14,
-  ?15, ?16, ?17, ?18, ?19
+  ?15, ?16, ?17, ?18, ?19,
+  ?20, ?21
 )
 on conflict(thread_id, review_thread_id) do update set
   path=excluded.path,
@@ -1361,7 +1377,9 @@ on conflict(thread_id, review_thread_id) do update set
   first_comment_updated_at=excluded.first_comment_updated_at,
   comments_json=excluded.comments_json,
   raw_json=excluded.raw_json,
-  fetched_at=excluded.fetched_at
+  fetched_at=excluded.fetched_at,
+  deleted_at=excluded.deleted_at,
+  deletion_reason=excluded.deletion_reason
 `
 
 type UpsertPullRequestReviewThreadParams struct {
@@ -1384,6 +1402,8 @@ type UpsertPullRequestReviewThreadParams struct {
 	CommentsJson          string         `json:"comments_json"`
 	RawJson               string         `json:"raw_json"`
 	FetchedAt             string         `json:"fetched_at"`
+	DeletedAt             sql.NullString `json:"deleted_at"`
+	DeletionReason        sql.NullString `json:"deletion_reason"`
 }
 
 func (q *Queries) UpsertPullRequestReviewThread(ctx context.Context, arg UpsertPullRequestReviewThreadParams) error {
@@ -1407,6 +1427,8 @@ func (q *Queries) UpsertPullRequestReviewThread(ctx context.Context, arg UpsertP
 		arg.CommentsJson,
 		arg.RawJson,
 		arg.FetchedAt,
+		arg.DeletedAt,
+		arg.DeletionReason,
 	)
 	return err
 }

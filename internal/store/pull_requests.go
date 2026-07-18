@@ -40,15 +40,17 @@ type PullRequestFile struct {
 }
 
 type PullRequestCommit struct {
-	ThreadID    int64  `json:"thread_id"`
-	SHA         string `json:"sha"`
-	Message     string `json:"message,omitempty"`
-	AuthorLogin string `json:"author_login,omitempty"`
-	AuthorName  string `json:"author_name,omitempty"`
-	CommittedAt string `json:"committed_at,omitempty"`
-	HTMLURL     string `json:"html_url,omitempty"`
-	RawJSON     string `json:"raw_json,omitempty"`
-	FetchedAt   string `json:"fetched_at"`
+	ThreadID       int64  `json:"thread_id"`
+	SHA            string `json:"sha"`
+	Message        string `json:"message,omitempty"`
+	AuthorLogin    string `json:"author_login,omitempty"`
+	AuthorName     string `json:"author_name,omitempty"`
+	CommittedAt    string `json:"committed_at,omitempty"`
+	HTMLURL        string `json:"html_url,omitempty"`
+	RawJSON        string `json:"raw_json,omitempty"`
+	FetchedAt      string `json:"fetched_at"`
+	DeletedAt      string `json:"deleted_at,omitempty"`
+	DeletionReason string `json:"deletion_reason,omitempty"`
 }
 
 type PullRequestCheck struct {
@@ -254,20 +256,31 @@ func (s *Store) upsertPullRequestCacheFamilies(
 		}
 	}
 	if families.Commits {
-		if err := s.qsql().DeletePullRequestCommits(ctx, detail.ThreadID); err != nil {
-			return fmt.Errorf("clear pull request commits: %w", err)
-		}
 		for _, commit := range commits {
-			if err := s.qsql().InsertPullRequestCommit(ctx, storedb.InsertPullRequestCommitParams{
-				ThreadID:    detail.ThreadID,
-				Sha:         commit.SHA,
-				Message:     nullString(commit.Message),
-				AuthorLogin: nullString(commit.AuthorLogin),
-				AuthorName:  nullString(commit.AuthorName),
-				CommittedAt: nullString(commit.CommittedAt),
-				HtmlUrl:     nullString(commit.HTMLURL),
-				RawJson:     commit.RawJSON,
-				FetchedAt:   commit.FetchedAt,
+			if err := validateTombstone(commit.DeletedAt, commit.DeletionReason); err != nil {
+				return fmt.Errorf("upsert pull request commit %q: %w", commit.SHA, err)
+			}
+			if commit.DeletedAt != "" {
+				applied, err := s.tombstonePullRequestCommit(ctx, detail.ThreadID, commit.SHA, commit.DeletedAt, commit.DeletionReason)
+				if err != nil {
+					return err
+				}
+				if applied {
+					continue
+				}
+			}
+			if err := s.qsql().UpsertPullRequestCommit(ctx, storedb.UpsertPullRequestCommitParams{
+				ThreadID:       detail.ThreadID,
+				Sha:            commit.SHA,
+				Message:        nullString(commit.Message),
+				AuthorLogin:    nullString(commit.AuthorLogin),
+				AuthorName:     nullString(commit.AuthorName),
+				CommittedAt:    nullString(commit.CommittedAt),
+				HtmlUrl:        nullString(commit.HTMLURL),
+				RawJson:        commit.RawJSON,
+				FetchedAt:      commit.FetchedAt,
+				DeletedAt:      nullString(commit.DeletedAt),
+				DeletionReason: nullString(commit.DeletionReason),
 			}); err != nil {
 				return fmt.Errorf("upsert pull request commit: %w", err)
 			}
@@ -460,18 +473,42 @@ func (s *Store) PullRequestCommits(ctx context.Context, threadID int64) ([]PullR
 	out := make([]PullRequestCommit, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, PullRequestCommit{
-			ThreadID:    row.ThreadID,
-			SHA:         row.Sha,
-			Message:     stringValue(row.Message),
-			AuthorLogin: stringValue(row.AuthorLogin),
-			AuthorName:  stringValue(row.AuthorName),
-			CommittedAt: stringValue(row.CommittedAt),
-			HTMLURL:     stringValue(row.HtmlUrl),
-			RawJSON:     row.RawJson,
-			FetchedAt:   row.FetchedAt,
+			ThreadID:       row.ThreadID,
+			SHA:            row.Sha,
+			Message:        stringValue(row.Message),
+			AuthorLogin:    stringValue(row.AuthorLogin),
+			AuthorName:     stringValue(row.AuthorName),
+			CommittedAt:    stringValue(row.CommittedAt),
+			HTMLURL:        stringValue(row.HtmlUrl),
+			RawJSON:        row.RawJson,
+			FetchedAt:      row.FetchedAt,
+			DeletedAt:      stringValue(row.DeletedAt),
+			DeletionReason: stringValue(row.DeletionReason),
 		})
 	}
 	return out, nil
+}
+
+func (s *Store) TombstonePullRequestCommit(ctx context.Context, threadID int64, sha, deletedAt, reason string) (bool, error) {
+	if err := validateTombstone(deletedAt, reason); err != nil {
+		return false, fmt.Errorf("tombstone pull request commit: %w", err)
+	}
+	if deletedAt == "" {
+		return false, fmt.Errorf("tombstone pull request commit: deleted_at is required")
+	}
+	return s.tombstonePullRequestCommit(ctx, threadID, sha, deletedAt, reason)
+}
+
+func (s *Store) tombstonePullRequestCommit(ctx context.Context, threadID int64, sha, deletedAt, reason string) (bool, error) {
+	result, err := s.q().ExecContext(ctx, `
+		update pull_request_commits
+		set deleted_at = ?, deletion_reason = ?
+		where thread_id = ? and sha = ?
+	`, deletedAt, reason, threadID, sha)
+	if err != nil {
+		return false, fmt.Errorf("tombstone pull request commit: %w", err)
+	}
+	return rowsAffected(result) != 0, nil
 }
 
 func (s *Store) PullRequestChecks(ctx context.Context, threadID int64) ([]PullRequestCheck, error) {

@@ -151,7 +151,7 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	if rows, err := q.PullRequestFiles(ctx, threadID); err != nil || len(rows) != 1 {
 		t.Fatalf("pull request files len = %d, %v", len(rows), err)
 	}
-	if err := q.InsertPullRequestCommit(ctx, storedb.InsertPullRequestCommitParams{
+	if err := q.UpsertPullRequestCommit(ctx, storedb.UpsertPullRequestCommitParams{
 		ThreadID: threadID, Sha: "abc123", Message: ns("commit"), AuthorLogin: ns("alice"), AuthorName: ns("Alice"),
 		CommittedAt: ns(now), HtmlUrl: ns("https://github.com/openclaw/gitcrawl/commit/abc123"), RawJson: `{"commit":true}`, FetchedAt: now,
 	}); err != nil {
@@ -233,13 +233,7 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	if err := q.DeletePullRequestChecks(ctx, threadID); err != nil {
 		t.Fatalf("delete pr checks: %v", err)
 	}
-	if err := q.DeletePullRequestCommits(ctx, threadID); err != nil {
-		t.Fatalf("delete pr commits: %v", err)
-	}
 	if err := q.DeletePullRequestFiles(ctx, threadID); err != nil {
 		t.Fatalf("delete pr files: %v", err)
-	}
-	if err := q.DeletePullRequestReviewThreads(ctx, threadID); err != nil {
-		t.Fatalf("delete review threads: %v", err)
 	}
 }

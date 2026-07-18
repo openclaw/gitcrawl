@@ -15,6 +15,148 @@ import (
 	"time"
 )
 
+func TestOpenMigratesFamilyTombstonesLosslessly(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open seed store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-18T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	threadID, err := st.UpsertThread(ctx, Thread{
+		RepoID: repoID, GitHubID: "17", Number: 17, Kind: "pull_request", State: "open",
+		Title: "legacy family rows", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/17",
+		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread-hash", UpdatedAt: "2026-07-18T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	if _, err := st.UpsertComment(ctx, Comment{
+		ThreadID: threadID, GitHubID: "comment-17", CommentType: "pull_review",
+		AuthorLogin: "alice", Body: "legacy review", RawJSON: `{"body":"legacy review"}`,
+		CreatedAtGitHub: "2026-07-18T00:01:00Z", UpdatedAtGitHub: "2026-07-18T00:02:00Z",
+	}); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+	detail := PullRequestDetail{ThreadID: threadID, RepoID: repoID, Number: 17, RawJSON: "{}", FetchedAt: "2026-07-18T00:03:00Z", UpdatedAt: "2026-07-18T00:03:00Z"}
+	if err := st.UpsertPullRequestCache(ctx, detail, nil, []PullRequestCommit{{
+		SHA: "abc17", Message: "legacy commit", RawJSON: `{"sha":"abc17"}`, FetchedAt: "2026-07-18T00:03:00Z",
+	}}, nil, nil); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+	if err := st.UpsertPullRequestReviewThreads(ctx, threadID, "2026-07-18T00:04:00Z", []PullRequestReviewThread{{
+		ReviewThreadID: "rt-17", Path: "legacy.go", Line: 17, CommentsJSON: `[{"body":"legacy thread"}]`,
+		RawJSON: `{"id":"rt-17"}`, FetchedAt: "2026-07-18T00:04:00Z",
+	}}); err != nil {
+		t.Fatalf("seed review thread: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+
+	raw := openRawMigrationDB(t, dbPath)
+	statements := []string{
+		`pragma foreign_keys = off`,
+		`drop table comment_revisions`,
+		`drop table pull_request_review_thread_revisions`,
+		`create table comments_legacy (
+			id integer primary key, thread_id integer not null references threads(id) on delete cascade,
+			github_id text not null, comment_type text not null, author_login text, author_type text,
+			body text not null, is_bot integer not null default 0, raw_json text not null,
+			raw_json_blob_id integer references blobs(id) on delete set null,
+			created_at_gh text, updated_at_gh text, unique(thread_id, comment_type, github_id))`,
+		`insert into comments_legacy select id, thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, raw_json_blob_id, created_at_gh, updated_at_gh from comments`,
+		`drop table comments`,
+		`alter table comments_legacy rename to comments`,
+		`create table pull_request_commits_legacy (
+			thread_id integer not null references threads(id) on delete cascade, sha text not null,
+			message text, author_login text, author_name text, committed_at text, html_url text,
+			raw_json text not null, fetched_at text not null, primary key(thread_id, sha))`,
+		`insert into pull_request_commits_legacy select thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at from pull_request_commits`,
+		`drop table pull_request_commits`,
+		`alter table pull_request_commits_legacy rename to pull_request_commits`,
+		`create table pull_request_review_threads_legacy (
+			thread_id integer not null references threads(id) on delete cascade, review_thread_id text not null,
+			path text, line integer not null default 0, start_line integer not null default 0,
+			is_resolved integer not null default 0, is_outdated integer not null default 0,
+			viewer_can_resolve integer not null default 0, viewer_can_unresolve integer not null default 0,
+			viewer_can_reply integer not null default 0, first_author_login text, first_author_type text,
+			first_comment_body text, first_comment_url text, first_comment_created_at text,
+			first_comment_updated_at text, comments_json text not null, raw_json text not null,
+			fetched_at text not null, primary key(thread_id, review_thread_id))`,
+		`insert into pull_request_review_threads_legacy select thread_id, review_thread_id, path, line, start_line, is_resolved, is_outdated, viewer_can_resolve, viewer_can_unresolve, viewer_can_reply, first_author_login, first_author_type, first_comment_body, first_comment_url, first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at from pull_request_review_threads`,
+		`drop table pull_request_review_threads`,
+		`alter table pull_request_review_threads_legacy rename to pull_request_review_threads`,
+		`pragma user_version = 12`,
+		`pragma foreign_keys = on`,
+	}
+	for _, statement := range statements {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			_ = raw.Close()
+			t.Fatalf("prepare legacy family schema with %q: %v", statement, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("migrate legacy family schema: %v", err)
+	}
+	defer st.Close()
+	comments, err := st.ListComments(ctx, threadID)
+	if err != nil || len(comments) != 1 || comments[0].Body != "legacy review" {
+		t.Fatalf("migrated comments = %+v err=%v", comments, err)
+	}
+	commits, err := st.PullRequestCommits(ctx, threadID)
+	if err != nil || len(commits) != 1 || commits[0].Message != "legacy commit" {
+		t.Fatalf("migrated commits = %+v err=%v", commits, err)
+	}
+	reviewThreads, err := st.PullRequestReviewThreads(ctx, threadID)
+	if err != nil || len(reviewThreads) != 1 || reviewThreads[0].Path != "legacy.go" {
+		t.Fatalf("migrated review threads = %+v err=%v", reviewThreads, err)
+	}
+	for _, check := range []struct {
+		table string
+		want  int
+	}{
+		{table: "comment_revisions", want: 1},
+		{table: "pull_request_review_thread_revisions", want: 1},
+	} {
+		var count int
+		if err := st.DB().QueryRowContext(ctx, `select count(*) from `+check.table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", check.table, err)
+		}
+		if count != check.want {
+			t.Fatalf("%s rows = %d, want %d", check.table, count, check.want)
+		}
+	}
+	if !st.familyTombstoneSchemaHasCurrentShape(ctx) {
+		t.Fatal("migrated family tombstone schema did not converge to the fresh schema")
+	}
+	for _, invalidUpdate := range []string{
+		`update comments set deleted_at = '2026-07-18T00:05:00Z', deletion_reason = null where github_id = 'comment-17'`,
+		`update pull_request_commits set deleted_at = '2026-07-18T00:05:00Z', deletion_reason = null where sha = 'abc17'`,
+		`update pull_request_review_threads set deleted_at = '2026-07-18T00:05:00Z', deletion_reason = null where review_thread_id = 'rt-17'`,
+	} {
+		if _, err := st.DB().ExecContext(ctx, invalidUpdate); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("migrated tombstone constraint error = %v for %q", err, invalidUpdate)
+		}
+	}
+	rows, err := st.DB().QueryContext(ctx, `pragma foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign key check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("migration left a foreign key violation")
+	}
+}
+
 func TestOpenRepairsMinimumThreadObservationSequence(t *testing.T) {
 	ctx := context.Background()
 	dbPath, _, threadID := seedMigrationPullRequest(t, "minimum-sequence-head", 11)

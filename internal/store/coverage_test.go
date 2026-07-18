@@ -214,6 +214,21 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	if _, err := st.UpsertComment(ctx, Comment{ThreadID: threadIDs[0], GitHubID: "c1", CommentType: "issue_comment", AuthorLogin: "alice", Body: "portable comment body", RawJSON: `{"body":"portable comment body"}`, CreatedAtGitHub: "2026-04-30T00:00:00Z", UpdatedAtGitHub: "2026-04-30T00:00:00Z"}); err != nil {
 		t.Fatalf("upsert comment: %v", err)
 	}
+	reviewThread := PullRequestReviewThread{
+		ReviewThreadID: "portable-review", FirstCommentBody: "historical review body secret",
+		CommentsJSON: `[{"body":"historical nested review body secret"}]`, RawJSON: `{"raw":"historical review body secret"}`,
+		FetchedAt: "2026-04-30T00:00:00Z",
+	}
+	if err := st.UpsertPullRequestReviewThreads(ctx, threadIDs[1], reviewThread.FetchedAt, []PullRequestReviewThread{reviewThread}); err != nil {
+		t.Fatalf("upsert historical review thread: %v", err)
+	}
+	reviewThread.FirstCommentBody = "current review body secret"
+	reviewThread.CommentsJSON = `[{"body":"current nested review body secret"}]`
+	reviewThread.RawJSON = `{"raw":"current review body secret"}`
+	reviewThread.FetchedAt = "2026-04-30T00:01:00Z"
+	if err := st.UpsertPullRequestReviewThreads(ctx, threadIDs[1], reviewThread.FetchedAt, []PullRequestReviewThread{reviewThread}); err != nil {
+		t.Fatalf("upsert current review thread: %v", err)
+	}
 	if _, err := st.DB().ExecContext(ctx, `insert into sync_runs(repo_id, scope, status, started_at, finished_at, stats_json) values(?, 'open', 'success', '2026-04-30T00:00:00Z', '2026-04-30T00:01:00Z', '{}')`, repoID); err != nil {
 		t.Fatalf("seed sync run: %v", err)
 	}
@@ -230,6 +245,23 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	if !st.tableExists(ctx, "comments") {
 		t.Fatalf("comments should remain in portable v2")
 	}
+	if !st.tableExists(ctx, "comment_revisions") || !st.tableExists(ctx, "pull_request_review_thread_revisions") {
+		t.Fatalf("family revision history should remain in portable v2")
+	}
+	var compactReviewBodies string
+	if err := st.DB().QueryRowContext(ctx, `
+		select group_concat(first_comment_body || comments_json || raw_json, '|')
+		from (
+			select first_comment_body, comments_json, raw_json from pull_request_review_threads
+			union all
+			select first_comment_body, comments_json, raw_json from pull_request_review_thread_revisions
+		)
+	`).Scan(&compactReviewBodies); err != nil {
+		t.Fatalf("read compact review history: %v", err)
+	}
+	if strings.Contains(compactReviewBodies, "review body secret") || strings.Contains(compactReviewBodies, "nested review") || strings.Contains(compactReviewBodies, `"raw":`) {
+		t.Fatalf("portable review history retained full text: %q", compactReviewBodies)
+	}
 	var schema, includes, excluded string
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'schema'`).Scan(&schema); err != nil {
 		t.Fatalf("schema metadata: %v", err)
@@ -240,7 +272,10 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'excluded'`).Scan(&excluded); err != nil {
 		t.Fatalf("excluded metadata: %v", err)
 	}
-	if schema != "gitcrawl-portable-sync-v2" || !strings.Contains(includes, "comments") || strings.Contains(excluded, "comments") {
+	if schema != "gitcrawl-portable-sync-v2" ||
+		!strings.Contains(includes, "comment_revisions") ||
+		!strings.Contains(includes, "pull_request_review_thread_revisions") ||
+		strings.Contains(excluded, "comments") {
 		t.Fatalf("portable metadata schema=%q includes=%q excluded=%q", schema, includes, excluded)
 	}
 	var version int

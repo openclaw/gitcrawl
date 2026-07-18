@@ -168,8 +168,8 @@ set closed_at_local = null, close_reason_local = null, updated_at = sqlc.arg(upd
 where repo_id = sqlc.arg(repo_id) and number = sqlc.arg(number);
 
 -- name: UpsertComment :one
-insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh)
-values(sqlc.arg(thread_id), sqlc.arg(github_id), sqlc.arg(comment_type), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.arg(body), sqlc.arg(is_bot), sqlc.arg(raw_json), sqlc.narg(created_at_gh), sqlc.narg(updated_at_gh))
+insert into comments(thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh, deleted_at, deletion_reason)
+values(sqlc.arg(thread_id), sqlc.arg(github_id), sqlc.arg(comment_type), sqlc.narg(author_login), sqlc.narg(author_type), sqlc.arg(body), sqlc.arg(is_bot), sqlc.arg(raw_json), sqlc.narg(created_at_gh), sqlc.narg(updated_at_gh), sqlc.narg(deleted_at), sqlc.narg(deletion_reason))
 on conflict(thread_id, comment_type, github_id) do update set
   author_login=excluded.author_login,
   author_type=excluded.author_type,
@@ -177,13 +177,16 @@ on conflict(thread_id, comment_type, github_id) do update set
   is_bot=excluded.is_bot,
   raw_json=excluded.raw_json,
   created_at_gh=excluded.created_at_gh,
-  updated_at_gh=excluded.updated_at_gh
+  updated_at_gh=excluded.updated_at_gh,
+  deleted_at=excluded.deleted_at,
+  deletion_reason=excluded.deletion_reason
 returning id;
 
 -- name: ListComments :many
-select id, thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh
+select id, thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh, deleted_at, deletion_reason
 from comments
 where thread_id = sqlc.arg(thread_id)
+  and deleted_at is null
 order by created_at_gh, id;
 
 -- name: UpsertDocument :one
@@ -290,12 +293,19 @@ delete from pull_request_files where thread_id = sqlc.arg(thread_id);
 insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at)
 values(sqlc.arg(thread_id), sqlc.arg(position), sqlc.arg(path), sqlc.narg(status), sqlc.arg(additions), sqlc.arg(deletions), sqlc.arg(changes), sqlc.narg(previous_path), sqlc.narg(patch), sqlc.arg(raw_json), sqlc.arg(fetched_at));
 
--- name: DeletePullRequestCommits :exec
-delete from pull_request_commits where thread_id = sqlc.arg(thread_id);
-
--- name: InsertPullRequestCommit :exec
-insert into pull_request_commits(thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at)
-values(sqlc.arg(thread_id), sqlc.arg(sha), sqlc.narg(message), sqlc.narg(author_login), sqlc.narg(author_name), sqlc.narg(committed_at), sqlc.narg(html_url), sqlc.arg(raw_json), sqlc.arg(fetched_at));
+-- name: UpsertPullRequestCommit :exec
+insert into pull_request_commits(thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at, deleted_at, deletion_reason)
+values(sqlc.arg(thread_id), sqlc.arg(sha), sqlc.narg(message), sqlc.narg(author_login), sqlc.narg(author_name), sqlc.narg(committed_at), sqlc.narg(html_url), sqlc.arg(raw_json), sqlc.arg(fetched_at), sqlc.narg(deleted_at), sqlc.narg(deletion_reason))
+on conflict(thread_id, sha) do update set
+  message=excluded.message,
+  author_login=excluded.author_login,
+  author_name=excluded.author_name,
+  committed_at=excluded.committed_at,
+  html_url=excluded.html_url,
+  raw_json=excluded.raw_json,
+  fetched_at=excluded.fetched_at,
+  deleted_at=excluded.deleted_at,
+  deletion_reason=excluded.deletion_reason;
 
 -- name: DeletePullRequestChecks :exec
 delete from pull_request_checks where thread_id = sqlc.arg(thread_id);
@@ -333,9 +343,10 @@ where thread_id = sqlc.arg(thread_id)
 order by path, position;
 
 -- name: PullRequestCommits :many
-select thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at
+select thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at, deleted_at, deletion_reason
 from pull_request_commits
 where thread_id = sqlc.arg(thread_id)
+  and deleted_at is null
 order by rowid;
 
 -- name: PullRequestChecks :many
@@ -353,9 +364,6 @@ where repo_id = sqlc.arg(repo_id)
 order by updated_at_gh desc, run_id desc
 limit sqlc.arg(row_limit);
 
--- name: DeletePullRequestReviewThreads :exec
-delete from pull_request_review_threads where thread_id = sqlc.arg(thread_id);
-
 -- name: UpsertPullRequestReviewThreadSync :exec
 insert into pull_request_review_thread_syncs(thread_id, fetched_at)
 values(sqlc.arg(thread_id), sqlc.arg(fetched_at))
@@ -366,13 +374,15 @@ insert into pull_request_review_threads(
   thread_id, review_thread_id, path, line, start_line, is_resolved, is_outdated,
   viewer_can_resolve, viewer_can_unresolve, viewer_can_reply,
   first_author_login, first_author_type, first_comment_body, first_comment_url,
-  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at
+  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at,
+  deleted_at, deletion_reason
 )
 values(
   sqlc.arg(thread_id), sqlc.arg(review_thread_id), sqlc.narg(path), sqlc.arg(line), sqlc.arg(start_line), sqlc.arg(is_resolved), sqlc.arg(is_outdated),
   sqlc.arg(viewer_can_resolve), sqlc.arg(viewer_can_unresolve), sqlc.arg(viewer_can_reply),
   sqlc.narg(first_author_login), sqlc.narg(first_author_type), sqlc.narg(first_comment_body), sqlc.narg(first_comment_url),
-  sqlc.narg(first_comment_created_at), sqlc.narg(first_comment_updated_at), sqlc.arg(comments_json), sqlc.arg(raw_json), sqlc.arg(fetched_at)
+  sqlc.narg(first_comment_created_at), sqlc.narg(first_comment_updated_at), sqlc.arg(comments_json), sqlc.arg(raw_json), sqlc.arg(fetched_at),
+  sqlc.narg(deleted_at), sqlc.narg(deletion_reason)
 )
 on conflict(thread_id, review_thread_id) do update set
   path=excluded.path,
@@ -391,15 +401,19 @@ on conflict(thread_id, review_thread_id) do update set
   first_comment_updated_at=excluded.first_comment_updated_at,
   comments_json=excluded.comments_json,
   raw_json=excluded.raw_json,
-  fetched_at=excluded.fetched_at;
+  fetched_at=excluded.fetched_at,
+  deleted_at=excluded.deleted_at,
+  deletion_reason=excluded.deletion_reason;
 
 -- name: PullRequestReviewThreads :many
 select thread_id, review_thread_id, path, line, start_line, is_resolved, is_outdated,
   viewer_can_resolve, viewer_can_unresolve, viewer_can_reply,
   first_author_login, first_author_type, first_comment_body, first_comment_url,
-  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at
+  first_comment_created_at, first_comment_updated_at, comments_json, raw_json, fetched_at,
+  deleted_at, deletion_reason
 from pull_request_review_threads
 where thread_id = sqlc.arg(thread_id)
+  and deleted_at is null
 order by is_resolved, path, line, review_thread_id;
 
 -- name: PullRequestReviewThreadsFetchedAt :one

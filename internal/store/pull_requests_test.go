@@ -92,8 +92,41 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("updated pull request cache: %v", err)
 	}
-	if cache.Detail.HeadSHA != "head-v2" || len(cache.Files) != 1 || len(cache.Commits) != 0 || len(cache.Checks) != 0 {
+	if cache.Detail.HeadSHA != "head-v2" || len(cache.Files) != 1 || len(cache.Commits) != 1 || cache.Commits[0].SHA != "abc" || len(cache.Checks) != 0 {
 		t.Fatalf("updated cache = %+v", cache)
+	}
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, nil, []PullRequestCommit{{
+		SHA: "abc", DeletedAt: "2026-05-05T10:01:00Z", DeletionReason: "explicit-source-delete",
+	}}, nil, nil, PullRequestHydrationFamilies{Commits: true}); err != nil {
+		t.Fatalf("import sparse pull request commit tombstone: %v", err)
+	}
+	commitsAfterDelete, err := st.PullRequestCommits(ctx, threadID)
+	if err != nil || len(commitsAfterDelete) != 0 {
+		t.Fatalf("tombstoned commits = %+v err=%v", commitsAfterDelete, err)
+	}
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, nil, nil, nil, nil, PullRequestHydrationFamilies{Commits: true}); err != nil {
+		t.Fatalf("empty commit merge: %v", err)
+	}
+	var deletedAt, deletionReason string
+	if err := st.DB().QueryRowContext(ctx, `select deleted_at, deletion_reason from pull_request_commits where thread_id = ? and sha = 'abc'`, threadID).Scan(&deletedAt, &deletionReason); err != nil {
+		t.Fatalf("read preserved commit tombstone: %v", err)
+	}
+	if deletedAt == "" || deletionReason != "explicit-source-delete" {
+		t.Fatalf("commit tombstone = %q/%q", deletedAt, deletionReason)
+	}
+	var retainedMessage string
+	if err := st.DB().QueryRowContext(ctx, `select message from pull_request_commits where thread_id = ? and sha = 'abc'`, threadID).Scan(&retainedMessage); err != nil {
+		t.Fatalf("read retained commit message: %v", err)
+	}
+	if retainedMessage != "feat: cache" {
+		t.Fatalf("sparse commit tombstone replaced message with %q", retainedMessage)
+	}
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, nil, commits, nil, nil, PullRequestHydrationFamilies{Commits: true}); err != nil {
+		t.Fatalf("restore pull request commit: %v", err)
+	}
+	restoredCommits, err := st.PullRequestCommits(ctx, threadID)
+	if err != nil || len(restoredCommits) != 1 || restoredCommits[0].SHA != "abc" {
+		t.Fatalf("restored commits = %+v err=%v", restoredCommits, err)
 	}
 }
 

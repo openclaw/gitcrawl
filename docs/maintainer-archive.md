@@ -40,6 +40,8 @@ The first command mirrors open issues and pull requests into SQLite. The targete
 
 Use `--include-comments` when issue discussion matters. Use `--with pr-details` for pull requests that need files, commits, checks, workflow runs, and review-thread state. Those detail rows are useful for review work, but they cost more GitHub API calls than metadata-only sync.
 
+Child hydration is lossless by default. Gitcrawl merges comments, reviews, review threads, and pull-request commit references by their stable GitHub identity; an item missing from one response is not treated as deleted. Deletion therefore requires an explicit sourced record rather than inference from GitHub list responses. Explicit deletion records remain as tombstones with their reason, edited comments and review threads retain revisions, and a later live observation restores their current row without discarding that revision history. Commit references are immutable identities, so they retain tombstone state but do not have an edit-revision table.
+
 ## Search with bounded staleness
 
 Use local search for discovery and add a staleness bound when an agent or script should refresh before answering:

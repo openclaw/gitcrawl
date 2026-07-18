@@ -59,7 +59,28 @@ create table comments (
   raw_json_blob_id integer references blobs(id) on delete set null,
   created_at_gh text,
   updated_at_gh text,
+  deleted_at text,
+  deletion_reason text,
+  check (
+    (deleted_at is null and deletion_reason is null)
+    or (deleted_at is not null and deletion_reason is not null and trim(deletion_reason) <> '')
+  ),
   unique(thread_id, comment_type, github_id)
+);
+
+create table comment_revisions (
+  id integer primary key,
+  comment_id integer not null references comments(id) on delete cascade,
+  author_login text,
+  author_type text,
+  body text not null,
+  is_bot integer not null default 0,
+  raw_json text not null,
+  created_at_gh text,
+  updated_at_gh text,
+  deleted_at text,
+  deletion_reason text,
+  recorded_at text not null
 );
 
 create table blobs (
@@ -167,6 +188,12 @@ create table pull_request_commits (
   html_url text,
   raw_json text not null,
   fetched_at text not null,
+  deleted_at text,
+  deletion_reason text,
+  check (
+    (deleted_at is null and deletion_reason is null)
+    or (deleted_at is not null and deletion_reason is not null and trim(deletion_reason) <> '')
+  ),
   primary key(thread_id, sha)
 );
 
@@ -205,7 +232,42 @@ create table pull_request_review_threads (
   comments_json text not null,
   raw_json text not null,
   fetched_at text not null,
+  deleted_at text,
+  deletion_reason text,
+  check (
+    (deleted_at is null and deletion_reason is null)
+    or (deleted_at is not null and deletion_reason is not null and trim(deletion_reason) <> '')
+  ),
   primary key(thread_id, review_thread_id)
+);
+
+create table pull_request_review_thread_revisions (
+  id integer primary key,
+  thread_id integer not null,
+  review_thread_id text not null,
+  path text,
+  line integer not null default 0,
+  start_line integer not null default 0,
+  is_resolved integer not null default 0,
+  is_outdated integer not null default 0,
+  viewer_can_resolve integer not null default 0,
+  viewer_can_unresolve integer not null default 0,
+  viewer_can_reply integer not null default 0,
+  first_author_login text,
+  first_author_type text,
+  first_comment_body text,
+  first_comment_url text,
+  first_comment_created_at text,
+  first_comment_updated_at text,
+  comments_json text not null,
+  raw_json text not null,
+  fetched_at text not null,
+  deleted_at text,
+  deletion_reason text,
+  recorded_at text not null,
+  foreign key(thread_id, review_thread_id)
+    references pull_request_review_threads(thread_id, review_thread_id)
+    on delete cascade
 );
 
 create table pull_request_review_thread_syncs (
