@@ -155,4 +155,15 @@ func TestPullRequestReviewThreadMergeTombstoneRevisionAndRestore(t *testing.T) {
 	if revisions != 4 {
 		t.Fatalf("review thread revisions after restore = %d, want 4", revisions)
 	}
+	applied, err := st.TombstonePullRequestReviewThread(ctx, threadID, "rt-1", "2026-05-15T00:06:00Z", "explicit-source-delete")
+	if err != nil || !applied {
+		t.Fatalf("direct review thread tombstone = %t, %v", applied, err)
+	}
+	applied, err = st.TombstonePullRequestReviewThread(ctx, threadID, "missing", "2026-05-15T00:06:00Z", "explicit-source-delete")
+	if err != nil || applied {
+		t.Fatalf("missing review thread tombstone = %t, %v", applied, err)
+	}
+	if _, err := st.TombstonePullRequestReviewThread(ctx, threadID, "rt-1", "", ""); err == nil || !strings.Contains(err.Error(), "deleted_at is required") {
+		t.Fatalf("empty review thread tombstone error = %v", err)
+	}
 }

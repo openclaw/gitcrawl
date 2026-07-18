@@ -128,6 +128,17 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	if err != nil || len(restoredCommits) != 1 || restoredCommits[0].SHA != "abc" {
 		t.Fatalf("restored commits = %+v err=%v", restoredCommits, err)
 	}
+	applied, err := st.TombstonePullRequestCommit(ctx, threadID, "abc", "2026-05-05T10:02:00Z", "explicit-source-delete")
+	if err != nil || !applied {
+		t.Fatalf("direct commit tombstone = %t, %v", applied, err)
+	}
+	applied, err = st.TombstonePullRequestCommit(ctx, threadID, "missing", "2026-05-05T10:02:00Z", "explicit-source-delete")
+	if err != nil || applied {
+		t.Fatalf("missing commit tombstone = %t, %v", applied, err)
+	}
+	if _, err := st.TombstonePullRequestCommit(ctx, threadID, "abc", "", ""); err == nil || !strings.Contains(err.Error(), "deleted_at is required") {
+		t.Fatalf("empty commit tombstone error = %v", err)
+	}
 }
 
 func TestMissingPullRequestDetailNumbersSelectsOnlyUnfilledPRs(t *testing.T) {

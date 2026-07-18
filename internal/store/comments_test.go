@@ -151,4 +151,21 @@ func TestTombstoneFieldsRejectSurroundingWhitespace(t *testing.T) {
 			}
 		})
 	}
+	if _, err := st.UpsertComment(ctx, Comment{
+		ThreadID: threadID, GitHubID: "direct", CommentType: "issue_comment",
+		Body: "direct tombstone", RawJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("seed direct tombstone comment: %v", err)
+	}
+	applied, err := st.TombstoneComment(ctx, threadID, "issue_comment", "direct", "2026-05-01T00:02:00Z", "explicit-source-delete")
+	if err != nil || !applied {
+		t.Fatalf("direct comment tombstone = %t, %v", applied, err)
+	}
+	applied, err = st.TombstoneComment(ctx, threadID, "issue_comment", "missing", "2026-05-01T00:02:00Z", "explicit-source-delete")
+	if err != nil || applied {
+		t.Fatalf("missing comment tombstone = %t, %v", applied, err)
+	}
+	if _, err := st.TombstoneComment(ctx, threadID, "issue_comment", "direct", "", ""); err == nil || !strings.Contains(err.Error(), "deleted_at is required") {
+		t.Fatalf("empty comment tombstone error = %v", err)
+	}
 }
