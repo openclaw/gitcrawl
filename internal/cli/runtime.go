@@ -319,6 +319,7 @@ type portableStoreRefreshState struct {
 	MirrorHealthSize            int64  `json:"mirror_health_size,omitempty"`
 	MirrorHealthManifestModTime string `json:"mirror_health_manifest_mod_time,omitempty"`
 	MirrorHealthManifestSize    int64  `json:"mirror_health_manifest_size,omitempty"`
+	MirrorHealthSourceSHA256    string `json:"mirror_health_source_sha256,omitempty"`
 	LastRepair                  string `json:"last_repair,omitempty"`
 	LastRepairBackup            string `json:"last_repair_backup,omitempty"`
 	LastRepairAt                string `json:"last_repair_at,omitempty"`
@@ -446,50 +447,51 @@ func sqliteStoreOpenHealth(ctx context.Context, path string) error {
 }
 
 func portableMirrorCachedHealth(ctx context.Context, mirrorPath, sourceDBPath, statePath string) error {
-	manifestModTime, manifestSize, err := portableDBManifestStamp(sourceDBPath)
+	manifestModTime, manifestSize, sourceSHA256, err := portableDBManifestStamp(sourceDBPath)
 	if err != nil {
 		return err
 	}
-	if err := sqliteStoreCachedHealthWithManifest(ctx, mirrorPath, sourceDBPath, statePath, manifestModTime, manifestSize); err != nil {
+	if err := sqliteStoreCachedHealthWithManifest(ctx, mirrorPath, sourceDBPath, statePath, manifestModTime, manifestSize, sourceSHA256); err != nil {
 		return err
 	}
 	return nil
 }
 
-func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath, statePath, manifestModTime string, manifestSize int64) error {
+func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath, statePath, manifestModTime string, manifestSize int64, sourceSHA256 string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	state := readPortableStoreRefreshState(statePath)
 	modTime := info.ModTime().UTC().Format(time.RFC3339Nano)
+	manifestGenerationUnchanged := sourceSHA256 != "" &&
+		strings.EqualFold(state.MirrorHealthSourceSHA256, sourceSHA256)
 	if state.MirrorHealthSize == info.Size() &&
 		state.MirrorHealthModTime == modTime &&
-		state.MirrorHealthManifestSize == manifestSize &&
-		state.MirrorHealthManifestModTime == manifestModTime {
+		manifestGenerationUnchanged {
 		return sqliteStoreOpenHealth(ctx, path)
 	}
-	if manifestModTime == "" {
+	if manifestModTime == "" || manifestGenerationUnchanged {
 		if err := sqliteStoreHealth(ctx, path); err != nil {
 			return err
 		}
-		return markPortableMirrorHealthVerified(path, statePath, "")
+		return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
 	}
 	if err := validatePortableSQLiteFile(ctx, path, sourceDBPath); err != nil {
 		return err
 	}
-	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize)
+	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
 }
 
 func markPortableMirrorHealthVerified(path, statePath, sourceDBPath string) error {
-	manifestModTime, manifestSize, err := portableDBManifestStamp(sourceDBPath)
+	manifestModTime, manifestSize, sourceSHA256, err := portableDBManifestStamp(sourceDBPath)
 	if err != nil {
 		return err
 	}
-	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize)
+	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
 }
 
-func markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime string, manifestSize int64) error {
+func markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime string, manifestSize int64, sourceSHA256 string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -499,21 +501,30 @@ func markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime 
 	state.MirrorHealthModTime = info.ModTime().UTC().Format(time.RFC3339Nano)
 	state.MirrorHealthManifestSize = manifestSize
 	state.MirrorHealthManifestModTime = manifestModTime
+	state.MirrorHealthSourceSHA256 = sourceSHA256
 	return writePortableStoreRefreshState(statePath, state)
 }
 
-func portableDBManifestStamp(dbPath string) (string, int64, error) {
+func portableDBManifestStamp(dbPath string) (string, int64, string, error) {
 	if strings.TrimSpace(dbPath) == "" {
-		return "", 0, nil
+		return "", 0, "", nil
 	}
-	info, err := os.Stat(portableDBManifestPath(dbPath))
+	manifestPath := portableDBManifestPath(dbPath)
+	info, err := os.Stat(manifestPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", 0, nil
+			return "", 0, "", nil
 		}
-		return "", 0, err
+		return "", 0, "", err
 	}
-	return info.ModTime().UTC().Format(time.RFC3339Nano), info.Size(), nil
+	manifest, ok, err := readPortableDBManifest(manifestPath)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("portable manifest mismatch: %w", err)
+	}
+	if !ok {
+		return "", 0, "", nil
+	}
+	return info.ModTime().UTC().Format(time.RFC3339Nano), info.Size(), strings.ToLower(strings.TrimSpace(manifest.SHA256)), nil
 }
 
 func sqliteStoreHealth(ctx context.Context, path string) error {

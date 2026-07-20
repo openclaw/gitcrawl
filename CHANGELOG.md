@@ -3,6 +3,7 @@
 ## 0.8.3 - Unreleased
 
 - Preserve comments, pull-request reviews, review threads, and commit references as explicit tombstones; comments and review threads retain edit history, and child hydration now merges by identity so only a sourced deletion event deletes an item while a later live observation restores it.
+- Preserve migrated writable runtime mirrors across portable-store commands, validate their SQLite health independently from the immutable source manifest, and report compatible schema-v4 portable sources as current.
 
 ## 0.8.2 - 2026-07-18
 

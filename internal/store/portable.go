@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const portableSchemaVersion = 4
+const (
+	portableSchemaVersion = 4
+	portableSchemaFormat  = "gitcrawl-portable-sync-v2"
+)
 
 const portableSyncFailureErrorRedaction = "[redacted for portable export]"
 
@@ -378,7 +381,7 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		excluded = strings.ReplaceAll(excluded, ",sync_attempt_failures", "")
 	}
 	metadata := map[string]string{
-		"schema":                "gitcrawl-portable-sync-v2",
+		"schema":                portableSchemaFormat,
 		"body_chars":            fmt.Sprintf("%d", bodyChars),
 		"capabilities":          capabilities,
 		"includes":              includes,

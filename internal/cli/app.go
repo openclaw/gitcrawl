@@ -3841,7 +3841,8 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		sourceSchema = store.InspectSchema(ctx, rt.SourceDBPath)
 		dbSchema = sourceSchema
 		if rt.RemoteSource {
-			runtimeHealth = sqliteDBHealth(ctx, rt.Config.DBPath, rt.SourceDBPath)
+			sourceSchema = store.InspectPortableSourceSchema(ctx, rt.SourceDBPath)
+			runtimeHealth = sqliteDBHealth(ctx, rt.Config.DBPath, "")
 			runtimeSchema = store.InspectSchema(ctx, rt.Config.DBPath)
 			runtimeSchemaAvailable = true
 			dbSchema = runtimeSchema
@@ -4021,6 +4022,15 @@ func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[stri
 	result["size"] = info.Size()
 	if sum, err := fileSHA256(dbPath); err == nil {
 		result["sha256"] = fmt.Sprintf("%x", sum)
+	}
+	if strings.TrimSpace(manifestDBPath) == "" {
+		if err := sqliteStoreHealth(ctx, dbPath); err != nil {
+			result["health"] = "error"
+			result["error"] = err.Error()
+		} else {
+			result["health"] = "ok"
+		}
+		return result
 	}
 	manifestPath := portableDBManifestPath(manifestDBPath)
 	result["manifest_path"] = manifestPath

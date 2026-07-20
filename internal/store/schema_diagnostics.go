@@ -24,6 +24,8 @@ type SchemaDiagnostics struct {
 	WorkflowRunReservations        bool                      `json:"workflow_run_observation_reservations"`
 	WorkflowRunReservationsCurrent bool                      `json:"workflow_run_observation_reservations_current"`
 	PendingMigrations              []string                  `json:"pending_migrations"`
+	Portable                       bool                      `json:"portable,omitempty"`
+	PortableFormat                 string                    `json:"portable_format,omitempty"`
 	PRDetails                      PRDetailSchemaDiagnostics `json:"pr_details"`
 	NextSteps                      []string                  `json:"next_steps,omitempty"`
 	Error                          string                    `json:"error,omitempty"`
@@ -38,6 +40,14 @@ type PRDetailSchemaDiagnostics struct {
 }
 
 func InspectSchema(ctx context.Context, path string) SchemaDiagnostics {
+	return inspectSchema(ctx, path, false)
+}
+
+func InspectPortableSourceSchema(ctx context.Context, path string) SchemaDiagnostics {
+	return inspectSchema(ctx, path, true)
+}
+
+func inspectSchema(ctx context.Context, path string, portableSource bool) SchemaDiagnostics {
 	diag := SchemaDiagnostics{
 		Path:              path,
 		SupportedVersion:  schemaVersion,
@@ -88,6 +98,15 @@ func InspectSchema(ctx context.Context, path string) SchemaDiagnostics {
 	diag.WorkflowRunReservations = st.hasTable(ctx, "workflow_run_observation_reservations")
 	diag.WorkflowRunReservationsCurrent = diag.WorkflowRunReservations &&
 		st.workflowRunObservationReservationsHaveCurrentShape(ctx)
+	if portableSource {
+		diag.PortableFormat = inspectPortableSchemaFormat(ctx, st)
+		diag.Portable = diag.PortableFormat != ""
+		if diag.Portable && current == portableSchemaVersion {
+			diag.State = "current"
+			diag.Current = true
+			return diag
+		}
+	}
 	diag.PendingMigrations, err = inspectCompatibilityMigrations(
 		ctx,
 		st,
@@ -120,6 +139,24 @@ func InspectSchema(ctx context.Context, path string) SchemaDiagnostics {
 	}
 	diag.NextSteps = schemaNextSteps(diag)
 	return diag
+}
+
+func inspectPortableSchemaFormat(ctx context.Context, st *Store) string {
+	if !st.hasTable(ctx, "portable_metadata") {
+		return ""
+	}
+	var format string
+	if err := st.db.QueryRowContext(ctx, `
+		select value
+		from portable_metadata
+		where key = 'schema'
+	`).Scan(&format); err != nil {
+		return ""
+	}
+	if format != portableSchemaFormat {
+		return ""
+	}
+	return format
 }
 
 func inspectPRDetailSchema(ctx context.Context, st *Store) PRDetailSchemaDiagnostics {

@@ -1353,6 +1353,64 @@ func TestInspectSchemaReportsCurrentStoreWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestInspectSchemaReportsPortableStoreCurrentWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
+		BodyChars: 256,
+		Vacuum:    false,
+	}); err != nil {
+		_ = st.Close()
+		t.Fatalf("prune portable store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db before: %v", err)
+	}
+
+	runtimeDiag := InspectSchema(ctx, dbPath)
+	if runtimeDiag.State != "pending_migration" || runtimeDiag.Current || !runtimeDiag.PendingMigration {
+		t.Fatalf("runtime schema diag = %#v, want pending migration", runtimeDiag)
+	}
+	if runtimeDiag.Portable {
+		t.Fatalf("runtime schema diag = %#v, want no source-role normalization", runtimeDiag)
+	}
+
+	diag := InspectPortableSourceSchema(ctx, dbPath)
+	if diag.State != "current" || !diag.Current || diag.PendingMigration || diag.Legacy || diag.Newer {
+		t.Fatalf("schema diag = %#v, want current portable store", diag)
+	}
+	if !diag.Portable || diag.PortableFormat != portableSchemaFormat {
+		t.Fatalf("portable schema diag = %#v, want %q", diag, portableSchemaFormat)
+	}
+	if diag.CurrentVersion != portableSchemaVersion || diag.SupportedVersion != schemaVersion {
+		t.Fatalf(
+			"schema versions = current %d supported %d, want portable %d runtime %d",
+			diag.CurrentVersion,
+			diag.SupportedVersion,
+			portableSchemaVersion,
+			schemaVersion,
+		)
+	}
+	if len(diag.PendingMigrations) != 0 || len(diag.NextSteps) != 0 {
+		t.Fatalf("portable schema guidance = pending %#v next %#v, want none", diag.PendingMigrations, diag.NextSteps)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read db after: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("schema diagnostics mutated portable database bytes")
+	}
+}
+
 func TestInspectSchemaReportsMissingStore(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
