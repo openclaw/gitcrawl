@@ -3610,6 +3610,37 @@ func TestWritableRuntimeUsesPortableMirror(t *testing.T) {
 	if !gitWorktreeClean(ctx, checkoutDir) {
 		t.Fatal("portable checkout should stay clean after writable runtime command")
 	}
+	statePath := portableStoreRefreshStatePath(rt.Config.DBPath)
+	legacyState := readPortableStoreRefreshState(statePath)
+	if legacyState.MirrorHealthSourceSHA256 == "" {
+		t.Fatal("portable refresh state should start with a source hash")
+	}
+	legacyState.MirrorHealthSourceSHA256 = ""
+	if err := writePortableStoreRefreshState(statePath, legacyState); err != nil {
+		t.Fatalf("write legacy portable refresh state: %v", err)
+	}
+
+	legacyRead := New()
+	legacyRead.configPath = configPath
+	legacyRT, err := legacyRead.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		t.Fatalf("open runtime with legacy refresh state: %v", err)
+	}
+	if _, _, err := legacyRT.Store.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{
+		RepoID:     repo.ID,
+		Model:      "text-embedding-3-small",
+		Basis:      "title_original",
+		Dimensions: 3,
+	}, 1); err != nil {
+		t.Fatalf("read runtime vector after legacy state migration: %v", err)
+	}
+	if err := legacyRT.Store.Close(); err != nil {
+		t.Fatalf("close runtime after legacy state migration: %v", err)
+	}
+	if got := readPortableStoreRefreshState(statePath).MirrorHealthSourceSHA256; got == "" {
+		t.Fatal("legacy portable refresh state source hash was not migrated")
+	}
+
 	manifestPath := portableDBManifestPath(filepath.Join(checkoutDir, dbRel))
 	manifestTime := time.Now().Add(time.Hour)
 	if err := os.Chtimes(manifestPath, manifestTime, manifestTime); err != nil {

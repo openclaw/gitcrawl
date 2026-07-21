@@ -119,6 +119,17 @@ func TestPortableManifestGenerationUnchanged(t *testing.T) {
 			want:         true,
 		},
 		{
+			name: "legacy manifest stamp migrates to hash",
+			state: portableStoreRefreshState{
+				MirrorHealthManifestModTime: "2026-07-20T00:00:00Z",
+				MirrorHealthManifestSize:    512,
+			},
+			manifestModTime: "2026-07-20T00:00:00Z",
+			manifestSize:    512,
+			sourceSHA256:    "abc123",
+			want:            true,
+		},
+		{
 			name:  "manifest-less legacy store reuses cached health",
 			state: portableStoreRefreshState{},
 			want:  true,
@@ -203,6 +214,60 @@ func TestManifestlessPortableMirrorReusesCachedOpenHealth(t *testing.T) {
 	}
 	if openHealthCalls != 1 || fullHealthCalls != 0 {
 		t.Fatalf("health calls: open=%d full=%d, want open=1 full=0", openHealthCalls, fullHealthCalls)
+	}
+}
+
+func TestLegacyPortableMirrorHealthMigratesSourceHash(t *testing.T) {
+	dir := t.TempDir()
+	mirrorPath := filepath.Join(dir, "gitcrawl.db")
+	statePath := portableStoreRefreshStatePath(mirrorPath)
+	if err := os.WriteFile(mirrorPath, []byte("legacy portable mirror"), 0o600); err != nil {
+		t.Fatalf("write mirror: %v", err)
+	}
+	info, err := os.Stat(mirrorPath)
+	if err != nil {
+		t.Fatalf("stat mirror: %v", err)
+	}
+	const manifestModTime = "2026-07-20T00:00:00Z"
+	const manifestSize = int64(512)
+	const sourceSHA256 = "abc123"
+	if err := writePortableStoreRefreshState(statePath, portableStoreRefreshState{
+		MirrorHealthSize:            info.Size(),
+		MirrorHealthModTime:         info.ModTime().UTC().Format(time.RFC3339Nano),
+		MirrorHealthManifestModTime: manifestModTime,
+		MirrorHealthManifestSize:    manifestSize,
+	}); err != nil {
+		t.Fatalf("write legacy cached health state: %v", err)
+	}
+
+	openHealthCalls := 0
+	fullHealthCalls := 0
+	err = sqliteStoreCachedHealthWithManifestChecks(
+		context.Background(),
+		mirrorPath,
+		filepath.Join(dir, "source.db"),
+		statePath,
+		manifestModTime,
+		manifestSize,
+		sourceSHA256,
+		func(context.Context, string) error {
+			openHealthCalls++
+			return nil
+		},
+		func(context.Context, string) error {
+			fullHealthCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("cached health migration: %v", err)
+	}
+	if openHealthCalls != 0 || fullHealthCalls != 1 {
+		t.Fatalf("health calls: open=%d full=%d, want open=0 full=1", openHealthCalls, fullHealthCalls)
+	}
+	state := readPortableStoreRefreshState(statePath)
+	if state.MirrorHealthSourceSHA256 != sourceSHA256 {
+		t.Fatalf("cached source hash = %q, want %q", state.MirrorHealthSourceSHA256, sourceSHA256)
 	}
 }
 

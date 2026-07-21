@@ -484,9 +484,11 @@ func sqliteStoreCachedHealthWithManifestChecks(ctx context.Context, path, source
 		manifestSize,
 		sourceSHA256,
 	)
+	manifestGenerationRecorded := sourceSHA256 == "" || state.MirrorHealthSourceSHA256 != ""
 	if state.MirrorHealthSize == info.Size() &&
 		state.MirrorHealthModTime == modTime &&
-		manifestGenerationUnchanged {
+		manifestGenerationUnchanged &&
+		manifestGenerationRecorded {
 		return openHealthCheck(ctx, path)
 	}
 	if manifestModTime == "" || manifestGenerationUnchanged {
@@ -503,7 +505,9 @@ func sqliteStoreCachedHealthWithManifestChecks(ctx context.Context, path, source
 
 func portableManifestGenerationUnchanged(state portableStoreRefreshState, manifestModTime string, manifestSize int64, sourceSHA256 string) bool {
 	if sourceSHA256 != "" {
-		return strings.EqualFold(state.MirrorHealthSourceSHA256, sourceSHA256)
+		if state.MirrorHealthSourceSHA256 != "" {
+			return strings.EqualFold(state.MirrorHealthSourceSHA256, sourceSHA256)
+		}
 	}
 	return state.MirrorHealthManifestSize == manifestSize &&
 		state.MirrorHealthManifestModTime == manifestModTime
