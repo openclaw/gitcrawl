@@ -458,21 +458,39 @@ func portableMirrorCachedHealth(ctx context.Context, mirrorPath, sourceDBPath, s
 }
 
 func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath, statePath, manifestModTime string, manifestSize int64, sourceSHA256 string) error {
+	return sqliteStoreCachedHealthWithManifestChecks(
+		ctx,
+		path,
+		sourceDBPath,
+		statePath,
+		manifestModTime,
+		manifestSize,
+		sourceSHA256,
+		sqliteStoreOpenHealth,
+		sqliteStoreHealth,
+	)
+}
+
+func sqliteStoreCachedHealthWithManifestChecks(ctx context.Context, path, sourceDBPath, statePath, manifestModTime string, manifestSize int64, sourceSHA256 string, openHealthCheck, fullHealthCheck func(context.Context, string) error) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	state := readPortableStoreRefreshState(statePath)
 	modTime := info.ModTime().UTC().Format(time.RFC3339Nano)
-	manifestGenerationUnchanged := sourceSHA256 != "" &&
-		strings.EqualFold(state.MirrorHealthSourceSHA256, sourceSHA256)
+	manifestGenerationUnchanged := portableManifestGenerationUnchanged(
+		state,
+		manifestModTime,
+		manifestSize,
+		sourceSHA256,
+	)
 	if state.MirrorHealthSize == info.Size() &&
 		state.MirrorHealthModTime == modTime &&
 		manifestGenerationUnchanged {
-		return sqliteStoreOpenHealth(ctx, path)
+		return openHealthCheck(ctx, path)
 	}
 	if manifestModTime == "" || manifestGenerationUnchanged {
-		if err := sqliteStoreHealth(ctx, path); err != nil {
+		if err := fullHealthCheck(ctx, path); err != nil {
 			return err
 		}
 		return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
@@ -481,6 +499,14 @@ func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath
 		return err
 	}
 	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
+}
+
+func portableManifestGenerationUnchanged(state portableStoreRefreshState, manifestModTime string, manifestSize int64, sourceSHA256 string) bool {
+	if sourceSHA256 != "" {
+		return strings.EqualFold(state.MirrorHealthSourceSHA256, sourceSHA256)
+	}
+	return state.MirrorHealthManifestSize == manifestSize &&
+		state.MirrorHealthManifestModTime == manifestModTime
 }
 
 func markPortableMirrorHealthVerified(path, statePath, sourceDBPath string) error {

@@ -101,6 +101,111 @@ func TestPortableStoreRootIgnoresCommandScopeGitConfig(t *testing.T) {
 	}
 }
 
+func TestPortableManifestGenerationUnchanged(t *testing.T) {
+	tests := []struct {
+		name            string
+		state           portableStoreRefreshState
+		manifestModTime string
+		manifestSize    int64
+		sourceSHA256    string
+		want            bool
+	}{
+		{
+			name: "manifest hash matches",
+			state: portableStoreRefreshState{
+				MirrorHealthSourceSHA256: "ABC123",
+			},
+			sourceSHA256: "abc123",
+			want:         true,
+		},
+		{
+			name:  "manifest-less legacy store reuses cached health",
+			state: portableStoreRefreshState{},
+			want:  true,
+		},
+		{
+			name: "removed manifest invalidates prior manifest stamp",
+			state: portableStoreRefreshState{
+				MirrorHealthManifestModTime: "2026-07-20T00:00:00Z",
+				MirrorHealthManifestSize:    512,
+				MirrorHealthSourceSHA256:    "abc123",
+			},
+			want: false,
+		},
+		{
+			name: "hash mismatch overrides unchanged manifest metadata",
+			state: portableStoreRefreshState{
+				MirrorHealthManifestModTime: "2026-07-20T00:00:00Z",
+				MirrorHealthManifestSize:    512,
+				MirrorHealthSourceSHA256:    "old",
+			},
+			manifestModTime: "2026-07-20T00:00:00Z",
+			manifestSize:    512,
+			sourceSHA256:    "new",
+			want:            false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := portableManifestGenerationUnchanged(
+				test.state,
+				test.manifestModTime,
+				test.manifestSize,
+				test.sourceSHA256,
+			)
+			if got != test.want {
+				t.Fatalf("portableManifestGenerationUnchanged() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestManifestlessPortableMirrorReusesCachedOpenHealth(t *testing.T) {
+	dir := t.TempDir()
+	mirrorPath := filepath.Join(dir, "gitcrawl.db")
+	statePath := portableStoreRefreshStatePath(mirrorPath)
+	if err := os.WriteFile(mirrorPath, []byte("legacy portable mirror"), 0o600); err != nil {
+		t.Fatalf("write mirror: %v", err)
+	}
+	info, err := os.Stat(mirrorPath)
+	if err != nil {
+		t.Fatalf("stat mirror: %v", err)
+	}
+	if err := writePortableStoreRefreshState(statePath, portableStoreRefreshState{
+		MirrorHealthSize:    info.Size(),
+		MirrorHealthModTime: info.ModTime().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write cached health state: %v", err)
+	}
+
+	openHealthCalls := 0
+	fullHealthCalls := 0
+	err = sqliteStoreCachedHealthWithManifestChecks(
+		context.Background(),
+		mirrorPath,
+		filepath.Join(dir, "source.db"),
+		statePath,
+		"",
+		0,
+		"",
+		func(context.Context, string) error {
+			openHealthCalls++
+			return nil
+		},
+		func(context.Context, string) error {
+			fullHealthCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("cached health check: %v", err)
+	}
+	if openHealthCalls != 1 || fullHealthCalls != 0 {
+		t.Fatalf("health calls: open=%d full=%d, want open=1 full=0", openHealthCalls, fullHealthCalls)
+	}
+}
+
 func TestPortableRuntimeUtilityBranches(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source.db")
