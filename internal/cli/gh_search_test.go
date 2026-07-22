@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -180,6 +181,89 @@ func TestGHSearchSyncIfStaleHydratesCache(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"number": 501`) || !strings.Contains(stdout.String(), `"cache"`) {
 		t.Fatalf("search output = %q", stdout.String())
+	}
+}
+
+func TestGHSearchSyncIfStaleMigratesFreshPortableRuntime(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 1, "portable issue")
+	prunePortableTestStore(t, filepath.Join(remoteDir, dbRel))
+	if err := runGit(ctx, remoteDir, "add", dbRel, portableDBManifestPath(filepath.Join(remoteDir, dbRel))); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("clone portable store: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(checkoutDir, dbRel)}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/openclaw/openclaw":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "full_name": "openclaw/openclaw"})
+		case "/repos/openclaw/openclaw/issues":
+			_ = json.NewEncoder(w).Encode([]map[string]any{githubIssueJSON(501, "issue", "fresh portable runtime")})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
+
+	run := New()
+	var stdout, stderr bytes.Buffer
+	run.Stdout = &stdout
+	run.Stderr = &stderr
+	if err := run.Run(ctx, []string{"--config", configPath, "search", "issues", "portable", "-R", "openclaw/openclaw", "--sync-if-stale", "1s", "--json", "number,title"}); err != nil {
+		t.Fatalf("search with fresh portable runtime: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "no cached sync found") {
+		t.Fatalf("stderr missing first-sync note: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"number": 501`) {
+		t.Fatalf("search output = %q", stdout.String())
+	}
+	if !gitWorktreeClean(ctx, checkoutDir) {
+		t.Fatal("portable checkout should stay clean after live search")
+	}
+
+	verify := New()
+	verify.configPath = configPath
+	rt, err := verify.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		t.Fatalf("open migrated runtime: %v", err)
+	}
+	defer rt.Store.Close()
+	if rt.SourceDBPath == rt.Config.DBPath {
+		t.Fatalf("runtime db path should differ from portable source: %s", rt.Config.DBPath)
+	}
+	var schemaVersion int
+	if err := rt.Store.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read runtime schema version: %v", err)
+	}
+	if schemaVersion != 13 {
+		t.Fatalf("runtime schema version = %d, want 13", schemaVersion)
+	}
+	var tableName string
+	if err := rt.Store.DB().QueryRowContext(ctx, `select name from sqlite_schema where type = 'table' and name = 'sync_runs'`).Scan(&tableName); err != nil {
+		t.Fatalf("read migrated sync_runs table: %v", err)
 	}
 }
 

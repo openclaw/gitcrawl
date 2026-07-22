@@ -2,6 +2,14 @@
 
 ## 0.8.4 - Unreleased
 
+### Cached search
+
+- Treat portable runtime mirrors without pruned sync history as stale so `search issues|prs --sync-if-stale` can migrate and refresh them instead of failing on a missing `sync_runs` table.
+
+### Dependencies and maintenance
+
+- Update the current golden-test helpers, `golang.org/x/exp`, and `modernc.org/libc` patch release.
+
 ## 0.8.3 - 2026-07-20
 
 ### Highlights

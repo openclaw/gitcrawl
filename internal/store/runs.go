@@ -129,7 +129,7 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, repoID int64) (time.Ti
 
 func (s *Store) LastSuccessfulListSyncAt(ctx context.Context, repoID int64, state string) (time.Time, error) {
 	state = normalizedListSyncState(state)
-	if state == "" {
+	if state == "" || !s.hasColumns(ctx, "sync_runs", "repo_id", "scope", "status", "finished_at") {
 		return time.Time{}, nil
 	}
 	lastSync, err := s.qsql().LastSuccessfulListSyncAt(ctx, storedb.LastSuccessfulListSyncAtParams{
