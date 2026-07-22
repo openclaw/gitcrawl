@@ -272,7 +272,7 @@ func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath stri
 		}
 	}
 	if needsCopy && isRepairablePortableSource {
-		sourceHealthErr := validatePortableSQLiteFile(ctx, sourceDBPath, sourceDBPath)
+		sourceHealthErr := validatePortableSQLiteSourceFile(ctx, sourceDBPath, sourceDBPath)
 		if sourceHealthErr != nil && isPortableSourceRepairableHealthError(sourceHealthErr) {
 			repair, err := repairMalformedPortableStoreForDB(ctx, sourceDBPath, configPath)
 			recordPortableRepairState(statePath, repair, err)
@@ -284,14 +284,14 @@ func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath stri
 				}
 				return false, fmt.Errorf("repair malformed portable store db: %w", err)
 			}
-			sourceHealthErr = validatePortableSQLiteFile(ctx, sourceDBPath, sourceDBPath)
+			sourceHealthErr = validatePortableSQLiteSourceFile(ctx, sourceDBPath, sourceDBPath)
 			if sourceHealthErr != nil && isPortableSourceRepairableHealthError(sourceHealthErr) {
 				reclone, err := recloneMalformedPortableStoreForDB(ctx, sourceDBPath, configPath)
 				recordPortableRepairState(statePath, reclone, err)
 				if err != nil {
 					return false, fmt.Errorf("reclone malformed portable store db: %w", err)
 				}
-				sourceHealthErr = validatePortableSQLiteFile(ctx, sourceDBPath, sourceDBPath)
+				sourceHealthErr = validatePortableSQLiteSourceFile(ctx, sourceDBPath, sourceDBPath)
 			}
 		}
 		if sourceHealthErr != nil {
@@ -558,7 +558,15 @@ func portableDBManifestStamp(dbPath string) (string, int64, string, error) {
 }
 
 func sqliteStoreHealth(ctx context.Context, path string) error {
-	st, err := store.OpenReadOnly(ctx, path)
+	return sqliteStoreHealthWithOpen(ctx, path, store.OpenReadOnly)
+}
+
+func sqliteStoreImmutableHealth(ctx context.Context, path string) error {
+	return sqliteStoreHealthWithOpen(ctx, path, store.OpenReadOnlyImmutable)
+}
+
+func sqliteStoreHealthWithOpen(ctx context.Context, path string, open func(context.Context, string) (*store.Store, error)) error {
+	st, err := open(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -602,6 +610,13 @@ func portableDBManifestPath(dbPath string) string {
 
 func validatePortableSQLiteFile(ctx context.Context, dbPath, manifestDBPath string) error {
 	if err := sqliteStoreHealth(ctx, dbPath); err != nil {
+		return err
+	}
+	return validatePortableDBManifest(dbPath, portableDBManifestPath(manifestDBPath))
+}
+
+func validatePortableSQLiteSourceFile(ctx context.Context, dbPath, manifestDBPath string) error {
+	if err := sqliteStoreImmutableHealth(ctx, dbPath); err != nil {
 		return err
 	}
 	return validatePortableDBManifest(dbPath, portableDBManifestPath(manifestDBPath))

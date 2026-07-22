@@ -3681,6 +3681,93 @@ func TestWritableRuntimeUsesPortableMirror(t *testing.T) {
 	}
 }
 
+func TestDoctorLeavesCanonicalPortableStoreClean(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	checkoutDir := filepath.Join(dir, "checkout")
+	dbRel := filepath.Join("data", "openclaw__openclaw.sync.db")
+	remoteDB := filepath.Join(remoteDir, dbRel)
+	if err := os.MkdirAll(filepath.Dir(remoteDB), 0o755); err != nil {
+		t.Fatalf("mkdir remote data: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	seedPortableThread(t, remoteDB, 1, "portable issue")
+	prunePortableTestStore(t, remoteDB)
+	if err := runGit(ctx, remoteDir, "add", dbRel, portableDBManifestPath(remoteDB)); err != nil {
+		t.Fatalf("git add seed: %v", err)
+	}
+	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
+		t.Fatalf("git commit seed: %v", err)
+	}
+	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
+		t.Fatalf("clone portable store: %v", err)
+	}
+
+	checkoutDB := filepath.Join(checkoutDir, dbRel)
+	configPath := filepath.Join(dir, "config.toml")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", checkoutDB}); err != nil {
+		t.Fatalf("init config: %v", err)
+	}
+	if !gitWorktreeClean(ctx, checkoutDir) {
+		t.Fatal("portable checkout should start clean")
+	}
+
+	payload := runDoctorJSON(t, ctx, configPath)
+	if got := doctorMap(t, payload, "source_db_schema")["state"]; got != "current" {
+		t.Fatalf("source_db_schema.state = %#v, payload=%#v", got, payload)
+	}
+	if !gitWorktreeClean(ctx, checkoutDir) {
+		t.Fatal("doctor should leave the portable checkout clean")
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(checkoutDB + suffix); !os.IsNotExist(err) {
+			t.Fatalf("doctor left portable SQLite sidecar %s: %v", suffix, err)
+		}
+	}
+}
+
+func TestDoctorPortableProbeFailureDoesNotCreateSidecars(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "data", "gitcrawl.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Remove(dbPath + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove setup sidecar %s: %v", suffix, err)
+		}
+	}
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatalf("mkdir malformed git metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write malformed git head: %v", err)
+	}
+	configPath := writeDoctorTestConfig(t, dir, dbPath)
+
+	err = New().Run(ctx, []string{"--config", configPath, "doctor", "--json"})
+	if err == nil || !strings.Contains(err.Error(), "verify portable store candidate") {
+		t.Fatalf("doctor error = %v, want portable probe failure", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); !os.IsNotExist(err) {
+			t.Fatalf("doctor probe failure left SQLite sidecar %s: %v", suffix, err)
+		}
+	}
+}
+
 func TestDoctorRefreshesPortableStore(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

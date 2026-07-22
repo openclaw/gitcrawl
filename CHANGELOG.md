@@ -6,6 +6,10 @@
 
 - Treat portable runtime mirrors without pruned sync history as stale so `search issues|prs --sync-if-stale` can migrate and refresh them instead of failing on a missing `sync_runs` table.
 
+### Portable diagnostics
+
+- Keep `doctor --json` read-only for Git-backed portable stores by inspecting committed source databases as immutable SQLite files without leaving `-wal` or `-shm` sidecars in the checkout.
+
 ### Dependencies and maintenance
 
 - Update the current golden-test helpers, `golang.org/x/exp`, and `modernc.org/libc` patch release.

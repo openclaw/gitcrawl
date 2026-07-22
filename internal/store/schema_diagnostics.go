@@ -73,7 +73,18 @@ func inspectSchema(ctx context.Context, path string, portableSource bool) Schema
 	}
 	diag.Exists = true
 
-	base, err := crawlstore.OpenReadOnly(ctx, path)
+	openPath := path
+	if portableSource {
+		immutablePath, err := immutableSQLiteURI(path)
+		if err != nil {
+			diag.State = "error"
+			diag.Error = err.Error()
+			diag.NextSteps = []string{"Check the configured db_path before running write commands."}
+			return diag
+		}
+		openPath = immutablePath
+	}
+	base, err := crawlstore.OpenReadOnly(ctx, openPath)
 	if err != nil {
 		diag.State = "error"
 		diag.Error = err.Error()

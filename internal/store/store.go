@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -67,7 +71,26 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	base, err := crawlstore.OpenReadOnly(ctx, path)
+	return openReadOnly(ctx, path, path)
+}
+
+func OpenReadOnlyImmutable(ctx context.Context, path string) (*Store, error) {
+	resolvedPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sqlite db path: %w", err)
+	}
+	if _, err := os.Stat(resolvedPath); err != nil {
+		return nil, fmt.Errorf("stat sqlite db: %w", err)
+	}
+	openPath, err := immutableSQLiteURI(resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+	return openReadOnly(ctx, path, openPath)
+}
+
+func openReadOnly(ctx context.Context, path, openPath string) (*Store, error) {
+	base, err := crawlstore.OpenReadOnly(ctx, openPath)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +106,24 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("database schema version %d is newer than supported version %d", current, schemaVersion)
 	}
 	return st, nil
+}
+
+func immutableSQLiteURI(path string) (string, error) {
+	resolvedPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve sqlite db path: %w", err)
+	}
+	if runtime.GOOS == "windows" {
+		resolvedPath = filepath.ToSlash(resolvedPath)
+		if filepath.VolumeName(resolvedPath) != "" && !strings.HasPrefix(resolvedPath, "/") {
+			resolvedPath = "/" + resolvedPath
+		}
+	}
+	u := url.URL{Scheme: "file", Path: resolvedPath}
+	query := u.Query()
+	query.Set("immutable", "1")
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 func (s *Store) Close() error {

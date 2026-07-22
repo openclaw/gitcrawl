@@ -3812,8 +3812,15 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		return err
 	}
 	storeStatus := store.Status{DBPath: cfg.DBPath}
-	sourceHealth := sqliteDBHealth(ctx, cfg.DBPath, cfg.DBPath)
+	_, portableSource, portableProbeErr := portableStoreRoot(ctx, cfg.DBPath)
+	if portableProbeErr != nil {
+		return portableProbeErr
+	}
+	sourceHealth := sqliteDBHealth(ctx, cfg.DBPath, cfg.DBPath, portableSource)
 	sourceSchema := store.InspectSchema(ctx, cfg.DBPath)
+	if portableSource {
+		sourceSchema = store.InspectPortableSourceSchema(ctx, cfg.DBPath)
+	}
 	dbSchema := sourceSchema
 	runtimeHealth := map[string]any{}
 	var runtimeSchema store.SchemaDiagnostics
@@ -3837,12 +3844,10 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 	} else {
 		defer rt.Store.Close()
 		lockDBPath = rt.Config.DBPath
-		sourceHealth = sqliteDBHealth(ctx, rt.SourceDBPath, rt.SourceDBPath)
-		sourceSchema = store.InspectSchema(ctx, rt.SourceDBPath)
-		dbSchema = sourceSchema
+		sourceHealth = sqliteDBHealth(ctx, rt.SourceDBPath, rt.SourceDBPath, rt.RemoteSource)
 		if rt.RemoteSource {
 			sourceSchema = store.InspectPortableSourceSchema(ctx, rt.SourceDBPath)
-			runtimeHealth = sqliteDBHealth(ctx, rt.Config.DBPath, "")
+			runtimeHealth = sqliteDBHealth(ctx, rt.Config.DBPath, "", false)
 			runtimeSchema = store.InspectSchema(ctx, rt.Config.DBPath)
 			runtimeSchemaAvailable = true
 			dbSchema = runtimeSchema
@@ -3853,6 +3858,9 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 			if repairAction == "" {
 				repairAction = "none"
 			}
+		} else {
+			sourceSchema = store.InspectSchema(ctx, rt.SourceDBPath)
+			dbSchema = sourceSchema
 		}
 		storeStatus, err = rt.Store.Status(ctx)
 		if err != nil {
@@ -4001,7 +4009,7 @@ func (a *App) runRemoteDoctor(ctx context.Context, cfg config.Config, configExis
 	return a.writeOutput("doctor", payload, true)
 }
 
-func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[string]any {
+func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string, immutable bool) map[string]any {
 	result := map[string]any{
 		"path":   dbPath,
 		"exists": false,
@@ -4048,7 +4056,11 @@ func sqliteDBHealth(ctx context.Context, dbPath, manifestDBPath string) map[stri
 	} else {
 		result["manifest"] = "missing"
 	}
-	if err := validatePortableSQLiteFile(ctx, dbPath, manifestDBPath); err != nil {
+	validate := validatePortableSQLiteFile
+	if immutable {
+		validate = validatePortableSQLiteSourceFile
+	}
+	if err := validate(ctx, dbPath, manifestDBPath); err != nil {
 		result["health"] = "error"
 		result["error"] = err.Error()
 	} else {
