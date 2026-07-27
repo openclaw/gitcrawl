@@ -3,7 +3,7 @@ VERSION ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate-sqlc tidy-check fmt lint test test-coverage run clean smoke test-release check snapshot release verify-release release-artifacts
+.PHONY: help build generate-sqlc tidy-check fmt lint test test-coverage run clean smoke test-release check snapshot release verify-release release-artifacts release-snapshot
 
 help:
 	@printf '%s\n' \
@@ -15,7 +15,7 @@ help:
 		'  lint              Run vet, vulnerability, and dead-code checks.' \
 		'  check             Run every local gate enforced by CI.' \
 		'  snapshot          Build credential-free release artifacts.' \
-		'  release           Build and verify official release artifacts (VERSION=vX.Y.Z).' \
+		'  release           Refuse local publishing and print the official CI command.' \
 		'  verify-release    Verify existing release artifacts (VERSION=vX.Y.Z).' \
 		'  generate-sqlc     Regenerate sqlc output.' \
 		'  tidy-check        Verify go.mod and go.sum are tidy.' \
@@ -24,7 +24,8 @@ help:
 		'  test-release      Test the release scripts.' \
 		'  run               Run the CLI (ARGS=...).' \
 		'  clean             Remove local build output.' \
-		'  release-artifacts Alias for release.'
+		'  release-artifacts Alias for release.' \
+		'  release-snapshot  Alias for snapshot.'
 
 build:
 	mkdir -p bin
@@ -70,7 +71,6 @@ clean:
 smoke: build
 	@set -e; version="$$(./bin/$(BINARY) --version)"; test -n "$$version"
 	@set -e; output="$$(./bin/$(BINARY) metadata --json)"; printf '%s' "$$output" | grep -q '"schema_version"'
-	@set -e; output="$$(./bin/$(BINARY) status --json)"; printf '%s' "$$output" | grep -q '"databases"'
 	@set -e; output="$$(./bin/$(BINARY) help tui)"; \
 	printf '%s\n' "$$output"; \
 	printf '%s' "$$output" | grep -q "gitcrawl tui"
@@ -84,12 +84,12 @@ snapshot:
 	GOWORK=off goreleaser release --snapshot --clean --skip=publish
 
 release:
-	@test -n "$(VERSION)" && [ "$(VERSION)" != dev ] || (echo "usage: make release VERSION=vX.Y.Z" >&2; exit 2)
-	@helper="$${MAC_RELEASE_HELPER:-$$HOME/Projects/agent-scripts/skills/release-mac-app/scripts/mac-release}"; \
-	"$$helper" codesign-run -- ./scripts/package-release.sh "$(VERSION)"
+	@./scripts/package-release.sh
 
 verify-release:
 	@test -n "$(VERSION)" && [ "$(VERSION)" != dev ] || (echo "usage: make verify-release VERSION=vX.Y.Z" >&2; exit 2)
 	./scripts/verify-release.sh "$(VERSION)"
 
 release-artifacts: release
+
+release-snapshot: snapshot

@@ -2,6 +2,10 @@
 
 ## 0.8.8 - Unreleased
 
+### Maintenance
+
+- Move official releases to the shared signed, notarized, independently verified GitHub Actions pipeline while preserving archive names, contents, checksums, and Homebrew delivery.
+
 ## 0.8.7 - 2026-07-26
 
 ### Portable stores

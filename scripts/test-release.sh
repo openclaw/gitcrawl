@@ -87,16 +87,11 @@ EOF
 chmod 0755 "$test_binary"
 
 GITCRAWL_REQUIRE_CODESIGN=0 "$ROOT/scripts/codesign-macos.sh" "$test_binary"
-if CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
-  "$ROOT/scripts/package-release.sh" v0.7.1 >/dev/null 2>&1; then
-  echo "package script accepted personal signing identity" >&2
+if package_output=$("$ROOT/scripts/package-release.sh" 2>&1); then
+  echo "local package script unexpectedly succeeded" >&2
   exit 1
 fi
-if CODESIGN_IDENTITY="$EXPECTED_AUTHORITY" \
-  "$ROOT/scripts/package-release.sh" v0.7.1 >/dev/null 2>&1; then
-  echo "package script accepted a missing notary profile" >&2
-  exit 1
-fi
+grep -F 'gh workflow run release-unified.yml --repo openclaw/gitcrawl -f version=X.Y.Z' <<<"$package_output" >/dev/null
 if GITCRAWL_REQUIRE_CODESIGN=1 \
   CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
   "$ROOT/scripts/codesign-macos.sh" "$test_binary" >/dev/null 2>&1; then
@@ -174,26 +169,15 @@ if "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" >/dev/null 2>&1; then
   exit 1
 fi
 
-release_workflow="$ROOT/.github/workflows/release-assets.yml"
-grep -F 'contents: write' "$release_workflow" >/dev/null
-grep -F "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" "$release_workflow" >/dev/null
-grep -F "endsWith(github.workflow_ref, format('@refs/heads/{0}', github.event.repository.default_branch))" "$release_workflow" >/dev/null
-grep -F "github.event_name == 'release' && github.event.action == 'published'" "$release_workflow" >/dev/null
-# shellcheck disable=SC2016 # GitHub expression must remain literal.
-grep -F 'ref: ${{ github.event.repository.default_branch }}' "$release_workflow" >/dev/null
-grep -F 'persist-credentials: false' "$release_workflow" >/dev/null
-# shellcheck disable=SC2016 # GitHub expression must remain literal.
-[[ "$(grep -F -c 'GH_TOKEN: ${{ github.token }}' "$release_workflow")" == 1 ]]
-# shellcheck disable=SC2016 # jq expression must remain literal.
-grep -F 'tag_name == $tag and (.draft == ($draft == "true"))' "$release_workflow" >/dev/null
-grep -F 'Accept: application/octet-stream' "$release_workflow" >/dev/null
-grep -F 'unset GH_TOKEN GITHUB_TOKEN' "$release_workflow" >/dev/null
+release_workflow="$ROOT/.github/workflows/release-unified.yml"
+grep -F 'uses: openclaw/release-workflows/.github/workflows/release-go-cli.yml@v1' "$release_workflow" >/dev/null
+grep -F 'checksum-filename: checksums.txt' "$release_workflow" >/dev/null
+grep -F 'archive-files: '\''["CHANGELOG.md","LICENSE","README.md"]'\''' "$release_workflow" >/dev/null
+grep -F 'stable-identifier: org.openclaw.gitcrawl' "$release_workflow" >/dev/null
+grep -F 'require-signed-tag: true' "$release_workflow" >/dev/null
+grep -F 'darwin-universal: disabled' "$release_workflow" >/dev/null
 if grep -R -F 'NOTARYTOOL_KEYCHAIN_PROFILE' "$ROOT/.github/workflows" >/dev/null; then
   echo "notary profile must not be configured in GitHub Actions" >&2
-  exit 1
-fi
-if grep -F 'gh release download' "$release_workflow" >/dev/null; then
-  echo "release workflow cannot resolve draft assets through gh release download" >&2
   exit 1
 fi
 
