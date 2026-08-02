@@ -81,7 +81,13 @@ func TestPollRemoteLoginStates(t *testing.T) {
 			t.Fatalf("poll login: %v", err)
 		}
 		if result.Token != "session-token" || polls != 2 {
-			t.Fatalf("result=%#v polls=%d", result, polls)
+			t.Fatalf(
+				"poll result mismatch: status=%q token_present=%t token_length=%d polls=%d",
+				result.Status,
+				result.Token != "",
+				len(result.Token),
+				polls,
+			)
 		}
 	})
 
@@ -154,10 +160,10 @@ func TestSendIngestRowsBatchesAndFinalizes(t *testing.T) {
 		t.Fatalf("requests len = %d", len(requests))
 	}
 	if requests[0].Cursor != "" || requests[0].Final || len(requests[0].Rows) != gitcrawlCloudBatchSize {
-		t.Fatalf("first request = %#v", requests[0])
+		t.Fatalf("first request mismatch: cursor=%q final=%t rows=%d", requests[0].Cursor, requests[0].Final, len(requests[0].Rows))
 	}
 	if requests[1].Cursor != "250" || !requests[1].Final || len(requests[1].Rows) != 1 {
-		t.Fatalf("second request = %#v", requests[1])
+		t.Fatalf("second request mismatch: cursor=%q final=%t rows=%d", requests[1].Cursor, requests[1].Final, len(requests[1].Rows))
 	}
 }
 
@@ -207,16 +213,16 @@ func TestSendSnapshotIngestRowsRotatesMutationTokens(t *testing.T) {
 		t.Fatalf("send snapshot ingest: %v", err)
 	}
 	if progress.RowsAccepted != int64(len(rows)) || progress.MutationToken != "generation-2" {
-		t.Fatalf("progress = %#v", progress)
+		t.Fatalf("progress mismatch: rows_accepted=%d mutation_token_present=%t mutation_token_length=%d", progress.RowsAccepted, progress.MutationToken != "", len(progress.MutationToken))
 	}
 	if len(requests) != 2 {
-		t.Fatalf("requests = %#v", requests)
+		t.Fatalf("requests length = %d, want 2", len(requests))
 	}
 	if requests[0].Cursor != "" || requests[0].MutationToken != "previous-dataset" {
-		t.Fatalf("first request = %#v", requests[0])
+		t.Fatalf("first request mismatch: cursor=%q mutation_token_present=%t mutation_token_length=%d", requests[0].Cursor, requests[0].MutationToken != "", len(requests[0].MutationToken))
 	}
 	if requests[1].Cursor != "250" || requests[1].MutationToken != "generation-1" || !requests[1].Final {
-		t.Fatalf("second request = %#v", requests[1])
+		t.Fatalf("second request mismatch: cursor=%q final=%t mutation_token_present=%t mutation_token_length=%d", requests[1].Cursor, requests[1].Final, requests[1].MutationToken != "", len(requests[1].MutationToken))
 	}
 }
 
@@ -287,17 +293,20 @@ func TestSendIngestRowsDrainsRemoteResetBeforeRetry(t *testing.T) {
 		t.Fatalf("send ingest: %v", err)
 	}
 	if progress.RowsAccepted != 1 || progress.MutationToken != "generation-current" {
-		t.Fatalf("progress = %#v", progress)
+		t.Fatalf("progress mismatch: rows_accepted=%d mutation_token_present=%t mutation_token_length=%d", progress.RowsAccepted, progress.MutationToken != "", len(progress.MutationToken))
 	}
 	if resetCalls != 2 {
 		t.Fatalf("resetCalls = %d", resetCalls)
 	}
-	if len(requests) != 1 || requests[0].Cursor != "" || !requests[0].Final {
-		t.Fatalf("data requests = %#v", requests)
+	if len(requests) != 1 {
+		t.Fatalf("data requests length = %d, want 1", len(requests))
+	}
+	if requests[0].Cursor != "" || !requests[0].Final {
+		t.Fatalf("data request mismatch: cursor=%q final=%t", requests[0].Cursor, requests[0].Final)
 	}
 	for index, request := range drainRequests {
 		if request.MutationToken != "generation-current" {
-			t.Fatalf("drain request %d mutation token = %q", index, request.MutationToken)
+			t.Fatalf("drain request %d mutation token mismatch: present=%t length=%d", index, request.MutationToken != "", len(request.MutationToken))
 		}
 	}
 }

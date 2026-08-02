@@ -40,7 +40,7 @@ func TestRemoteTokenResolutionWithKeyring(t *testing.T) {
 		t.Fatalf("resolve env token: %v", err)
 	}
 	if resolved.Value != "env-session" || resolved.Source != "GITCRAWL_TEST_REMOTE_TOKEN" {
-		t.Fatalf("env token = %#v", resolved)
+		t.Fatalf("env token mismatch: source=%q value_present=%t value_length=%d", resolved.Source, resolved.Value != "", len(resolved.Value))
 	}
 
 	t.Setenv("GITCRAWL_TEST_REMOTE_TOKEN", "")
@@ -57,7 +57,7 @@ func TestRemoteTokenResolutionWithKeyring(t *testing.T) {
 		t.Fatalf("resolve keyring token: %v", err)
 	}
 	if resolved.Value != "keyring-session" || resolved.Source != "keyring" {
-		t.Fatalf("keyring token = %#v", resolved)
+		t.Fatalf("keyring token mismatch: source=%q value_present=%t value_length=%d", resolved.Source, resolved.Value != "", len(resolved.Value))
 	}
 
 	cfg.Remote.Auth.TokenSource = "none"

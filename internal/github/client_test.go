@@ -27,8 +27,8 @@ func writeRateLimits(t *testing.T, w http.ResponseWriter, resetAt time.Time, cor
 
 func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer token" {
-			t.Fatalf("missing auth header: %q", r.Header.Get("Authorization"))
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("auth header mismatch: present=%t length=%d", got != "", len(got))
 		}
 		switch r.URL.Query().Get("page") {
 		case "":

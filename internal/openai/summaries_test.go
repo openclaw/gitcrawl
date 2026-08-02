@@ -18,7 +18,7 @@ func TestSummarizeUsesResponsesOutputText(t *testing.T) {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
-			t.Fatalf("authorization = %q", got)
+			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
 		}
 		var request summaryRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {

@@ -16,7 +16,11 @@ func (a *App) resolveGitHubToken(ctx context.Context, cfg config.Config) config.
 	if token.Value != "" {
 		return token
 	}
-	if value, err := a.githubAuthToken(ctx); err == nil && value != "" {
+	lookup := a.githubAuthToken
+	if a.githubAuthTokenLookup != nil {
+		lookup = a.githubAuthTokenLookup
+	}
+	if value, err := lookup(ctx); err == nil && value != "" {
 		return config.TokenResolution{Value: value, Source: "gh auth token"}
 	}
 	return token

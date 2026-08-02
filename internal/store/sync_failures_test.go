@@ -402,6 +402,6 @@ func assertPortableFileDoesNotContain(t *testing.T, path, value string) {
 		t.Fatalf("read portable database bytes: %v", err)
 	}
 	if bytes.Contains(data, []byte(value)) {
-		t.Fatalf("portable database retains scrubbed value %q", value)
+		t.Fatal("portable database retains a scrubbed credential value")
 	}
 }

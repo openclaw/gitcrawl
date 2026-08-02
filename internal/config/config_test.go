@@ -319,10 +319,10 @@ func TestResolveTokens(t *testing.T) {
 
 	cfg := Default()
 	if got := ResolveGitHubToken(cfg); got.Value != "ghp_test" || got.Source != "GITHUB_TOKEN" {
-		t.Fatalf("github token resolution mismatch: %#v", got)
+		t.Fatalf("github token resolution mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 	if got := ResolveOpenAIKey(cfg); got.Value != "sk_test" || got.Source != "OPENAI_API_KEY" {
-		t.Fatalf("openai key resolution mismatch: %#v", got)
+		t.Fatalf("openai key resolution mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 
 	t.Setenv("GITHUB_TOKEN", "")
@@ -332,19 +332,19 @@ func TestResolveTokens(t *testing.T) {
 	t.Setenv("CUSTOM_GITHUB_TOKEN", "custom-gh")
 	t.Setenv("CUSTOM_OPENAI_KEY", "custom-openai")
 	if got := ResolveGitHubToken(cfg); got.Value != "custom-gh" || got.Source != "CUSTOM_GITHUB_TOKEN" {
-		t.Fatalf("custom github token mismatch: %#v", got)
+		t.Fatalf("custom github token mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 	if got := ResolveOpenAIKey(cfg); got.Value != "custom-openai" || got.Source != "CUSTOM_OPENAI_KEY" {
-		t.Fatalf("custom openai key mismatch: %#v", got)
+		t.Fatalf("custom openai key mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 
 	t.Setenv("CUSTOM_GITHUB_TOKEN", "")
 	t.Setenv("CUSTOM_OPENAI_KEY", "")
 	if got := ResolveGitHubToken(cfg); got.Value != "" || got.Source != "" {
-		t.Fatalf("empty github token mismatch: %#v", got)
+		t.Fatalf("empty github token mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 	if got := ResolveOpenAIKey(cfg); got.Value != "" || got.Source != "" {
-		t.Fatalf("empty openai key mismatch: %#v", got)
+		t.Fatalf("empty openai key mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 }
 
@@ -358,15 +358,15 @@ func TestResolveTokensFromConfigEnv(t *testing.T) {
 		"OPENAI_API_KEY": "config-openai",
 	}
 	if got := ResolveGitHubToken(cfg); got.Value != "config-gh" || got.Source != "config.toml [env].GITHUB_TOKEN" {
-		t.Fatalf("github token config env mismatch: %#v", got)
+		t.Fatalf("github token config env mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 	if got := ResolveOpenAIKey(cfg); got.Value != "config-openai" || got.Source != "config.toml [env].OPENAI_API_KEY" {
-		t.Fatalf("openai key config env mismatch: %#v", got)
+		t.Fatalf("openai key config env mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 
 	t.Setenv("GITHUB_TOKEN", "process-gh")
 	if got := ResolveGitHubToken(cfg); got.Value != "process-gh" || got.Source != "GITHUB_TOKEN" {
-		t.Fatalf("process env should win: %#v", got)
+		t.Fatalf("process env should win: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 }
 
@@ -384,15 +384,15 @@ func TestResolveTokensFromCustomConfigEnv(t *testing.T) {
 		"OPENAI_API_KEY":      "ignored-default-openai",
 	}
 	if got := ResolveGitHubToken(cfg); got.Value != "config-custom-gh" || got.Source != "config.toml [env].CUSTOM_GITHUB_TOKEN" {
-		t.Fatalf("custom github token config env mismatch: %#v", got)
+		t.Fatalf("custom github token config env mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 	if got := ResolveOpenAIKey(cfg); got.Value != "config-custom-openai" || got.Source != "config.toml [env].CUSTOM_OPENAI_KEY" {
-		t.Fatalf("custom openai key config env mismatch: %#v", got)
+		t.Fatalf("custom openai key config env mismatch: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 
 	cfg.Env["CUSTOM_GITHUB_TOKEN"] = "   "
 	if got := ResolveGitHubToken(cfg); got.Value != "" || got.Source != "" {
-		t.Fatalf("empty config env should be ignored: %#v", got)
+		t.Fatalf("empty config env should be ignored: source=%q value_present=%t value_length=%d", got.Source, got.Value != "", len(got.Value))
 	}
 }
 

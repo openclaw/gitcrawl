@@ -13,35 +13,31 @@ import (
 )
 
 func TestResolveGitHubTokenFallsBackToGHAuthToken(t *testing.T) {
-	dir := t.TempDir()
-	ghPath := filepath.Join(dir, "gh")
-	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then echo gh-fallback-token; exit 0; fi\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
 	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("GITCRAWL_GH_PATH", ghPath)
 
-	token := New().resolveGitHubToken(context.Background(), config.Default())
+	app := New()
+	app.githubAuthTokenLookup = func(context.Context) (string, error) {
+		return "gh-fallback-token", nil
+	}
+	token := app.resolveGitHubToken(context.Background(), config.Default())
 	if token.Value != "gh-fallback-token" || token.Source != "gh auth token" {
-		t.Fatalf("token = %#v", token)
+		t.Fatalf("token mismatch: source=%q value_present=%t value_length=%d", token.Source, token.Value != "", len(token.Value))
 	}
 }
 
 func TestDoctorReportsGHAuthTokenFallback(t *testing.T) {
 	dir := t.TempDir()
-	ghPath := filepath.Join(dir, "gh")
-	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then echo gh-fallback-token; exit 0; fi\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
 	configPath := filepath.Join(dir, "config.toml")
 	dbPath := filepath.Join(dir, "gitcrawl.db")
 	if err := os.WriteFile(configPath, []byte("version = 1\ndb_path = "+strconv.Quote(dbPath)+"\n[github]\ntoken_env = 'GITHUB_TOKEN'\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("GITCRAWL_GH_PATH", ghPath)
 
 	doctor := New()
+	doctor.githubAuthTokenLookup = func(context.Context) (string, error) {
+		return "gh-fallback-token", nil
+	}
 	var stdout bytes.Buffer
 	doctor.Stdout = &stdout
 	if err := doctor.Run(context.Background(), []string{"--config", configPath, "doctor", "--json"}); err != nil {
@@ -49,12 +45,12 @@ func TestDoctorReportsGHAuthTokenFallback(t *testing.T) {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("parse doctor json: %v\n%s", err, stdout.String())
+		t.Fatalf("parse doctor json: %v (output_bytes=%d)", err, stdout.Len())
 	}
 	if got := payload["github_token_present"]; got != true {
-		t.Fatalf("github_token_present = %#v, payload=%s", got, stdout.String())
+		t.Fatalf("github_token_present = %#v", got)
 	}
 	if got := payload["github_token_source"]; got != "gh auth token" {
-		t.Fatalf("github_token_source = %#v, payload=%s", got, stdout.String())
+		t.Fatalf("github_token_source = %#v", got)
 	}
 }

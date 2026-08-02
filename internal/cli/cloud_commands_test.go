@@ -162,7 +162,7 @@ func TestSendSnapshotIngestDatasetStreamsBoundedBatches(t *testing.T) {
 		t.Fatalf("stream dataset: %v", err)
 	}
 	if progress.RowsAccepted != 501 || progress.MutationToken != "mutation-3" {
-		t.Fatalf("progress = %#v", progress)
+		t.Fatalf("progress mismatch: rows_accepted=%d mutation_token_present=%t mutation_token_length=%d", progress.RowsAccepted, progress.MutationToken != "", len(progress.MutationToken))
 	}
 	if len(requests) != 3 {
 		t.Fatalf("requests = %d, want 3", len(requests))
@@ -253,7 +253,7 @@ func TestSendSnapshotIngestDatasetFlushesBeforeEncodedByteLimit(t *testing.T) {
 		t.Fatalf("stream byte-bounded dataset: %v", err)
 	}
 	if progress.RowsAccepted != 3 || progress.MutationToken != "mutation-3" {
-		t.Fatalf("progress = %#v", progress)
+		t.Fatalf("progress mismatch: rows_accepted=%d mutation_token_present=%t mutation_token_length=%d", progress.RowsAccepted, progress.MutationToken != "", len(progress.MutationToken))
 	}
 	if len(requests) != 3 {
 		t.Fatalf("requests = %d, want one per large row", len(requests))
@@ -331,7 +331,7 @@ func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
 		t.Fatalf("send byte-bounded rows: %v", err)
 	}
 	if progress.RowsAccepted != 3 || progress.MutationToken != "mutation-3" {
-		t.Fatalf("progress = %#v", progress)
+		t.Fatalf("progress mismatch: rows_accepted=%d mutation_token_present=%t mutation_token_length=%d", progress.RowsAccepted, progress.MutationToken != "", len(progress.MutationToken))
 	}
 	if len(requests) != 3 {
 		t.Fatalf("requests = %d, want one per large row", len(requests))

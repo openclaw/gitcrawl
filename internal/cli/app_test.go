@@ -2140,7 +2140,12 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 			stagedDatasetGeneratedAt = result.DatasetGeneratedAt
 			if stagedDatasetGeneratedAt != concurrentDatasetGeneratedAt ||
 				result.MutationToken != "" {
-				t.Fatalf("stage-only did not bind its generation: %#v", result)
+				t.Fatalf(
+					"stage-only generation mismatch: generation_matches=%t mutation_token_present=%t mutation_token_length=%d",
+					stagedDatasetGeneratedAt == concurrentDatasetGeneratedAt,
+					result.MutationToken != "",
+					len(result.MutationToken),
+				)
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
@@ -2161,7 +2166,7 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				)
 			}
 			if result.MutationToken != "" {
-				t.Fatalf("resumed publish minted mutation token %q", result.MutationToken)
+				t.Fatalf("resumed publish minted mutation token: length=%d", len(result.MutationToken))
 			}
 		}
 	}
@@ -2389,7 +2394,13 @@ func TestRemoteLoginStoresKeyringToken(t *testing.T) {
 		t.Fatalf("remote login: %v", err)
 	}
 	if pollSecretHash == "" || pollSecret == "" || crawlremote.LoginPollSecretHash(pollSecret) != pollSecretHash {
-		t.Fatalf("poll secret/hash not linked: secret=%q hash=%q", pollSecret, pollSecretHash)
+		t.Fatalf(
+			"poll secret/hash not linked: secret_present=%t secret_length=%d hash_present=%t hash_length=%d",
+			pollSecret != "",
+			len(pollSecret),
+			pollSecretHash != "",
+			len(pollSecretHash),
+		)
 	}
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -2403,7 +2414,7 @@ func TestRemoteLoginStoresKeyringToken(t *testing.T) {
 		t.Fatalf("keyring get: %v", err)
 	}
 	if stored != "session-token" {
-		t.Fatalf("stored token = %q", stored)
+		t.Fatalf("stored token mismatch: present=%t length=%d", stored != "", len(stored))
 	}
 
 	whoami := New()
@@ -2461,7 +2472,7 @@ func TestRemoteLoginWithGitHubTokenEnvStoresKeyringToken(t *testing.T) {
 		t.Fatalf("remote login: %v", err)
 	}
 	if sawToken != "github-token" {
-		t.Fatalf("github token = %q", sawToken)
+		t.Fatalf("github token mismatch: present=%t length=%d", sawToken != "", len(sawToken))
 	}
 	if !strings.Contains(out.String(), `"login_method": "github-token"`) {
 		t.Fatalf("login output = %s", out.String())
@@ -2475,7 +2486,7 @@ func TestRemoteLoginWithGitHubTokenEnvStoresKeyringToken(t *testing.T) {
 		t.Fatalf("keyring get: %v", err)
 	}
 	if stored != "session-token" {
-		t.Fatalf("stored token = %q", stored)
+		t.Fatalf("stored token mismatch: present=%t length=%d", stored != "", len(stored))
 	}
 
 	whoami := New()
@@ -2995,7 +3006,7 @@ func TestSameGitRemoteIgnoresHTTPSCredentials(t *testing.T) {
 func TestGitRemoteForMessageRedactsURLCredentials(t *testing.T) {
 	got := gitRemoteForMessage("https://user:secret@example.com/org/store.git")
 	if strings.Contains(got, "user") || strings.Contains(got, "secret") {
-		t.Fatalf("remote message leaked credentials: %q", got)
+		t.Fatal("remote message leaked credentials")
 	}
 	if got != "https://example.com/org/store.git" {
 		t.Fatalf("remote message = %q, want sanitized URL", got)
@@ -5840,7 +5851,7 @@ func TestCommandFlowCoversSearchEmbedNeighborsClusterDetailRunsAndRefresh(t *tes
 			t.Fatalf("unexpected OpenAI path: %s", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-openai-key" {
-			t.Fatalf("authorization = %q", got)
+			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
 		}
 		var payload struct {
 			Input []string `json:"input"`
@@ -6289,7 +6300,7 @@ func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
-			t.Fatalf("authorization = %q", got)
+			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
 		}
 		switch r.URL.Path {
 		case "/repos/openclaw/openclaw":
@@ -6459,7 +6470,7 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
-			t.Fatalf("authorization = %q", got)
+			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
 		}
 		w.Header().Set("X-RateLimit-Limit", "5000")
 		w.Header().Set("X-RateLimit-Remaining", "4990")
@@ -6710,7 +6721,7 @@ func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.
 	var coreCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
-			t.Fatalf("authorization = %q", got)
+			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
 		}
 		if r.URL.Path == "/rate_limit" {
 			remaining := 12 - int(rateStatusCalls.Add(1))

@@ -66,10 +66,11 @@ type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	configPath          string
-	format              OutputFormat
-	getWorkingDirectory func() (string, error)
-	dbTargetNoticeOnce  sync.Once
+	configPath            string
+	format                OutputFormat
+	getWorkingDirectory   func() (string, error)
+	githubAuthTokenLookup func(context.Context) (string, error)
+	dbTargetNoticeOnce    sync.Once
 }
 
 type initResult struct {
