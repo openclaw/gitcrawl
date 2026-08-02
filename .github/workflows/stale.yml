@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "21 4 * * *"
   workflow_dispatch:
+    inputs:
+      debug_only:
+        description: Log stale decisions without mutating issues or pull requests
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -17,6 +23,7 @@ jobs:
       - name: Mark stale unassigned issues and pull requests
         uses: actions/stale@v11
         with:
+          debug-only: ${{ inputs.debug_only || false }}
           days-before-issue-stale: 14
           days-before-issue-close: 7
           days-before-pr-stale: 14
@@ -46,6 +53,7 @@ jobs:
       - name: Mark stale assigned issues
         uses: actions/stale@v11
         with:
+          debug-only: ${{ inputs.debug_only || false }}
           days-before-issue-stale: 30
           days-before-issue-close: 10
           days-before-pr-stale: -1
@@ -67,6 +75,7 @@ jobs:
       - name: Mark stale assigned pull requests
         uses: actions/stale@v11
         with:
+          debug-only: ${{ inputs.debug_only || false }}
           days-before-issue-stale: -1
           days-before-issue-close: -1
           days-before-pr-stale: 27
