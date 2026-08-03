@@ -4,7 +4,7 @@
 
 ### Maintenance
 
-- Rewrite the README around the local-first quickstart and move the cloud archive contract into the documentation.
+- Rewrite the README around the local-first quickstart and move deeper cloud archive and Docker material into the documentation.
 - Update `actions/stale` to v11 and expose its debug-only mode for safe manual policy validation.
 - Accept the shared release workflow's leading `./` archive-member notation in local release verification.
 
