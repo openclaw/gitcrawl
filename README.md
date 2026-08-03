@@ -1,183 +1,84 @@
-# gitcrawl
+# gitcrawl 🕷️ — Pull GitHub down to earth
 
-<img width="1797" height="1096" alt="Screenshot 2026-04-30 at 00 45 36" src="https://github.com/user-attachments/assets/54a0a6cf-5862-451d-9552-5d18656976ff" />
+[![CI](https://img.shields.io/github/actions/workflow/status/openclaw/gitcrawl/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/openclaw/gitcrawl/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/openclaw/gitcrawl?style=flat-square)](https://github.com/openclaw/gitcrawl/releases/latest)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-64748b?style=flat-square)](https://github.com/openclaw/gitcrawl/releases/latest)
+[![License](https://img.shields.io/github/license/openclaw/gitcrawl?style=flat-square)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-gitcrawl.sh-2563eb?style=flat-square)](https://gitcrawl.sh)
 
-`gitcrawl` is a local-first GitHub issue and pull request crawler for maintainer triage. Data stays local in SQLite. The primary runtime surfaces are the CLI, JSON command output, and the terminal UI. There is no local HTTP API.
+`gitcrawl` mirrors GitHub issues and pull requests into local SQLite for maintainers and agents. It provides local search, related-thread clustering, JSON output, and a terminal interface without running a local HTTP service.
 
-Full documentation: [gitcrawl.sh](https://gitcrawl.sh)
-
-Maintainer first-run workflow: [docs/maintainer-archive.md](docs/maintainer-archive.md)
-
-## Status
-
-Early bootstrap. The implementation is being built in small commits.
-
-## Commands
-
-```bash
-gitcrawl init
-gitcrawl doctor
-gitcrawl doctor --locks --json
-gitcrawl metadata --json
-gitcrawl status --json
-gitcrawl init --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw
-gitcrawl remote login --endpoint https://crawl.openclaw.ai --json
-gitcrawl remote status --json
-gitcrawl remote archives --json
-gitcrawl whoami --json
-gitcrawl cloud publish --remote https://crawl.openclaw.ai --archive gitcrawl/openclaw__openclaw --json
-gitcrawl sync owner/repo
-gitcrawl sync owner/repo --state open
-gitcrawl sync owner/repo --state all --include-comments
-gitcrawl capture owner/repo --output capture.json
-gitcrawl sync owner/repo --numbers 123,456 --include-comments
-gitcrawl sync owner/repo --numbers https://github.com/owner/repo/issues/123 --with pr-details
-gitcrawl coverage --repos owner/repo,owner/other --min-missing-pr-details 1 --json
-gitcrawl refresh owner/repo
-gitcrawl cluster owner/repo --threshold 0.80
-gitcrawl clusters owner/repo
-gitcrawl clusters-report owner/repo --limit 10 --min-size 5
-gitcrawl durable-clusters owner/repo
-gitcrawl cluster-detail owner/repo --id 123
-gitcrawl cluster-explain owner/repo --id 123
-gitcrawl close-thread owner/repo --number 123 --reason "duplicate handled"
-gitcrawl close-thread owner/repo --number https://github.com/owner/repo/issues/123 --reason "handled"
-gitcrawl reopen-thread owner/repo --number 123
-gitcrawl close-cluster owner/repo --id 123 --reason "handled"
-gitcrawl reopen-cluster owner/repo --id 123
-gitcrawl exclude-cluster-member owner/repo --id 123 --number 456 --reason "not the same bug"
-gitcrawl include-cluster-member owner/repo --id 123 --number 456
-gitcrawl set-cluster-canonical owner/repo --id 123 --number 456
-gitcrawl neighbors owner/repo --number 123 --limit 10
-gitcrawl neighbors owner/repo --number https://github.com/owner/repo/pull/456 --limit 10
-gitcrawl search owner/repo --query "download stalls"
-gitcrawl search issues "download stalls" -R owner/repo --state open --json number,title,state,url,updatedAt,labels --limit 30
-gitcrawl search prs "manifest cache" -R owner/repo --state open --json number,title,state,url,updatedAt,isDraft,author --limit 20
-gitcrawl search issues "hot loop" -R owner/repo --state open --sync-if-stale 5m --json number,title,url
-gitcrawl code index owner/repo --path /path/to/checkout
-gitcrawl search owner/repo --query "manifest cache" --scope all --json
-gitcrawl sync owner/repo --numbers 123 --with pr-details
-octopool login
-octopool gh api repos/openclaw/openclaw/pulls/123 --jq .number
-gitcrawl tui
-gitcrawl tui owner/repo
-```
-
-`gitcrawl clusters` and `gitcrawl tui` match ghcrawl's display view: latest raw run clusters first, closed durable rows merged as historical context, sorted by size by default. Pass `--hide-closed` to focus only currently open clusters. `gitcrawl durable-clusters` stays on governed durable rows and needs `--include-closed` for inactive rows.
-`gitcrawl metadata --json`, `gitcrawl status --json`, and `gitcrawl doctor --json` are crawlkit control surfaces for launchers, local automation, and CI checks. They are read-only and do not mutate archive data.
-`gitcrawl init --remote ... --archive ...` configures a Worker-fronted cloud archive. In `cloud` mode, supported read commands such as `status` and `search owner/repo --query ...` call the remote archive and do not create a local SQLite database. Existing local and Git-backed portable-store workflows remain unchanged.
-The remote service is deployed separately from gitcrawl in `openclaw/crawl-remote` with Wrangler. gitcrawl only stores the Worker endpoint/archive in config and calls that service.
-`gitcrawl remote login` starts the Worker GitHub OAuth flow, verifies org/team membership server-side, and stores the signed bearer token in the OS keyring.
-Use `gitcrawl remote login --github-token-env GITHUB_TOKEN` for non-browser bootstrap; the Worker verifies that GitHub token against the same org/team policy and stores only the returned remote session token locally.
-`gitcrawl cloud publish` freezes and sanitizes one local SQLite image, uses its
-SHA-256 as the snapshot identity, exports repositories, threads, revisions,
-fingerprints, summaries, durable clusters, and PR detail/file rows from that
-same image, negotiates the remote snapshot-provenance contract before touching
-R2, uploads its digest-scoped bundle, and completes staged D1 coverage through
-row- and encoded-byte-bounded ingest requests.
-The cloud SQLite image preserves full canonical issue and pull-request bodies,
-comments, revisions, review comments, and PR patch text. Gzip is lossless
-transport, not portable-store compaction. Bundle privacy metadata declares both
-message bodies and source code because patch text is retained. Publication still
-removes raw API payloads, blob-backed payloads, local run diagnostics, source
-code indexes, and machine-local paths; those are not part of the shared archive
-contract.
-Publishing moves unpinned reads to the complete snapshot by default, preserving
-the existing reader-refresh behavior. The remote must advertise
-`gitcrawl.snapshot.staging.v1`; `--stage-only` keeps the immutable snapshot
-staged without changing serving state. A later publish verifies the
-candidate through the publisher-only status projection, skips repeated ingest
-when its digest, source sync, schema, resolved publication profile, persisted
-generation timestamp, and coverage match, then cuts it over. Cutover requires
-the remote contract to advertise reader-authenticated `GET /sqlite`; Gitcrawl
-validates the cutover acknowledgement, retries the scoped reader projection
-until its digest, profile, generation, and dataset coverage are exact, rechecks
-the exact publisher metadata, and hashes the downloaded bound SQLite image
-before reporting success. Before any upload or ingest, Gitcrawl verifies
-the configured credential through the advertised `/v1/whoami` route and
-requires both publisher and reader roles, including for stage-only publication.
-Incomplete local enrichment fails before any remote mutation;
-`--allow-incomplete` is an explicit escape hatch, and `--observation-order`
-publishes durable fetch ordering after the remote operator fence is enabled.
-Digest-scoped SQLite bundles can contain private issue and pull-request text.
-Gitcrawl intentionally exposes no remote deletion command: operators must only
-enable publication against a remote deployment with bounded lifecycle rules for
-failed, superseded, and uncut staged bundles. `--stage-only` does not transfer
-that retention responsibility back to the client.
-`gitcrawl clusters-report` writes a Markdown report for the top clusters using the same display view, with an at-a-glance table, per-cluster metadata, member tables, and key snippets. Use `--json` for the hydrated report payload.
-`gitcrawl cluster` and `gitcrawl refresh` build ghcrawl-shaped durable clusters by default (`--threshold 0.80`, `--min-size 1`, `--max-cluster-size 40`, `--k 16`, `--cross-kind-threshold 0.93`): every active vector-backed thread is represented, singleton rows use `singleton_orphan`, multi-member rows use `duplicate_candidate`, and stable IDs are derived from the representative thread. They also add deterministic GitHub reference evidence for direct issue/PR links such as `#123`, `issues/123`, and `pull/123`. Weak embedding edges need concrete title-token overlap unless their similarity is already high, which keeps generic low-confidence bridges from forming unrelated clusters.
-`gitcrawl tui` infers the most recently updated local repository when `owner/repo` is omitted. `serve` is intentionally not part of `gitcrawl`.
-`gitcrawl sync` fetches open issues and pull requests by default. Pass `--state all` or `--state closed` for explicit backfill workflows; incremental open syncs with `--since` also sweep recently closed items so local open state does not rot.
-Pass `--numbers` to refresh exact issue or pull request rows without relying on list ordering or updated-time windows.
-Thread-reference inputs accept bare numbers, `#123`, `issues/123`, `pull/123`, `owner/repo#123`, and full GitHub issue/PR URLs. This applies to sync filters, `--number` flags, governance member commands, neighbor/embed lookups, and TUI jump input.
-Pass `--with pr-details` or `--include-pr-details` to hydrate pull request files, commits, checks, workflow runs, and review-thread state for local review.
-`gitcrawl code index owner/repo --path ...` snapshots tracked UTF-8 text files from a local Git checkout into separate source-document tables in a normal local database. Direct search accepts `--scope threads|code|all`; source documents do not enter issue embeddings, duplicate clusters, portable stores, or cloud snapshots.
-`gitcrawl search issues|prs` accepts the common `gh search` shape (`<query> -R owner/repo --state open --json fields --limit N`) and answers from the local SQLite cache. It is intended for discovery without spending GitHub REST search quota; use `gh` for final live verification and GitHub write actions. Pass `--sync-if-stale 5m` to perform one metadata sync before the cached search when the local repository mirror is older than that duration.
-`gitcrawl gh` moved to Octopool. Run `octopool login`, then use `octopool gh ...` or symlink Octopool as `gh` for the shared org cache and pooled GitHub relay.
-The TUI starts at `--min-size 5` and `--sort size`, like ghcrawl's saved default, so the first screen is the useful cluster workload instead of singleton noise. Pass `--min-size 1` when you intentionally want singleton clusters, or `--layout focus` when you want more readable detail text. Mouse support is built in: click rows, wheel panes, and right-click for copy, sort, filter, jump, link, neighbor, local close/reopen, and member triage actions. Press `a` to open the same action menu from the keyboard, `#` to jump directly to an issue or PR number, `p` to switch between repositories already present in the local store, or `n` to load neighbors for the selected issue or PR. Enter from the members pane also loads neighbors before opening detail. The TUI quietly refreshes from the local store every 15 seconds.
-`gitcrawl tui` remains the reference terminal interaction model for the crawl app family: pane focus, sortable headers, mouse/right-click actions, detail rendering, and status chrome are the behavior the shared `crawlkit/tui` browser is converging on for Slack, Discord, and Notion archives.
-
-## Local Defaults
-
-- Linux config: `${XDG_CONFIG_HOME:-~/.config}/gitcrawl/config.toml`
-- Linux database/vectors: `${XDG_DATA_HOME:-~/.local/share}/gitcrawl/`
-- Linux cache: `${XDG_CACHE_HOME:-~/.cache}/gitcrawl/`
-- Linux logs: `${XDG_STATE_HOME:-~/.local/state}/gitcrawl/logs/`
-- macOS config/database/vectors/logs: `~/Library/Application Support/gitcrawl/`
-- macOS cache: `~/Library/Caches/gitcrawl/`
-
-Existing installs with `~/.config/gitcrawl/config.toml` continue to load that
-config until the new platform config path exists.
-
-## Requirements
-
-- Go 1.26+
-- a GitHub token for sync commands, either via `GITHUB_TOKEN` or `gh auth token`
-- an OpenAI API key only for summary and embedding commands
+<img width="1797" height="1096" alt="Gitcrawl terminal interface showing issue and pull request clusters" src="https://github.com/user-attachments/assets/54a0a6cf-5862-451d-9552-5d18656976ff" />
 
 ## Install
 
-Install from Homebrew:
+Homebrew is the smallest install on macOS and Linux:
 
-```bash
+```sh
 brew install openclaw/tap/gitcrawl
 ```
 
-Or download a release archive from GitHub releases or build from source:
+Prebuilt archives for macOS, Linux, and Windows are available from [GitHub Releases](https://github.com/openclaw/gitcrawl/releases/latest). The [installation guide](docs/installation.md) also covers source builds and update checks; source builds require Go 1.26.5 or newer.
 
-```bash
-git clone https://github.com/openclaw/gitcrawl.git
-cd gitcrawl
-go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=$(git describe --tags --always --dirty)" -o bin/gitcrawl ./cmd/gitcrawl
-./bin/gitcrawl --version
+Sync needs a GitHub token from `GITHUB_TOKEN` or `gh auth token`. Generating summaries and embeddings also needs `OPENAI_API_KEY`; semantic search and clustering use those stored embeddings, while ordinary sync and keyword search do not.
+
+## Quick start
+
+Initialize the local archive, sync a repository, and query it:
+
+```sh
+gitcrawl init
+gitcrawl sync openclaw/gitcrawl
+gitcrawl search issues "SQLite" -R openclaw/gitcrawl \
+  --state open --json number,title,url --limit 5
 ```
 
-Check for newer releases manually with:
+The default sync fetches open issues and pull requests and sweeps recently closed threads. Use `--state all` for an initial historical backfill, `--include-comments` for discussion, or `--with pr-details` for pull request files, commits, checks, and review state.
 
-```bash
-gitcrawl check-update
-```
+The [quickstart](docs/quickstart.md) continues through embeddings, clusters, and the terminal UI. For a quota-conscious maintainer workflow, see [Maintainer archive workflow](docs/maintainer-archive.md).
 
-Interactive terminal runs also perform a cached daily release check and print a
-stderr notice when a newer OpenClaw release is available. Set
-`GITCRAWL_NO_UPDATE_CHECK=1` or `CRAWLKIT_NO_UPDATE_CHECK=1` to disable that
-passive notice.
+## Search and automation
 
-Docker:
+Direct search supports keyword, semantic, and hybrid modes over one local repository. The `gh search`-shaped form used above lets existing scripts query the SQLite mirror without spending GitHub search quota. Add `--sync-if-stale 5m` when an agent should refresh an old mirror before searching.
 
-```bash
-docker build -t gitcrawl .
-docker run --rm -e GITHUB_TOKEN -v "$PWD/.gitcrawl:/data" gitcrawl sync owner/repo
-docker run --rm -v "$PWD/.gitcrawl:/data" gitcrawl search issues "hot loop" -R owner/repo
-```
+Commands support structured output with `--json`. Gitcrawl reserves stdout for results and sends diagnostics to stderr, so its output can feed `jq` or another process directly. See [Search](docs/search.md) and [Automation](docs/automation.md) for the supported shapes.
 
-The image stores config, SQLite data, cache, and Git snapshot state under `/data`.
+## Cluster and review
+
+`gitcrawl refresh owner/repo` runs sync, embedding, and clustering in order. Clusters combine vector similarity with direct GitHub references, then preserve maintainer decisions such as local closes, member exclusions, and canonical threads across later runs.
+
+Open `gitcrawl tui [owner/repo]` for the keyboard- and mouse-driven cluster browser. The TUI reads SQLite and refreshes its view every 15 seconds; it does not call GitHub itself. See [Clustering](docs/clustering.md), [Governance](docs/governance.md), and [TUI](docs/tui.md).
+
+## Archive modes
+
+The default local archive keeps configuration, SQLite data, vectors, caches, and logs in platform-native user directories. Exact paths and environment overrides are in [Configuration](docs/configuration.md).
+
+[Portable stores](docs/portable-stores.md) publish a compact SQLite snapshot through Git so multiple machines can share a read-mostly archive. [Cloud archives](docs/cloud-archives.md) configure authenticated reads and snapshot publication through a separately deployed Worker service. Local, portable, and cloud modes keep distinct storage and credential boundaries.
+
+Octopool owns pooled live `gh` reads. Gitcrawl keeps local mirror, search, clustering, and TUI workflows; use `gh` or Octopool for final live verification and GitHub write actions. See the [migration note](docs/gh-shim.md).
+
+## Command map
+
+| Job | Command | Guide |
+| --- | --- | --- |
+| Check archive health | `gitcrawl status` / `gitcrawl doctor` | [Configuration](docs/configuration.md) |
+| Mirror GitHub threads | `gitcrawl sync owner/repo` | [Sync](docs/sync.md) |
+| Search threads or indexed code | `gitcrawl search ...` | [Search](docs/search.md) |
+| Build and inspect clusters | `gitcrawl refresh`, `clusters`, `tui` | [Clustering](docs/clustering.md) |
+| Export a code-free conversation snapshot | `gitcrawl capture owner/repo` | [Capture](docs/capture.md) |
+
+The [command reference](docs/commands.md) lists the complete CLI surface and flags.
 
 ## Development
 
-```bash
-make help
-make check
+```sh
 make build
-make run ARGS="help tui"
+make test
+make check
 ```
+
+`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, and snapshot gates used by CI.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
