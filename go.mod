@@ -12,7 +12,7 @@ require (
 	github.com/openclaw/crawlkit v0.14.5
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.47.0
-	modernc.org/sqlite v1.55.0
+	modernc.org/sqlite v1.56.0
 )
 
 require (
@@ -29,7 +29,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
-	github.com/google/pprof v0.0.0-20260802004507-5106ece31595 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
