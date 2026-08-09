@@ -42,6 +42,7 @@ type Profile struct {
 	Capabilities  []string
 	Excluded      []string
 	IndexProfile  string
+	ColumnProfile string
 }
 
 var currentStateProfile = Profile{
@@ -92,7 +93,8 @@ var currentStateProfile = Profile{
 		"sync_attempt_failures",
 		"ordinary_indexes",
 	},
-	IndexProfile: "constraints-only",
+	IndexProfile:  "constraints-only",
+	ColumnProfile: store.PortableColumnProfileSanitizedCompatibility,
 }
 
 func ResolveProfile(name string) (Profile, error) {
@@ -175,6 +177,7 @@ type Manifest struct {
 	DroppedTables        []string    `json:"droppedTables"`
 	DroppedIndexes       []string    `json:"droppedIndexes"`
 	IndexProfile         string      `json:"indexProfile"`
+	ColumnProfile        string      `json:"columnProfile,omitempty"`
 }
 
 type ExportResult struct {
@@ -201,6 +204,7 @@ type ExportResult struct {
 	DroppedTables        []string    `json:"dropped_tables"`
 	DroppedIndexes       []string    `json:"dropped_indexes"`
 	ArtifactCommitted    bool        `json:"artifact_committed"`
+	ColumnProfile        string      `json:"column_profile,omitempty"`
 }
 
 type exporter struct {
@@ -276,6 +280,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		BytesBefore:    sourceInfo.Size(),
 		MaxBytes:       options.MaxBytes,
 		ByteBudgetOK:   true,
+		ColumnProfile:  profile.ColumnProfile,
 	}
 	if err := reportProgress(ctx, options.Progress, StageSnapshot); err != nil {
 		return result, err
@@ -329,11 +334,12 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		}
 	}
 	pruneStats, err := st.PrunePortablePayloads(ctx, store.PortablePruneOptions{
-		BodyChars:           options.BodyChars,
-		Vacuum:              false,
-		IncludeSyncFailures: false,
-		DeferSecureRewrite:  true,
-		Progress:            pruneProgress,
+		BodyChars:                     options.BodyChars,
+		Vacuum:                        false,
+		IncludeSyncFailures:           false,
+		DeferSecureRewrite:            true,
+		RetainSanitizedPayloadColumns: true,
+		Progress:                      pruneProgress,
 	})
 	if err != nil {
 		return result, fmt.Errorf("apply canonical portable shaping: %w", err)
@@ -382,6 +388,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		"exported_at":     exportedAt,
 		"source_path":     options.PublicPath,
 		"index_profile":   profile.IndexProfile,
+		"column_profile":  profile.ColumnProfile,
 	}
 	if err := writeMetadata(ctx, st.DB(), metadata); err != nil {
 		return result, err
@@ -491,6 +498,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		DroppedTables:        droppedTables,
 		DroppedIndexes:       droppedIndexes,
 		IndexProfile:         profile.IndexProfile,
+		ColumnProfile:        profile.ColumnProfile,
 	}
 	if e.beforeManifest != nil {
 		if err := e.beforeManifest(); err != nil {
@@ -1129,6 +1137,7 @@ func validateManifestPair(ctx context.Context, dbPath, manifestPath string, expe
 		"profile_version": fmt.Sprintf("%d", actual.ProfileVersion),
 		"source_path":     actual.OutputPath,
 		"index_profile":   actual.IndexProfile,
+		"column_profile":  actual.ColumnProfile,
 	} {
 		var got string
 		if err := db.QueryRowContext(ctx, `select value from portable_metadata where key = ?`, key).Scan(&got); err != nil {

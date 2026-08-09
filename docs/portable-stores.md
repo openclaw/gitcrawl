@@ -175,6 +175,15 @@ while `pull_request_files.patch` diff payloads are set to `NULL`. It also remove
 while retaining primary keys, unique constraints, and explicit unique indexes.
 The manifest records the exact dropped tables and indexes.
 
+Derived exports record `column_profile=sanitized-compatibility` in SQLite
+metadata and `columnProfile: sanitized-compatibility` in the manifest. They keep
+the full-schema compatibility columns `repositories.raw_json`,
+`threads.raw_json`, and `threads.body` to avoid three full-table SQLite rewrites;
+the raw JSON values are empty and `threads.body` contains only `body_excerpt`.
+The final `VACUUM INTO` ensures the removed full payload bytes are absent. The
+portable schema identifier remains `gitcrawl-portable-sync-v2`, and ordinary
+`portable prune` continues to physically drop these columns.
+
 Those history and governance omissions are intentional data loss in the
 generation, not a promise that every omission can be rebuilt. Opening the
 export writable lets the current Gitcrawl migration recreate missing tables and

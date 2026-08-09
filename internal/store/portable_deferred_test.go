@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -46,13 +47,23 @@ func TestPortablePruneDeferredRewriteVisibleEquivalence(t *testing.T) {
 	ctx := context.Background()
 	legacy := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "legacy.db"))
 	deferred := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "deferred.db"))
+	retained := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "retained.db"))
 	defer legacy.Close()
 	defer deferred.Close()
+	defer retained.Close()
 	if _, err := legacy.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 8, Vacuum: false}); err != nil {
 		t.Fatalf("legacy prune: %v", err)
 	}
 	if _, err := deferred.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 8, Vacuum: false, DeferSecureRewrite: true}); err != nil {
 		t.Fatalf("deferred prune: %v", err)
+	}
+	retainedStats, err := retained.PrunePortablePayloads(ctx, PortablePruneOptions{
+		BodyChars:                     8,
+		DeferSecureRewrite:            true,
+		RetainSanitizedPayloadColumns: true,
+	})
+	if err != nil {
+		t.Fatalf("retained-column prune: %v", err)
 	}
 	for _, st := range []*Store{legacy, deferred} {
 		if st.hasColumn(ctx, "threads", "body") || st.hasColumn(ctx, "threads", "raw_json") || st.hasColumn(ctx, "repositories", "raw_json") {
@@ -63,6 +74,29 @@ func TestPortablePruneDeferredRewriteVisibleEquivalence(t *testing.T) {
 	deferredVisible := portableVisibleState(t, ctx, deferred)
 	if !reflect.DeepEqual(legacyVisible, deferredVisible) {
 		t.Fatalf("visible portable state differs:\nlegacy=%#v\ndeferred=%#v", legacyVisible, deferredVisible)
+	}
+	retainedVisible := portableVisibleState(t, ctx, retained)
+	if !reflect.DeepEqual(legacyVisible, retainedVisible) {
+		t.Fatalf("retained-column visible state differs:\nlegacy=%#v\nretained=%#v", legacyVisible, retainedVisible)
+	}
+	if !retained.hasColumn(ctx, "repositories", "raw_json") || !retained.hasColumn(ctx, "threads", "raw_json") || !retained.hasColumn(ctx, "threads", "body") {
+		t.Fatal("sanitized compatibility columns were physically dropped")
+	}
+	if len(retainedStats.DroppedColumns) != 0 {
+		t.Fatalf("retained-column dropped stats = %v", retainedStats.DroppedColumns)
+	}
+	var repositoryRaw, threadRaw, body, excerpt, columnProfile string
+	if err := retained.DB().QueryRowContext(ctx, `select raw_json from repositories where id = 1`).Scan(&repositoryRaw); err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.DB().QueryRowContext(ctx, `select raw_json, body, body_excerpt from threads where id = 1`).Scan(&threadRaw, &body, &excerpt); err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'column_profile'`).Scan(&columnProfile); err != nil {
+		t.Fatal(err)
+	}
+	if repositoryRaw != "" || threadRaw != "" || body != "abcdefgh" || excerpt != "abcdefgh" || columnProfile != PortableColumnProfileSanitizedCompatibility {
+		t.Fatalf("sanitized columns repository_raw=%q thread_raw=%q body=%q excerpt=%q profile=%q", repositoryRaw, threadRaw, body, excerpt, columnProfile)
 	}
 }
 
@@ -86,10 +120,42 @@ func TestPortablePruneProgressStagesOrdered(t *testing.T) {
 		PortablePruneStageMetadataRawPayloads,
 		PortablePruneStageFingerprintsSummaries,
 		PortablePruneStageDiscardedData,
-		PortablePruneStageCanonicalSchema,
+		PortablePruneStageCanonicalSchemaFinalization,
 	}
 	if !slices.Equal(stages, want) {
 		t.Fatalf("portable prune stages = %v, want %v", stages, want)
+	}
+}
+
+func TestPortablePrunePhysicalDropClearsCompatibilityColumnProfile(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "column-profile.db")
+	st := seedPortableDeferredStore(t, ctx, dbPath)
+	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
+		BodyChars:                     8,
+		DeferSecureRewrite:            true,
+		RetainSanitizedPayloadColumns: true,
+	}); err != nil {
+		t.Fatalf("retained-column prune: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close retained-column store: %v", err)
+	}
+	var err error
+	st, err = Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("reopen retained-column store: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 8}); err != nil {
+		t.Fatalf("physical-drop prune: %v", err)
+	}
+	if st.hasColumn(ctx, "repositories", "raw_json") || st.hasColumn(ctx, "threads", "raw_json") || st.hasColumn(ctx, "threads", "body") {
+		t.Fatal("physical-drop prune retained compatibility columns")
+	}
+	var value string
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'column_profile'`).Scan(&value); err != sql.ErrNoRows {
+		t.Fatalf("column_profile after physical drop = %q, err=%v", value, err)
 	}
 }
 

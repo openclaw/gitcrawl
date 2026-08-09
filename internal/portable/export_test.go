@@ -78,18 +78,21 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 			t.Fatalf("preserved table %s row count = %d, want 1", table, got)
 		}
 	}
-	var body, excerpt string
+	var body, excerpt, threadRawJSON, repositoryRawJSON string
 	var bodyLength int
-	if err := db.QueryRow(`select body_excerpt, body_excerpt, body_length from threads where id = 1`).Scan(&body, &excerpt, &bodyLength); err != nil {
+	if err := db.QueryRow(`select body, body_excerpt, body_length, raw_json from threads where id = 1`).Scan(&body, &excerpt, &bodyLength, &threadRawJSON); err != nil {
 		t.Fatalf("read compact thread: %v", err)
 	}
-	if body != "abcdefgh" || excerpt != "abcdefgh" || bodyLength != 26 {
-		t.Fatalf("compact thread = body %q excerpt %q length %d", body, excerpt, bodyLength)
+	if err := db.QueryRow(`select raw_json from repositories where id = 1`).Scan(&repositoryRawJSON); err != nil {
+		t.Fatalf("read compact repository: %v", err)
 	}
-	var sourceMetadata, profileMetadata, includes, capabilities, excluded, indexProfile string
+	if body != "abcdefgh" || excerpt != "abcdefgh" || bodyLength != 26 || threadRawJSON != "" || repositoryRawJSON != "" {
+		t.Fatalf("compact thread = body %q excerpt %q length %d thread_raw=%q repository_raw=%q", body, excerpt, bodyLength, threadRawJSON, repositoryRawJSON)
+	}
+	var sourceMetadata, profileMetadata, includes, capabilities, excluded, indexProfile, columnProfile string
 	for key, target := range map[string]*string{
 		"source_path": &sourceMetadata, "profile": &profileMetadata, "includes": &includes,
-		"capabilities": &capabilities, "excluded": &excluded, "index_profile": &indexProfile,
+		"capabilities": &capabilities, "excluded": &excluded, "index_profile": &indexProfile, "column_profile": &columnProfile,
 	} {
 		if err := db.QueryRow(`select value from portable_metadata where key = ?`, key).Scan(target); err != nil {
 			t.Fatalf("read metadata %s: %v", key, err)
@@ -98,8 +101,8 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	if sourceMetadata != "data/openclaw__openclaw.sync.db" || strings.Contains(sourceMetadata, dir) {
 		t.Fatalf("portable source_path = %q", sourceMetadata)
 	}
-	if profileMetadata != CurrentStateV1 || indexProfile != "constraints-only" {
-		t.Fatalf("profile metadata = %q / %q", profileMetadata, indexProfile)
+	if profileMetadata != CurrentStateV1 || indexProfile != "constraints-only" || columnProfile != store.PortableColumnProfileSanitizedCompatibility {
+		t.Fatalf("profile metadata = %q / %q / %q", profileMetadata, indexProfile, columnProfile)
 	}
 	if !csvContains(includes, "comments") || !csvContains(includes, "thread_child_observation_memberships") ||
 		!csvContains(capabilities, "current_comments") || !csvContains(excluded, "pull_request_file_patches") || csvContains(excluded, "comments") {
@@ -127,7 +130,8 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	manifest := readManifest(t, result.ManifestPath)
 	if manifest.OutputPath != result.PublicPath || manifest.OutputBytes != result.BytesAfter ||
 		manifest.SHA256 != result.SHA256 || manifest.ArtifactID != result.ArtifactID ||
-		manifest.ForeignKeyViolations != 0 || !manifest.ValidationOK {
+		manifest.ForeignKeyViolations != 0 || !manifest.ValidationOK ||
+		manifest.ColumnProfile != store.PortableColumnProfileSanitizedCompatibility || result.ColumnProfile != manifest.ColumnProfile {
 		t.Fatalf("manifest/result mismatch: manifest=%+v result=%+v", manifest, result)
 	}
 	if got := hashFile(t, result.DatabasePath); got != result.SHA256 {
@@ -484,6 +488,7 @@ func TestFinalCompactArtifactExcludesDeletedPayloadSentinels(t *testing.T) {
 		"GITCRAWL_REMOVED_RAW_JSON_SENTINEL_" + strings.Repeat("r", 96),
 		"GITCRAWL_REMOVED_PR_PATCH_SENTINEL_" + strings.Repeat("p", 96),
 		"GITCRAWL_REMOVED_SYNC_FAILURE_SENTINEL_" + strings.Repeat("s", 96),
+		"GITCRAWL_REMOVED_FULL_THREAD_BODY_SENTINEL_" + strings.Repeat("b", 160),
 	}
 	if _, err := st.DB().ExecContext(ctx, `update comment_revisions set body = ? where id = 1`, sentinels[0]); err != nil {
 		t.Fatal(err)
@@ -503,6 +508,9 @@ func TestFinalCompactArtifactExcludesDeletedPayloadSentinels(t *testing.T) {
 	`, sentinels[3]); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.DB().ExecContext(ctx, `update threads set body = ? where id = 1`, sentinels[4]); err != nil {
+		t.Fatal(err)
+	}
 	result, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "artifact")))
 	if err != nil {
 		t.Fatalf("export sentinel fixture: %v", err)
@@ -515,17 +523,22 @@ func TestFinalCompactArtifactExcludesDeletedPayloadSentinels(t *testing.T) {
 	}
 	db := openRawDB(t, result.DatabasePath)
 	defer db.Close()
-	var title, path, status string
+	var title, path, status, body, excerpt, rawJSON string
+	var bodyLength int
 	var additions int
 	var patch sql.NullString
 	if err := db.QueryRow(`select title from threads where id = 1`).Scan(&title); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`select body, body_excerpt, body_length, raw_json from threads where id = 1`).Scan(&body, &excerpt, &bodyLength, &rawJSON); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`select path, status, additions, patch from pull_request_files where thread_id = 1`).Scan(&path, &status, &additions, &patch); err != nil {
 		t.Fatal(err)
 	}
-	if title != "portable export" || path != "internal/portable/export.go" || status != "modified" || additions != 10 || patch.Valid {
-		t.Fatalf("retained metadata title=%q file=%q/%q/%d patch=%#v", title, path, status, additions, patch)
+	wantExcerpt := sentinels[4][:32]
+	if title != "portable export" || body != wantExcerpt || excerpt != wantExcerpt || bodyLength != len(sentinels[4]) || rawJSON != "" || path != "internal/portable/export.go" || status != "modified" || additions != 10 || patch.Valid {
+		t.Fatalf("retained metadata title=%q body=%q excerpt=%q length=%d raw=%q file=%q/%q/%d patch=%#v", title, body, excerpt, bodyLength, rawJSON, path, status, additions, patch)
 	}
 }
 
@@ -650,6 +663,22 @@ func TestExportedDatabaseReopensWritableAndRecreatesOmittedSchema(t *testing.T) 
 	}
 	if !indexExists(t, writable.DB(), "idx_comments_thread_type") {
 		t.Fatal("migration did not recreate ordinary schema indexes")
+	}
+	if _, err := writable.DB().ExecContext(ctx, `update threads set body = 'writable body', raw_json = '{"writable":true}' where id = 1`); err != nil {
+		t.Fatalf("write retained thread columns: %v", err)
+	}
+	if _, err := writable.DB().ExecContext(ctx, `update repositories set raw_json = '{"writable":true}' where id = 1`); err != nil {
+		t.Fatalf("write retained repository column: %v", err)
+	}
+	var body, threadRaw, repositoryRaw string
+	if err := writable.DB().QueryRowContext(ctx, `select body, raw_json from threads where id = 1`).Scan(&body, &threadRaw); err != nil {
+		t.Fatalf("read retained thread columns: %v", err)
+	}
+	if err := writable.DB().QueryRowContext(ctx, `select raw_json from repositories where id = 1`).Scan(&repositoryRaw); err != nil {
+		t.Fatalf("read retained repository column: %v", err)
+	}
+	if body != "writable body" || threadRaw != `{"writable":true}` || repositoryRaw != `{"writable":true}` {
+		t.Fatalf("retained writable columns body=%q thread_raw=%q repository_raw=%q", body, threadRaw, repositoryRaw)
 	}
 }
 

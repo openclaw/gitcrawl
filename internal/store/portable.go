@@ -19,15 +19,17 @@ const portableSyncFailureErrorRedaction = "[redacted for portable export]"
 
 const portableSyncFailureScrubPendingKey = "sync_failure_scrub_pending"
 
+const PortableColumnProfileSanitizedCompatibility = "sanitized-compatibility"
+
 type PortablePruneStage string
 
 const (
-	PortablePruneStageThreadBodies          PortablePruneStage = "thread bodies"
-	PortablePruneStageCommentReviewBodies   PortablePruneStage = "comment and review bodies"
-	PortablePruneStageMetadataRawPayloads   PortablePruneStage = "metadata and raw payload cleanup"
-	PortablePruneStageFingerprintsSummaries PortablePruneStage = "fingerprints and summaries"
-	PortablePruneStageDiscardedData         PortablePruneStage = "discarded tables and failure ledger"
-	PortablePruneStageCanonicalSchema       PortablePruneStage = "canonical schema drops"
+	PortablePruneStageThreadBodies                PortablePruneStage = "thread bodies"
+	PortablePruneStageCommentReviewBodies         PortablePruneStage = "comment and review bodies"
+	PortablePruneStageMetadataRawPayloads         PortablePruneStage = "metadata and raw payload cleanup"
+	PortablePruneStageFingerprintsSummaries       PortablePruneStage = "fingerprints and summaries"
+	PortablePruneStageDiscardedData               PortablePruneStage = "discarded tables and failure ledger"
+	PortablePruneStageCanonicalSchemaFinalization PortablePruneStage = "canonical schema finalization"
 )
 
 type PortablePruneProgressFunc func(PortablePruneStage)
@@ -40,8 +42,9 @@ type PortablePruneOptions struct {
 	// one final VACUUM. It may therefore skip writes to columns or tables that
 	// canonical shaping removes. The in-place portable prune command must leave
 	// this false so --no-vacuum still scrubs visible payloads before returning.
-	DeferSecureRewrite bool
-	Progress           PortablePruneProgressFunc `json:"-"`
+	DeferSecureRewrite            bool
+	RetainSanitizedPayloadColumns bool
+	Progress                      PortablePruneProgressFunc `json:"-"`
 }
 
 type PortablePruneStats struct {
@@ -378,8 +381,8 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 			return stats, fmt.Errorf("clear portable sync failure scrub marker: %w", err)
 		}
 	}
-	reportPortablePruneProgress(options.Progress, PortablePruneStageCanonicalSchema)
-	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, options.IncludeSyncFailures, &stats); err != nil {
+	reportPortablePruneProgress(options.Progress, PortablePruneStageCanonicalSchemaFinalization)
+	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, options.IncludeSyncFailures, options.RetainSanitizedPayloadColumns, &stats); err != nil {
 		return stats, err
 	}
 	if options.Vacuum {
@@ -572,7 +575,7 @@ func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, e
 	return rowsAffected(result), nil
 }
 
-func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, includeSyncFailures bool, stats *PortablePruneStats) error {
+func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, includeSyncFailures, retainSanitizedPayloadColumns bool, stats *PortablePruneStats) error {
 	if s.hasColumn(ctx, "threads", "body") && !s.hasColumn(ctx, "threads", "body_excerpt") {
 		if _, err := s.db.ExecContext(ctx, `alter table threads add column body_excerpt text`); err != nil {
 			return fmt.Errorf("add portable threads.body_excerpt: %w", err)
@@ -590,6 +593,11 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 			return fmt.Errorf("add portable threads.body_length: %w", err)
 		}
 	}
+	if retainSanitizedPayloadColumns {
+		if err := s.sanitizePortableCompatibilityColumns(ctx); err != nil {
+			return err
+		}
+	}
 	for _, column := range []struct {
 		table string
 		name  string
@@ -598,6 +606,9 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		{table: "threads", name: "raw_json"},
 		{table: "threads", name: "body"},
 	} {
+		if retainSanitizedPayloadColumns {
+			continue
+		}
 		if !s.hasColumn(ctx, column.table, column.name) {
 			continue
 		}
@@ -639,6 +650,11 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		"source_path":           s.path,
 		"thread_author_profile": "login,type,association",
 	}
+	if retainSanitizedPayloadColumns {
+		metadata["column_profile"] = PortableColumnProfileSanitizedCompatibility
+	} else if _, err := s.db.ExecContext(ctx, `delete from portable_metadata where key = 'column_profile'`); err != nil {
+		return fmt.Errorf("clear portable column profile metadata: %w", err)
+	}
 	for key, value := range metadata {
 		if _, err := s.db.ExecContext(ctx, `
 			insert into portable_metadata(key, value)
@@ -650,6 +666,33 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`pragma user_version = %d`, portableSchemaVersion)); err != nil {
 		return fmt.Errorf("set portable schema compatibility version: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) sanitizePortableCompatibilityColumns(ctx context.Context) error {
+	var assignments, conditions []string
+	if s.hasColumns(ctx, "threads", "body", "body_excerpt") {
+		assignments = append(assignments, `body = body_excerpt`)
+		conditions = append(conditions, `body is not body_excerpt`)
+	}
+	if s.hasColumn(ctx, "threads", "raw_json") {
+		assignments = append(assignments, `raw_json = ''`)
+		conditions = append(conditions, `raw_json != ''`)
+	}
+	if len(assignments) > 0 {
+		query := `update threads set ` + strings.Join(assignments, ", ")
+		if len(conditions) > 0 {
+			query += ` where ` + strings.Join(conditions, " or ")
+		}
+		if _, err := s.db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("sanitize portable thread compatibility columns: %w", err)
+		}
+	}
+	if s.hasColumn(ctx, "repositories", "raw_json") {
+		if _, err := s.db.ExecContext(ctx, `update repositories set raw_json = '' where raw_json != ''`); err != nil {
+			return fmt.Errorf("sanitize portable repository compatibility column: %w", err)
+		}
 	}
 	return nil
 }

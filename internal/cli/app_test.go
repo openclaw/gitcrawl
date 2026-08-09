@@ -4863,6 +4863,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		IntegrityCheck       string `json:"integrity_check"`
 		ForeignKeyViolations int    `json:"foreign_key_violations"`
 		ArtifactCommitted    bool   `json:"artifact_committed"`
+		ColumnProfile        string `json:"column_profile"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatalf("parse portable export JSON: %v\n%s", err, stdout.String())
@@ -4871,7 +4872,8 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		payload.SourceDBPath != dbPath || payload.OutputDir != outputDir || payload.PublicPath != "data/openclaw__openclaw.sync.db" ||
 		payload.Repository.Owner != "openclaw" || payload.Repository.Name != "openclaw" || payload.Repository.FullName != "openclaw/openclaw" ||
 		payload.BodyChars != 32 || payload.MaxBytes != 99999999 || payload.BytesAfter <= 0 || payload.ArtifactID != payload.SHA256 ||
-		payload.QuickCheck != "ok" || payload.IntegrityCheck != "ok" || payload.ForeignKeyViolations != 0 || !payload.ArtifactCommitted {
+		payload.QuickCheck != "ok" || payload.IntegrityCheck != "ok" || payload.ForeignKeyViolations != 0 || !payload.ArtifactCommitted ||
+		payload.ColumnProfile != store.PortableColumnProfileSanitizedCompatibility {
 		t.Fatalf("portable export payload = %+v", payload)
 	}
 	artifact, err := sql.Open("sqlite", payload.DatabasePath)
@@ -4899,7 +4901,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		"canonical shaping: metadata and raw payload cleanup",
 		"canonical shaping: fingerprints and summaries",
 		"canonical shaping: discarded tables and failure ledger",
-		"canonical shaping: canonical schema drops",
+		"canonical shaping: canonical schema finalization",
 		"foreign key proof", "index removal", "final vacuum", "validation", "manifest", "artifact commit", "complete",
 	} {
 		prefix := "gitcrawl: portable export: stage=" + stage + " "
