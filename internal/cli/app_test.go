@@ -4823,8 +4823,9 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 
 	outputDir := filepath.Join(dir, "artifact.next")
 	app := New()
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	app.Stdout = &stdout
+	app.Stderr = &stderr
 	if err := app.Run(ctx, []string{
 		"--config", configPath,
 		"portable", "export",
@@ -4890,6 +4891,18 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 	}
 	if _, err := os.Stat(payload.ManifestPath); err != nil {
 		t.Fatalf("manifest missing: %v", err)
+	}
+	for _, stage := range []string{
+		"snapshot", "repository scope", "profile omissions", "canonical shaping",
+		"foreign key proof", "index removal", "final vacuum", "validation", "manifest", "artifact commit",
+	} {
+		line := "gitcrawl: portable export: " + stage
+		if !strings.Contains(stderr.String(), line) {
+			t.Fatalf("progress missing %q:\n%s", line, stderr.String())
+		}
+		if strings.Contains(stdout.String(), line) {
+			t.Fatalf("progress leaked to JSON stdout: %s", stdout.String())
+		}
 	}
 }
 

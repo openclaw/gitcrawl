@@ -109,7 +109,25 @@ type ExportOptions struct {
 	Repository   string
 	BodyChars    int
 	MaxBytes     *int64
+	Progress     ProgressFunc
 }
+
+type Stage string
+
+const (
+	StageSnapshot         Stage = "snapshot"
+	StageRepositoryScope  Stage = "repository scope"
+	StageProfileOmissions Stage = "profile omissions"
+	StageCanonicalShaping Stage = "canonical shaping"
+	StageForeignKeyProof  Stage = "foreign key proof"
+	StageIndexRemoval     Stage = "index removal"
+	StageFinalVacuum      Stage = "final vacuum"
+	StageValidation       Stage = "validation"
+	StageManifest         Stage = "manifest"
+	StageArtifactCommit   Stage = "artifact commit"
+)
+
+type ProgressFunc func(Stage)
 
 type Repository struct {
 	ID       int64  `json:"id"`
@@ -247,6 +265,9 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		MaxBytes:       options.MaxBytes,
 		ByteBudgetOK:   true,
 	}
+	if err := reportProgress(ctx, options.Progress, StageSnapshot); err != nil {
+		return result, err
+	}
 	if err := snapshotSQLite(ctx, sourcePath, dbPath); err != nil {
 		return result, err
 	}
@@ -260,12 +281,34 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			_ = st.Close()
 		}
 	}()
+	if err := configureDisposableStore(ctx, st.DB()); err != nil {
+		return result, err
+	}
+	if err := reportProgress(ctx, options.Progress, StageRepositoryScope); err != nil {
+		return result, err
+	}
 	if options.Repository != "" {
 		scope, err := st.RestrictPortableRepository(ctx, options.Repository)
 		if err != nil {
 			return result, fmt.Errorf("restrict portable repository: %w", err)
 		}
 		result.Repository = repositoryFromStore(scope.Repository)
+	}
+	if err := reportProgress(ctx, options.Progress, StageProfileOmissions); err != nil {
+		return result, err
+	}
+	var droppedTables []string
+	for _, table := range profile.DroppedTables {
+		dropped, err := dropTableIfPresent(ctx, st.DB(), table)
+		if err != nil {
+			return result, err
+		}
+		if dropped {
+			droppedTables = appendUnique(droppedTables, table)
+		}
+	}
+	if err := reportProgress(ctx, options.Progress, StageCanonicalShaping); err != nil {
+		return result, err
 	}
 	pruneStats, err := st.PrunePortablePayloads(ctx, store.PortablePruneOptions{
 		BodyChars:           options.BodyChars,
@@ -276,15 +319,24 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err != nil {
 		return result, fmt.Errorf("apply canonical portable shaping: %w", err)
 	}
-	droppedTables := append([]string(nil), pruneStats.DroppedTables...)
-	for _, table := range profile.DroppedTables {
-		dropped, err := dropTableIfPresent(ctx, st.DB(), table)
-		if err != nil {
-			return result, err
-		}
-		if dropped {
-			droppedTables = append(droppedTables, table)
-		}
+	for _, table := range pruneStats.DroppedTables {
+		droppedTables = appendUnique(droppedTables, table)
+	}
+	// Prove row relationships while schema indexes still exist. Everything
+	// after this point is transport shaping or metadata and cannot change them.
+	if err := reportProgress(ctx, options.Progress, StageForeignKeyProof); err != nil {
+		return result, err
+	}
+	foreignKeyViolations, err := foreignKeyCheck(ctx, st.DB())
+	if err != nil {
+		return result, err
+	}
+	result.ForeignKeyViolations = foreignKeyViolations
+	if foreignKeyViolations != 0 {
+		return result, fmt.Errorf("portable database foreign_key_check failed with %d violations", foreignKeyViolations)
+	}
+	if err := reportProgress(ctx, options.Progress, StageIndexRemoval); err != nil {
+		return result, err
 	}
 	droppedIndexes, err := ordinaryNonUniqueIndexes(ctx, st.DB())
 	if err != nil {
@@ -318,10 +370,16 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if _, err := st.DB().ExecContext(ctx, `delete from portable_metadata where key = 'sync_failure_scrub_pending'`); err != nil {
 		return result, fmt.Errorf("clear portable scrub marker: %w", err)
 	}
+	if err := reportProgress(ctx, options.Progress, StageFinalVacuum); err != nil {
+		return result, err
+	}
 	if err := finalVacuum(ctx, st.DB()); err != nil {
 		return result, err
 	}
 	result.Vacuumed = true
+	if err := reportProgress(ctx, options.Progress, StageValidation); err != nil {
+		return result, err
+	}
 	quickCheck, err := checkPragma(ctx, st.DB(), "quick_check")
 	if err != nil {
 		return result, err
@@ -330,15 +388,10 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err != nil {
 		return result, err
 	}
-	foreignKeyViolations, err := foreignKeyCheck(ctx, st.DB())
-	if err != nil {
-		return result, err
-	}
 	result.QuickCheck = quickCheck
 	result.IntegrityCheck = integrityCheck
-	result.ForeignKeyViolations = foreignKeyViolations
-	if quickCheck != "ok" || integrityCheck != "ok" || foreignKeyViolations != 0 {
-		return result, fmt.Errorf("portable database validation failed: quick_check=%q integrity_check=%q foreign_key_violations=%d", quickCheck, integrityCheck, foreignKeyViolations)
+	if quickCheck != "ok" || integrityCheck != "ok" {
+		return result, fmt.Errorf("portable database validation failed: quick_check=%q integrity_check=%q", quickCheck, integrityCheck)
 	}
 	if result.Repository == nil {
 		result.Repository, err = singleRepository(ctx, st.DB())
@@ -376,6 +429,9 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	result.ArtifactID = sha
 	result.DroppedTables = droppedTables
 	result.DroppedIndexes = droppedIndexes
+	if err := reportProgress(ctx, options.Progress, StageManifest); err != nil {
+		return result, err
+	}
 	manifest := Manifest{
 		Schema:               portableSchema,
 		PortableSchema:       portableSchema,
@@ -436,6 +492,9 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, fmt.Errorf("inspect output directory before commit: %w", err)
 	}
+	if err := reportProgress(ctx, options.Progress, StageArtifactCommit); err != nil {
+		return result, err
+	}
 	// The portable artifact contract deliberately uses a sibling rename and
 	// portable Go filesystem APIs, so recheck the nonexistent target at the
 	// last possible point before committing the directory.
@@ -445,6 +504,46 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	bestEffortSyncDir(filepath.Dir(outputDir))
 	result.ArtifactCommitted = true
 	return result, nil
+}
+
+func reportProgress(ctx context.Context, progress ProgressFunc, stage Stage) error {
+	if progress != nil {
+		progress(stage)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("portable export canceled during %s: %w", stage, err)
+	}
+	return nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func configureDisposableStore(ctx context.Context, db *sql.DB) error {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	var mode string
+	if err := db.QueryRowContext(ctx, `pragma journal_mode = delete`).Scan(&mode); err != nil {
+		return fmt.Errorf("configure disposable journal mode: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(mode), "delete") {
+		return fmt.Errorf("configure disposable journal mode: got %q, want delete", mode)
+	}
+	// Staging is private and discarded on error. Final integrity checks and
+	// explicit file/directory fsyncs remain the durability boundary.
+	if _, err := db.ExecContext(ctx, `pragma synchronous = off`); err != nil {
+		return fmt.Errorf("configure disposable synchronous mode: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `pragma temp_store = memory`); err != nil {
+		return fmt.Errorf("configure disposable temp store: %w", err)
+	}
+	return nil
 }
 
 func ValidateDatabaseName(name string) error {
@@ -804,12 +903,11 @@ func validateManifestPair(ctx context.Context, dbPath, manifestPath string, expe
 	if integrity != actual.IntegrityCheck || integrity != "ok" {
 		return fmt.Errorf("portable manifest integrityCheck does not match database")
 	}
-	violations, err := foreignKeyCheck(ctx, db)
-	if err != nil {
-		return err
-	}
-	if violations != actual.ForeignKeyViolations || violations != 0 {
-		return fmt.Errorf("portable manifest foreignKeyViolations does not match database")
+	// The semantic pipeline proves foreign keys before dropping transport-only
+	// indexes. Repeating foreign_key_check here would turn manifest validation
+	// into a pathological unindexed scan on large archives.
+	if actual.ForeignKeyViolations != 0 {
+		return fmt.Errorf("portable manifest records %d foreign-key violations", actual.ForeignKeyViolations)
 	}
 	tables, err := databaseTableStats(ctx, db)
 	if err != nil {

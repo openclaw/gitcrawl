@@ -3515,6 +3515,9 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 		Repository:   repository,
 		BodyChars:    bodyChars,
 		MaxBytes:     maxBytes,
+		Progress: func(stage portableexport.Stage) {
+			fmt.Fprintf(a.Stderr, "gitcrawl: portable export: %s\n", stage)
+		},
 	})
 	if err != nil {
 		return err

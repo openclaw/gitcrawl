@@ -23,9 +23,10 @@ type PortablePruneOptions struct {
 	BodyChars           int
 	Vacuum              bool
 	IncludeSyncFailures bool
-	// DeferSecureRewrite leaves the scrub marker in place so a derived export
-	// can perform one final VACUUM after applying additional profile shaping.
-	// The in-place portable prune command must leave this false.
+	// DeferSecureRewrite guarantees that a derived, non-visible snapshot receives
+	// one final VACUUM. It may therefore skip writes to columns or tables that
+	// canonical shaping removes. The in-place portable prune command must leave
+	// this false so --no-vacuum still scrubs visible payloads before returning.
 	DeferSecureRewrite bool
 }
 
@@ -266,39 +267,8 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesBefore = info.Size()
 	}
 
-	if s.hasColumn(ctx, "threads", "body") {
-		if err := s.ensurePortableExcerptColumns(ctx, "threads"); err != nil {
-			return stats, err
-		}
-		if result, err := s.db.ExecContext(ctx, `
-			update threads
-			   set body_length = case when body is not null then length(body) else body_length end,
-			       body_excerpt = case
-			         when body is not null and length(body) > ? then substr(body, 1, ?)
-			         when body is not null then body
-			         else body_excerpt
-			       end
-			 where body is not null
-		`, options.BodyChars, options.BodyChars); err != nil {
-			return stats, fmt.Errorf("prune thread body excerpts: %w", err)
-		} else {
-			stats.ThreadsPruned += rowsAffected(result)
-		}
-		if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt`); err != nil {
-			return stats, fmt.Errorf("replace thread bodies with excerpts: %w", err)
-		}
-	}
-	if s.hasColumn(ctx, "threads", "raw_json") {
-		if _, err := s.db.ExecContext(ctx, `update threads set raw_json = '' where raw_json is not null and raw_json != ''`); err != nil {
-			return stats, fmt.Errorf("clear thread raw json: %w", err)
-		}
-	}
-	if s.hasColumn(ctx, "repositories", "raw_json") {
-		result, err := s.db.ExecContext(ctx, `update repositories set raw_json = '' where raw_json is not null and raw_json != ''`)
-		if err != nil {
-			return stats, fmt.Errorf("clear repository raw json: %w", err)
-		}
-		stats.RepositoriesPruned = rowsAffected(result)
+	if err := s.preparePortableThreadPayloads(ctx, options, &stats); err != nil {
+		return stats, err
 	}
 	if s.tableExists(ctx, "comments") && s.hasColumn(ctx, "comments", "body") {
 		if err := s.ensurePortableExcerptColumns(ctx, "comments"); err != nil {
@@ -358,22 +328,26 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	} else {
 		stats.LegacySummariesDeleted = deleted
 	}
-	if s.tableExists(ctx, "documents") {
+	if !options.DeferSecureRewrite && s.tableExists(ctx, "documents") {
 		result, err := s.db.ExecContext(ctx, `delete from documents`)
 		if err != nil {
 			return stats, fmt.Errorf("delete generated documents: %w", err)
 		}
 		stats.DocumentsDeleted = rowsAffected(result)
 	}
-	if s.tableExists(ctx, "documents_fts") {
+	if !options.DeferSecureRewrite && s.tableExists(ctx, "documents_fts") {
 		if _, err := s.db.ExecContext(ctx, `insert into documents_fts(documents_fts) values('rebuild')`); err != nil {
 			return stats, fmt.Errorf("rebuild document fts: %w", err)
 		}
 		stats.DocumentsFTSRebuilt = true
 	}
-	syncFailureScrubRequired, err := s.scrubPortableSyncFailures(ctx, options.IncludeSyncFailures, &stats)
-	if err != nil {
-		return stats, err
+	syncFailureScrubRequired := false
+	if !(options.DeferSecureRewrite && !options.IncludeSyncFailures) {
+		var err error
+		syncFailureScrubRequired, err = s.scrubPortableSyncFailures(ctx, options.IncludeSyncFailures, &stats)
+		if err != nil {
+			return stats, err
+		}
 	}
 	if syncFailureScrubRequired && !options.DeferSecureRewrite {
 		if err := s.vacuumPortableDatabase(ctx); err != nil {
@@ -398,6 +372,49 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesAfter = info.Size()
 	}
 	return stats, nil
+}
+
+func (s *Store) preparePortableThreadPayloads(ctx context.Context, options PortablePruneOptions, stats *PortablePruneStats) error {
+	if s.hasColumn(ctx, "threads", "body") {
+		if err := s.ensurePortableExcerptColumns(ctx, "threads"); err != nil {
+			return err
+		}
+		result, err := s.db.ExecContext(ctx, `
+			update threads
+			   set body_length = case when body is not null then length(body) else body_length end,
+			       body_excerpt = case
+			         when body is not null and length(body) > ? then substr(body, 1, ?)
+			         when body is not null then body
+			         else body_excerpt
+			       end
+			 where body is not null
+		`, options.BodyChars, options.BodyChars)
+		if err != nil {
+			return fmt.Errorf("prune thread body excerpts: %w", err)
+		}
+		stats.ThreadsPruned += rowsAffected(result)
+		if !options.DeferSecureRewrite {
+			if _, err := s.db.ExecContext(ctx, `update threads set body = body_excerpt`); err != nil {
+				return fmt.Errorf("replace thread bodies with excerpts: %w", err)
+			}
+		}
+	}
+	if options.DeferSecureRewrite {
+		return nil
+	}
+	if s.hasColumn(ctx, "threads", "raw_json") {
+		if _, err := s.db.ExecContext(ctx, `update threads set raw_json = '' where raw_json is not null and raw_json != ''`); err != nil {
+			return fmt.Errorf("clear thread raw json: %w", err)
+		}
+	}
+	if s.hasColumn(ctx, "repositories", "raw_json") {
+		result, err := s.db.ExecContext(ctx, `update repositories set raw_json = '' where raw_json is not null and raw_json != ''`)
+		if err != nil {
+			return fmt.Errorf("clear repository raw json: %w", err)
+		}
+		stats.RepositoriesPruned = rowsAffected(result)
+	}
+	return nil
 }
 
 func (s *Store) vacuumPortableDatabase(ctx context.Context) error {

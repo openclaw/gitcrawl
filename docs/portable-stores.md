@@ -175,12 +175,15 @@ local maintainer decisions do not return. Rebuildable derived state may be
 generated again from the retained current data where the relevant command
 supports it.
 
-Before committing the generation, export runs a final `VACUUM`, removes SQLite
-sidecars, requires `quick_check` and full `integrity_check` to return `ok`,
-requires an empty `foreign_key_check`, enforces the optional finalized byte
+Before removing transport-only indexes, export requires an empty
+`foreign_key_check` while those indexes still make relationship proof efficient.
+It then runs one final `VACUUM`, removes SQLite sidecars, requires `quick_check`
+and full `integrity_check` to return `ok`, enforces the optional finalized byte
 budget, hashes the database with SHA-256, writes and fsyncs the manifest, then
-re-reads the pair and validates it again. Any failure leaves the requested
-output directory absent and removes the private staging directory.
+re-reads the pair without repeating the unindexed foreign-key scan. Concise
+stage progress is written to stderr, including during JSON output. Any failure
+or handled interrupt leaves the requested output directory absent and removes
+the private staging directory.
 
 | Flag | Default | Description |
 | --- | --- | --- |

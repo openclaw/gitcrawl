@@ -4,7 +4,7 @@
 
 ### Portable stores
 
-- Add `portable export` with the `current-state-v1` profile for atomic, validated, patch-free, optionally repository-scoped generations with counted manifests that leave the active archive unchanged.
+- Add streamlined `portable export` generations with atomic validation, patch-free repository scoping, counted manifests, progress diagnostics, and clean interruption.
 
 ## 0.9.0 - 2026-08-08
 

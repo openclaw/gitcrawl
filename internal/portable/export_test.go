@@ -55,6 +55,13 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 
 	db := openRawDB(t, result.DatabasePath)
 	defer db.Close()
+	var journalMode string
+	if err := db.QueryRow(`pragma journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("read artifact journal mode: %v", err)
+	}
+	if journalMode != "delete" {
+		t.Fatalf("artifact journal mode = %q, want delete", journalMode)
+	}
 	for _, table := range currentStateProfile.DroppedTables {
 		if tableExists(t, db, table) {
 			t.Fatalf("omitted table %s still exists", table)
@@ -106,6 +113,16 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	}
 	if slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
 		t.Fatalf("implicitly removed indexes were reported as explicitly dropped: %v", result.DroppedIndexes)
+	}
+	if len(result.DroppedTables) < len(currentStateProfile.DroppedTables) || !slices.Equal(result.DroppedTables[:len(currentStateProfile.DroppedTables)], currentStateProfile.DroppedTables) {
+		t.Fatalf("profile tables were not dropped first: %v", result.DroppedTables)
+	}
+	seenDroppedTables := make(map[string]bool)
+	for _, table := range result.DroppedTables {
+		if seenDroppedTables[table] {
+			t.Fatalf("dropped table %s reported more than once: %v", table, result.DroppedTables)
+		}
+		seenDroppedTables[table] = true
 	}
 	manifest := readManifest(t, result.ManifestPath)
 	if manifest.OutputPath != result.PublicPath || manifest.OutputBytes != result.BytesAfter ||
@@ -307,6 +324,76 @@ func TestExportFailureHooksCleanStagingAndNeverCommitPartialPair(t *testing.T) {
 			}
 			assertNoExportTemps(t, dir)
 		})
+	}
+}
+
+func TestExportCancellationDuringStageCleansStaging(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, context.Background(), sourcePath)
+	defer st.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	outputDir := filepath.Join(dir, "canceled")
+	options := testExportOptions(sourcePath, outputDir)
+	options.Progress = func(stage Stage) {
+		if stage == StageCanonicalShaping {
+			cancel()
+		}
+	}
+	if _, err := Export(ctx, options); err == nil || !strings.Contains(err.Error(), "canceled during canonical shaping") {
+		t.Fatalf("canceled export error = %v", err)
+	}
+	if _, err := os.Stat(outputDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled export left target: %v", err)
+	}
+	assertNoExportTemps(t, dir)
+}
+
+func TestExportRejectsForeignKeyViolationBeforeIndexRemoval(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	if _, err := st.DB().ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `insert into pull_request_checks(id, thread_id, name, status, raw_json, fetched_at) values(99, 999, 'orphan', 'completed', '{}', '2026-08-09T00:00:00Z')`); err != nil {
+		t.Fatalf("seed FK violation: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `pragma foreign_keys = on`); err != nil {
+		t.Fatal(err)
+	}
+	outputDir := filepath.Join(dir, "invalid-fk")
+	if _, err := Export(ctx, testExportOptions(sourcePath, outputDir)); err == nil || !strings.Contains(err.Error(), "foreign_key_check failed") {
+		t.Fatalf("foreign key export error = %v", err)
+	}
+	if _, err := os.Stat(outputDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("foreign key failure left target: %v", err)
+	}
+	assertNoExportTemps(t, dir)
+}
+
+func TestConfigureDisposableStoreUsesRollbackJournalAndReducedSync(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "staging.db"))
+	if err != nil {
+		t.Fatalf("open staging store: %v", err)
+	}
+	defer st.Close()
+	if err := configureDisposableStore(ctx, st.DB()); err != nil {
+		t.Fatalf("configure disposable store: %v", err)
+	}
+	var journalMode string
+	var synchronous int
+	if err := st.DB().QueryRowContext(ctx, `pragma journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `pragma synchronous`).Scan(&synchronous); err != nil {
+		t.Fatal(err)
+	}
+	if journalMode != "delete" || synchronous != 0 || st.DB().Stats().MaxOpenConnections != 1 {
+		t.Fatalf("disposable settings journal=%q synchronous=%d max_open=%d", journalMode, synchronous, st.DB().Stats().MaxOpenConnections)
 	}
 }
 
