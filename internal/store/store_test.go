@@ -2225,12 +2225,28 @@ func TestPrunePortablePayloads(t *testing.T) {
 	if prDetailCount != 1 || prFileCount != 1 || prCommitCount != 1 || prCheckCount != 1 || runCount != 1 {
 		t.Fatalf("pr/run rows not retained: detail=%d files=%d commits=%d checks=%d runs=%d", prDetailCount, prFileCount, prCommitCount, prCheckCount, runCount)
 	}
-	var portableSchema, capabilities, authorProfile, authorAssociation string
+	var prFilePath, prFileStatus string
+	var prFileAdditions, prFileDeletions, prFileChanges int
+	var prFilePatch sql.NullString
+	if err := st.DB().QueryRowContext(ctx, `
+		select path, status, additions, deletions, changes, patch
+		from pull_request_files
+		where thread_id = 1
+	`).Scan(&prFilePath, &prFileStatus, &prFileAdditions, &prFileDeletions, &prFileChanges, &prFilePatch); err != nil {
+		t.Fatalf("portable pull request file: %v", err)
+	}
+	if prFilePath != "README.md" || prFileStatus != "modified" || prFileAdditions != 10 || prFileDeletions != 2 || prFileChanges != 12 || prFilePatch.Valid {
+		t.Fatalf("portable pull request file metadata=%q/%q/%d/%d/%d patch=%#v", prFilePath, prFileStatus, prFileAdditions, prFileDeletions, prFileChanges, prFilePatch)
+	}
+	var portableSchema, capabilities, excluded, authorProfile, authorAssociation string
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'schema'`).Scan(&portableSchema); err != nil {
 		t.Fatalf("portable schema metadata: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'capabilities'`).Scan(&capabilities); err != nil {
 		t.Fatalf("portable capabilities metadata: %v", err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'excluded'`).Scan(&excluded); err != nil {
+		t.Fatalf("portable excluded metadata: %v", err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `select value from portable_metadata where key = 'thread_author_profile'`).Scan(&authorProfile); err != nil {
 		t.Fatalf("portable author profile metadata: %v", err)
@@ -2243,9 +2259,10 @@ func TestPrunePortablePayloads(t *testing.T) {
 		!strings.Contains(capabilities, "workflow_runs") ||
 		!strings.Contains(capabilities, "author_association") ||
 		!strings.Contains(capabilities, "thread_revisions") ||
+		!strings.Contains(excluded, "pull_request_file_patches") ||
 		authorProfile != "login,type,association" ||
 		authorAssociation != "MEMBER" {
-		t.Fatalf("portable metadata schema=%q capabilities=%q author_profile=%q association=%q", portableSchema, capabilities, authorProfile, authorAssociation)
+		t.Fatalf("portable metadata schema=%q capabilities=%q excluded=%q author_profile=%q association=%q", portableSchema, capabilities, excluded, authorProfile, authorAssociation)
 	}
 	if bodyExcerpt != "abcdefgh" || titleTokens != "[]" || linkedRefs != "[]" || buckets != "[]" || features != "{}" {
 		t.Fatalf("payloads not pruned: bodyExcerpt=%q titleTokens=%q linkedRefs=%q buckets=%q features=%q", bodyExcerpt, titleTokens, linkedRefs, buckets, features)

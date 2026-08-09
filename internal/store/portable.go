@@ -337,6 +337,9 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	} else {
 		stats.RawJSONPruned = pruned
 	}
+	if err := s.clearPortablePullRequestFilePatches(ctx); err != nil {
+		return stats, err
+	}
 	if s.tableExists(ctx, "thread_fingerprints") {
 		result, err := s.db.ExecContext(ctx, `
 			update thread_fingerprints
@@ -577,7 +580,7 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 	}
 	capabilities := "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,family_tombstones,comment_revisions,pr_review_thread_revisions,raw_json_stripped"
 	includes := "repositories,threads,comments,comment_revisions,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_revisions,pull_request_review_thread_syncs,github_workflow_runs"
-	excluded := "raw_json,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs,sync_attempt_failures"
+	excluded := "raw_json,pull_request_file_patches,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs,sync_attempt_failures"
 	if stats.SyncFailuresIncluded {
 		capabilities += ",sync_failure_ledger_redacted"
 		includes += ",sync_attempt_failures"
@@ -858,6 +861,20 @@ func (s *Store) clearPortableRawJSON(ctx context.Context) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+func (s *Store) clearPortablePullRequestFilePatches(ctx context.Context) error {
+	if !s.tableExists(ctx, "pull_request_files") || !s.hasColumn(ctx, "pull_request_files", "patch") {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		update pull_request_files
+		set patch = null
+		where patch is not null and patch != ''
+	`); err != nil {
+		return fmt.Errorf("clear portable pull request file patches: %w", err)
+	}
+	return nil
 }
 
 func canonicalPortableDroppedTables() []string {

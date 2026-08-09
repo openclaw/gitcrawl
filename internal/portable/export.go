@@ -73,6 +73,7 @@ var currentStateProfile = Profile{
 	},
 	Excluded: []string{
 		"raw_json",
+		"pull_request_file_patches",
 		"documents",
 		"fts",
 		"vectors",

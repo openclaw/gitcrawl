@@ -62,7 +62,7 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	}
 	for _, table := range []string{
 		"repositories", "threads", "comments", "thread_revisions", "thread_fingerprints",
-		"pull_request_details", "pull_request_checks", "thread_child_observation_memberships",
+		"pull_request_details", "pull_request_files", "pull_request_checks", "thread_child_observation_memberships",
 	} {
 		if !tableExists(t, db, table) {
 			t.Fatalf("preserved table %s is missing", table)
@@ -95,7 +95,7 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 		t.Fatalf("profile metadata = %q / %q", profileMetadata, indexProfile)
 	}
 	if !csvContains(includes, "comments") || !csvContains(includes, "thread_child_observation_memberships") ||
-		!csvContains(capabilities, "current_comments") || csvContains(excluded, "comments") {
+		!csvContains(capabilities, "current_comments") || !csvContains(excluded, "pull_request_file_patches") || csvContains(excluded, "comments") {
 		t.Fatalf("inaccurate metadata includes=%q capabilities=%q excluded=%q", includes, capabilities, excluded)
 	}
 	if indexExists(t, db, "custom_comments_author") || !indexExists(t, db, "unique_comments_github") {
@@ -115,6 +115,10 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	}
 	if got := hashFile(t, result.DatabasePath); got != result.SHA256 {
 		t.Fatalf("database hash = %s, want %s", got, result.SHA256)
+	}
+	assertPortablePRFilePatchStripped(t, db)
+	if !slices.Contains(manifest.Excluded, "pull_request_file_patches") {
+		t.Fatalf("manifest excluded = %v", manifest.Excluded)
 	}
 	if manifest.Repository == nil || manifest.Repository.FullName != "openclaw/gitcrawl" || result.Repository == nil || *manifest.Repository != *result.Repository {
 		t.Fatalf("single-repository metadata manifest=%+v result=%+v", manifest.Repository, result.Repository)
@@ -142,7 +146,7 @@ func TestExportScopedRepositoryKeepsOnlyRequestedDependentData(t *testing.T) {
 	defer db.Close()
 	for _, table := range []string{
 		"repositories", "threads", "comments", "thread_revisions", "thread_fingerprints",
-		"pull_request_details", "pull_request_checks", "thread_child_observation_memberships",
+		"pull_request_details", "pull_request_files", "pull_request_checks", "thread_child_observation_memberships",
 	} {
 		if got := rowCount(t, db, table); got != 1 {
 			t.Fatalf("scoped table %s rows = %d, want 1", table, got)
@@ -161,6 +165,7 @@ func TestExportScopedRepositoryKeepsOnlyRequestedDependentData(t *testing.T) {
 	if fullName != "openclaw/gitcrawl" || title != "portable export" || commentBody != "comment-current-body" {
 		t.Fatalf("scoped data = %q / %q / %q", fullName, title, commentBody)
 	}
+	assertPortablePRFilePatchStripped(t, db)
 	manifest := readManifest(t, result.ManifestPath)
 	if manifest.Repository == nil || *manifest.Repository != *result.Repository {
 		t.Fatalf("scoped manifest repository = %+v, result = %+v", manifest.Repository, result.Repository)
@@ -377,6 +382,7 @@ func seedExportSource(t *testing.T, ctx context.Context, dbPath string) *store.S
 		`insert into thread_fingerprints(id, thread_revision_id, algorithm_version, fingerprint_hash, fingerprint_slug, title_tokens_json, body_token_hash, linked_refs_json, file_set_hash, module_buckets_json, simhash64, feature_json, created_at) values(1, 1, 'v1', 'fingerprint', 'portable-export', '["portable"]', 'bodyhash', '[]', 'files', '[]', '1', '{}', '2026-08-08T00:00:00Z')`,
 		`insert into thread_key_summaries(id, thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at) values(1, 1, 'llm_key', 'v1', 'openai', 'test', 'in', 'out', 'historical enrichment', '2026-08-08T00:00:00Z')`,
 		`insert into pull_request_details(thread_id, repo_id, number, raw_json, fetched_at, updated_at) values(1, 1, 7, '{}', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
+		`insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at) values(1, 0, 'internal/portable/export.go', 'modified', 10, 2, 12, 'internal/export.go', '@@ retained repository patch', '{}', '2026-08-08T00:00:00Z')`,
 		`insert into pull_request_checks(id, thread_id, name, status, raw_json, fetched_at) values(1, 1, 'test', 'completed', '{}', '2026-08-08T00:00:00Z')`,
 		`insert into thread_child_observation_memberships(thread_id, family, observation_sequence, member_ids_json) values(1, 'comments', 1, '["C1"]')`,
 		`insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, created_at, updated_at) values(1, 1, 'key', 'slug', 'open', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
@@ -418,6 +424,7 @@ func seedSecondExportRepository(t *testing.T, ctx context.Context, st *store.Sto
 		`insert into thread_fingerprints(id, thread_revision_id, algorithm_version, fingerprint_hash, fingerprint_slug, title_tokens_json, body_token_hash, linked_refs_json, file_set_hash, module_buckets_json, simhash64, feature_json, created_at) values(2, 2, 'v1', 'other-fingerprint', 'other', '[]', 'other-bodyhash', '[]', 'other-files', '[]', '2', '{}', '2026-08-08T00:00:00Z')`,
 		`insert into thread_key_summaries(id, thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at) values(2, 2, 'llm_key', 'v1', 'openai', 'test', 'other-in', 'other-out', 'other enrichment', '2026-08-08T00:00:00Z')`,
 		`insert into pull_request_details(thread_id, repo_id, number, raw_json, fetched_at, updated_at) values(2, 2, 8, '{}', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
+		`insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at) values(2, 0, 'other.go', 'added', 4, 0, 4, null, '@@ other repository patch', '{}', '2026-08-08T00:00:00Z')`,
 		`insert into pull_request_checks(id, thread_id, name, status, raw_json, fetched_at) values(2, 2, 'test', 'completed', '{}', '2026-08-08T00:00:00Z')`,
 		`insert into thread_child_observation_memberships(thread_id, family, observation_sequence, member_ids_json) values(2, 'comments', 2, '["C2"]')`,
 		`insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, created_at, updated_at) values(2, 2, 'other-key', 'other-slug', 'open', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
@@ -530,6 +537,22 @@ func assertManifestTableCounts(t *testing.T, db *sql.DB, tables []Table) {
 			t.Fatalf("manifest table %s rows = %d, database = %d", table.Name, table.Rows, got)
 		}
 		previous = table.Name
+	}
+}
+
+func assertPortablePRFilePatchStripped(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var path, status, previousPath string
+	var additions, deletions, changes int
+	var patch sql.NullString
+	if err := db.QueryRow(`
+		select path, status, additions, deletions, changes, previous_path, patch
+		from pull_request_files
+	`).Scan(&path, &status, &additions, &deletions, &changes, &previousPath, &patch); err != nil {
+		t.Fatalf("read portable PR file: %v", err)
+	}
+	if path != "internal/portable/export.go" || status != "modified" || additions != 10 || deletions != 2 || changes != 12 || previousPath != "internal/export.go" || patch.Valid {
+		t.Fatalf("portable PR file=%q/%q/%d/%d/%d/%q patch=%#v", path, status, additions, deletions, changes, previousPath, patch)
 	}
 }
 
