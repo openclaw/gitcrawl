@@ -31,6 +31,7 @@ import (
 	"github.com/openclaw/gitcrawl/internal/config"
 	gh "github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/openai"
+	portableexport "github.com/openclaw/gitcrawl/internal/portable"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/openclaw/gitcrawl/internal/syncer"
 	"github.com/openclaw/gitcrawl/internal/vector"
@@ -3423,9 +3424,89 @@ func (a *App) runPortable(ctx context.Context, args []string) error {
 		return a.printCommandUsage("portable")
 	case "prune":
 		return a.runPortablePrune(ctx, args[1:])
+	case "export":
+		return a.runPortableExport(ctx, args[1:])
 	default:
 		return usageErr(fmt.Errorf("unknown portable subcommand %q", args[0]))
 	}
+}
+
+func (a *App) runPortableExport(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("portable export", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	profile := fs.String("profile", "", "portable export profile")
+	bodyCharsRaw := fs.String("body-chars", "256", "maximum thread body characters to keep")
+	outputDir := fs.String("output-dir", "", "new artifact directory")
+	databaseName := fs.String("database-name", "gitcrawl.db", "portable database basename")
+	publicPath := fs.String("public-path", "", "logical portable database path")
+	maxBytesRaw := fs.String("max-bytes", "", "maximum finalized database bytes")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	valueFlags := map[string]bool{
+		"profile": true, "body-chars": true, "output-dir": true,
+		"database-name": true, "public-path": true, "max-bytes": true,
+	}
+	if err := fs.Parse(normalizeCommandArgs(args, valueFlags)); err != nil {
+		return usageErr(err)
+	}
+	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 0 {
+		return usageErr(fmt.Errorf("portable export does not take positional arguments"))
+	}
+	if strings.TrimSpace(*profile) == "" {
+		return usageErr(fmt.Errorf("--profile is required"))
+	}
+	if strings.TrimSpace(*outputDir) == "" {
+		return usageErr(fmt.Errorf("--output-dir is required"))
+	}
+	bodyChars, err := parseOptionalPositiveInt(*bodyCharsRaw)
+	if err != nil {
+		return usageErr(err)
+	}
+	if bodyChars == 0 {
+		bodyChars = 256
+	}
+	var maxBytes *int64
+	if strings.TrimSpace(*maxBytesRaw) != "" {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(*maxBytesRaw), 10, 64)
+		if err != nil || parsed <= 0 {
+			return usageErr(fmt.Errorf("--max-bytes must be a positive integer"))
+		}
+		maxBytes = &parsed
+	}
+	logicalPath := *publicPath
+	if logicalPath == "" {
+		logicalPath = *databaseName
+	}
+	if _, err := portableexport.ResolveProfile(*profile); err != nil {
+		return usageErr(err)
+	}
+	if err := portableexport.ValidateDatabaseName(*databaseName); err != nil {
+		return usageErr(err)
+	}
+	if err := portableexport.ValidatePublicPath(logicalPath); err != nil {
+		return usageErr(err)
+	}
+	rt, err := a.openLocalRuntimeReadOnly(ctx)
+	if err != nil {
+		return err
+	}
+	sourceDBPath := rt.Store.Path()
+	if err := rt.Store.Close(); err != nil {
+		return err
+	}
+	result, err := portableexport.Export(ctx, portableexport.ExportOptions{
+		SourceDBPath: sourceDBPath,
+		OutputDir:    *outputDir,
+		DatabaseName: *databaseName,
+		PublicPath:   logicalPath,
+		Profile:      *profile,
+		BodyChars:    bodyChars,
+		MaxBytes:     maxBytes,
+	})
+	if err != nil {
+		return err
+	}
+	return a.writeOutput("portable export", result, true)
 }
 
 func (a *App) runPortablePrune(ctx context.Context, args []string) error {
@@ -5179,6 +5260,7 @@ Core commands:
   search               search local thread and source documents; also supports search issues|prs gh syntax
   gh                   moved to Octopool; prints migration note
   portable prune       prune volatile payloads from a portable store
+  portable export      create an immutable derived portable generation
   tui [owner/repo]     browse clusters in the terminal UI; repo is inferred when omitted
 
 No API server is provided. There is intentionally no serve command.
@@ -5395,13 +5477,17 @@ const portableUsageText = `gitcrawl portable manages local portable-store snapsh
 
 Usage:
   gitcrawl portable prune [--body-chars N] [--no-vacuum] [--include-sync-failures] [--no-publish] [--json]
+  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--json]
 
 Subcommands:
   prune               prune volatile payloads from the configured portable store
+  export              create a validated portable artifact in a new directory
 
 The sync failure ledger is excluded by default. --include-sync-failures keeps
 the ledger but replaces every error message with a redaction marker. A present
 or pending ledger forces a secure database rewrite even with --no-vacuum.
 For a portable checkout, prune publishes the database and manifest back into
 the checkout by default. --no-publish leaves them only in the runtime mirror.
+Export never changes the active database or publishes the artifact. It creates
+a complete database and manifest generation at a previously nonexistent path.
 `

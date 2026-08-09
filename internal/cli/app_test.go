@@ -4799,6 +4799,103 @@ func TestPortablePruneCommand(t *testing.T) {
 	}
 }
 
+func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "source.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seedPortableThread(t, dbPath, 7, "live WAL title")
+	writer, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	defer writer.Close()
+	writer.DB().SetMaxOpenConns(1)
+	if _, err := writer.DB().ExecContext(ctx, `pragma wal_autocheckpoint = 0`); err != nil {
+		t.Fatalf("disable WAL autocheckpoint: %v", err)
+	}
+	if _, err := writer.DB().ExecContext(ctx, `update threads set title = 'committed WAL title' where number = 7`); err != nil {
+		t.Fatalf("write live WAL state: %v", err)
+	}
+
+	outputDir := filepath.Join(dir, "artifact.next")
+	app := New()
+	var stdout bytes.Buffer
+	app.Stdout = &stdout
+	if err := app.Run(ctx, []string{
+		"--config", configPath,
+		"portable", "export",
+		"--profile", "current-state-v1",
+		"--body-chars", "32",
+		"--output-dir", outputDir,
+		"--database-name", "openclaw__openclaw.sync.db",
+		"--public-path", "data/openclaw__openclaw.sync.db",
+		"--max-bytes", "99999999",
+		"--json",
+	}); err != nil {
+		t.Fatalf("portable export: %v", err)
+	}
+	var payload struct {
+		Profile              string `json:"profile"`
+		PortableSchema       string `json:"portable_schema"`
+		SourceDBPath         string `json:"source_db_path"`
+		OutputDir            string `json:"output_dir"`
+		DatabasePath         string `json:"database_path"`
+		ManifestPath         string `json:"manifest_path"`
+		PublicPath           string `json:"public_path"`
+		BodyChars            int    `json:"body_chars"`
+		BytesAfter           int64  `json:"bytes_after"`
+		MaxBytes             int64  `json:"max_bytes"`
+		ArtifactID           string `json:"artifact_id"`
+		SHA256               string `json:"sha256"`
+		QuickCheck           string `json:"quick_check"`
+		IntegrityCheck       string `json:"integrity_check"`
+		ForeignKeyViolations int    `json:"foreign_key_violations"`
+		ArtifactCommitted    bool   `json:"artifact_committed"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("parse portable export JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.Profile != "current-state-v1" || payload.PortableSchema != "gitcrawl-portable-sync-v2" ||
+		payload.SourceDBPath != dbPath || payload.OutputDir != outputDir || payload.PublicPath != "data/openclaw__openclaw.sync.db" ||
+		payload.BodyChars != 32 || payload.MaxBytes != 99999999 || payload.BytesAfter <= 0 || payload.ArtifactID != payload.SHA256 ||
+		payload.QuickCheck != "ok" || payload.IntegrityCheck != "ok" || payload.ForeignKeyViolations != 0 || !payload.ArtifactCommitted {
+		t.Fatalf("portable export payload = %+v", payload)
+	}
+	artifact, err := sql.Open("sqlite", payload.DatabasePath)
+	if err != nil {
+		t.Fatalf("open artifact: %v", err)
+	}
+	defer artifact.Close()
+	var title, sourcePath string
+	if err := artifact.QueryRowContext(ctx, `select title from threads where number = 7`).Scan(&title); err != nil {
+		t.Fatalf("read exported thread: %v", err)
+	}
+	if err := artifact.QueryRowContext(ctx, `select value from portable_metadata where key = 'source_path'`).Scan(&sourcePath); err != nil {
+		t.Fatalf("read portable source path: %v", err)
+	}
+	if title != "committed WAL title" || sourcePath != payload.PublicPath || strings.Contains(sourcePath, dir) {
+		t.Fatalf("artifact title/source = %q / %q", title, sourcePath)
+	}
+	if _, err := os.Stat(payload.ManifestPath); err != nil {
+		t.Fatalf("manifest missing: %v", err)
+	}
+}
+
+func TestPortableExportCommandValidatesProfileBeforeOpeningSource(t *testing.T) {
+	app := New()
+	err := app.Run(context.Background(), []string{
+		"--config", filepath.Join(t.TempDir(), "missing.toml"),
+		"portable", "export", "--profile", "future-v2", "--output-dir", filepath.Join(t.TempDir(), "out"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported portable export profile "future-v2"`) {
+		t.Fatalf("unknown profile error = %v", err)
+	}
+}
+
 type portablePruneTestFixture struct {
 	configPath string
 	checkoutDB string

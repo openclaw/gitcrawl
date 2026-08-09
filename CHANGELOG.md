@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Portable stores
+
+- Add `portable export` with the `current-state-v1` profile for atomic, validated, size-bounded derived database generations that leave the active archive unchanged.
+
 ## 0.9.0 - 2026-08-08
 
 ### Portable stores

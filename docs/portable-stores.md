@@ -118,6 +118,70 @@ Portable mirrors retain existing revision-bound key summaries, but do not regene
 
 After pruning, commit and push both the database and its `.manifest.json` from the portable checkout the way you would for any Git repository.
 
+## Derived generations: `gitcrawl portable export`
+
+`portable export` creates a new, validated database-and-manifest generation from
+the configured active database without changing that database. It is generic
+artifact production: Gitcrawl owns the consistent SQLite snapshot, semantic
+shaping, validation, size budget, digest, and manifest. Promotion into a
+repository, replacement of an older generation, Git commits, and publication
+remain external operations.
+
+```bash
+gitcrawl --config /path/to/config.toml portable export \
+  --profile current-state-v1 \
+  --body-chars 32 \
+  --output-dir /path/to/artifact.next \
+  --database-name openclaw__openclaw.sync.db \
+  --public-path data/openclaw__openclaw.sync.db \
+  --max-bytes 99999999 \
+  --json
+```
+
+The required `--profile` currently accepts only `current-state-v1`.
+`--output-dir` is also required and must not exist; export builds beside it and
+renames the complete pair into place only after validation. The database name
+defaults to `gitcrawl.db` and must be a safe basename. `--public-path` defaults
+to that name and is a clean relative slash path recorded in the manifest and
+`portable_metadata`; it is a logical consumer path, never the source or output
+host path. `--body-chars` defaults to `256`. `--max-bytes` is optional and
+inclusive, so a deployment requiring a database smaller than 100,000,000 bytes
+should pass `99999999` rather than relying on a Gitcrawl-specific hosting limit.
+
+The `current-state-v1` profile starts with portable v2 shaping and keeps current
+repositories, issue and pull-request threads, current comments, compact thread
+revisions and fingerprints, pull-request detail/review/check state, workflow
+runs, and child observation memberships. It omits comment revision history,
+generated thread key summaries, and derived cluster groups, memberships,
+lineage, overrides, and closures. It also removes ordinary non-unique indexes
+while retaining primary keys, unique constraints, and explicit unique indexes.
+The manifest records the exact dropped tables and indexes.
+
+Those history and governance omissions are intentional data loss in the
+generation, not a promise that every omission can be rebuilt. Opening the
+export writable lets the current Gitcrawl migration recreate missing tables and
+ordinary schema indexes, but the omitted historical snapshots, summaries, and
+local maintainer decisions do not return. Rebuildable derived state may be
+generated again from the retained current data where the relevant command
+supports it.
+
+Before committing the generation, export runs a final `VACUUM`, removes SQLite
+sidecars, requires `quick_check` and full `integrity_check` to return `ok`,
+requires an empty `foreign_key_check`, enforces the optional finalized byte
+budget, hashes the database with SHA-256, writes and fsyncs the manifest, then
+re-reads the pair and validates it again. Any failure leaves the requested
+output directory absent and removes the private staging directory.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--profile <name>` | _(required)_ | Semantic export profile; currently `current-state-v1` |
+| `--output-dir <path>` | _(required)_ | New artifact directory; must not already exist |
+| `--database-name <name>` | `gitcrawl.db` | Safe database basename inside the generation |
+| `--public-path <path>` | database name | Logical relative slash path recorded in metadata and the manifest |
+| `--body-chars <n>` | `256` | Maximum body characters retained in compact excerpts |
+| `--max-bytes <n>` | _(unset)_ | Inclusive maximum finalized database size |
+| `--json` | _(off)_ | Stable structured result, including local source and output paths |
+
 ## A typical publishing flow
 
 ```bash

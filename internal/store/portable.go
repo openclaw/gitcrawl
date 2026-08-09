@@ -23,6 +23,10 @@ type PortablePruneOptions struct {
 	BodyChars           int
 	Vacuum              bool
 	IncludeSyncFailures bool
+	// DeferSecureRewrite leaves the scrub marker in place so a derived export
+	// can perform one final VACUUM after applying additional profile shaping.
+	// The in-place portable prune command must leave this false.
+	DeferSecureRewrite bool
 }
 
 type PortablePruneStats struct {
@@ -169,7 +173,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	if err != nil {
 		return stats, err
 	}
-	if syncFailureScrubRequired {
+	if syncFailureScrubRequired && !options.DeferSecureRewrite {
 		if err := s.vacuumPortableDatabase(ctx); err != nil {
 			return stats, err
 		}
