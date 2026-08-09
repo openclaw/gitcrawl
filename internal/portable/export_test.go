@@ -104,6 +104,9 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	if !slices.Contains(result.DroppedIndexes, "custom_comments_author") || slices.Contains(result.DroppedIndexes, "unique_comments_github") {
 		t.Fatalf("dropped indexes = %v", result.DroppedIndexes)
 	}
+	if slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
+		t.Fatalf("implicitly removed indexes were reported as explicitly dropped: %v", result.DroppedIndexes)
+	}
 	manifest := readManifest(t, result.ManifestPath)
 	if manifest.OutputPath != result.PublicPath || manifest.OutputBytes != result.BytesAfter ||
 		manifest.SHA256 != result.SHA256 || manifest.ArtifactID != result.ArtifactID ||
@@ -113,6 +116,100 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	if got := hashFile(t, result.DatabasePath); got != result.SHA256 {
 		t.Fatalf("database hash = %s, want %s", got, result.SHA256)
 	}
+	if manifest.Repository == nil || manifest.Repository.FullName != "openclaw/gitcrawl" || result.Repository == nil || *manifest.Repository != *result.Repository {
+		t.Fatalf("single-repository metadata manifest=%+v result=%+v", manifest.Repository, result.Repository)
+	}
+	assertManifestTableCounts(t, db, manifest.Tables)
+}
+
+func TestExportScopedRepositoryKeepsOnlyRequestedDependentData(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	seedSecondExportRepository(t, ctx, st)
+	options := testExportOptions(sourcePath, filepath.Join(dir, "scoped"))
+	options.Repository = "openclaw/gitcrawl"
+	result, err := Export(ctx, options)
+	if err != nil {
+		t.Fatalf("scoped export: %v", err)
+	}
+	if result.Repository == nil || *result.Repository != (Repository{ID: 1, Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl"}) {
+		t.Fatalf("scoped repository = %+v", result.Repository)
+	}
+	db := openRawDB(t, result.DatabasePath)
+	defer db.Close()
+	for _, table := range []string{
+		"repositories", "threads", "comments", "thread_revisions", "thread_fingerprints",
+		"pull_request_details", "pull_request_checks", "thread_child_observation_memberships",
+	} {
+		if got := rowCount(t, db, table); got != 1 {
+			t.Fatalf("scoped table %s rows = %d, want 1", table, got)
+		}
+	}
+	var fullName, title, commentBody string
+	if err := db.QueryRow(`select full_name from repositories`).Scan(&fullName); err != nil {
+		t.Fatalf("read scoped repository: %v", err)
+	}
+	if err := db.QueryRow(`select title from threads`).Scan(&title); err != nil {
+		t.Fatalf("read scoped thread: %v", err)
+	}
+	if err := db.QueryRow(`select body from comments`).Scan(&commentBody); err != nil {
+		t.Fatalf("read scoped comment: %v", err)
+	}
+	if fullName != "openclaw/gitcrawl" || title != "portable export" || commentBody != "comment-current-body" {
+		t.Fatalf("scoped data = %q / %q / %q", fullName, title, commentBody)
+	}
+	manifest := readManifest(t, result.ManifestPath)
+	if manifest.Repository == nil || *manifest.Repository != *result.Repository {
+		t.Fatalf("scoped manifest repository = %+v, result = %+v", manifest.Repository, result.Repository)
+	}
+	assertManifestTableCounts(t, db, manifest.Tables)
+	if slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
+		t.Fatalf("dropped indexes include indexes removed with a table: %v", result.DroppedIndexes)
+	}
+}
+
+func TestExportMissingRepositoryCleansStaging(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	outputDir := filepath.Join(dir, "missing")
+	options := testExportOptions(sourcePath, outputDir)
+	options.Repository = "openclaw/missing"
+	if _, err := Export(ctx, options); err == nil || !strings.Contains(err.Error(), `target repository "openclaw/missing" count is 0`) {
+		t.Fatalf("missing repository error = %v", err)
+	}
+	if _, err := os.Stat(outputDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing repository left target: %v", err)
+	}
+	assertNoExportTemps(t, dir)
+}
+
+func TestExportUnscopedMultiRepositoryOmitsSingularMetadata(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	seedSecondExportRepository(t, ctx, st)
+	result, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "multi")))
+	if err != nil {
+		t.Fatalf("unscoped multi-repository export: %v", err)
+	}
+	manifest := readManifest(t, result.ManifestPath)
+	if result.Repository != nil || manifest.Repository != nil {
+		t.Fatalf("multi-repository metadata result=%+v manifest=%+v", result.Repository, manifest.Repository)
+	}
+	db := openRawDB(t, result.DatabasePath)
+	defer db.Close()
+	if got := rowCount(t, db, "repositories"); got != 2 {
+		t.Fatalf("unscoped repositories = %d, want 2", got)
+	}
+	assertManifestTableCounts(t, db, manifest.Tables)
 }
 
 func TestExportByteBudgetExactAndOneByteOver(t *testing.T) {
@@ -288,6 +385,7 @@ func seedExportSource(t *testing.T, ctx context.Context, dbPath string) *store.S
 		`insert into cluster_aliases(cluster_id, alias_slug, reason, created_at) values(1, 'old-slug', 'lineage', '2026-08-08T00:00:00Z')`,
 		`insert into cluster_closures(cluster_id, reason, actor_kind, created_at, updated_at) values(1, 'local', 'human', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
 		`create index custom_comments_author on comments(author_login)`,
+		`create index custom_comment_revisions_body on comment_revisions(body)`,
 		`create unique index unique_comments_github on comments(github_id)`,
 	}
 	tx, err := st.DB().BeginTx(ctx, nil)
@@ -307,6 +405,40 @@ func seedExportSource(t *testing.T, ctx context.Context, dbPath string) *store.S
 		t.Fatalf("source WAL missing: %v", err)
 	}
 	return st
+}
+
+func seedSecondExportRepository(t *testing.T, ctx context.Context, st *store.Store) {
+	t.Helper()
+	statements := []string{
+		`insert into repositories(id, owner, name, full_name, raw_json, updated_at) values(2, 'openclaw', 'other', 'openclaw/other', '{}', '2026-08-08T00:00:00Z')`,
+		`insert into threads(id, repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at) values(2, 2, 'T2', 8, 'pull_request', 'open', 'other repository', 'other body', 'https://github.com/openclaw/other/pull/8', '[]', '[]', '{}', 'other-hash', '2026-08-08T00:00:00Z')`,
+		`insert into comments(id, thread_id, github_id, comment_type, body, raw_json) values(2, 2, 'C2', 'issue_comment', 'other-comment', '{}')`,
+		`insert into comment_revisions(id, comment_id, body, raw_json, recorded_at) values(2, 2, 'other-history', '{}', '2026-08-08T00:00:00Z')`,
+		`insert into thread_revisions(id, thread_id, content_hash, title_hash, body_hash, labels_hash, created_at) values(2, 2, 'other-content', 'other-title', 'other-body', 'other-labels', '2026-08-08T00:00:00Z')`,
+		`insert into thread_fingerprints(id, thread_revision_id, algorithm_version, fingerprint_hash, fingerprint_slug, title_tokens_json, body_token_hash, linked_refs_json, file_set_hash, module_buckets_json, simhash64, feature_json, created_at) values(2, 2, 'v1', 'other-fingerprint', 'other', '[]', 'other-bodyhash', '[]', 'other-files', '[]', '2', '{}', '2026-08-08T00:00:00Z')`,
+		`insert into thread_key_summaries(id, thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at) values(2, 2, 'llm_key', 'v1', 'openai', 'test', 'other-in', 'other-out', 'other enrichment', '2026-08-08T00:00:00Z')`,
+		`insert into pull_request_details(thread_id, repo_id, number, raw_json, fetched_at, updated_at) values(2, 2, 8, '{}', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
+		`insert into pull_request_checks(id, thread_id, name, status, raw_json, fetched_at) values(2, 2, 'test', 'completed', '{}', '2026-08-08T00:00:00Z')`,
+		`insert into thread_child_observation_memberships(thread_id, family, observation_sequence, member_ids_json) values(2, 'comments', 2, '["C2"]')`,
+		`insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, created_at, updated_at) values(2, 2, 'other-key', 'other-slug', 'open', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
+		`insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at) values(2, 2, 'member', 'active', 'system', '{}', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
+		`insert into cluster_overrides(id, repo_id, cluster_id, thread_id, action, created_at) values(2, 2, 2, 2, 'exclude', '2026-08-08T00:00:00Z')`,
+		`insert into cluster_aliases(cluster_id, alias_slug, reason, created_at) values(2, 'other-old-slug', 'lineage', '2026-08-08T00:00:00Z')`,
+		`insert into cluster_closures(cluster_id, reason, actor_kind, created_at, updated_at) values(2, 'local', 'human', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
+	}
+	tx, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin second repository seed: %v", err)
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("seed second repository with %q: %v", statement, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit second repository seed: %v", err)
+	}
 }
 
 func testExportOptions(sourcePath, outputDir string) ExportOptions {
@@ -382,6 +514,23 @@ func readManifest(t *testing.T, path string) Manifest {
 		t.Fatalf("read manifest: %v", err)
 	}
 	return manifest
+}
+
+func assertManifestTableCounts(t *testing.T, db *sql.DB, tables []Table) {
+	t.Helper()
+	if len(tables) == 0 {
+		t.Fatal("manifest tables are empty")
+	}
+	previous := ""
+	for _, table := range tables {
+		if previous != "" && table.Name <= previous {
+			t.Fatalf("manifest tables not sorted: %q before %q", previous, table.Name)
+		}
+		if got := int64(rowCount(t, db, table.Name)); got != table.Rows {
+			t.Fatalf("manifest table %s rows = %d, database = %d", table.Name, table.Rows, got)
+		}
+		previous = table.Name
+	}
 }
 
 func assertNoExportTemps(t *testing.T, parent string) {

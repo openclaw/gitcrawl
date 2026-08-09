@@ -4833,19 +4833,26 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		"--output-dir", outputDir,
 		"--database-name", "openclaw__openclaw.sync.db",
 		"--public-path", "data/openclaw__openclaw.sync.db",
+		"--repository", "openclaw/openclaw",
 		"--max-bytes", "99999999",
 		"--json",
 	}); err != nil {
 		t.Fatalf("portable export: %v", err)
 	}
 	var payload struct {
-		Profile              string `json:"profile"`
-		PortableSchema       string `json:"portable_schema"`
-		SourceDBPath         string `json:"source_db_path"`
-		OutputDir            string `json:"output_dir"`
-		DatabasePath         string `json:"database_path"`
-		ManifestPath         string `json:"manifest_path"`
-		PublicPath           string `json:"public_path"`
+		Profile        string `json:"profile"`
+		PortableSchema string `json:"portable_schema"`
+		SourceDBPath   string `json:"source_db_path"`
+		OutputDir      string `json:"output_dir"`
+		DatabasePath   string `json:"database_path"`
+		ManifestPath   string `json:"manifest_path"`
+		PublicPath     string `json:"public_path"`
+		Repository     struct {
+			ID       int64  `json:"id"`
+			Owner    string `json:"owner"`
+			Name     string `json:"name"`
+			FullName string `json:"fullName"`
+		} `json:"repository"`
 		BodyChars            int    `json:"body_chars"`
 		BytesAfter           int64  `json:"bytes_after"`
 		MaxBytes             int64  `json:"max_bytes"`
@@ -4861,6 +4868,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 	}
 	if payload.Profile != "current-state-v1" || payload.PortableSchema != "gitcrawl-portable-sync-v2" ||
 		payload.SourceDBPath != dbPath || payload.OutputDir != outputDir || payload.PublicPath != "data/openclaw__openclaw.sync.db" ||
+		payload.Repository.Owner != "openclaw" || payload.Repository.Name != "openclaw" || payload.Repository.FullName != "openclaw/openclaw" ||
 		payload.BodyChars != 32 || payload.MaxBytes != 99999999 || payload.BytesAfter <= 0 || payload.ArtifactID != payload.SHA256 ||
 		payload.QuickCheck != "ok" || payload.IntegrityCheck != "ok" || payload.ForeignKeyViolations != 0 || !payload.ArtifactCommitted {
 		t.Fatalf("portable export payload = %+v", payload)
@@ -4893,6 +4901,20 @@ func TestPortableExportCommandValidatesProfileBeforeOpeningSource(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), `unsupported portable export profile "future-v2"`) {
 		t.Fatalf("unknown profile error = %v", err)
+	}
+	err = app.Run(context.Background(), []string{
+		"--config", filepath.Join(t.TempDir(), "missing.toml"),
+		"portable", "export", "--profile", "current-state-v1", "--output-dir", filepath.Join(t.TempDir(), "out"), "--repository", "openclaw",
+	})
+	if err == nil || !strings.Contains(err.Error(), `repository: expected owner/repo, got "openclaw"`) {
+		t.Fatalf("invalid repository error = %v", err)
+	}
+	err = app.Run(context.Background(), []string{
+		"--config", filepath.Join(t.TempDir(), "missing.toml"),
+		"portable", "export", "--profile", "current-state-v1", "--output-dir", filepath.Join(t.TempDir(), "out"), "--repository", "openclaw /gitcrawl",
+	})
+	if err == nil || !strings.Contains(err.Error(), `repository: expected owner/repo, got "openclaw /gitcrawl"`) {
+		t.Fatalf("non-canonical repository error = %v", err)
 	}
 }
 

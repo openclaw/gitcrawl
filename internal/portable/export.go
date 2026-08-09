@@ -105,56 +105,71 @@ type ExportOptions struct {
 	DatabaseName string
 	PublicPath   string
 	Profile      string
+	Repository   string
 	BodyChars    int
 	MaxBytes     *int64
 }
 
+type Repository struct {
+	ID       int64  `json:"id"`
+	Owner    string `json:"owner"`
+	Name     string `json:"name"`
+	FullName string `json:"fullName"`
+}
+
+type Table struct {
+	Name string `json:"name"`
+	Rows int64  `json:"rows"`
+}
+
 type Manifest struct {
-	Schema               string   `json:"schema"`
-	PortableSchema       string   `json:"portableSchema"`
-	Profile              string   `json:"profile"`
-	ProfileVersion       int      `json:"profileVersion"`
-	ExportedAt           string   `json:"exportedAt"`
-	OutputPath           string   `json:"outputPath"`
-	OutputBytes          int64    `json:"outputBytes"`
-	SHA256               string   `json:"sha256"`
-	ArtifactID           string   `json:"artifactId"`
-	BodyChars            int      `json:"bodyChars"`
-	MaxBytes             *int64   `json:"maxBytes,omitempty"`
-	Tables               []string `json:"tables"`
-	Excluded             []string `json:"excluded"`
-	ValidationOK         bool     `json:"validationOk"`
-	QuickCheck           string   `json:"quickCheck"`
-	IntegrityCheck       string   `json:"integrityCheck"`
-	ForeignKeyViolations int      `json:"foreignKeyViolations"`
-	DroppedTables        []string `json:"droppedTables"`
-	DroppedIndexes       []string `json:"droppedIndexes"`
-	IndexProfile         string   `json:"indexProfile"`
+	Schema               string      `json:"schema"`
+	PortableSchema       string      `json:"portableSchema"`
+	Profile              string      `json:"profile"`
+	ProfileVersion       int         `json:"profileVersion"`
+	ExportedAt           string      `json:"exportedAt"`
+	OutputPath           string      `json:"outputPath"`
+	OutputBytes          int64       `json:"outputBytes"`
+	SHA256               string      `json:"sha256"`
+	ArtifactID           string      `json:"artifactId"`
+	Repository           *Repository `json:"repository,omitempty"`
+	BodyChars            int         `json:"bodyChars"`
+	MaxBytes             *int64      `json:"maxBytes,omitempty"`
+	Tables               []Table     `json:"tables"`
+	Excluded             []string    `json:"excluded"`
+	ValidationOK         bool        `json:"validationOk"`
+	QuickCheck           string      `json:"quickCheck"`
+	IntegrityCheck       string      `json:"integrityCheck"`
+	ForeignKeyViolations int         `json:"foreignKeyViolations"`
+	DroppedTables        []string    `json:"droppedTables"`
+	DroppedIndexes       []string    `json:"droppedIndexes"`
+	IndexProfile         string      `json:"indexProfile"`
 }
 
 type ExportResult struct {
-	Profile              string   `json:"profile"`
-	PortableSchema       string   `json:"portable_schema"`
-	Schema               string   `json:"schema"`
-	SourceDBPath         string   `json:"source_db_path"`
-	OutputDir            string   `json:"output_dir"`
-	DatabasePath         string   `json:"database_path"`
-	ManifestPath         string   `json:"manifest_path"`
-	PublicPath           string   `json:"public_path"`
-	BodyChars            int      `json:"body_chars"`
-	BytesBefore          int64    `json:"bytes_before"`
-	BytesAfter           int64    `json:"bytes_after"`
-	MaxBytes             *int64   `json:"max_bytes,omitempty"`
-	ByteBudgetOK         bool     `json:"byte_budget_ok"`
-	ArtifactID           string   `json:"artifact_id"`
-	SHA256               string   `json:"sha256"`
-	QuickCheck           string   `json:"quick_check"`
-	IntegrityCheck       string   `json:"integrity_check"`
-	ForeignKeyViolations int      `json:"foreign_key_violations"`
-	Vacuumed             bool     `json:"vacuumed"`
-	DroppedTables        []string `json:"dropped_tables"`
-	DroppedIndexes       []string `json:"dropped_indexes"`
-	ArtifactCommitted    bool     `json:"artifact_committed"`
+	Profile              string      `json:"profile"`
+	PortableSchema       string      `json:"portable_schema"`
+	Schema               string      `json:"schema"`
+	SourceDBPath         string      `json:"source_db_path"`
+	OutputDir            string      `json:"output_dir"`
+	DatabasePath         string      `json:"database_path"`
+	ManifestPath         string      `json:"manifest_path"`
+	PublicPath           string      `json:"public_path"`
+	Repository           *Repository `json:"repository,omitempty"`
+	BodyChars            int         `json:"body_chars"`
+	BytesBefore          int64       `json:"bytes_before"`
+	BytesAfter           int64       `json:"bytes_after"`
+	MaxBytes             *int64      `json:"max_bytes,omitempty"`
+	ByteBudgetOK         bool        `json:"byte_budget_ok"`
+	ArtifactID           string      `json:"artifact_id"`
+	SHA256               string      `json:"sha256"`
+	QuickCheck           string      `json:"quick_check"`
+	IntegrityCheck       string      `json:"integrity_check"`
+	ForeignKeyViolations int         `json:"foreign_key_violations"`
+	Vacuumed             bool        `json:"vacuumed"`
+	DroppedTables        []string    `json:"dropped_tables"`
+	DroppedIndexes       []string    `json:"dropped_indexes"`
+	ArtifactCommitted    bool        `json:"artifact_committed"`
 }
 
 type exporter struct {
@@ -244,9 +259,12 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			_ = st.Close()
 		}
 	}()
-	droppedIndexes, err := ordinaryNonUniqueIndexes(ctx, st.DB())
-	if err != nil {
-		return result, err
+	if options.Repository != "" {
+		scope, err := st.RestrictPortableRepository(ctx, options.Repository)
+		if err != nil {
+			return result, fmt.Errorf("restrict portable repository: %w", err)
+		}
+		result.Repository = repositoryFromStore(scope.Repository)
 	}
 	pruneStats, err := st.PrunePortablePayloads(ctx, store.PortablePruneOptions{
 		BodyChars:           options.BodyChars,
@@ -267,12 +285,16 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			droppedTables = append(droppedTables, table)
 		}
 	}
+	droppedIndexes, err := ordinaryNonUniqueIndexes(ctx, st.DB())
+	if err != nil {
+		return result, err
+	}
 	for _, index := range droppedIndexes {
 		if _, err := st.DB().ExecContext(ctx, `drop index if exists `+quoteIdentifier(index)); err != nil {
 			return result, fmt.Errorf("drop portable index %s: %w", index, err)
 		}
 	}
-	tables, err := databaseTables(ctx, st.DB())
+	tableNames, err := databaseTableNames(ctx, st.DB())
 	if err != nil {
 		return result, err
 	}
@@ -283,7 +305,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		"profile_version": fmt.Sprintf("%d", profile.Version),
 		"body_chars":      fmt.Sprintf("%d", options.BodyChars),
 		"capabilities":    strings.Join(profile.Capabilities, ","),
-		"includes":        strings.Join(tables, ","),
+		"includes":        strings.Join(tableNames, ","),
 		"excluded":        strings.Join(profile.Excluded, ","),
 		"exported_at":     exportedAt,
 		"source_path":     options.PublicPath,
@@ -316,6 +338,18 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	result.ForeignKeyViolations = foreignKeyViolations
 	if quickCheck != "ok" || integrityCheck != "ok" || foreignKeyViolations != 0 {
 		return result, fmt.Errorf("portable database validation failed: quick_check=%q integrity_check=%q foreign_key_violations=%d", quickCheck, integrityCheck, foreignKeyViolations)
+	}
+	if result.Repository == nil {
+		result.Repository, err = singleRepository(ctx, st.DB())
+		if err != nil {
+			return result, err
+		}
+	} else if err := verifyRepository(ctx, st.DB(), *result.Repository); err != nil {
+		return result, err
+	}
+	tables, err := databaseTableStats(ctx, st.DB())
+	if err != nil {
+		return result, err
 	}
 	if err := st.Close(); err != nil {
 		return result, fmt.Errorf("close portable snapshot: %w", err)
@@ -351,6 +385,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		OutputBytes:          info.Size(),
 		SHA256:               sha,
 		ArtifactID:           sha,
+		Repository:           result.Repository,
 		BodyChars:            options.BodyChars,
 		MaxBytes:             options.MaxBytes,
 		Tables:               tables,
@@ -472,7 +507,7 @@ func snapshotSQLite(ctx context.Context, sourcePath, targetPath string) error {
 }
 
 func ordinaryNonUniqueIndexes(ctx context.Context, db *sql.DB) ([]string, error) {
-	tables, err := databaseTables(ctx, db)
+	tables, err := databaseTableNames(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +540,7 @@ func ordinaryNonUniqueIndexes(ctx context.Context, db *sql.DB) ([]string, error)
 	return indexes, nil
 }
 
-func databaseTables(ctx context.Context, db *sql.DB) ([]string, error) {
+func databaseTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `select name from sqlite_schema where type = 'table' and name not like 'sqlite_%' order by name`)
 	if err != nil {
 		return nil, fmt.Errorf("list portable tables: %w", err)
@@ -520,6 +555,52 @@ func databaseTables(ctx context.Context, db *sql.DB) ([]string, error) {
 		tables = append(tables, name)
 	}
 	return tables, rows.Err()
+}
+
+func databaseTableStats(ctx context.Context, db *sql.DB) ([]Table, error) {
+	names, err := databaseTableNames(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	tables := make([]Table, 0, len(names))
+	for _, name := range names {
+		var rows int64
+		if err := db.QueryRowContext(ctx, `select count(*) from `+quoteIdentifier(name)).Scan(&rows); err != nil {
+			return nil, fmt.Errorf("count portable table %s: %w", name, err)
+		}
+		tables = append(tables, Table{Name: name, Rows: rows})
+	}
+	return tables, nil
+}
+
+func repositoryFromStore(repo store.Repository) *Repository {
+	return &Repository{ID: repo.ID, Owner: repo.Owner, Name: repo.Name, FullName: repo.FullName}
+}
+
+func singleRepository(ctx context.Context, db *sql.DB) (*Repository, error) {
+	var count int64
+	if err := db.QueryRowContext(ctx, `select count(*) from repositories`).Scan(&count); err != nil {
+		return nil, fmt.Errorf("count portable repositories: %w", err)
+	}
+	if count != 1 {
+		return nil, nil
+	}
+	var repo Repository
+	if err := db.QueryRowContext(ctx, `select id, owner, name, full_name from repositories`).Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName); err != nil {
+		return nil, fmt.Errorf("read portable repository metadata: %w", err)
+	}
+	return &repo, nil
+}
+
+func verifyRepository(ctx context.Context, db *sql.DB, expected Repository) error {
+	actual, err := singleRepository(ctx, db)
+	if err != nil {
+		return err
+	}
+	if actual == nil || *actual != expected {
+		return fmt.Errorf("portable repository restriction did not preserve exactly %s", expected.FullName)
+	}
+	return nil
 }
 
 func dropTableIfPresent(ctx context.Context, db *sql.DB, table string) (bool, error) {
@@ -728,6 +809,20 @@ func validateManifestPair(ctx context.Context, dbPath, manifestPath string, expe
 	}
 	if violations != actual.ForeignKeyViolations || violations != 0 {
 		return fmt.Errorf("portable manifest foreignKeyViolations does not match database")
+	}
+	tables, err := databaseTableStats(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(tables, actual.Tables) {
+		return fmt.Errorf("portable manifest table counts do not match database")
+	}
+	repository, err := singleRepository(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(repository, actual.Repository) {
+		return fmt.Errorf("portable manifest repository does not match database scope")
 	}
 	for key, want := range map[string]string{
 		"schema":          actual.Schema,

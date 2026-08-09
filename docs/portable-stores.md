@@ -134,6 +134,7 @@ gitcrawl --config /path/to/config.toml portable export \
   --output-dir /path/to/artifact.next \
   --database-name openclaw__openclaw.sync.db \
   --public-path data/openclaw__openclaw.sync.db \
+  --repository openclaw/openclaw \
   --max-bytes 99999999 \
   --json
 ```
@@ -147,6 +148,14 @@ to that name and is a clean relative slash path recorded in the manifest and
 host path. `--body-chars` defaults to `256`. `--max-bytes` is optional and
 inclusive, so a deployment requiring a database smaller than 100,000,000 bytes
 should pass `99999999` rather than relying on a Gitcrawl-specific hosting limit.
+The optional `--repository owner/repo` is semantic export behavior: Gitcrawl
+removes all other repositories and their dependent rows from the disposable
+snapshot, verifies the exact remaining identity, and records it in the manifest.
+Without the flag, multi-repository artifacts remain supported.
+The manifest reports every retained table as a sorted `{name, rows}` object.
+It includes a singular repository object for scoped exports and for unscoped
+artifacts that naturally contain exactly one repository; multi-repository
+artifacts omit that singular field.
 
 The `current-state-v1` profile starts with portable v2 shaping and keeps current
 repositories, issue and pull-request threads, current comments, compact thread
@@ -178,6 +187,7 @@ output directory absent and removes the private staging directory.
 | `--output-dir <path>` | _(required)_ | New artifact directory; must not already exist |
 | `--database-name <name>` | `gitcrawl.db` | Safe database basename inside the generation |
 | `--public-path <path>` | database name | Logical relative slash path recorded in metadata and the manifest |
+| `--repository <owner/repo>` | _(unset)_ | Semantically restrict the artifact to exactly one repository |
 | `--body-chars <n>` | `256` | Maximum body characters retained in compact excerpts |
 | `--max-bytes <n>` | _(unset)_ | Inclusive maximum finalized database size |
 | `--json` | _(off)_ | Stable structured result, including local source and output paths |

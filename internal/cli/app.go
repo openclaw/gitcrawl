@@ -3439,11 +3439,12 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	outputDir := fs.String("output-dir", "", "new artifact directory")
 	databaseName := fs.String("database-name", "gitcrawl.db", "portable database basename")
 	publicPath := fs.String("public-path", "", "logical portable database path")
+	repositoryRaw := fs.String("repository", "", "restrict the artifact to one owner/repo")
 	maxBytesRaw := fs.String("max-bytes", "", "maximum finalized database bytes")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	valueFlags := map[string]bool{
 		"profile": true, "body-chars": true, "output-dir": true,
-		"database-name": true, "public-path": true, "max-bytes": true,
+		"database-name": true, "public-path": true, "repository": true, "max-bytes": true,
 	}
 	if err := fs.Parse(normalizeCommandArgs(args, valueFlags)); err != nil {
 		return usageErr(err)
@@ -3486,6 +3487,17 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	if err := portableexport.ValidatePublicPath(logicalPath); err != nil {
 		return usageErr(err)
 	}
+	repository := ""
+	if strings.TrimSpace(*repositoryRaw) != "" {
+		owner, name, err := parseOwnerRepo(*repositoryRaw)
+		if err != nil {
+			return usageErr(fmt.Errorf("repository: %w", err))
+		}
+		repository = owner + "/" + name
+		if strings.TrimSpace(*repositoryRaw) != repository {
+			return usageErr(fmt.Errorf("repository: expected owner/repo, got %q", *repositoryRaw))
+		}
+	}
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
@@ -3500,6 +3512,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 		DatabaseName: *databaseName,
 		PublicPath:   logicalPath,
 		Profile:      *profile,
+		Repository:   repository,
 		BodyChars:    bodyChars,
 		MaxBytes:     maxBytes,
 	})
@@ -5477,7 +5490,7 @@ const portableUsageText = `gitcrawl portable manages local portable-store snapsh
 
 Usage:
   gitcrawl portable prune [--body-chars N] [--no-vacuum] [--include-sync-failures] [--no-publish] [--json]
-  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--json]
+  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo] [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--json]
 
 Subcommands:
   prune               prune volatile payloads from the configured portable store
@@ -5490,4 +5503,5 @@ For a portable checkout, prune publishes the database and manifest back into
 the checkout by default. --no-publish leaves them only in the runtime mirror.
 Export never changes the active database or publishes the artifact. It creates
 a complete database and manifest generation at a previously nonexistent path.
+--repository semantically restricts the disposable snapshot to one owner/repo.
 `
