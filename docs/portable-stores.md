@@ -127,6 +127,10 @@ shaping, validation, size budget, digest, and manifest. Promotion into a
 repository, replacement of an older generation, Git commits, and publication
 remain external operations.
 
+The initial snapshot uses SQLite's online backup API in bounded page chunks, so
+committed WAL state is captured consistently and cancellation can be observed
+between chunks without compacting the multi-gigabyte source first.
+
 ```bash
 gitcrawl --config /path/to/config.toml portable export \
   --profile current-state-v1 \
@@ -177,8 +181,10 @@ supports it.
 
 Before removing transport-only indexes, export requires an empty
 `foreign_key_check` while those indexes still make relationship proof efficient.
-It then runs one final `VACUUM`, removes SQLite sidecars, requires `quick_check`
-and full `integrity_check` to return `ok`, enforces the optional finalized byte
+It then creates one compact final generation with `VACUUM INTO`, closes and
+removes the larger private working database, and promotes the compact file
+within staging. The compact file must pass `quick_check` and full
+`integrity_check`; export then enforces the optional finalized byte
 budget, hashes the database with SHA-256, writes and fsyncs the manifest, then
 re-reads the pair without repeating the unindexed foreign-key scan. Concise
 stage progress is written to stderr, including during JSON output. Any failure

@@ -21,7 +21,7 @@ import (
 	"unicode"
 
 	"github.com/openclaw/gitcrawl/internal/store"
-	_ "modernc.org/sqlite"
+	moderncsqlite "modernc.org/sqlite"
 )
 
 const (
@@ -29,6 +29,8 @@ const (
 	portableSchema        = "gitcrawl-portable-sync-v2"
 	currentProfileVersion = 1
 	defaultBodyChars      = 256
+	onlineBackupPageChunk = int32(1024)
+	onlineBackupBusyRetry = 50 * time.Millisecond
 )
 
 // Profile defines a portable artifact's semantic policy independently of CLI
@@ -125,9 +127,19 @@ const (
 	StageValidation       Stage = "validation"
 	StageManifest         Stage = "manifest"
 	StageArtifactCommit   Stage = "artifact commit"
+	StageComplete         Stage = "complete"
 )
 
 type ProgressFunc func(Stage)
+
+type onlineBackupOptions struct {
+	PagesPerStep int32
+	AfterStep    func(remaining, pageCount int)
+}
+
+type backupCreator interface {
+	NewBackup(string) (*moderncsqlite.Backup, error)
+}
 
 type Repository struct {
 	ID       int64  `json:"id"`
@@ -373,42 +385,60 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err := reportProgress(ctx, options.Progress, StageFinalVacuum); err != nil {
 		return result, err
 	}
-	if err := finalVacuum(ctx, st.DB()); err != nil {
+	compactPath, err := createCompactDatabase(ctx, st.DB(), dbPath)
+	if err != nil {
+		return result, err
+	}
+	if err := st.Close(); err != nil {
+		return result, fmt.Errorf("close uncompact portable snapshot: %w", err)
+	}
+	closed = true
+	if err := replaceWithCompactDatabase(ctx, dbPath, compactPath); err != nil {
 		return result, err
 	}
 	result.Vacuumed = true
 	if err := reportProgress(ctx, options.Progress, StageValidation); err != nil {
 		return result, err
 	}
-	quickCheck, err := checkPragma(ctx, st.DB(), "quick_check")
+	finalDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
+		return result, fmt.Errorf("open compact portable database: %w", err)
+	}
+	finalDB.SetMaxOpenConns(1)
+	quickCheck, err := checkPragma(ctx, finalDB, "quick_check")
+	if err != nil {
+		_ = finalDB.Close()
 		return result, err
 	}
-	integrityCheck, err := checkPragma(ctx, st.DB(), "integrity_check")
+	integrityCheck, err := checkPragma(ctx, finalDB, "integrity_check")
 	if err != nil {
+		_ = finalDB.Close()
 		return result, err
 	}
 	result.QuickCheck = quickCheck
 	result.IntegrityCheck = integrityCheck
 	if quickCheck != "ok" || integrityCheck != "ok" {
+		_ = finalDB.Close()
 		return result, fmt.Errorf("portable database validation failed: quick_check=%q integrity_check=%q", quickCheck, integrityCheck)
 	}
 	if result.Repository == nil {
-		result.Repository, err = singleRepository(ctx, st.DB())
+		result.Repository, err = singleRepository(ctx, finalDB)
 		if err != nil {
+			_ = finalDB.Close()
 			return result, err
 		}
-	} else if err := verifyRepository(ctx, st.DB(), *result.Repository); err != nil {
+	} else if err := verifyRepository(ctx, finalDB, *result.Repository); err != nil {
+		_ = finalDB.Close()
 		return result, err
 	}
-	tables, err := databaseTableStats(ctx, st.DB())
+	tables, err := databaseTableStats(ctx, finalDB)
 	if err != nil {
+		_ = finalDB.Close()
 		return result, err
 	}
-	if err := st.Close(); err != nil {
-		return result, fmt.Errorf("close portable snapshot: %w", err)
+	if err := finalDB.Close(); err != nil {
+		return result, fmt.Errorf("close compact portable database: %w", err)
 	}
-	closed = true
 	if err := removeSQLiteSidecars(dbPath); err != nil {
 		return result, err
 	}
@@ -503,6 +533,9 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	}
 	bestEffortSyncDir(filepath.Dir(outputDir))
 	result.ArtifactCommitted = true
+	if options.Progress != nil {
+		options.Progress(StageComplete)
+	}
 	return result, nil
 }
 
@@ -580,6 +613,18 @@ func ValidatePublicPath(value string) error {
 }
 
 func snapshotSQLite(ctx context.Context, sourcePath, targetPath string) error {
+	return snapshotSQLiteWithOptions(ctx, sourcePath, targetPath, onlineBackupOptions{PagesPerStep: onlineBackupPageChunk})
+}
+
+func snapshotSQLiteWithOptions(ctx context.Context, sourcePath, targetPath string, options onlineBackupOptions) (retErr error) {
+	if options.PagesPerStep <= 0 {
+		return fmt.Errorf("online backup pages per step must be positive")
+	}
+	if _, err := os.Lstat(targetPath); err == nil {
+		return fmt.Errorf("snapshot target already exists: %s", targetPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect snapshot target: %w", err)
+	}
 	abs, err := filepath.Abs(sourcePath)
 	if err != nil {
 		return fmt.Errorf("resolve snapshot source: %w", err)
@@ -600,9 +645,85 @@ func snapshotSQLite(ctx context.Context, sourcePath, targetPath string) error {
 		return fmt.Errorf("open source database for snapshot: %w", err)
 	}
 	defer db.Close()
-	if _, err := db.ExecContext(ctx, `vacuum into ?`, targetPath); err != nil {
+	db.SetMaxOpenConns(1)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open source backup connection: %w", err)
+	}
+	defer conn.Close()
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		if err := os.Remove(targetPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove partial snapshot: %w", err))
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if err := os.Remove(targetPath + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove partial snapshot sidecar: %w", err))
+			}
+		}
+	}()
+	if err := conn.Raw(func(driverConn any) (rawErr error) {
+		creator, ok := driverConn.(backupCreator)
+		if !ok {
+			return fmt.Errorf("SQLite driver connection does not support online backup")
+		}
+		backup, err := creator.NewBackup(targetPath)
+		if err != nil {
+			return fmt.Errorf("start online backup: %w", err)
+		}
+		finished := false
+		defer func() {
+			if finished {
+				return
+			}
+			if err := backup.Finish(); err != nil {
+				rawErr = errors.Join(rawErr, fmt.Errorf("finish online backup after failure: %w", err))
+			}
+		}()
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			more, err := backup.Step(options.PagesPerStep)
+			if err != nil {
+				if store.IsTransientSQLiteBusy(err) {
+					timer := time.NewTimer(onlineBackupBusyRetry)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return ctx.Err()
+					case <-timer.C:
+					}
+					continue
+				}
+				return fmt.Errorf("step online backup: %w", err)
+			}
+			if options.AfterStep != nil {
+				options.AfterStep(backup.Remaining(), backup.PageCount())
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !more {
+				break
+			}
+		}
+		if err := backup.Finish(); err != nil {
+			finished = true
+			return fmt.Errorf("finish online backup: %w", err)
+		}
+		finished = true
+		return nil
+	}); err != nil {
 		return fmt.Errorf("snapshot source database: %w", err)
 	}
+	if _, err := os.Stat(targetPath); err != nil {
+		return fmt.Errorf("stat completed snapshot: %w", err)
+	}
+	complete = true
 	return nil
 }
 
@@ -738,16 +859,71 @@ func writeMetadata(ctx context.Context, db *sql.DB, metadata map[string]string) 
 	return nil
 }
 
-func finalVacuum(ctx context.Context, db *sql.DB) error {
-	var busy, logFrames, checkpointedFrames int
-	if err := db.QueryRowContext(ctx, `pragma wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
-		return fmt.Errorf("checkpoint portable snapshot: %w", err)
+func createCompactDatabase(ctx context.Context, db *sql.DB, workingPath string) (_ string, retErr error) {
+	placeholder, err := os.CreateTemp(filepath.Dir(workingPath), "."+filepath.Base(workingPath)+".compact-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve compact portable database path: %w", err)
 	}
-	if busy != 0 {
-		return fmt.Errorf("checkpoint portable snapshot: busy with %d of %d frames checkpointed", checkpointedFrames, logFrames)
+	compactPath := placeholder.Name()
+	if err := placeholder.Close(); err != nil {
+		_ = os.Remove(compactPath)
+		return "", fmt.Errorf("close compact portable database placeholder: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `vacuum`); err != nil {
-		return fmt.Errorf("vacuum portable snapshot: %w", err)
+	if err := os.Remove(compactPath); err != nil {
+		return "", fmt.Errorf("prepare compact portable database path: %w", err)
+	}
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		if err := os.Remove(compactPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove partial compact database: %w", err))
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if err := os.Remove(compactPath + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove partial compact sidecar: %w", err))
+			}
+		}
+	}()
+	if _, err := db.ExecContext(ctx, `vacuum into ?`, compactPath); err != nil {
+		return "", fmt.Errorf("create compact portable database: %w", err)
+	}
+	if _, err := os.Stat(compactPath); err != nil {
+		return "", fmt.Errorf("stat compact portable database: %w", err)
+	}
+	complete = true
+	return compactPath, nil
+}
+
+func replaceWithCompactDatabase(ctx context.Context, workingPath, compactPath string) error {
+	db, err := sql.Open("sqlite", compactPath)
+	if err != nil {
+		return fmt.Errorf("open compact database candidate: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	quickCheck, checkErr := checkPragma(ctx, db, "quick_check")
+	closeErr := db.Close()
+	if checkErr != nil {
+		return fmt.Errorf("validate compact database candidate: %w", checkErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close compact database candidate: %w", closeErr)
+	}
+	if quickCheck != "ok" {
+		return fmt.Errorf("compact database candidate quick_check = %q", quickCheck)
+	}
+	if err := removeSQLiteSidecars(compactPath); err != nil {
+		return err
+	}
+	if err := removeSQLiteSidecars(workingPath); err != nil {
+		return err
+	}
+	if err := os.Remove(workingPath); err != nil {
+		return fmt.Errorf("remove uncompact portable database: %w", err)
+	}
+	if err := os.Rename(compactPath, workingPath); err != nil {
+		return fmt.Errorf("promote compact portable database: %w", err)
 	}
 	return nil
 }

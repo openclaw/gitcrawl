@@ -4894,13 +4894,20 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 	}
 	for _, stage := range []string{
 		"snapshot", "repository scope", "profile omissions", "canonical shaping",
-		"foreign key proof", "index removal", "final vacuum", "validation", "manifest", "artifact commit",
+		"foreign key proof", "index removal", "final vacuum", "validation", "manifest", "artifact commit", "complete",
 	} {
-		line := "gitcrawl: portable export: " + stage
-		if !strings.Contains(stderr.String(), line) {
-			t.Fatalf("progress missing %q:\n%s", line, stderr.String())
+		prefix := "gitcrawl: portable export: stage=" + stage + " "
+		var progressLine string
+		for _, line := range strings.Split(stderr.String(), "\n") {
+			if strings.HasPrefix(line, prefix) {
+				progressLine = line
+				break
+			}
 		}
-		if strings.Contains(stdout.String(), line) {
+		if progressLine == "" || !strings.Contains(progressLine, "after=") || !strings.Contains(progressLine, "total=") {
+			t.Fatalf("timed progress missing for %q:\n%s", stage, stderr.String())
+		}
+		if strings.Contains(stdout.String(), prefix) {
 			t.Fatalf("progress leaked to JSON stdout: %s", stdout.String())
 		}
 	}

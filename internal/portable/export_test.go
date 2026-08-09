@@ -143,6 +143,76 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	assertManifestTableCounts(t, db, manifest.Tables)
 }
 
+func TestOnlineBackupSnapshotsLiveWALInChunksWithoutSourceMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	sourceBefore := readFile(t, sourcePath)
+	walBefore := readFile(t, sourcePath+"-wal")
+	targetPath := filepath.Join(dir, "snapshot.db")
+	steps := 0
+	if err := snapshotSQLiteWithOptions(ctx, sourcePath, targetPath, onlineBackupOptions{
+		PagesPerStep: 1,
+		AfterStep: func(remaining, pageCount int) {
+			steps++
+			if pageCount <= 0 || remaining < 0 {
+				t.Errorf("backup progress remaining=%d page_count=%d", remaining, pageCount)
+			}
+		},
+	}); err != nil {
+		t.Fatalf("online backup: %v", err)
+	}
+	if steps <= 1 {
+		t.Fatalf("online backup steps = %d, want multiple bounded chunks", steps)
+	}
+	db := openRawDB(t, targetPath)
+	defer db.Close()
+	if got := rowCount(t, db, "threads"); got != 1 {
+		t.Fatalf("snapshot threads = %d, want committed WAL row", got)
+	}
+	if !bytes.Equal(sourceBefore, readFile(t, sourcePath)) || !bytes.Equal(walBefore, readFile(t, sourcePath+"-wal")) {
+		t.Fatal("online backup changed source database or WAL bytes")
+	}
+}
+
+func TestOnlineBackupCancellationRemovesPartialTarget(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, context.Background(), sourcePath)
+	defer st.Close()
+	sourceBefore := readFile(t, sourcePath)
+	walBefore := readFile(t, sourcePath+"-wal")
+	ctx, cancel := context.WithCancel(context.Background())
+	targetPath := filepath.Join(dir, "partial.db")
+	sawPartial := false
+	err := snapshotSQLiteWithOptions(ctx, sourcePath, targetPath, onlineBackupOptions{
+		PagesPerStep: 1,
+		AfterStep: func(remaining, pageCount int) {
+			if remaining > 0 {
+				_, statErr := os.Stat(targetPath)
+				sawPartial = statErr == nil
+				cancel()
+			}
+		},
+	})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled online backup error = %v", err)
+	}
+	if !sawPartial {
+		t.Fatal("online backup cancellation did not occur after a partial target was created")
+	}
+	for _, path := range []string{targetPath, targetPath + "-wal", targetPath + "-shm"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial backup artifact remains at %s: %v", path, err)
+		}
+	}
+	if !bytes.Equal(sourceBefore, readFile(t, sourcePath)) || !bytes.Equal(walBefore, readFile(t, sourcePath+"-wal")) {
+		t.Fatal("canceled online backup changed source database or WAL bytes")
+	}
+}
+
 func TestExportScopedRepositoryKeepsOnlyRequestedDependentData(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -394,6 +464,80 @@ func TestConfigureDisposableStoreUsesRollbackJournalAndReducedSync(t *testing.T)
 	}
 	if journalMode != "delete" || synchronous != 0 || st.DB().Stats().MaxOpenConnections != 1 {
 		t.Fatalf("disposable settings journal=%q synchronous=%d max_open=%d", journalMode, synchronous, st.DB().Stats().MaxOpenConnections)
+	}
+}
+
+func TestCompactGenerationReplacesUncompactWorkingDatabase(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	workingPath := filepath.Join(dir, "working.db")
+	st, err := store.Open(ctx, workingPath)
+	if err != nil {
+		t.Fatalf("open working store: %v", err)
+	}
+	if err := configureDisposableStore(ctx, st.DB()); err != nil {
+		t.Fatalf("configure working store: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `create table compact_payload(value blob); insert into compact_payload values(zeroblob(2097152)); delete from compact_payload`); err != nil {
+		t.Fatalf("seed free space: %v", err)
+	}
+	workingInfo, err := os.Stat(workingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactPath, err := createCompactDatabase(ctx, st.DB(), workingPath)
+	if err != nil {
+		t.Fatalf("create compact generation: %v", err)
+	}
+	compactInfo, err := os.Stat(compactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compactInfo.Size() >= workingInfo.Size() {
+		t.Fatalf("compact bytes = %d, uncompact bytes = %d", compactInfo.Size(), workingInfo.Size())
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close working store: %v", err)
+	}
+	if err := replaceWithCompactDatabase(ctx, workingPath, compactPath); err != nil {
+		t.Fatalf("replace with compact generation: %v", err)
+	}
+	if _, err := os.Stat(compactPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("compact temp still exists: %v", err)
+	}
+	db := openRawDB(t, workingPath)
+	defer db.Close()
+	if check, err := checkPragma(ctx, db, "quick_check"); err != nil || check != "ok" {
+		t.Fatalf("promoted compact quick_check=%q err=%v", check, err)
+	}
+}
+
+func TestCompactGenerationCancellationCleansPartialFile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	workingPath := filepath.Join(dir, "working.db")
+	st, err := store.Open(ctx, workingPath)
+	if err != nil {
+		t.Fatalf("open working store: %v", err)
+	}
+	defer st.Close()
+	if err := configureDisposableStore(ctx, st.DB()); err != nil {
+		t.Fatalf("configure working store: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := createCompactDatabase(canceled, st.DB(), workingPath); err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled compact generation error = %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".working.db.compact-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("partial compact files remain: %v", matches)
+	}
+	if _, err := os.Stat(workingPath); err != nil {
+		t.Fatalf("working database removed on compact cancellation: %v", err)
 	}
 }
 

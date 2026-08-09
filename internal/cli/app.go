@@ -3506,6 +3506,8 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	if err := rt.Store.Close(); err != nil {
 		return err
 	}
+	progressStarted := time.Now()
+	progressPrevious := progressStarted
 	result, err := portableexport.Export(ctx, portableexport.ExportOptions{
 		SourceDBPath: sourceDBPath,
 		OutputDir:    *outputDir,
@@ -3516,13 +3518,28 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 		BodyChars:    bodyChars,
 		MaxBytes:     maxBytes,
 		Progress: func(stage portableexport.Stage) {
-			fmt.Fprintf(a.Stderr, "gitcrawl: portable export: %s\n", stage)
+			now := time.Now()
+			fmt.Fprintf(
+				a.Stderr,
+				"gitcrawl: portable export: stage=%s after=%s total=%s\n",
+				stage,
+				formatPortableProgressDuration(now.Sub(progressPrevious)),
+				formatPortableProgressDuration(now.Sub(progressStarted)),
+			)
+			progressPrevious = now
 		},
 	})
 	if err != nil {
 		return err
 	}
 	return a.writeOutput("portable export", result, true)
+}
+
+func formatPortableProgressDuration(value time.Duration) string {
+	if value < 0 {
+		value = 0
+	}
+	return value.Round(100 * time.Millisecond).String()
 }
 
 func (a *App) runPortablePrune(ctx context.Context, args []string) error {
