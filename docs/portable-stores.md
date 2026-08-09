@@ -180,6 +180,11 @@ metadata and `columnProfile: sanitized-compatibility` in the manifest. They keep
 the full-schema compatibility columns `repositories.raw_json`,
 `threads.raw_json`, and `threads.body` to avoid three full-table SQLite rewrites;
 the raw JSON values are empty and `threads.body` contains only `body_excerpt`.
+Export rebuilds `threads` once from its stored constrained table definition,
+preserving table constraints, explicit unique indexes, triggers, child foreign
+keys, and all other columns while omitting ordinary transport indexes. Custom
+INSERT/DELETE triggers are retained; unsupported custom UPDATE-trigger semantics
+fail closed rather than silently diverging during the bulk copy.
 The final `VACUUM INTO` ensures the removed full payload bytes are absent. The
 portable schema identifier remains `gitcrawl-portable-sync-v2`, and ordinary
 `portable prune` continues to physically drop these columns.

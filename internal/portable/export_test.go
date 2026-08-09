@@ -114,6 +114,14 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	if !slices.Contains(result.DroppedIndexes, "custom_comments_author") || slices.Contains(result.DroppedIndexes, "unique_comments_github") {
 		t.Fatalf("dropped indexes = %v", result.DroppedIndexes)
 	}
+	for _, index := range []string{"custom_threads_title", "idx_threads_repo_number", "idx_threads_repo_state_closed", "idx_threads_repo_updated"} {
+		if !slices.Contains(result.DroppedIndexes, index) {
+			t.Fatalf("dropped indexes = %v, missing rebuilt threads index %s", result.DroppedIndexes, index)
+		}
+	}
+	if slices.Contains(result.DroppedIndexes, "unique_threads_github_id") || !indexExists(t, db, "unique_threads_github_id") {
+		t.Fatalf("explicit unique threads index was not preserved: dropped=%v exists=%v", result.DroppedIndexes, indexExists(t, db, "unique_threads_github_id"))
+	}
 	if slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
 		t.Fatalf("implicitly removed indexes were reported as explicitly dropped: %v", result.DroppedIndexes)
 	}
@@ -308,6 +316,35 @@ func TestExportUnscopedMultiRepositoryOmitsSingularMetadata(t *testing.T) {
 	assertManifestTableCounts(t, db, manifest.Tables)
 }
 
+func TestExportMigratesPhysicallyPrunedSourceBeforeSanitizedRebuild(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "physically-pruned.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	if _, err := st.PrunePortablePayloads(ctx, store.PortablePruneOptions{BodyChars: 16}); err != nil {
+		t.Fatalf("physically prune source: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close physically pruned source: %v", err)
+	}
+	result, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "artifact")))
+	if err != nil {
+		t.Fatalf("export physically pruned source: %v", err)
+	}
+	db := openRawDB(t, result.DatabasePath)
+	defer db.Close()
+	var body, excerpt, rawJSON, columnProfile string
+	if err := db.QueryRow(`select body, body_excerpt, raw_json from threads where id = 1`).Scan(&body, &excerpt, &rawJSON); err != nil {
+		t.Fatalf("read migrated compatibility columns: %v", err)
+	}
+	if err := db.QueryRow(`select value from portable_metadata where key = 'column_profile'`).Scan(&columnProfile); err != nil {
+		t.Fatal(err)
+	}
+	if body != "abcdefghijklmnop" || excerpt != body || rawJSON != "" || columnProfile != store.PortableColumnProfileSanitizedCompatibility {
+		t.Fatalf("migrated physical source body=%q excerpt=%q raw=%q profile=%q", body, excerpt, rawJSON, columnProfile)
+	}
+}
+
 func TestExportByteBudgetExactAndOneByteOver(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -439,7 +476,7 @@ func TestExportRejectsForeignKeyViolationBeforeIndexRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	outputDir := filepath.Join(dir, "invalid-fk")
-	if _, err := Export(ctx, testExportOptions(sourcePath, outputDir)); err == nil || !strings.Contains(err.Error(), "foreign_key_check failed") {
+	if _, err := Export(ctx, testExportOptions(sourcePath, outputDir)); err == nil || !strings.Contains(err.Error(), "foreign-key violations") {
 		t.Fatalf("foreign key export error = %v", err)
 	}
 	if _, err := os.Stat(outputDir); !errors.Is(err, os.ErrNotExist) {
@@ -485,10 +522,10 @@ func TestFinalCompactArtifactExcludesDeletedPayloadSentinels(t *testing.T) {
 	defer st.Close()
 	sentinels := []string{
 		"GITCRAWL_REMOVED_HISTORY_SENTINEL_" + strings.Repeat("h", 96),
-		"GITCRAWL_REMOVED_RAW_JSON_SENTINEL_" + strings.Repeat("r", 96),
+		"GITCRAWL_REMOVED_RAW_JSON_SENTINEL_" + strings.Repeat("r", 2<<20),
 		"GITCRAWL_REMOVED_PR_PATCH_SENTINEL_" + strings.Repeat("p", 96),
 		"GITCRAWL_REMOVED_SYNC_FAILURE_SENTINEL_" + strings.Repeat("s", 96),
-		"GITCRAWL_REMOVED_FULL_THREAD_BODY_SENTINEL_" + strings.Repeat("b", 160),
+		"GITCRAWL_REMOVED_FULL_THREAD_BODY_SENTINEL_" + strings.Repeat("b", 2<<20),
 	}
 	if _, err := st.DB().ExecContext(ctx, `update comment_revisions set body = ? where id = 1`, sentinels[0]); err != nil {
 		t.Fatal(err)
@@ -516,9 +553,9 @@ func TestFinalCompactArtifactExcludesDeletedPayloadSentinels(t *testing.T) {
 		t.Fatalf("export sentinel fixture: %v", err)
 	}
 	artifactBytes := readFile(t, result.DatabasePath)
-	for _, sentinel := range sentinels {
+	for index, sentinel := range sentinels {
 		if bytes.Contains(artifactBytes, []byte(sentinel)) {
-			t.Fatalf("final compact artifact retained deleted sentinel %q", sentinel)
+			t.Fatalf("final compact artifact retained deleted sentinel %d", index)
 		}
 	}
 	db := openRawDB(t, result.DatabasePath)
@@ -715,6 +752,8 @@ func seedExportSource(t *testing.T, ctx context.Context, dbPath string) *store.S
 		`create index custom_comments_author on comments(author_login)`,
 		`create index custom_comment_revisions_body on comment_revisions(body)`,
 		`create unique index unique_comments_github on comments(github_id)`,
+		`create index custom_threads_title on threads(title)`,
+		`create unique index unique_threads_github_id on threads(github_id)`,
 	}
 	tx, err := st.DB().BeginTx(ctx, nil)
 	if err != nil {

@@ -2,10 +2,15 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -70,6 +75,7 @@ type PortablePruneStats struct {
 	SyncFailureVacuumForced   bool     `json:"sync_failure_vacuum_forced"`
 	DroppedTables             []string `json:"dropped_tables,omitempty"`
 	DroppedColumns            []string `json:"dropped_columns,omitempty"`
+	DroppedIndexes            []string `json:"dropped_indexes,omitempty"`
 	Vacuumed                  bool     `json:"vacuumed"`
 }
 
@@ -594,7 +600,12 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		}
 	}
 	if retainSanitizedPayloadColumns {
-		if err := s.sanitizePortableCompatibilityColumns(ctx); err != nil {
+		droppedIndexes, err := s.rebuildPortableCompatibilityThreads(ctx)
+		if err != nil {
+			return err
+		}
+		stats.DroppedIndexes = append(stats.DroppedIndexes, droppedIndexes...)
+		if err := s.sanitizePortableRepositoryCompatibilityColumn(ctx); err != nil {
 			return err
 		}
 	}
@@ -670,31 +681,465 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 	return nil
 }
 
-func (s *Store) sanitizePortableCompatibilityColumns(ctx context.Context) error {
-	var assignments, conditions []string
-	if s.hasColumns(ctx, "threads", "body", "body_excerpt") {
-		assignments = append(assignments, `body = body_excerpt`)
-		conditions = append(conditions, `body is not body_excerpt`)
-	}
-	if s.hasColumn(ctx, "threads", "raw_json") {
-		assignments = append(assignments, `raw_json = ''`)
-		conditions = append(conditions, `raw_json != ''`)
-	}
-	if len(assignments) > 0 {
-		query := `update threads set ` + strings.Join(assignments, ", ")
-		if len(conditions) > 0 {
-			query += ` where ` + strings.Join(conditions, " or ")
-		}
-		if _, err := s.db.ExecContext(ctx, query); err != nil {
-			return fmt.Errorf("sanitize portable thread compatibility columns: %w", err)
-		}
-	}
+func (s *Store) sanitizePortableRepositoryCompatibilityColumn(ctx context.Context) error {
 	if s.hasColumn(ctx, "repositories", "raw_json") {
 		if _, err := s.db.ExecContext(ctx, `update repositories set raw_json = '' where raw_json != ''`); err != nil {
 			return fmt.Errorf("sanitize portable repository compatibility column: %w", err)
 		}
 	}
 	return nil
+}
+
+var portableThreadsCreateTablePattern = regexp.MustCompile("(?i)^(\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)(?:\"threads\"|`threads`|\\[threads\\]|threads)(\\s*\\()")
+
+type portableSchemaObject struct {
+	name string
+	sql  string
+}
+
+func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []string, retErr error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open portable threads rebuild connection: %w", err)
+	}
+	defer conn.Close()
+	var createSQL string
+	if err := conn.QueryRowContext(ctx, `select sql from sqlite_schema where type = 'table' and name = 'threads'`).Scan(&createSQL); err != nil {
+		return nil, fmt.Errorf("read portable threads schema: %w", err)
+	}
+	sibling, err := portableThreadsSiblingName()
+	if err != nil {
+		return nil, err
+	}
+	siblingCreateSQL, err := rewritePortableThreadsCreateSQL(createSQL, sibling)
+	if err != nil {
+		return nil, err
+	}
+	columns, selectExpressions, err := portableThreadsRebuildColumns(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	ordinaryIndexes, uniqueIndexes, err := portableThreadsRebuildIndexes(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	triggers, err := portableThreadsRebuildTriggers(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	hasConvergenceTrigger := false
+	for _, trigger := range triggers {
+		canonicalConvergence := false
+		for _, definition := range observationConvergenceTriggers {
+			if definition.table == "threads" && definition.name == trigger.name && trigger.sql == sqliteStoredSQL(observationConvergenceTriggerSQL(definition)) {
+				canonicalConvergence = true
+				hasConvergenceTrigger = true
+				break
+			}
+		}
+		if canonicalConvergence {
+			continue
+		}
+		updatesThreads, err := portableTriggerUpdatesThreads(trigger.sql)
+		if err != nil {
+			return nil, fmt.Errorf("inspect portable threads trigger %s: %w", trigger.name, err)
+		}
+		if updatesThreads {
+			return nil, fmt.Errorf("portable threads rebuild cannot preserve update-trigger semantics for %s", trigger.name)
+		}
+	}
+	originalSequence, err := portableThreadsSequence(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if originalSequence.Valid && !strings.Contains(strings.ToUpper(createSQL), "AUTOINCREMENT") {
+		return nil, fmt.Errorf("portable threads sqlite_sequence exists without AUTOINCREMENT schema")
+	}
+	foreignKeysOff := false
+	legacyAlterChanged := false
+	var originalLegacyAlter int
+	defer func() {
+		if foreignKeysOff {
+			if _, err := conn.ExecContext(context.Background(), `pragma foreign_keys = on`); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("restore portable threads foreign keys: %w", err))
+			}
+		}
+		if legacyAlterChanged {
+			if _, err := conn.ExecContext(context.Background(), fmt.Sprintf(`pragma legacy_alter_table = %d`, originalLegacyAlter)); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("restore portable threads legacy alter mode: %w", err))
+			}
+		}
+	}()
+	if err := conn.QueryRowContext(ctx, `pragma legacy_alter_table`).Scan(&originalLegacyAlter); err != nil {
+		return nil, fmt.Errorf("read portable threads legacy alter mode: %w", err)
+	}
+	if originalLegacyAlter != 1 {
+		if _, err := conn.ExecContext(ctx, `pragma legacy_alter_table = on`); err != nil {
+			return nil, fmt.Errorf("enable portable threads legacy alter mode: %w", err)
+		}
+		legacyAlterChanged = true
+	}
+	var legacyAlter int
+	if err := conn.QueryRowContext(ctx, `pragma legacy_alter_table`).Scan(&legacyAlter); err != nil {
+		return nil, fmt.Errorf("verify portable threads legacy alter mode: %w", err)
+	}
+	if legacyAlter != 1 {
+		return nil, fmt.Errorf("enable portable threads legacy alter mode: pragma remained %d", legacyAlter)
+	}
+	if _, err := conn.ExecContext(ctx, `pragma foreign_keys = off`); err != nil {
+		return nil, fmt.Errorf("disable portable threads foreign keys: %w", err)
+	}
+	foreignKeysOff = true
+	var foreignKeys int
+	if err := conn.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeys); err != nil {
+		return nil, fmt.Errorf("verify disabled portable threads foreign keys: %w", err)
+	}
+	if foreignKeys != 0 {
+		return nil, fmt.Errorf("disable portable threads foreign keys: pragma remained %d", foreignKeys)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin portable threads rebuild: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, siblingCreateSQL); err != nil {
+		return nil, fmt.Errorf("create portable threads sibling: %w", err)
+	}
+	insertSQL := `insert or abort into ` + sqliteIdentifier(sibling) + ` (` + strings.Join(columns, ", ") + `) select ` + strings.Join(selectExpressions, ", ") + ` from "threads"`
+	if _, err := tx.ExecContext(ctx, insertSQL); err != nil {
+		return nil, fmt.Errorf("copy compact portable threads: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `drop table "threads"`); err != nil {
+		return nil, fmt.Errorf("drop uncompact portable threads: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `alter table `+sqliteIdentifier(sibling)+` rename to "threads"`); err != nil {
+		return nil, fmt.Errorf("rename compact portable threads: %w", err)
+	}
+	if originalSequence.Valid {
+		var rebuiltSequence sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `select max(seq) from sqlite_sequence where name in ('threads', ?)`, sibling).Scan(&rebuiltSequence); err != nil {
+			return nil, fmt.Errorf("read rebuilt portable threads sequence: %w", err)
+		}
+		highWater := originalSequence.Int64
+		if rebuiltSequence.Valid && rebuiltSequence.Int64 > highWater {
+			highWater = rebuiltSequence.Int64
+		}
+		if _, err := tx.ExecContext(ctx, `delete from sqlite_sequence where name in ('threads', ?)`, sibling); err != nil {
+			return nil, fmt.Errorf("clear rebuilt portable threads sequence: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `insert into sqlite_sequence(name, seq) values('threads', ?)`, highWater); err != nil {
+			return nil, fmt.Errorf("restore portable threads sequence: %w", err)
+		}
+	}
+	for _, index := range uniqueIndexes {
+		if _, err := tx.ExecContext(ctx, index.sql); err != nil {
+			return nil, fmt.Errorf("recreate portable unique index %s: %w", index.name, err)
+		}
+	}
+	for _, trigger := range triggers {
+		if _, err := tx.ExecContext(ctx, trigger.sql); err != nil {
+			return nil, fmt.Errorf("recreate portable threads trigger %s: %w", trigger.name, err)
+		}
+	}
+	// Bulk-copy rows intentionally do not fire table triggers. Definitions are
+	// restored for future writes; the known convergence triggers' net effect is
+	// applied once below instead of once per copied row.
+	var convergenceTable int
+	if err := tx.QueryRowContext(ctx, `select exists(select 1 from sqlite_schema where type = 'table' and name = 'observation_schema_convergence')`).Scan(&convergenceTable); err != nil {
+		return nil, fmt.Errorf("inspect portable observation convergence table: %w", err)
+	}
+	if convergenceTable == 1 && hasConvergenceTrigger {
+		if _, err := tx.ExecContext(ctx, `update observation_schema_convergence set checked_observation_sequence = -1 where id = 1`); err != nil {
+			return nil, fmt.Errorf("invalidate portable observation convergence after threads rebuild: %w", err)
+		}
+	}
+	violations, err := portableForeignKeyViolationCount(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if violations != 0 {
+		return nil, fmt.Errorf("portable threads rebuild left %d foreign-key violations before commit", violations)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit portable threads rebuild: %w", err)
+	}
+	if _, err := conn.ExecContext(context.Background(), `pragma foreign_keys = on`); err != nil {
+		return nil, fmt.Errorf("restore portable threads foreign keys: %w", err)
+	}
+	foreignKeysOff = false
+	if legacyAlterChanged {
+		if _, err := conn.ExecContext(context.Background(), fmt.Sprintf(`pragma legacy_alter_table = %d`, originalLegacyAlter)); err != nil {
+			return nil, fmt.Errorf("restore portable threads legacy alter mode: %w", err)
+		}
+		legacyAlterChanged = false
+	}
+	if err := conn.QueryRowContext(ctx, `pragma foreign_keys`).Scan(&foreignKeys); err != nil {
+		return nil, fmt.Errorf("verify restored portable threads foreign keys: %w", err)
+	}
+	if foreignKeys != 1 {
+		return nil, fmt.Errorf("restore portable threads foreign keys: pragma remained %d", foreignKeys)
+	}
+	violations, err = portableForeignKeyViolationCount(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if violations != 0 {
+		return nil, fmt.Errorf("portable threads rebuild left %d foreign-key violations", violations)
+	}
+	return ordinaryIndexes, nil
+}
+
+type portableSQLToken struct {
+	value  string
+	quoted bool
+}
+
+func portableTriggerUpdatesThreads(triggerSQL string) (bool, error) {
+	tokens, err := tokenizePortableSQL(triggerSQL)
+	if err != nil {
+		return false, err
+	}
+	headerEnd := len(tokens)
+	for index, token := range tokens {
+		if !token.quoted && strings.EqualFold(token.value, "BEGIN") {
+			headerEnd = index
+			break
+		}
+	}
+	header := tokens[:headerEnd]
+	for index, token := range header {
+		if token.quoted || !strings.EqualFold(token.value, "ON") {
+			continue
+		}
+		targetIndex := index + 1
+		if targetIndex+2 < len(header) && header[targetIndex+1].value == "." {
+			targetIndex += 2
+		}
+		if targetIndex >= len(header) || !strings.EqualFold(header[targetIndex].value, "threads") {
+			continue
+		}
+		for _, prior := range header[:index] {
+			if !prior.quoted && strings.EqualFold(prior.value, "UPDATE") {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return false, fmt.Errorf("unrecognized trigger target")
+}
+
+func tokenizePortableSQL(value string) ([]portableSQLToken, error) {
+	var tokens []portableSQLToken
+	for index := 0; index < len(value); {
+		switch {
+		case isPortableSQLSpace(value[index]):
+			index++
+		case index+1 < len(value) && value[index:index+2] == "--":
+			index += 2
+			for index < len(value) && value[index] != '\n' {
+				index++
+			}
+		case index+1 < len(value) && value[index:index+2] == "/*":
+			end := strings.Index(value[index+2:], "*/")
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated SQL comment")
+			}
+			index += end + 4
+		case value[index] == '\'' || value[index] == '"' || value[index] == '`':
+			quote := value[index]
+			start := index + 1
+			index++
+			var text strings.Builder
+			for {
+				if index >= len(value) {
+					return nil, fmt.Errorf("unterminated SQL quote")
+				}
+				if value[index] == quote {
+					if index+1 < len(value) && value[index+1] == quote {
+						text.WriteString(value[start:index])
+						text.WriteByte(quote)
+						index += 2
+						start = index
+						continue
+					}
+					text.WriteString(value[start:index])
+					index++
+					break
+				}
+				index++
+			}
+			tokens = append(tokens, portableSQLToken{value: text.String(), quoted: true})
+		case value[index] == '[':
+			end := strings.IndexByte(value[index+1:], ']')
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated SQL bracket identifier")
+			}
+			tokens = append(tokens, portableSQLToken{value: value[index+1 : index+1+end], quoted: true})
+			index += end + 2
+		case isPortableSQLWord(value[index]):
+			start := index
+			for index < len(value) && isPortableSQLWord(value[index]) {
+				index++
+			}
+			tokens = append(tokens, portableSQLToken{value: value[start:index]})
+		default:
+			tokens = append(tokens, portableSQLToken{value: value[index : index+1]})
+			index++
+		}
+	}
+	return tokens, nil
+}
+
+func isPortableSQLSpace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n' || value == '\f'
+}
+
+func isPortableSQLWord(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '$'
+}
+
+func portableThreadsSequence(ctx context.Context, q dbQueries) (sql.NullInt64, error) {
+	var sequenceTable int
+	if err := q.QueryRowContext(ctx, `select exists(select 1 from sqlite_schema where type = 'table' and name = 'sqlite_sequence')`).Scan(&sequenceTable); err != nil {
+		return sql.NullInt64{}, fmt.Errorf("inspect portable threads sequence table: %w", err)
+	}
+	if sequenceTable == 0 {
+		return sql.NullInt64{}, nil
+	}
+	var sequence sql.NullInt64
+	if err := q.QueryRowContext(ctx, `select seq from sqlite_sequence where name = 'threads'`).Scan(&sequence); err != nil {
+		if err == sql.ErrNoRows {
+			return sql.NullInt64{}, nil
+		}
+		return sql.NullInt64{}, fmt.Errorf("read portable threads sequence: %w", err)
+	}
+	return sequence, nil
+}
+
+func portableThreadsSiblingName() (string, error) {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate portable threads sibling name: %w", err)
+	}
+	return "threads_portable_" + hex.EncodeToString(value[:]), nil
+}
+
+func rewritePortableThreadsCreateSQL(createSQL, sibling string) (string, error) {
+	match := portableThreadsCreateTablePattern.FindStringSubmatchIndex(createSQL)
+	if match == nil {
+		return "", fmt.Errorf("unrecognized portable threads CREATE TABLE SQL")
+	}
+	return createSQL[:match[3]] + sqliteIdentifier(sibling) + createSQL[match[4]:], nil
+}
+
+func portableThreadsRebuildColumns(ctx context.Context, q dbQueries) ([]string, []string, error) {
+	rows, err := q.QueryContext(ctx, `pragma table_xinfo("threads")`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect portable threads columns: %w", err)
+	}
+	defer rows.Close()
+	var columns, expressions []string
+	seen := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey, hidden int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey, &hidden); err != nil {
+			return nil, nil, fmt.Errorf("scan portable threads columns: %w", err)
+		}
+		seen[name] = true
+		if hidden != 0 {
+			continue
+		}
+		columns = append(columns, sqliteIdentifier(name))
+		switch name {
+		case "body":
+			expressions = append(expressions, `"body_excerpt"`)
+		case "raw_json":
+			expressions = append(expressions, `''`)
+		default:
+			expressions = append(expressions, sqliteIdentifier(name))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read portable threads columns: %w", err)
+	}
+	for _, required := range []string{"body", "body_excerpt", "raw_json"} {
+		if !seen[required] {
+			return nil, nil, fmt.Errorf("portable threads rebuild requires column %s", required)
+		}
+	}
+	return columns, expressions, nil
+}
+
+func portableThreadsRebuildIndexes(ctx context.Context, q dbQueries) ([]string, []portableSchemaObject, error) {
+	rows, err := q.QueryContext(ctx, `pragma index_list("threads")`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect portable threads indexes: %w", err)
+	}
+	defer rows.Close()
+	var ordinary []string
+	var uniqueNames []string
+	for rows.Next() {
+		var sequence, unique, partial int
+		var name, origin string
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			return nil, nil, fmt.Errorf("scan portable threads indexes: %w", err)
+		}
+		if origin != "c" {
+			continue
+		}
+		if unique == 0 {
+			ordinary = append(ordinary, name)
+			continue
+		}
+		uniqueNames = append(uniqueNames, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read portable threads indexes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close portable threads indexes: %w", err)
+	}
+	var uniqueIndexes []portableSchemaObject
+	for _, name := range uniqueNames {
+		var indexSQL sql.NullString
+		if err := q.QueryRowContext(ctx, `select sql from sqlite_schema where type = 'index' and tbl_name = 'threads' and name = ?`, name).Scan(&indexSQL); err != nil {
+			return nil, nil, fmt.Errorf("read portable unique index %s: %w", name, err)
+		}
+		if !indexSQL.Valid || !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(indexSQL.String)), "CREATE UNIQUE INDEX") {
+			return nil, nil, fmt.Errorf("portable unique index %s has unrecognized SQL", name)
+		}
+		uniqueIndexes = append(uniqueIndexes, portableSchemaObject{name: name, sql: indexSQL.String})
+	}
+	sort.Strings(ordinary)
+	sort.Slice(uniqueIndexes, func(left, right int) bool { return uniqueIndexes[left].name < uniqueIndexes[right].name })
+	return ordinary, uniqueIndexes, nil
+}
+
+func portableThreadsRebuildTriggers(ctx context.Context, q dbQueries) ([]portableSchemaObject, error) {
+	rows, err := q.QueryContext(ctx, `select name, sql from sqlite_schema where type = 'trigger' and tbl_name = 'threads' order by name`)
+	if err != nil {
+		return nil, fmt.Errorf("inspect portable threads triggers: %w", err)
+	}
+	defer rows.Close()
+	var triggers []portableSchemaObject
+	for rows.Next() {
+		var trigger portableSchemaObject
+		var triggerSQL sql.NullString
+		if err := rows.Scan(&trigger.name, &triggerSQL); err != nil {
+			return nil, fmt.Errorf("scan portable threads trigger: %w", err)
+		}
+		if !triggerSQL.Valid || !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(triggerSQL.String)), "CREATE TRIGGER") {
+			return nil, fmt.Errorf("portable threads trigger %s has unrecognized SQL", trigger.name)
+		}
+		trigger.sql = triggerSQL.String
+		triggers = append(triggers, trigger)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read portable threads triggers: %w", err)
+	}
+	return triggers, nil
 }
 
 func (s *Store) compactPortableThreadMetadata(ctx context.Context) (int64, int64, error) {

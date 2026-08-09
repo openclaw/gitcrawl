@@ -288,6 +288,8 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err := snapshotSQLite(ctx, sourcePath, dbPath); err != nil {
 		return result, err
 	}
+	// Opening the disposable snapshot migrates valid older/physically-pruned
+	// portable schemas back to the current writable schema before shaping.
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return result, fmt.Errorf("open disposable portable snapshot: %w", err)
@@ -363,15 +365,20 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err := reportProgress(ctx, options.Progress, StageIndexRemoval); err != nil {
 		return result, err
 	}
-	droppedIndexes, err := ordinaryNonUniqueIndexes(ctx, st.DB())
+	remainingIndexes, err := ordinaryNonUniqueIndexes(ctx, st.DB())
 	if err != nil {
 		return result, err
 	}
-	for _, index := range droppedIndexes {
+	for _, index := range remainingIndexes {
 		if _, err := st.DB().ExecContext(ctx, `drop index if exists `+quoteIdentifier(index)); err != nil {
 			return result, fmt.Errorf("drop portable index %s: %w", index, err)
 		}
 	}
+	var droppedIndexes []string
+	for _, index := range append(pruneStats.DroppedIndexes, remainingIndexes...) {
+		droppedIndexes = appendUnique(droppedIndexes, index)
+	}
+	sort.Strings(droppedIndexes)
 	tableNames, err := databaseTableNames(ctx, st.DB())
 	if err != nil {
 		return result, err
