@@ -444,7 +444,7 @@ func TestExportRejectsForeignKeyViolationBeforeIndexRemoval(t *testing.T) {
 	assertNoExportTemps(t, dir)
 }
 
-func TestConfigureDisposableStoreUsesRollbackJournalAndReducedSync(t *testing.T) {
+func TestConfigureDisposableStoreDisablesJournalDurabilityAndSecureDelete(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "staging.db"))
 	if err != nil {
@@ -455,15 +455,77 @@ func TestConfigureDisposableStoreUsesRollbackJournalAndReducedSync(t *testing.T)
 		t.Fatalf("configure disposable store: %v", err)
 	}
 	var journalMode string
-	var synchronous int
+	var synchronous, secureDelete, tempStore int
 	if err := st.DB().QueryRowContext(ctx, `pragma journal_mode`).Scan(&journalMode); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.DB().QueryRowContext(ctx, `pragma synchronous`).Scan(&synchronous); err != nil {
 		t.Fatal(err)
 	}
-	if journalMode != "delete" || synchronous != 0 || st.DB().Stats().MaxOpenConnections != 1 {
-		t.Fatalf("disposable settings journal=%q synchronous=%d max_open=%d", journalMode, synchronous, st.DB().Stats().MaxOpenConnections)
+	if err := st.DB().QueryRowContext(ctx, `pragma secure_delete`).Scan(&secureDelete); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `pragma temp_store`).Scan(&tempStore); err != nil {
+		t.Fatal(err)
+	}
+	if journalMode != "off" || synchronous != 0 || secureDelete != 0 || tempStore != 2 || st.DB().Stats().MaxOpenConnections != 1 {
+		t.Fatalf("disposable settings journal=%q synchronous=%d secure_delete=%d temp_store=%d max_open=%d", journalMode, synchronous, secureDelete, tempStore, st.DB().Stats().MaxOpenConnections)
+	}
+}
+
+func TestFinalCompactArtifactExcludesDeletedPayloadSentinels(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	sentinels := []string{
+		"GITCRAWL_REMOVED_HISTORY_SENTINEL_" + strings.Repeat("h", 96),
+		"GITCRAWL_REMOVED_RAW_JSON_SENTINEL_" + strings.Repeat("r", 96),
+		"GITCRAWL_REMOVED_PR_PATCH_SENTINEL_" + strings.Repeat("p", 96),
+		"GITCRAWL_REMOVED_SYNC_FAILURE_SENTINEL_" + strings.Repeat("s", 96),
+	}
+	if _, err := st.DB().ExecContext(ctx, `update comment_revisions set body = ? where id = 1`, sentinels[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `update threads set raw_json = ? where id = 1`, sentinels[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `update pull_request_files set patch = ? where thread_id = 1`, sentinels[2]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into sync_attempt_failures(
+			id, repo_id, thread_id, number, operation, error_class, error_message,
+			first_seen_at, last_seen_at
+		) values(1, 1, 1, 7, 'pull_request_details', 'test', ?,
+			'2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')
+	`, sentinels[3]); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "artifact")))
+	if err != nil {
+		t.Fatalf("export sentinel fixture: %v", err)
+	}
+	artifactBytes := readFile(t, result.DatabasePath)
+	for _, sentinel := range sentinels {
+		if bytes.Contains(artifactBytes, []byte(sentinel)) {
+			t.Fatalf("final compact artifact retained deleted sentinel %q", sentinel)
+		}
+	}
+	db := openRawDB(t, result.DatabasePath)
+	defer db.Close()
+	var title, path, status string
+	var additions int
+	var patch sql.NullString
+	if err := db.QueryRow(`select title from threads where id = 1`).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`select path, status, additions, patch from pull_request_files where thread_id = 1`).Scan(&path, &status, &additions, &patch); err != nil {
+		t.Fatal(err)
+	}
+	if title != "portable export" || path != "internal/portable/export.go" || status != "modified" || additions != 10 || patch.Valid {
+		t.Fatalf("retained metadata title=%q file=%q/%q/%d patch=%#v", title, path, status, additions, patch)
 	}
 }
 

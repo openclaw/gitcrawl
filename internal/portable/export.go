@@ -322,11 +322,18 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err := reportProgress(ctx, options.Progress, StageCanonicalShaping); err != nil {
 		return result, err
 	}
+	var pruneProgress store.PortablePruneProgressFunc
+	if options.Progress != nil {
+		pruneProgress = func(stage store.PortablePruneStage) {
+			options.Progress(Stage("canonical shaping: " + string(stage)))
+		}
+	}
 	pruneStats, err := st.PrunePortablePayloads(ctx, store.PortablePruneOptions{
 		BodyChars:           options.BodyChars,
 		Vacuum:              false,
 		IncludeSyncFailures: false,
 		DeferSecureRewrite:  true,
+		Progress:            pruneProgress,
 	})
 	if err != nil {
 		return result, fmt.Errorf("apply canonical portable shaping: %w", err)
@@ -562,19 +569,36 @@ func configureDisposableStore(ctx context.Context, db *sql.DB) error {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	var mode string
-	if err := db.QueryRowContext(ctx, `pragma journal_mode = delete`).Scan(&mode); err != nil {
+	if err := db.QueryRowContext(ctx, `pragma journal_mode = off`).Scan(&mode); err != nil {
 		return fmt.Errorf("configure disposable journal mode: %w", err)
 	}
-	if !strings.EqualFold(strings.TrimSpace(mode), "delete") {
-		return fmt.Errorf("configure disposable journal mode: got %q, want delete", mode)
+	if !strings.EqualFold(strings.TrimSpace(mode), "off") {
+		return fmt.Errorf("configure disposable journal mode: got %q, want off", mode)
 	}
-	// Staging is private and discarded on error. Final integrity checks and
-	// explicit file/directory fsyncs remain the durability boundary.
+	// The working generation is private and deleted on any error, so it needs no
+	// rollback journal. The mandatory compact generation restores privacy and is
+	// fully validated, hashed, fsynced, and atomically committed for durability.
 	if _, err := db.ExecContext(ctx, `pragma synchronous = off`); err != nil {
 		return fmt.Errorf("configure disposable synchronous mode: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `pragma secure_delete = off`); err != nil {
+		return fmt.Errorf("configure disposable secure-delete mode: %w", err)
+	}
 	if _, err := db.ExecContext(ctx, `pragma temp_store = memory`); err != nil {
 		return fmt.Errorf("configure disposable temp store: %w", err)
+	}
+	var synchronous, secureDelete, tempStore int
+	if err := db.QueryRowContext(ctx, `pragma synchronous`).Scan(&synchronous); err != nil {
+		return fmt.Errorf("verify disposable synchronous mode: %w", err)
+	}
+	if err := db.QueryRowContext(ctx, `pragma secure_delete`).Scan(&secureDelete); err != nil {
+		return fmt.Errorf("verify disposable secure-delete mode: %w", err)
+	}
+	if err := db.QueryRowContext(ctx, `pragma temp_store`).Scan(&tempStore); err != nil {
+		return fmt.Errorf("verify disposable temp store: %w", err)
+	}
+	if synchronous != 0 || secureDelete != 0 || tempStore != 2 {
+		return fmt.Errorf("configure disposable settings: synchronous=%d secure_delete=%d temp_store=%d, want 0/0/2", synchronous, secureDelete, tempStore)
 	}
 	return nil
 }

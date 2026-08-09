@@ -4894,6 +4894,12 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 	}
 	for _, stage := range []string{
 		"snapshot", "repository scope", "profile omissions", "canonical shaping",
+		"canonical shaping: thread bodies",
+		"canonical shaping: comment and review bodies",
+		"canonical shaping: metadata and raw payload cleanup",
+		"canonical shaping: fingerprints and summaries",
+		"canonical shaping: discarded tables and failure ledger",
+		"canonical shaping: canonical schema drops",
 		"foreign key proof", "index removal", "final vacuum", "validation", "manifest", "artifact commit", "complete",
 	} {
 		prefix := "gitcrawl: portable export: stage=" + stage + " "

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -62,6 +63,33 @@ func TestPortablePruneDeferredRewriteVisibleEquivalence(t *testing.T) {
 	deferredVisible := portableVisibleState(t, ctx, deferred)
 	if !reflect.DeepEqual(legacyVisible, deferredVisible) {
 		t.Fatalf("visible portable state differs:\nlegacy=%#v\ndeferred=%#v", legacyVisible, deferredVisible)
+	}
+}
+
+func TestPortablePruneProgressStagesOrdered(t *testing.T) {
+	ctx := context.Background()
+	st := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "progress.db"))
+	defer st.Close()
+	var stages []PortablePruneStage
+	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
+		BodyChars:          8,
+		DeferSecureRewrite: true,
+		Progress: func(stage PortablePruneStage) {
+			stages = append(stages, stage)
+		},
+	}); err != nil {
+		t.Fatalf("prune with progress: %v", err)
+	}
+	want := []PortablePruneStage{
+		PortablePruneStageThreadBodies,
+		PortablePruneStageCommentReviewBodies,
+		PortablePruneStageMetadataRawPayloads,
+		PortablePruneStageFingerprintsSummaries,
+		PortablePruneStageDiscardedData,
+		PortablePruneStageCanonicalSchema,
+	}
+	if !slices.Equal(stages, want) {
+		t.Fatalf("portable prune stages = %v, want %v", stages, want)
 	}
 }
 

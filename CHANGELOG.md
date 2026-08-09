@@ -4,7 +4,7 @@
 
 ### Portable stores
 
-- Add streamlined `portable export` generations with chunked online backups, compact final files, atomic validation, progress diagnostics, and clean interruption.
+- Add streamlined `portable export` generations with chunked online backups, journal-free staging, compact final files, granular progress, and clean interruption.
 
 ## 0.9.0 - 2026-08-08
 

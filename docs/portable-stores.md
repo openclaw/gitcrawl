@@ -130,6 +130,10 @@ remain external operations.
 The initial snapshot uses SQLite's online backup API in bounded page chunks, so
 committed WAL state is captured consistently and cancellation can be observed
 between chunks without compacting the multi-gigabyte source first.
+The private working copy disables journaling, synchronous writes, and secure
+deletion because it is never exposed and is deleted on any error. Privacy and
+durability come from the separate compact generation, full validation, hashing,
+fsync, and atomic directory commit.
 
 ```bash
 gitcrawl --config /path/to/config.toml portable export \

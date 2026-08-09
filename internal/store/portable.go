@@ -19,6 +19,19 @@ const portableSyncFailureErrorRedaction = "[redacted for portable export]"
 
 const portableSyncFailureScrubPendingKey = "sync_failure_scrub_pending"
 
+type PortablePruneStage string
+
+const (
+	PortablePruneStageThreadBodies          PortablePruneStage = "thread bodies"
+	PortablePruneStageCommentReviewBodies   PortablePruneStage = "comment and review bodies"
+	PortablePruneStageMetadataRawPayloads   PortablePruneStage = "metadata and raw payload cleanup"
+	PortablePruneStageFingerprintsSummaries PortablePruneStage = "fingerprints and summaries"
+	PortablePruneStageDiscardedData         PortablePruneStage = "discarded tables and failure ledger"
+	PortablePruneStageCanonicalSchema       PortablePruneStage = "canonical schema drops"
+)
+
+type PortablePruneProgressFunc func(PortablePruneStage)
+
 type PortablePruneOptions struct {
 	BodyChars           int
 	Vacuum              bool
@@ -28,6 +41,7 @@ type PortablePruneOptions struct {
 	// canonical shaping removes. The in-place portable prune command must leave
 	// this false so --no-vacuum still scrubs visible payloads before returning.
 	DeferSecureRewrite bool
+	Progress           PortablePruneProgressFunc `json:"-"`
 }
 
 type PortablePruneStats struct {
@@ -267,9 +281,11 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesBefore = info.Size()
 	}
 
+	reportPortablePruneProgress(options.Progress, PortablePruneStageThreadBodies)
 	if err := s.preparePortableThreadPayloads(ctx, options, &stats); err != nil {
 		return stats, err
 	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageCommentReviewBodies)
 	if s.tableExists(ctx, "comments") && s.hasColumn(ctx, "comments", "body") {
 		if err := s.ensurePortableExcerptColumns(ctx, "comments"); err != nil {
 			return stats, err
@@ -296,6 +312,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	if err := s.compactPortableReviewThreadBodies(ctx, options.BodyChars); err != nil {
 		return stats, err
 	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageMetadataRawPayloads)
 	if labels, assignees, err := s.compactPortableThreadMetadata(ctx); err != nil {
 		return stats, err
 	} else {
@@ -310,6 +327,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	if err := s.clearPortablePullRequestFilePatches(ctx); err != nil {
 		return stats, err
 	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageFingerprintsSummaries)
 	if s.tableExists(ctx, "thread_fingerprints") {
 		result, err := s.db.ExecContext(ctx, `
 			update thread_fingerprints
@@ -328,6 +346,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	} else {
 		stats.LegacySummariesDeleted = deleted
 	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageDiscardedData)
 	if !options.DeferSecureRewrite && s.tableExists(ctx, "documents") {
 		result, err := s.db.ExecContext(ctx, `delete from documents`)
 		if err != nil {
@@ -359,6 +378,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 			return stats, fmt.Errorf("clear portable sync failure scrub marker: %w", err)
 		}
 	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageCanonicalSchema)
 	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, options.IncludeSyncFailures, &stats); err != nil {
 		return stats, err
 	}
@@ -372,6 +392,12 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		stats.BytesAfter = info.Size()
 	}
 	return stats, nil
+}
+
+func reportPortablePruneProgress(progress PortablePruneProgressFunc, stage PortablePruneStage) {
+	if progress != nil {
+		progress(stage)
+	}
 }
 
 func (s *Store) preparePortableThreadPayloads(ctx context.Context, options PortablePruneOptions, stats *PortablePruneStats) error {
