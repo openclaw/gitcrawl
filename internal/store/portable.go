@@ -3,13 +3,16 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -35,9 +38,22 @@ const (
 	PortablePruneStageFingerprintsSummaries       PortablePruneStage = "fingerprints and summaries"
 	PortablePruneStageDiscardedData               PortablePruneStage = "discarded tables and failure ledger"
 	PortablePruneStageCanonicalSchemaFinalization PortablePruneStage = "canonical schema finalization"
+	PortablePruneStageThreadsRebuildPreflight     PortablePruneStage = "threads rebuild: preflight"
+	PortablePruneStageThreadsRebuildForeignKeys   PortablePruneStage = "threads rebuild: foreign key proof"
+	PortablePruneStageThreadsRebuildCompactCopy   PortablePruneStage = "threads rebuild: compact copy"
+	PortablePruneStageThreadsRebuildSchemaSwap    PortablePruneStage = "threads rebuild: schema swap"
+	PortablePruneStageThreadsRebuildSchemaRestore PortablePruneStage = "threads rebuild: schema restore"
 )
 
 type PortablePruneProgressFunc func(PortablePruneStage)
+
+type portableForeignKeyCheckFunc func(context.Context, dbQueries) (int, error)
+
+type portableThreadsRebuildHookStage string
+
+const portableThreadsRebuildHookAfterCopy portableThreadsRebuildHookStage = "after-copy"
+
+type portableThreadsRebuildHookFunc func(portableThreadsRebuildHookStage, *sql.Tx, string) error
 
 type PortablePruneOptions struct {
 	BodyChars           int
@@ -50,6 +66,8 @@ type PortablePruneOptions struct {
 	DeferSecureRewrite            bool
 	RetainSanitizedPayloadColumns bool
 	Progress                      PortablePruneProgressFunc `json:"-"`
+	foreignKeyCheck               portableForeignKeyCheckFunc
+	threadsRebuildHook            portableThreadsRebuildHookFunc
 }
 
 type PortablePruneStats struct {
@@ -76,6 +94,8 @@ type PortablePruneStats struct {
 	DroppedTables             []string `json:"dropped_tables,omitempty"`
 	DroppedColumns            []string `json:"dropped_columns,omitempty"`
 	DroppedIndexes            []string `json:"dropped_indexes,omitempty"`
+	ForeignKeyValidated       bool     `json:"foreign_key_validated,omitempty"`
+	ForeignKeyViolations      int      `json:"foreign_key_violations,omitempty"`
 	Vacuumed                  bool     `json:"vacuumed"`
 }
 
@@ -85,10 +105,20 @@ type PortableRepositoryScope struct {
 	RepositoriesRemoved int64      `json:"repositories_removed"`
 }
 
+type PortableRepositoryScopeOptions struct {
+	// DeferForeignKeyValidation is reserved for disposable pipelines that run
+	// one equivalent proof after all remaining semantic mutations.
+	DeferForeignKeyValidation bool
+}
+
 // RestrictPortableRepository reduces a disposable portable snapshot to one
 // repository. It combines current foreign-key cascades with column-aware
 // deletion so repository-owned rows remain covered as the schema evolves.
 func (s *Store) RestrictPortableRepository(ctx context.Context, fullName string) (PortableRepositoryScope, error) {
+	return s.RestrictPortableRepositoryWithOptions(ctx, fullName, PortableRepositoryScopeOptions{})
+}
+
+func (s *Store) RestrictPortableRepositoryWithOptions(ctx context.Context, fullName string, options PortableRepositoryScopeOptions) (PortableRepositoryScope, error) {
 	var result PortableRepositoryScope
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -204,12 +234,14 @@ func (s *Store) RestrictPortableRepository(ctx context.Context, fullName string)
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("commit portable repository scope: %w", err)
 	}
-	violations, err := portableForeignKeyViolationCount(ctx, conn)
-	if err != nil {
-		return result, err
-	}
-	if violations != 0 {
-		return result, fmt.Errorf("portable repository restriction left %d foreign-key violations", violations)
+	if !options.DeferForeignKeyValidation {
+		violations, err := portableForeignKeyViolationCount(ctx, conn)
+		if err != nil {
+			return result, err
+		}
+		if violations != 0 {
+			return result, fmt.Errorf("portable repository restriction left %d foreign-key violations", violations)
+		}
 	}
 	result.RepositoriesRemoved = result.RepositoriesBefore - 1
 	return result, nil
@@ -388,7 +420,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		}
 	}
 	reportPortablePruneProgress(options.Progress, PortablePruneStageCanonicalSchemaFinalization)
-	if err := s.canonicalizePortableSchema(ctx, options.BodyChars, options.IncludeSyncFailures, options.RetainSanitizedPayloadColumns, &stats); err != nil {
+	if err := s.canonicalizePortableSchema(ctx, options, &stats); err != nil {
 		return stats, err
 	}
 	if options.Vacuum {
@@ -581,7 +613,10 @@ func (s *Store) pruneEquivalentLegacyKeySummaries(ctx context.Context) (int64, e
 	return rowsAffected(result), nil
 }
 
-func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, includeSyncFailures, retainSanitizedPayloadColumns bool, stats *PortablePruneStats) error {
+func (s *Store) canonicalizePortableSchema(ctx context.Context, options PortablePruneOptions, stats *PortablePruneStats) error {
+	bodyChars := options.BodyChars
+	includeSyncFailures := options.IncludeSyncFailures
+	retainSanitizedPayloadColumns := options.RetainSanitizedPayloadColumns
 	if s.hasColumn(ctx, "threads", "body") && !s.hasColumn(ctx, "threads", "body_excerpt") {
 		if _, err := s.db.ExecContext(ctx, `alter table threads add column body_excerpt text`); err != nil {
 			return fmt.Errorf("add portable threads.body_excerpt: %w", err)
@@ -600,7 +635,12 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		}
 	}
 	if retainSanitizedPayloadColumns {
-		droppedIndexes, err := s.rebuildPortableCompatibilityThreads(ctx)
+		// Derived exports drop discarded relationship-bearing tables before the
+		// single indexed FK proof performed by the threads rebuild.
+		if err := s.dropCanonicalPortableTables(ctx, includeSyncFailures, stats); err != nil {
+			return err
+		}
+		droppedIndexes, err := s.rebuildPortableCompatibilityThreadsWithOptions(ctx, options, stats)
 		if err != nil {
 			return err
 		}
@@ -628,17 +668,10 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 		}
 		stats.DroppedColumns = append(stats.DroppedColumns, column.table+"."+column.name)
 	}
-	for _, table := range canonicalPortableDroppedTables() {
-		if table == "sync_attempt_failures" && includeSyncFailures {
-			continue
+	if !retainSanitizedPayloadColumns {
+		if err := s.dropCanonicalPortableTables(ctx, includeSyncFailures, stats); err != nil {
+			return err
 		}
-		if !s.tableExists(ctx, table) {
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, `drop table if exists `+sqliteIdentifier(table)); err != nil {
-			return fmt.Errorf("drop portable table %s: %w", table, err)
-		}
-		stats.DroppedTables = append(stats.DroppedTables, table)
 	}
 	if err := s.ensurePortableMetadata(ctx); err != nil {
 		return err
@@ -681,6 +714,22 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, bodyChars int, i
 	return nil
 }
 
+func (s *Store) dropCanonicalPortableTables(ctx context.Context, includeSyncFailures bool, stats *PortablePruneStats) error {
+	for _, table := range canonicalPortableDroppedTables() {
+		if table == "sync_attempt_failures" && includeSyncFailures {
+			continue
+		}
+		if !s.tableExists(ctx, table) {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `drop table if exists `+sqliteIdentifier(table)); err != nil {
+			return fmt.Errorf("drop portable table %s: %w", table, err)
+		}
+		stats.DroppedTables = append(stats.DroppedTables, table)
+	}
+	return nil
+}
+
 func (s *Store) sanitizePortableRepositoryCompatibilityColumn(ctx context.Context) error {
 	if s.hasColumn(ctx, "repositories", "raw_json") {
 		if _, err := s.db.ExecContext(ctx, `update repositories set raw_json = '' where raw_json != ''`); err != nil {
@@ -697,12 +746,21 @@ type portableSchemaObject struct {
 	sql  string
 }
 
-func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []string, retErr error) {
+func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) ([]string, error) {
+	stats := &PortablePruneStats{}
+	return s.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, stats)
+}
+
+func (s *Store) rebuildPortableCompatibilityThreadsWithOptions(ctx context.Context, options PortablePruneOptions, stats *PortablePruneStats) (_ []string, retErr error) {
+	if stats == nil {
+		stats = &PortablePruneStats{}
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open portable threads rebuild connection: %w", err)
 	}
 	defer conn.Close()
+	reportPortablePruneProgress(options.Progress, PortablePruneStageThreadsRebuildPreflight)
 	var createSQL string
 	if err := conn.QueryRowContext(ctx, `select sql from sqlite_schema where type = 'table' and name = 'threads'`).Scan(&createSQL); err != nil {
 		return nil, fmt.Errorf("read portable threads schema: %w", err)
@@ -715,7 +773,7 @@ func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []st
 	if err != nil {
 		return nil, err
 	}
-	columns, selectExpressions, err := portableThreadsRebuildColumns(ctx, conn)
+	columns, selectExpressions, verbatimColumns, err := portableThreadsRebuildColumns(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -754,6 +812,38 @@ func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []st
 	}
 	if originalSequence.Valid && !strings.Contains(strings.ToUpper(createSQL), "AUTOINCREMENT") {
 		return nil, fmt.Errorf("portable threads sqlite_sequence exists without AUTOINCREMENT schema")
+	}
+	originalIdentity, err := portableThreadsIdentityForTable(ctx, conn, "threads")
+	if err != nil {
+		return nil, err
+	}
+	originalThreadForeignKeys, err := portableForeignKeysForTable(ctx, conn, "threads")
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePortableThreadsForeignKeyTransformSafety(originalThreadForeignKeys, verbatimColumns); err != nil {
+		return nil, err
+	}
+	originalChildForeignKeys, err := portableChildForeignKeysReferencingThreads(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePortableChildForeignKeyIdentityTargets(originalChildForeignKeys); err != nil {
+		return nil, err
+	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageThreadsRebuildForeignKeys)
+	checker := options.foreignKeyCheck
+	if checker == nil {
+		checker = portableForeignKeyViolationCount
+	}
+	violations, err := checker(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	stats.ForeignKeyValidated = true
+	stats.ForeignKeyViolations = violations
+	if violations != 0 {
+		return nil, fmt.Errorf("portable threads rebuild found %d foreign-key violations before rebuild", violations)
 	}
 	foreignKeysOff := false
 	legacyAlterChanged := false
@@ -802,6 +892,7 @@ func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []st
 		return nil, fmt.Errorf("begin portable threads rebuild: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	reportPortablePruneProgress(options.Progress, PortablePruneStageThreadsRebuildCompactCopy)
 	if _, err := tx.ExecContext(ctx, siblingCreateSQL); err != nil {
 		return nil, fmt.Errorf("create portable threads sibling: %w", err)
 	}
@@ -809,12 +900,26 @@ func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []st
 	if _, err := tx.ExecContext(ctx, insertSQL); err != nil {
 		return nil, fmt.Errorf("copy compact portable threads: %w", err)
 	}
+	if options.threadsRebuildHook != nil {
+		if err := options.threadsRebuildHook(portableThreadsRebuildHookAfterCopy, tx, sibling); err != nil {
+			return nil, fmt.Errorf("portable threads rebuild test hook: %w", err)
+		}
+	}
+	rebuiltIdentity, err := portableThreadsIdentityForTable(ctx, tx, sibling)
+	if err != nil {
+		return nil, err
+	}
+	if rebuiltIdentity != originalIdentity {
+		return nil, fmt.Errorf("portable threads rebuild identity mismatch: copied %d of %d rows", rebuiltIdentity.count, originalIdentity.count)
+	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageThreadsRebuildSchemaSwap)
 	if _, err := tx.ExecContext(ctx, `drop table "threads"`); err != nil {
 		return nil, fmt.Errorf("drop uncompact portable threads: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `alter table `+sqliteIdentifier(sibling)+` rename to "threads"`); err != nil {
 		return nil, fmt.Errorf("rename compact portable threads: %w", err)
 	}
+	reportPortablePruneProgress(options.Progress, PortablePruneStageThreadsRebuildSchemaRestore)
 	if originalSequence.Valid {
 		var rebuiltSequence sql.NullInt64
 		if err := tx.QueryRowContext(ctx, `select max(seq) from sqlite_sequence where name in ('threads', ?)`, sibling).Scan(&rebuiltSequence); err != nil {
@@ -853,12 +958,19 @@ func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []st
 			return nil, fmt.Errorf("invalidate portable observation convergence after threads rebuild: %w", err)
 		}
 	}
-	violations, err := portableForeignKeyViolationCount(ctx, tx)
+	rebuiltThreadForeignKeys, err := portableForeignKeysForTable(ctx, tx, "threads")
 	if err != nil {
 		return nil, err
 	}
-	if violations != 0 {
-		return nil, fmt.Errorf("portable threads rebuild left %d foreign-key violations before commit", violations)
+	if !slices.Equal(originalThreadForeignKeys, rebuiltThreadForeignKeys) {
+		return nil, fmt.Errorf("portable threads rebuild changed threads foreign-key schema")
+	}
+	rebuiltChildForeignKeys, err := portableChildForeignKeysReferencingThreads(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Equal(originalChildForeignKeys, rebuiltChildForeignKeys) {
+		return nil, fmt.Errorf("portable threads rebuild changed child foreign-key schema")
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit portable threads rebuild: %w", err)
@@ -879,13 +991,9 @@ func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) (_ []st
 	if foreignKeys != 1 {
 		return nil, fmt.Errorf("restore portable threads foreign keys: pragma remained %d", foreignKeys)
 	}
-	violations, err = portableForeignKeyViolationCount(ctx, conn)
-	if err != nil {
-		return nil, err
-	}
-	if violations != 0 {
-		return nil, fmt.Errorf("portable threads rebuild left %d foreign-key violations", violations)
-	}
+	// One indexed full FK proof ran before the rebuild. Child rows and outgoing
+	// FK source values are untouched, parent (id, repo_id) identity is exact,
+	// and both parent/child FK definitions are equivalent, so zero is preserved.
 	return ordinaryIndexes, nil
 }
 
@@ -1016,6 +1124,146 @@ func portableThreadsSequence(ctx context.Context, q dbQueries) (sql.NullInt64, e
 	return sequence, nil
 }
 
+type portableThreadsIdentity struct {
+	count  int64
+	digest [sha256.Size]byte
+}
+
+func portableThreadsIdentityForTable(ctx context.Context, q dbQueries, table string) (portableThreadsIdentity, error) {
+	rows, err := q.QueryContext(ctx, `select id, repo_id from `+sqliteIdentifier(table)+` order by id`)
+	if err != nil {
+		return portableThreadsIdentity{}, fmt.Errorf("read portable threads identity from %s: %w", table, err)
+	}
+	defer rows.Close()
+	hash := sha256.New()
+	var identity portableThreadsIdentity
+	var encoded [16]byte
+	for rows.Next() {
+		var id, repoID int64
+		if err := rows.Scan(&id, &repoID); err != nil {
+			return portableThreadsIdentity{}, fmt.Errorf("scan portable threads identity from %s: %w", table, err)
+		}
+		binary.BigEndian.PutUint64(encoded[:8], uint64(id))
+		binary.BigEndian.PutUint64(encoded[8:], uint64(repoID))
+		_, _ = hash.Write(encoded[:])
+		identity.count++
+	}
+	if err := rows.Err(); err != nil {
+		return portableThreadsIdentity{}, fmt.Errorf("read portable threads identity rows from %s: %w", table, err)
+	}
+	copy(identity.digest[:], hash.Sum(nil))
+	return identity, nil
+}
+
+type portableForeignKeyDefinition struct {
+	ownerTable      string
+	id              int
+	sequence        int
+	referencedTable string
+	fromColumn      string
+	toColumn        string
+	onUpdate        string
+	onDelete        string
+	match           string
+}
+
+func portableForeignKeysForTable(ctx context.Context, q dbQueries, table string) ([]portableForeignKeyDefinition, error) {
+	rows, err := q.QueryContext(ctx, `pragma foreign_key_list(`+sqliteIdentifier(table)+`)`)
+	if err != nil {
+		return nil, fmt.Errorf("inspect portable foreign keys for %s: %w", table, err)
+	}
+	defer rows.Close()
+	var definitions []portableForeignKeyDefinition
+	for rows.Next() {
+		var definition portableForeignKeyDefinition
+		var toColumn sql.NullString
+		definition.ownerTable = table
+		if err := rows.Scan(
+			&definition.id,
+			&definition.sequence,
+			&definition.referencedTable,
+			&definition.fromColumn,
+			&toColumn,
+			&definition.onUpdate,
+			&definition.onDelete,
+			&definition.match,
+		); err != nil {
+			return nil, fmt.Errorf("scan portable foreign keys for %s: %w", table, err)
+		}
+		definition.toColumn = toColumn.String
+		definitions = append(definitions, definition)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read portable foreign keys for %s: %w", table, err)
+	}
+	sortPortableForeignKeys(definitions)
+	return definitions, nil
+}
+
+func portableChildForeignKeysReferencingThreads(ctx context.Context, q dbQueries) ([]portableForeignKeyDefinition, error) {
+	tables, err := portableTableNames(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	var definitions []portableForeignKeyDefinition
+	for _, table := range tables {
+		if table == "threads" {
+			continue
+		}
+		tableDefinitions, err := portableForeignKeysForTable(ctx, q, table)
+		if err != nil {
+			return nil, err
+		}
+		for _, definition := range tableDefinitions {
+			if strings.EqualFold(definition.referencedTable, "threads") {
+				definitions = append(definitions, definition)
+			}
+		}
+	}
+	sortPortableForeignKeys(definitions)
+	return definitions, nil
+}
+
+func sortPortableForeignKeys(definitions []portableForeignKeyDefinition) {
+	sort.Slice(definitions, func(left, right int) bool {
+		leftKey := fmt.Sprintf("%s\x00%08d\x00%08d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", definitions[left].ownerTable, definitions[left].id, definitions[left].sequence, definitions[left].referencedTable, definitions[left].fromColumn, definitions[left].toColumn, definitions[left].onUpdate, definitions[left].onDelete, definitions[left].match)
+		rightKey := fmt.Sprintf("%s\x00%08d\x00%08d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", definitions[right].ownerTable, definitions[right].id, definitions[right].sequence, definitions[right].referencedTable, definitions[right].fromColumn, definitions[right].toColumn, definitions[right].onUpdate, definitions[right].onDelete, definitions[right].match)
+		return leftKey < rightKey
+	})
+}
+
+func validatePortableChildForeignKeyIdentityTargets(definitions []portableForeignKeyDefinition) error {
+	for _, definition := range definitions {
+		toColumn := definition.toColumn
+		if toColumn == "" {
+			toColumn = "id"
+		}
+		if !strings.EqualFold(toColumn, "id") && !strings.EqualFold(toColumn, "repo_id") {
+			return fmt.Errorf("portable threads rebuild cannot preserve child foreign key %s.%s referencing mutable threads column %s", definition.ownerTable, definition.fromColumn, toColumn)
+		}
+	}
+	return nil
+}
+
+func validatePortableThreadsForeignKeyTransformSafety(definitions []portableForeignKeyDefinition, verbatimColumns map[string]bool) error {
+	for _, definition := range definitions {
+		if !verbatimColumns[strings.ToLower(definition.fromColumn)] {
+			return fmt.Errorf("portable threads rebuild cannot preserve foreign key from transformed threads column %s", definition.fromColumn)
+		}
+		if !strings.EqualFold(definition.referencedTable, "threads") {
+			continue
+		}
+		toColumn := definition.toColumn
+		if toColumn == "" {
+			toColumn = "id"
+		}
+		if !strings.EqualFold(toColumn, "id") && !strings.EqualFold(toColumn, "repo_id") {
+			return fmt.Errorf("portable threads rebuild cannot preserve self-referencing foreign key targeting transformed threads column %s", toColumn)
+		}
+	}
+	return nil
+}
+
 func portableThreadsSiblingName() (string, error) {
 	var value [8]byte
 	if _, err := rand.Read(value[:]); err != nil {
@@ -1032,20 +1280,21 @@ func rewritePortableThreadsCreateSQL(createSQL, sibling string) (string, error) 
 	return createSQL[:match[3]] + sqliteIdentifier(sibling) + createSQL[match[4]:], nil
 }
 
-func portableThreadsRebuildColumns(ctx context.Context, q dbQueries) ([]string, []string, error) {
+func portableThreadsRebuildColumns(ctx context.Context, q dbQueries) ([]string, []string, map[string]bool, error) {
 	rows, err := q.QueryContext(ctx, `pragma table_xinfo("threads")`)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect portable threads columns: %w", err)
+		return nil, nil, nil, fmt.Errorf("inspect portable threads columns: %w", err)
 	}
 	defer rows.Close()
 	var columns, expressions []string
 	seen := make(map[string]bool)
+	verbatimColumns := make(map[string]bool)
 	for rows.Next() {
 		var cid, notNull, primaryKey, hidden int
 		var name, columnType string
 		var defaultValue any
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey, &hidden); err != nil {
-			return nil, nil, fmt.Errorf("scan portable threads columns: %w", err)
+			return nil, nil, nil, fmt.Errorf("scan portable threads columns: %w", err)
 		}
 		seen[name] = true
 		if hidden != 0 {
@@ -1059,17 +1308,18 @@ func portableThreadsRebuildColumns(ctx context.Context, q dbQueries) ([]string, 
 			expressions = append(expressions, `''`)
 		default:
 			expressions = append(expressions, sqliteIdentifier(name))
+			verbatimColumns[strings.ToLower(name)] = true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("read portable threads columns: %w", err)
+		return nil, nil, nil, fmt.Errorf("read portable threads columns: %w", err)
 	}
 	for _, required := range []string{"body", "body_excerpt", "raw_json"} {
 		if !seen[required] {
-			return nil, nil, fmt.Errorf("portable threads rebuild requires column %s", required)
+			return nil, nil, nil, fmt.Errorf("portable threads rebuild requires column %s", required)
 		}
 	}
-	return columns, expressions, nil
+	return columns, expressions, verbatimColumns, nil
 }
 
 func portableThreadsRebuildIndexes(ctx context.Context, q dbQueries) ([]string, []portableSchemaObject, error) {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -410,7 +411,7 @@ func TestPortableThreadsRebuildRollsBackTransformedForeignKeyViolation(t *testin
 		t.Fatal(err)
 	}
 	st := &Store{db: db, path: "foreign-key.db"}
-	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "foreign-key violations before commit") {
+	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "referencing mutable threads column body") {
 		t.Fatalf("transformed foreign-key error = %v", err)
 	}
 	var body, childBody string
@@ -426,6 +427,162 @@ func TestPortableThreadsRebuildRollsBackTransformedForeignKeyViolation(t *testin
 	violations, err := portableForeignKeyViolationCount(ctx, db)
 	if err != nil || violations != 0 {
 		t.Fatalf("rolled-back rebuild FK violations=%d err=%v", violations, err)
+	}
+}
+
+func TestPortableThreadsRebuildRejectsForeignKeyFromTransformedColumn(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "outgoing-foreign-key.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.ExecContext(ctx, `
+		pragma foreign_keys = on;
+		create table repositories(id integer primary key);
+		create table retained_bodies(body text primary key);
+		create table threads(
+			id integer primary key,
+			repo_id integer not null references repositories(id),
+			body text references retained_bodies(body),
+			raw_json text not null,
+			body_excerpt text,
+			body_length integer not null default 0
+		);
+		insert into repositories(id) values(1);
+		insert into retained_bodies(body) values('full body');
+		insert into threads values(1, 1, 'full body', '{}', 'compact body', 9);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	st := &Store{db: db, path: "outgoing-foreign-key.db"}
+	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "foreign key from transformed threads column body") {
+		t.Fatalf("outgoing transformed foreign-key error = %v", err)
+	}
+	var body string
+	if err := db.QueryRowContext(ctx, `select body from threads where id = 1`).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body != "full body" {
+		t.Fatalf("rejected rebuild changed body to %q", body)
+	}
+}
+
+func TestPortableThreadsRebuildRejectsForeignKeyViolationBeforeSchemaSwap(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "preflight-violation.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.DB().ExecContext(ctx, `
+		alter table threads add column body_excerpt text;
+		alter table threads add column body_length integer not null default 0;
+		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
+		values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{}', '2026-08-09T00:00:00Z');
+		insert into threads(id, repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
+		values(1, 1, 'THREAD-1', 1, 'issue', 'open', 'title', 'body', 'https://example.test/1', '[]', '[]', '{}', 'hash', '2026-08-09T00:00:00Z');
+		pragma foreign_keys = off;
+		insert into pull_request_checks(id, thread_id, name, status, raw_json, fetched_at)
+		values(99, 999, 'orphan', 'completed', '{}', '2026-08-09T00:00:00Z');
+		pragma foreign_keys = on;
+	`); err != nil {
+		t.Fatalf("seed FK violation: %v", err)
+	}
+	var stages []PortablePruneStage
+	stats := &PortablePruneStats{}
+	_, err = st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{
+		Progress: func(stage PortablePruneStage) { stages = append(stages, stage) },
+	}, stats)
+	if err == nil || !strings.Contains(err.Error(), "found 1 foreign-key violations before rebuild") {
+		t.Fatalf("pre-rebuild foreign-key error = %v", err)
+	}
+	if !stats.ForeignKeyValidated || stats.ForeignKeyViolations != 1 {
+		t.Fatalf("foreign-key stats = %+v", stats)
+	}
+	if slices.Contains(stages, PortablePruneStageThreadsRebuildSchemaSwap) {
+		t.Fatalf("invalid database reached schema swap: %v", stages)
+	}
+	if !tableExistsForPortableTest(t, st.DB(), "threads") {
+		t.Fatal("preflight violation removed original threads table")
+	}
+}
+
+func TestPortableThreadsRebuildIdentityMismatchRollsBack(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "identity-mismatch.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	if _, err := st.DB().ExecContext(ctx, `
+		alter table threads add column body_excerpt text;
+		alter table threads add column body_length integer not null default 0;
+		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
+		values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{}', '2026-08-09T00:00:00Z');
+		insert into threads(id, repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
+		values(1, 1, 'THREAD-1', 1, 'issue', 'open', 'title', 'full body', 'https://example.test/1', '[]', '[]', '{}', 'hash', '2026-08-09T00:00:00Z');
+		update threads set body_excerpt = 'compact', body_length = 9 where id = 1;
+	`); err != nil {
+		t.Fatalf("seed identity mismatch: %v", err)
+	}
+	stats := &PortablePruneStats{}
+	_, err = st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{
+		threadsRebuildHook: func(stage portableThreadsRebuildHookStage, tx *sql.Tx, sibling string) error {
+			if stage != portableThreadsRebuildHookAfterCopy {
+				return nil
+			}
+			_, err := tx.ExecContext(ctx, `update `+sqliteIdentifier(sibling)+` set repo_id = 2 where id = 1`)
+			return err
+		},
+	}, stats)
+	if err == nil || !strings.Contains(err.Error(), "identity mismatch") {
+		t.Fatalf("identity mismatch error = %v", err)
+	}
+	var repoID int64
+	var body string
+	if err := st.DB().QueryRowContext(ctx, `select repo_id, body from threads where id = 1`).Scan(&repoID, &body); err != nil {
+		t.Fatalf("read original threads after rollback: %v", err)
+	}
+	if repoID != 1 || body != "full body" {
+		t.Fatalf("identity mismatch persisted repo/body = %d/%q", repoID, body)
+	}
+}
+
+func TestPortablePruneExportModeRunsOneForeignKeyProof(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "one-fk-proof.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	checks := 0
+	stats, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
+		BodyChars:                     8,
+		DeferSecureRewrite:            true,
+		RetainSanitizedPayloadColumns: true,
+		foreignKeyCheck: func(ctx context.Context, q dbQueries) (int, error) {
+			checks++
+			var discardedTable, ordinaryIndex int
+			if err := q.QueryRowContext(ctx, `select exists(select 1 from sqlite_schema where type = 'table' and name = 'documents')`).Scan(&discardedTable); err != nil {
+				return 0, err
+			}
+			if err := q.QueryRowContext(ctx, `select exists(select 1 from sqlite_schema where type = 'index' and name = 'idx_threads_repo_number')`).Scan(&ordinaryIndex); err != nil {
+				return 0, err
+			}
+			if discardedTable != 0 || ordinaryIndex != 1 {
+				return 0, fmt.Errorf("foreign-key proof placement documents=%d ordinary_index=%d", discardedTable, ordinaryIndex)
+			}
+			return portableForeignKeyViolationCount(ctx, q)
+		},
+	})
+	if err != nil {
+		t.Fatalf("prune export mode: %v", err)
+	}
+	if checks != 1 || !stats.ForeignKeyValidated || stats.ForeignKeyViolations != 0 {
+		t.Fatalf("foreign-key proofs=%d stats=%+v", checks, stats)
 	}
 }
 

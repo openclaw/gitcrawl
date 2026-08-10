@@ -123,7 +123,6 @@ const (
 	StageRepositoryScope  Stage = "repository scope"
 	StageProfileOmissions Stage = "profile omissions"
 	StageCanonicalShaping Stage = "canonical shaping"
-	StageForeignKeyProof  Stage = "foreign key proof"
 	StageIndexRemoval     Stage = "index removal"
 	StageFinalVacuum      Stage = "final vacuum"
 	StageValidation       Stage = "validation"
@@ -307,7 +306,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		return result, err
 	}
 	if options.Repository != "" {
-		scope, err := st.RestrictPortableRepository(ctx, options.Repository)
+		scope, err := st.RestrictPortableRepositoryWithOptions(ctx, options.Repository, store.PortableRepositoryScopeOptions{DeferForeignKeyValidation: true})
 		if err != nil {
 			return result, fmt.Errorf("restrict portable repository: %w", err)
 		}
@@ -349,18 +348,15 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	for _, table := range pruneStats.DroppedTables {
 		droppedTables = appendUnique(droppedTables, table)
 	}
-	// Prove row relationships while schema indexes still exist. Everything
-	// after this point is transport shaping or metadata and cannot change them.
-	if err := reportProgress(ctx, options.Progress, StageForeignKeyProof); err != nil {
-		return result, err
+	// Current-state shaping proves foreign keys once, immediately before its
+	// threads rebuild while the original table and ordinary indexes still exist.
+	if !pruneStats.ForeignKeyValidated {
+		return result, fmt.Errorf("canonical portable shaping did not validate foreign keys")
 	}
-	foreignKeyViolations, err := foreignKeyCheck(ctx, st.DB())
-	if err != nil {
-		return result, err
-	}
+	foreignKeyViolations := pruneStats.ForeignKeyViolations
 	result.ForeignKeyViolations = foreignKeyViolations
 	if foreignKeyViolations != 0 {
-		return result, fmt.Errorf("portable database foreign_key_check failed with %d violations", foreignKeyViolations)
+		return result, fmt.Errorf("canonical portable shaping found %d foreign-key violations", foreignKeyViolations)
 	}
 	if err := reportProgress(ctx, options.Progress, StageIndexRemoval); err != nil {
 		return result, err
@@ -985,22 +981,6 @@ func checkPragma(ctx context.Context, db *sql.DB, pragma string) (string, error)
 		return "", fmt.Errorf("read SQLite %s: %w", pragma, err)
 	}
 	return strings.Join(messages, "; "), nil
-}
-
-func foreignKeyCheck(ctx context.Context, db *sql.DB) (int, error) {
-	rows, err := db.QueryContext(ctx, `pragma foreign_key_check`)
-	if err != nil {
-		return 0, fmt.Errorf("run SQLite foreign_key_check: %w", err)
-	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("read SQLite foreign_key_check: %w", err)
-	}
-	return count, nil
 }
 
 func fileSHA256(filePath string) (string, error) {

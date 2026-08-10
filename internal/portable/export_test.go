@@ -153,6 +153,9 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 		t.Fatalf("single-repository metadata manifest=%+v result=%+v", manifest.Repository, result.Repository)
 	}
 	assertManifestTableCounts(t, db, manifest.Tables)
+	if violations, err := testForeignKeyViolationCount(ctx, db); err != nil || violations != 0 {
+		t.Fatalf("independent final artifact FK violations=%d err=%v", violations, err)
+	}
 }
 
 func TestOnlineBackupSnapshotsLiveWALInChunksWithoutSourceMutation(t *testing.T) {
@@ -827,6 +830,19 @@ func openRawDB(t *testing.T, path string) *sql.DB {
 		t.Fatalf("open sqlite %s: %v", path, err)
 	}
 	return db
+}
+
+func testForeignKeyViolationCount(ctx context.Context, db *sql.DB) (int, error) {
+	rows, err := db.QueryContext(ctx, `pragma foreign_key_check`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	return count, rows.Err()
 }
 
 func tableExists(t *testing.T, db *sql.DB, name string) bool {

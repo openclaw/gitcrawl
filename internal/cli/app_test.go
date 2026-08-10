@@ -4902,7 +4902,12 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		"canonical shaping: fingerprints and summaries",
 		"canonical shaping: discarded tables and failure ledger",
 		"canonical shaping: canonical schema finalization",
-		"foreign key proof", "index removal", "final vacuum", "validation", "manifest", "artifact commit", "complete",
+		"canonical shaping: threads rebuild: preflight",
+		"canonical shaping: threads rebuild: foreign key proof",
+		"canonical shaping: threads rebuild: compact copy",
+		"canonical shaping: threads rebuild: schema swap",
+		"canonical shaping: threads rebuild: schema restore",
+		"index removal", "final vacuum", "validation", "manifest", "artifact commit", "complete",
 	} {
 		prefix := "gitcrawl: portable export: stage=" + stage + " "
 		var progressLine string
