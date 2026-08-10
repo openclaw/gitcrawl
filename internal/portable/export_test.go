@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openclaw/gitcrawl/internal/store"
 )
@@ -163,6 +164,66 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	assertManifestTableCounts(t, db, manifest.Tables)
 	if violations, err := testForeignKeyViolationCount(ctx, db); err != nil || violations != 0 {
 		t.Fatalf("independent final artifact FK violations=%d err=%v", violations, err)
+	}
+}
+
+func TestExportArtifactIdentityIsDeterministicAcrossExportTimes(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+
+	exportAt := func(name, timestamp string) (ExportResult, Manifest) {
+		t.Helper()
+		instant, err := time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			t.Fatalf("parse export time: %v", err)
+		}
+		result, err := (exporter{now: func() time.Time { return instant }}).export(
+			ctx,
+			testExportOptions(sourcePath, filepath.Join(dir, name)),
+		)
+		if err != nil {
+			t.Fatalf("export %s: %v", name, err)
+		}
+		manifest := readManifest(t, result.ManifestPath)
+		if manifest.ExportedAt != timestamp {
+			t.Fatalf("export %s manifest exportedAt = %q, want %q", name, manifest.ExportedAt, timestamp)
+		}
+		if err := validateManifestPair(ctx, result.DatabasePath, result.ManifestPath, manifest); err != nil {
+			t.Fatalf("validate export %s pair: %v", name, err)
+		}
+		db := openRawDB(t, result.DatabasePath)
+		defer db.Close()
+		var exportedAtCount int
+		if err := db.QueryRow(`select count(*) from portable_metadata where key = 'exported_at'`).Scan(&exportedAtCount); err != nil {
+			t.Fatalf("inspect export %s metadata: %v", name, err)
+		}
+		if exportedAtCount != 0 {
+			t.Fatalf("export %s retained portable_metadata.exported_at", name)
+		}
+		return result, manifest
+	}
+
+	first, firstManifest := exportAt("first", "2026-08-09T10:00:00Z")
+	second, secondManifest := exportAt("second", "2026-08-09T10:05:00Z")
+	if firstManifest.ExportedAt == secondManifest.ExportedAt {
+		t.Fatalf("manifest exportedAt values are equal: %q", firstManifest.ExportedAt)
+	}
+	if first.SHA256 != second.SHA256 || first.ArtifactID != second.ArtifactID || first.BytesAfter != second.BytesAfter {
+		t.Fatalf("unchanged export identity differs: first=%+v second=%+v", first, second)
+	}
+	if !bytes.Equal(readFile(t, first.DatabasePath), readFile(t, second.DatabasePath)) {
+		t.Fatal("unchanged exports produced different SQLite file bytes")
+	}
+
+	if _, err := st.DB().ExecContext(ctx, `update threads set title = 'portable export changed' where id = 1`); err != nil {
+		t.Fatalf("change retained source content: %v", err)
+	}
+	changed, _ := exportAt("changed", "2026-08-09T10:10:00Z")
+	if changed.ArtifactID == first.ArtifactID {
+		t.Fatalf("artifactId did not change with source content: %s", changed.ArtifactID)
 	}
 }
 

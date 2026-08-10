@@ -164,6 +164,12 @@ The manifest reports every retained table as a sorted `{name, rows}` object.
 It includes a singular repository object for scoped exports and for unscoped
 artifacts that naturally contain exactly one repository; multi-repository
 artifacts omit that singular field.
+Its `exportedAt` value is event metadata for that generation and is not embedded
+in the derived SQLite database. Identical source state and export options
+therefore produce identical database bytes, SHA-256, and artifact identity even
+when exported at different times, allowing publishers to skip unchanged data.
+Destructive `portable prune` continues to record its operation time as
+`portable_metadata.exported_at`.
 
 The `current-state-v1` profile starts with portable v2 shaping and keeps current
 repositories, issue and pull-request threads, current comments, compact thread

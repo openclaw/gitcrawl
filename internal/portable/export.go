@@ -209,6 +209,7 @@ type ExportResult struct {
 type exporter struct {
 	beforeManifest func() error
 	beforeCommit   func() error
+	now            func() time.Time
 }
 
 func Export(ctx context.Context, options ExportOptions) (ExportResult, error) {
@@ -379,25 +380,29 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err != nil {
 		return result, err
 	}
-	exportedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	exportTime := time.Now
+	if e.now != nil {
+		exportTime = e.now
+	}
+	exportedAt := exportTime().UTC().Format(time.RFC3339Nano)
 	metadata := map[string]string{
-		"schema":          portableSchema,
-		"profile":         profile.Name,
-		"profile_version": fmt.Sprintf("%d", profile.Version),
-		"body_chars":      fmt.Sprintf("%d", options.BodyChars),
-		"capabilities":    strings.Join(profile.Capabilities, ","),
-		"includes":        strings.Join(tableNames, ","),
-		"excluded":        strings.Join(profile.Excluded, ","),
-		"exported_at":     exportedAt,
-		"source_path":     options.PublicPath,
-		"index_profile":   profile.IndexProfile,
-		"column_profile":  profile.ColumnProfile,
+		"schema":                portableSchema,
+		"profile":               profile.Name,
+		"profile_version":       fmt.Sprintf("%d", profile.Version),
+		"body_chars":            fmt.Sprintf("%d", options.BodyChars),
+		"capabilities":          strings.Join(profile.Capabilities, ","),
+		"includes":              strings.Join(tableNames, ","),
+		"excluded":              strings.Join(profile.Excluded, ","),
+		"source_path":           options.PublicPath,
+		"index_profile":         profile.IndexProfile,
+		"column_profile":        profile.ColumnProfile,
+		"thread_author_profile": "login,type,association",
+	}
+	if _, err := st.DB().ExecContext(ctx, `delete from portable_metadata`); err != nil {
+		return result, fmt.Errorf("clear inherited portable metadata: %w", err)
 	}
 	if err := writeMetadata(ctx, st.DB(), metadata); err != nil {
 		return result, err
-	}
-	if _, err := st.DB().ExecContext(ctx, `delete from portable_metadata where key = 'sync_failure_scrub_pending'`); err != nil {
-		return result, fmt.Errorf("clear portable scrub marker: %w", err)
 	}
 	if err := reportProgress(ctx, options.Progress, StageFinalVacuum); err != nil {
 		return result, err
