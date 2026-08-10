@@ -27,6 +27,7 @@ import (
 	clusterer "github.com/openclaw/gitcrawl/internal/cluster"
 	"github.com/openclaw/gitcrawl/internal/config"
 	gh "github.com/openclaw/gitcrawl/internal/github"
+	portableexport "github.com/openclaw/gitcrawl/internal/portable"
 	"github.com/openclaw/gitcrawl/internal/store"
 	"github.com/zalando/go-keyring"
 )
@@ -4858,6 +4859,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		BytesAfter           int64  `json:"bytes_after"`
 		MaxBytes             int64  `json:"max_bytes"`
 		ArtifactID           string `json:"artifact_id"`
+		ArtifactIDProfile    string `json:"artifact_id_profile"`
 		SHA256               string `json:"sha256"`
 		QuickCheck           string `json:"quick_check"`
 		IntegrityCheck       string `json:"integrity_check"`
@@ -4871,7 +4873,8 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 	if payload.Profile != "current-state-v1" || payload.PortableSchema != "gitcrawl-portable-sync-v2" ||
 		payload.SourceDBPath != dbPath || payload.OutputDir != outputDir || payload.PublicPath != "data/openclaw__openclaw.sync.db" ||
 		payload.Repository.Owner != "openclaw" || payload.Repository.Name != "openclaw" || payload.Repository.FullName != "openclaw/openclaw" ||
-		payload.BodyChars != 32 || payload.MaxBytes != 99999999 || payload.BytesAfter <= 0 || payload.ArtifactID != payload.SHA256 ||
+		payload.BodyChars != 32 || payload.MaxBytes != 99999999 || payload.BytesAfter <= 0 || payload.ArtifactID == payload.SHA256 ||
+		payload.ArtifactIDProfile != portableexport.CurrentStateSemanticV1 ||
 		payload.QuickCheck != "ok" || payload.IntegrityCheck != "ok" || payload.ForeignKeyViolations != 0 || !payload.ArtifactCommitted ||
 		payload.ColumnProfile != store.PortableColumnProfileSanitizedCompatibility {
 		t.Fatalf("portable export payload = %+v", payload)
@@ -4908,7 +4911,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		"canonical shaping: threads rebuild: compact copy",
 		"canonical shaping: threads rebuild: schema swap",
 		"canonical shaping: threads rebuild: schema restore",
-		"index removal", "final vacuum", "validation", "manifest", "artifact commit", "complete",
+		"index removal", "final vacuum", "validation", "artifact identity", "manifest", "artifact commit", "complete",
 	} {
 		prefix := "gitcrawl: portable export: stage=" + stage + " "
 		var progressLine string

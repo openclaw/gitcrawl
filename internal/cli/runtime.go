@@ -16,6 +16,7 @@ import (
 
 	crawlremote "github.com/openclaw/crawlkit/remote"
 	"github.com/openclaw/gitcrawl/internal/config"
+	portableexport "github.com/openclaw/gitcrawl/internal/portable"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -697,16 +698,19 @@ func sqliteStoreHealthWithOpen(ctx context.Context, path string, open func(conte
 }
 
 type portableDBManifest struct {
-	Schema        string `json:"schema,omitempty"`
-	ExportedAt    string `json:"exportedAt,omitempty"`
-	OutputPath    string `json:"outputPath,omitempty"`
-	OutputBytes   int64  `json:"outputBytes,omitempty"`
-	SHA256        string `json:"sha256,omitempty"`
-	QuickCheck    string `json:"quickCheck,omitempty"`
-	Compression   string `json:"compression,omitempty"`
-	ArchivePath   string `json:"archivePath,omitempty"`
-	ArchiveBytes  int64  `json:"archiveBytes,omitempty"`
-	ArchiveSHA256 string `json:"archiveSha256,omitempty"`
+	Schema            string `json:"schema,omitempty"`
+	Profile           string `json:"profile,omitempty"`
+	ExportedAt        string `json:"exportedAt,omitempty"`
+	OutputPath        string `json:"outputPath,omitempty"`
+	OutputBytes       int64  `json:"outputBytes,omitempty"`
+	SHA256            string `json:"sha256,omitempty"`
+	ArtifactID        string `json:"artifactId,omitempty"`
+	ArtifactIDProfile string `json:"artifactIdProfile,omitempty"`
+	QuickCheck        string `json:"quickCheck,omitempty"`
+	Compression       string `json:"compression,omitempty"`
+	ArchivePath       string `json:"archivePath,omitempty"`
+	ArchiveBytes      int64  `json:"archiveBytes,omitempty"`
+	ArchiveSHA256     string `json:"archiveSha256,omitempty"`
 }
 
 func portableDBManifestPath(dbPath string) string {
@@ -717,7 +721,7 @@ func validatePortableSQLiteFile(ctx context.Context, dbPath, manifestDBPath stri
 	if err := sqliteStoreHealth(ctx, dbPath); err != nil {
 		return err
 	}
-	return validatePortableDBManifest(dbPath, portableDBManifestPath(manifestDBPath))
+	return validatePortableDBManifest(ctx, dbPath, portableDBManifestPath(manifestDBPath))
 }
 
 func validatePortableSQLiteSourceFile(ctx context.Context, dbPath, manifestDBPath string) error {
@@ -729,7 +733,7 @@ func validatePortableSQLiteSourceFile(ctx context.Context, dbPath, manifestDBPat
 		if err := sqliteStoreImmutableHealth(ctx, dbPath); err != nil {
 			return err
 		}
-		return validatePortableDBManifest(dbPath, portableDBManifestPath(manifestDBPath))
+		return validatePortableDBManifest(ctx, dbPath, portableDBManifestPath(manifestDBPath))
 	}
 	tempDir, err := os.MkdirTemp("", "gitcrawl-portable-source-*")
 	if err != nil {
@@ -747,10 +751,10 @@ func validatePortableSQLiteSourceFile(ctx context.Context, dbPath, manifestDBPat
 	if err := sqliteStoreImmutableHealth(ctx, tempPath); err != nil {
 		return err
 	}
-	return validatePortableDBManifest(tempPath, portableDBManifestPath(manifestDBPath))
+	return validatePortableDBManifest(ctx, tempPath, portableDBManifestPath(manifestDBPath))
 }
 
-func validatePortableDBManifest(dbPath, manifestPath string) error {
+func validatePortableDBManifest(ctx context.Context, dbPath, manifestPath string) error {
 	manifest, ok, err := readPortableDBManifest(manifestPath)
 	if err != nil {
 		return fmt.Errorf("portable manifest mismatch: %w", err)
@@ -784,6 +788,29 @@ func validatePortableDBManifest(dbPath, manifestPath string) error {
 	sumText := fmt.Sprintf("%x", sum)
 	if !strings.EqualFold(sumText, strings.TrimSpace(manifest.SHA256)) {
 		return fmt.Errorf("portable manifest mismatch: sha256 %s != %s", sumText, manifest.SHA256)
+	}
+	artifactID := strings.TrimSpace(manifest.ArtifactID)
+	artifactIDProfile := strings.TrimSpace(manifest.ArtifactIDProfile)
+	if artifactIDProfile == "" {
+		// Derived manifests published before semantic identity used artifactId as
+		// an exact-SHA alias. Keep that additive manifest evolution readable.
+		if artifactID != "" && !strings.EqualFold(artifactID, strings.TrimSpace(manifest.SHA256)) {
+			return fmt.Errorf("portable manifest mismatch: legacy artifactId %s != sha256 %s", manifest.ArtifactID, manifest.SHA256)
+		}
+	} else {
+		if manifest.Profile != portableexport.CurrentStateV1 {
+			return fmt.Errorf("portable manifest mismatch: profile %q does not support semantic artifact identity", manifest.Profile)
+		}
+		if artifactIDProfile != portableexport.CurrentStateSemanticV1 {
+			return fmt.Errorf("portable manifest mismatch: unsupported artifactIdProfile %q", manifest.ArtifactIDProfile)
+		}
+		computedArtifactID, err := portableexport.ComputeArtifactID(ctx, dbPath, artifactIDProfile)
+		if err != nil {
+			return fmt.Errorf("portable manifest mismatch: recompute artifactId: %w", err)
+		}
+		if artifactID == "" || !strings.EqualFold(computedArtifactID, artifactID) {
+			return fmt.Errorf("portable manifest mismatch: artifactId %s != %s", computedArtifactID, manifest.ArtifactID)
+		}
 	}
 	return nil
 }
@@ -1134,7 +1161,7 @@ func publishPortableCheckoutPair(ctx context.Context, mirrorDBPath, mirrorManife
 	if err := sqliteStoreImmutableHealth(ctx, tempDB); err != nil {
 		return fmt.Errorf("validate staged portable db: %w", err)
 	}
-	if err := validatePortableDBManifest(tempDB, tempManifest); err != nil {
+	if err := validatePortableDBManifest(ctx, tempDB, tempManifest); err != nil {
 		return fmt.Errorf("validate staged portable manifest: %w", err)
 	}
 	// The pair is replaced with two adjacent renames; a crash between them is

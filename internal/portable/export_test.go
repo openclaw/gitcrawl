@@ -147,6 +147,7 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	manifest := readManifest(t, result.ManifestPath)
 	if manifest.OutputPath != result.PublicPath || manifest.OutputBytes != result.BytesAfter ||
 		manifest.SHA256 != result.SHA256 || manifest.ArtifactID != result.ArtifactID ||
+		manifest.ArtifactIDProfile != CurrentStateSemanticV1 || result.ArtifactIDProfile != CurrentStateSemanticV1 ||
 		manifest.ForeignKeyViolations != 0 || !manifest.ValidationOK ||
 		manifest.ColumnProfile != store.PortableColumnProfileSanitizedCompatibility || result.ColumnProfile != manifest.ColumnProfile {
 		t.Fatalf("manifest/result mismatch: manifest=%+v result=%+v", manifest, result)
@@ -224,6 +225,55 @@ func TestExportArtifactIdentityIsDeterministicAcrossExportTimes(t *testing.T) {
 	changed, _ := exportAt("changed", "2026-08-09T10:10:00Z")
 	if changed.ArtifactID == first.ArtifactID {
 		t.Fatalf("artifactId did not change with source content: %s", changed.ArtifactID)
+	}
+}
+
+func TestExportSemanticIdentityIgnoresLocalSourceChurnWhileExactSHAChanges(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+
+	first, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "first")))
+	if err != nil {
+		t.Fatalf("first export: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		update repositories set updated_at = '2026-08-10T00:00:00Z';
+		update threads set
+			first_pulled_at = '2026-08-10T00:00:00Z',
+			last_pulled_at = '2026-08-10T00:01:00Z',
+			updated_at = '2026-08-10T00:02:00Z',
+			observation_sequence = 99,
+			evidence_observation_sequence = 99,
+			evidence_source_updated_at = '2026-08-10T00:03:00Z';
+		update thread_revisions set observation_sequence = 99;
+		update thread_child_observation_memberships set observation_sequence = 99;
+	`); err != nil {
+		t.Fatalf("mutate local source bookkeeping: %v", err)
+	}
+	second, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "second")))
+	if err != nil {
+		t.Fatalf("second export: %v", err)
+	}
+	if first.SHA256 == second.SHA256 {
+		t.Fatalf("local source churn retained exact SHA %s", first.SHA256)
+	}
+	if first.ArtifactID != second.ArtifactID {
+		t.Fatalf("local source churn changed semantic identity: first=%s second=%s", first.ArtifactID, second.ArtifactID)
+	}
+	for _, result := range []ExportResult{first, second} {
+		manifest := readManifest(t, result.ManifestPath)
+		if manifest.ArtifactIDProfile != CurrentStateSemanticV1 || result.ArtifactIDProfile != CurrentStateSemanticV1 {
+			t.Fatalf("artifact identity profile manifest=%q result=%q", manifest.ArtifactIDProfile, result.ArtifactIDProfile)
+		}
+		if manifest.SHA256 == manifest.ArtifactID {
+			t.Fatalf("exact and semantic digests unexpectedly match: %s", manifest.SHA256)
+		}
+		if err := validateManifestPair(ctx, result.DatabasePath, result.ManifestPath, manifest); err != nil {
+			t.Fatalf("validate semantic manifest pair: %v", err)
+		}
 	}
 }
 
@@ -858,8 +908,17 @@ func seedExportSource(t *testing.T, ctx context.Context, dbPath string) *store.S
 		`insert into thread_key_summaries(id, thread_revision_id, summary_kind, prompt_version, provider, model, input_hash, output_hash, key_text, created_at) values(1, 1, 'llm_key', 'v1', 'openai', 'test', 'in', 'out', 'historical enrichment', '2026-08-08T00:00:00Z')`,
 		`insert into pull_request_details(thread_id, repo_id, number, raw_json, fetched_at, updated_at) values(1, 1, 7, '{}', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
 		`insert into pull_request_files(thread_id, position, path, status, additions, deletions, changes, previous_path, patch, raw_json, fetched_at) values(1, 0, 'internal/portable/export.go', 'modified', 10, 2, 12, 'internal/export.go', '@@ retained repository patch', '{}', '2026-08-08T00:00:00Z')`,
+		`insert into pull_request_commits(thread_id, sha, message, author_login, author_name, committed_at, html_url, raw_json, fetched_at, deleted_at, deletion_reason) values(1, 'abc123', 'portable commit', 'octocat', 'Octo Cat', '2026-08-07T00:00:00Z', 'https://github.com/openclaw/gitcrawl/commit/abc123', '{}', '2026-08-08T00:00:00Z', '2026-08-08T01:00:00Z', 'not returned by source')`,
 		`insert into pull_request_checks(id, thread_id, name, status, raw_json, fetched_at) values(1, 1, 'test', 'completed', '{}', '2026-08-08T00:00:00Z')`,
+		`insert into pull_request_review_threads(thread_id, review_thread_id, path, first_comment_body, comments_json, raw_json, fetched_at, deleted_at, deletion_reason) values(1, 'RT1', 'internal/portable/export.go', 'review body', '[{"body":"review body"}]', '{}', '2026-08-08T00:00:00Z', '2026-08-08T01:00:00Z', 'not returned by source')`,
+		`insert into pull_request_review_thread_revisions(id, thread_id, review_thread_id, path, first_comment_body, comments_json, raw_json, fetched_at, deleted_at, deletion_reason, recorded_at) values(1, 1, 'RT1', 'internal/portable/export.go', 'review body', '[{"body":"review body"}]', '{}', '2026-08-08T00:00:00Z', '2026-08-08T01:00:00Z', 'not returned by source', '2026-08-08T02:00:00Z')`,
+		`insert into pull_request_review_thread_syncs(thread_id, fetched_at) values(1, '2026-08-08T00:00:00Z')`,
+		`insert into github_workflow_runs(repo_id, run_id, run_number, head_branch, head_sha, status, conclusion, workflow_name, event, html_url, created_at_gh, updated_at_gh, raw_json, fetched_at) values(1, 'RUN1', 1, 'main', 'abc123', 'completed', 'success', 'CI', 'pull_request', 'https://github.com/openclaw/gitcrawl/actions/runs/1', '2026-08-07T00:00:00Z', '2026-08-07T00:01:00Z', '{}', '2026-08-08T00:00:00Z')`,
+		`update thread_observation_sequence set value = 7, last_started_at = '2026-08-08T00:00:00Z' where id = 1`,
+		`insert into thread_child_observation_reservations(thread_id, family, source_updated_at, observation_sequence) values(1, 'comments', '2026-08-07T00:00:00Z', 7)`,
 		`insert into thread_child_observation_memberships(thread_id, family, observation_sequence, member_ids_json) values(1, 'comments', 1, '["C1"]')`,
+		`insert into workflow_run_observation_reservations(repo_id, head_sha, source_updated_at, observation_sequence) values(1, 'abc123', '2026-08-07T00:00:00Z', 7)`,
+		`insert into repo_sync_state(repo_id, last_full_open_scan_started_at, updated_at) values(1, '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
 		`insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, created_at, updated_at) values(1, 1, 'key', 'slug', 'open', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
 		`insert into cluster_memberships(cluster_id, thread_id, role, state, added_by, added_reason_json, created_at, updated_at) values(1, 1, 'member', 'active', 'system', '{}', '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')`,
 		`insert into cluster_overrides(id, repo_id, cluster_id, thread_id, action, created_at) values(1, 1, 1, 1, 'exclude', '2026-08-08T00:00:00Z')`,

@@ -67,10 +67,26 @@ func TestValidateManifestPairRejectsInconsistentArtifacts(t *testing.T) {
 		},
 		{
 			name:      "digest mismatch",
-			wantError: "digest does not match",
+			wantError: "sha256 does not match",
 			mutate: func(t *testing.T, _, manifestPath string, manifest *Manifest) {
 				manifest.SHA256 = strings.Repeat("0", 64)
 				manifest.ArtifactID = manifest.SHA256
+				writeTestManifest(t, manifestPath, *manifest)
+			},
+		},
+		{
+			name:      "artifact identity profile mismatch",
+			wantError: "artifactIdProfile",
+			mutate: func(t *testing.T, _, manifestPath string, manifest *Manifest) {
+				manifest.ArtifactIDProfile = "future-semantic-v2"
+				writeTestManifest(t, manifestPath, *manifest)
+			},
+		},
+		{
+			name:      "artifact identity mismatch",
+			wantError: "artifactId does not match",
+			mutate: func(t *testing.T, _, manifestPath string, manifest *Manifest) {
+				manifest.ArtifactID = strings.Repeat("0", 64)
 				writeTestManifest(t, manifestPath, *manifest)
 			},
 		},
@@ -542,6 +558,7 @@ func TestExportCancellationAtSafetyBoundariesCleansStaging(t *testing.T) {
 		StageIndexRemoval,
 		StageFinalVacuum,
 		StageValidation,
+		StageArtifactIdentity,
 		StageManifest,
 		StageArtifactCommit,
 	}
@@ -839,7 +856,8 @@ func newTestManifestPair(t *testing.T) (string, string, Manifest) {
 	manifest := Manifest{
 		Schema: "portable-v1", PortableSchema: "portable-v1",
 		Profile: CurrentStateV1, ProfileVersion: 1,
-		OutputPath: "data/gitcrawl.db", Tables: tables,
+		ArtifactIDProfile: CurrentStateSemanticV1,
+		OutputPath:        "data/gitcrawl.db", Tables: tables,
 		Repository:   &Repository{ID: 1, Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl"},
 		ValidationOK: true, QuickCheck: "ok", IntegrityCheck: "ok",
 		IndexProfile: "unique-only", ColumnProfile: "sanitized-compatibility",
@@ -866,7 +884,11 @@ func refreshTestManifest(t *testing.T, dbPath string, manifest *Manifest) {
 	}
 	manifest.OutputBytes = info.Size()
 	manifest.SHA256 = hashFile(t, dbPath)
-	manifest.ArtifactID = manifest.SHA256
+	artifactID, err := ComputeArtifactID(context.Background(), dbPath, CurrentStateSemanticV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.ArtifactID = artifactID
 	manifest.Tables = tables
 }
 

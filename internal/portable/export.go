@@ -126,6 +126,7 @@ const (
 	StageIndexRemoval     Stage = "index removal"
 	StageFinalVacuum      Stage = "final vacuum"
 	StageValidation       Stage = "validation"
+	StageArtifactIdentity Stage = "artifact identity"
 	StageManifest         Stage = "manifest"
 	StageArtifactCommit   Stage = "artifact commit"
 	StageComplete         Stage = "complete"
@@ -164,6 +165,7 @@ type Manifest struct {
 	OutputBytes          int64       `json:"outputBytes"`
 	SHA256               string      `json:"sha256"`
 	ArtifactID           string      `json:"artifactId"`
+	ArtifactIDProfile    string      `json:"artifactIdProfile"`
 	Repository           *Repository `json:"repository,omitempty"`
 	BodyChars            int         `json:"bodyChars"`
 	MaxBytes             *int64      `json:"maxBytes,omitempty"`
@@ -195,6 +197,7 @@ type ExportResult struct {
 	MaxBytes             *int64      `json:"max_bytes,omitempty"`
 	ByteBudgetOK         bool        `json:"byte_budget_ok"`
 	ArtifactID           string      `json:"artifact_id"`
+	ArtifactIDProfile    string      `json:"artifact_id_profile"`
 	SHA256               string      `json:"sha256"`
 	QuickCheck           string      `json:"quick_check"`
 	IntegrityCheck       string      `json:"integrity_check"`
@@ -478,7 +481,15 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		return result, fmt.Errorf("hash portable database: %w", err)
 	}
 	result.SHA256 = sha
-	result.ArtifactID = sha
+	result.ArtifactIDProfile = CurrentStateSemanticV1
+	if err := reportProgress(ctx, options.Progress, StageArtifactIdentity); err != nil {
+		return result, err
+	}
+	artifactID, err := ComputeArtifactID(ctx, dbPath, result.ArtifactIDProfile)
+	if err != nil {
+		return result, fmt.Errorf("compute portable artifact identity: %w", err)
+	}
+	result.ArtifactID = artifactID
 	result.DroppedTables = droppedTables
 	result.DroppedIndexes = droppedIndexes
 	if err := reportProgress(ctx, options.Progress, StageManifest); err != nil {
@@ -493,7 +504,8 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		OutputPath:           options.PublicPath,
 		OutputBytes:          info.Size(),
 		SHA256:               sha,
-		ArtifactID:           sha,
+		ArtifactID:           artifactID,
+		ArtifactIDProfile:    result.ArtifactIDProfile,
 		Repository:           result.Repository,
 		BodyChars:            options.BodyChars,
 		MaxBytes:             options.MaxBytes,
@@ -1081,8 +1093,21 @@ func validateManifestPair(ctx context.Context, dbPath, manifestPath string, expe
 	if err != nil {
 		return fmt.Errorf("re-hash portable database: %w", err)
 	}
-	if sha != actual.SHA256 || sha != actual.ArtifactID {
-		return fmt.Errorf("portable manifest digest does not match database")
+	if sha != actual.SHA256 {
+		return fmt.Errorf("portable manifest sha256 does not match database")
+	}
+	if actual.Profile != CurrentStateV1 {
+		return fmt.Errorf("portable manifest profile %q does not support semantic artifact identity", actual.Profile)
+	}
+	if actual.ArtifactIDProfile != CurrentStateSemanticV1 {
+		return fmt.Errorf("portable manifest artifactIdProfile %q is unsupported", actual.ArtifactIDProfile)
+	}
+	artifactID, err := ComputeArtifactID(ctx, dbPath, actual.ArtifactIDProfile)
+	if err != nil {
+		return fmt.Errorf("recompute portable artifact identity: %w", err)
+	}
+	if artifactID != actual.ArtifactID {
+		return fmt.Errorf("portable manifest artifactId does not match database semantic state")
 	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

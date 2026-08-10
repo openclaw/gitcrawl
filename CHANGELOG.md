@@ -4,7 +4,7 @@
 
 ### Portable stores
 
-- Add streamlined `portable export` generations with single-pass sanitized compatibility tables, journal-free staging, deterministic artifact identity for no-op publication, compact final files, granular progress, and clean interruption.
+- Add streamlined `portable export` generations with single-pass sanitized compatibility tables, compact final files, and semantic artifact identity that ignores explicit local ingestion churn while retaining exact SQLite SHA-256 integrity, granular progress, and clean interruption.
 
 ## 0.9.0 - 2026-08-08
 

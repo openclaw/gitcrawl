@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/config"
+	portableexport "github.com/openclaw/gitcrawl/internal/portable"
 )
 
 func writeTestCompressedPortableSource(t *testing.T, dbPath string) string {
@@ -96,6 +98,101 @@ func TestLocalRuntimeDBTarget(t *testing.T) {
 	}
 	if got := redirected.dbTarget(); got != want {
 		t.Fatalf("redirected db target = %+v, want %+v", got, want)
+	}
+}
+
+func TestPortableManifestValidatesSemanticArtifactIdentity(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "artifact.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`create table repositories(id integer primary key, full_name text, updated_at text); insert into repositories values(1, 'openclaw/gitcrawl', 'first')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	artifactID, err := portableexport.ComputeArtifactID(ctx, dbPath, portableexport.CurrentStateSemanticV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := portableDBManifestPath(dbPath)
+	manifest := portableDBManifest{
+		Schema:            "gitcrawl-portable-sync-v2",
+		Profile:           portableexport.CurrentStateV1,
+		ArtifactID:        artifactID,
+		ArtifactIDProfile: portableexport.CurrentStateSemanticV1,
+		QuickCheck:        "ok",
+	}
+	refresh := func() {
+		t.Helper()
+		info, err := os.Stat(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum, err := fileSHA256(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.OutputBytes = info.Size()
+		manifest.SHA256 = fmt.Sprintf("%x", sum)
+		data, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refresh()
+	if err := validatePortableDBManifest(ctx, dbPath, manifestPath); err != nil {
+		t.Fatalf("validate semantic manifest: %v", err)
+	}
+	manifest.ArtifactIDProfile = ""
+	manifest.ArtifactID = manifest.SHA256
+	refresh()
+	if err := validatePortableDBManifest(ctx, dbPath, manifestPath); err != nil {
+		t.Fatalf("validate legacy exact-SHA artifact identity: %v", err)
+	}
+	manifest.ArtifactID = strings.Repeat("0", 64)
+	refresh()
+	if err := validatePortableDBManifest(ctx, dbPath, manifestPath); err == nil || !strings.Contains(err.Error(), "legacy artifactId") {
+		t.Fatalf("mismatched legacy artifact identity error = %v", err)
+	}
+	manifest.ArtifactIDProfile = portableexport.CurrentStateSemanticV1
+	manifest.ArtifactID = artifactID
+	refresh()
+
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`update repositories set updated_at = 'second'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	refresh()
+	if err := validatePortableDBManifest(ctx, dbPath, manifestPath); err != nil {
+		t.Fatalf("local-only change invalidated semantic manifest: %v", err)
+	}
+
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`update repositories set full_name = 'openclaw/changed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	refresh()
+	if err := validatePortableDBManifest(ctx, dbPath, manifestPath); err == nil || !strings.Contains(err.Error(), "artifactId") {
+		t.Fatalf("meaningful change semantic manifest error = %v", err)
 	}
 }
 

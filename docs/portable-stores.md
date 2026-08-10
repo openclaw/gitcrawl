@@ -167,9 +167,45 @@ artifacts omit that singular field.
 Its `exportedAt` value is event metadata for that generation and is not embedded
 in the derived SQLite database. Identical source state and export options
 therefore produce identical database bytes, SHA-256, and artifact identity even
-when exported at different times, allowing publishers to skip unchanged data.
+when exported at different times. The manifest `sha256` remains the exact digest
+of the finalized SQLite bytes. `artifactId` is instead the digest of a private,
+normalized compact copy and is identified by
+`artifactIdProfile: current-state-semantic-v1` (JSON command output uses
+`artifact_id_profile`). Publishers should use `artifactId` for no-op decisions
+and `sha256` for file integrity: repeated ingestion may legitimately change the
+file SHA while retaining the same meaningful portable state.
 Destructive `portable prune` continues to record its operation time as
 `portable_metadata.exported_at`.
+
+The semantic identity policy is an exact allowlist rather than a name pattern.
+Unknown future tables and columns remain in the identity, and a known column
+with an unexpected SQLite type fails identity computation. Missing known legacy
+tables and columns are skipped safely. The `current-state-semantic-v1` policy is:
+
+| Action | Tables or columns |
+| --- | --- |
+| Delete local-only tables when present | `observation_schema_convergence`, `repo_pipeline_state`, `repo_sync_state`, `sqlite_stat1`, `sqlite_stat4`, `thread_observation_sequence`, `thread_child_observation_reservations`, `workflow_run_observation_reservations`, `pull_request_review_thread_syncs` |
+| Clear repository ingestion time | `repositories.updated_at` |
+| Clear thread ingestion/order fields | `threads.first_pulled_at`, `last_pulled_at`, `updated_at`, `observation_sequence`, `evidence_observation_sequence`, `evidence_source_updated_at` |
+| Clear revision/fingerprint record bookkeeping | `thread_revisions.observation_sequence`, `thread_revisions.created_at`, `thread_fingerprints.created_at` |
+| Clear membership ordering but retain membership | `thread_child_observation_memberships.observation_sequence` becomes `1`; `member_ids_json` is retained |
+| Clear PR/workflow fetch and local record times | `pull_request_details.fetched_at` and `updated_at`; `pull_request_files.fetched_at`; `pull_request_commits.fetched_at`; `pull_request_checks.fetched_at`; `pull_request_review_threads.fetched_at`; `pull_request_review_thread_revisions.fetched_at` and `recorded_at`; `github_workflow_runs.fetched_at` |
+| Preserve tombstone state without local observation time | Non-NULL `threads.closed_at_local` and `deleted_at` values on comments, PR commits, review threads, and review-thread revisions become an empty non-NULL marker; NULL remains NULL |
+
+The policy also removes the named observation-convergence triggers associated
+with the deleted allocator/reservation state and normalizes SQLite's transient
+schema cookie before compaction. To prevent insertion-order-only hidden rowids
+from changing the compact bytes, it rebuilds child memberships, PR files, PR
+commits, review threads, workflow runs, and portable metadata in their declared
+primary-key order; retained triggers are restored in deterministic name order.
+The disposable compact file also zeroes SQLite's file-change,
+version-valid-for, and writer-library-version header words so a SQLite library
+upgrade cannot change semantic identity by itself. It does not clear titles, bodies or excerpts,
+body lengths, labels, assignees, states, URLs, GitHub timestamps, content hashes,
+comment/review content, revision or fingerprint content, membership IDs, PR or
+workflow public state, or repository identity. Manifest validation always
+recomputes the declared semantic profile and artifact ID in addition to checking
+the exact size and SHA-256 pair.
 
 The `current-state-v1` profile starts with portable v2 shaping and keeps current
 repositories, issue and pull-request threads, current comments, compact thread
@@ -209,9 +245,12 @@ It then creates one compact final generation with `VACUUM INTO`, closes and
 removes the larger private working database, and promotes the compact file
 within staging. The compact file must pass `quick_check` and full
 `integrity_check`; export then enforces the optional finalized byte
-budget, hashes the database with SHA-256, writes and fsyncs the manifest, then
+budget, hashes the database with SHA-256, derives semantic identity through a
+second bounded online backup and compact normalization pass, writes and fsyncs
+the manifest, then
 re-reads the pair without repeating the unindexed foreign-key scan. Concise
-stage progress is written to stderr, including during JSON output. Any failure
+stage progress, including `artifact identity`, is written to stderr, including
+during JSON output. Any failure
 or handled interrupt leaves the requested output directory absent and removes
 the private staging directory.
 
