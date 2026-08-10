@@ -71,9 +71,12 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	if journalMode != "delete" {
 		t.Fatalf("artifact journal mode = %q, want delete", journalMode)
 	}
-	for _, table := range currentStateProfile.DroppedTables {
-		if tableExists(t, db, table) {
-			t.Fatalf("omitted table %s still exists", table)
+	for _, table := range currentStateProfile.ClearedTables {
+		if !tableExists(t, db, table) {
+			t.Fatalf("cleared table %s is missing", table)
+		}
+		if got := rowCount(t, db, table); got != 0 {
+			t.Fatalf("cleared table %s row count = %d, want 0", table, got)
 		}
 	}
 	for _, table := range []string{
@@ -131,11 +134,13 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	if slices.Contains(result.DroppedIndexes, "unique_threads_github_id") || !indexExists(t, db, "unique_threads_github_id") {
 		t.Fatalf("explicit unique threads index was not preserved: dropped=%v exists=%v", result.DroppedIndexes, indexExists(t, db, "unique_threads_github_id"))
 	}
-	if slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
-		t.Fatalf("implicitly removed indexes were reported as explicitly dropped: %v", result.DroppedIndexes)
+	if !slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || !slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
+		t.Fatalf("cleared-table indexes were not removed explicitly: %v", result.DroppedIndexes)
 	}
-	if len(result.DroppedTables) < len(currentStateProfile.DroppedTables) || !slices.Equal(result.DroppedTables[:len(currentStateProfile.DroppedTables)], currentStateProfile.DroppedTables) {
-		t.Fatalf("profile tables were not dropped first: %v", result.DroppedTables)
+	for _, table := range currentStateProfile.ClearedTables {
+		if slices.Contains(result.DroppedTables, table) {
+			t.Fatalf("cleared table %s reported as dropped: %v", table, result.DroppedTables)
+		}
 	}
 	seenDroppedTables := make(map[string]bool)
 	for _, table := range result.DroppedTables {
@@ -165,6 +170,31 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 	assertManifestTableCounts(t, db, manifest.Tables)
 	if violations, err := testForeignKeyViolationCount(ctx, db); err != nil || violations != 0 {
 		t.Fatalf("independent final artifact FK violations=%d err=%v", violations, err)
+	}
+}
+
+func TestExportedDatabaseReportsStatusReadOnly(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+
+	result, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "artifact")))
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	exported, err := store.OpenReadOnly(ctx, result.DatabasePath)
+	if err != nil {
+		t.Fatalf("open exported database read-only: %v", err)
+	}
+	defer exported.Close()
+	status, err := exported.Status(ctx)
+	if err != nil {
+		t.Fatalf("read exported database status: %v", err)
+	}
+	if status.RepositoryCount != 1 || status.ThreadCount != 1 || status.ClusterCount != 0 {
+		t.Fatalf("exported database status = %+v", status)
 	}
 }
 
@@ -392,8 +422,8 @@ func TestExportScopedRepositoryKeepsOnlyRequestedDependentData(t *testing.T) {
 		t.Fatalf("scoped manifest repository = %+v, result = %+v", manifest.Repository, result.Repository)
 	}
 	assertManifestTableCounts(t, db, manifest.Tables)
-	if slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
-		t.Fatalf("dropped indexes include indexes removed with a table: %v", result.DroppedIndexes)
+	if !slices.Contains(result.DroppedIndexes, "idx_comment_revisions_comment") || !slices.Contains(result.DroppedIndexes, "custom_comment_revisions_body") {
+		t.Fatalf("cleared-table indexes were not removed explicitly: %v", result.DroppedIndexes)
 	}
 }
 
@@ -825,7 +855,7 @@ func TestRemoveSQLiteSidecarsFailsClosed(t *testing.T) {
 	}
 }
 
-func TestExportedDatabaseReopensWritableAndRecreatesOmittedSchema(t *testing.T) {
+func TestExportedDatabaseReopensWritableWithInvariantSchema(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
@@ -848,13 +878,13 @@ func TestExportedDatabaseReopensWritableAndRecreatesOmittedSchema(t *testing.T) 
 			t.Fatalf("writable reopen did not restore %s.%s", column.table, column.name)
 		}
 	}
-	for _, table := range currentStateProfile.DroppedTables {
+	for _, table := range currentStateProfile.ClearedTables {
 		if !tableExists(t, writable.DB(), table) {
-			t.Fatalf("migration did not recreate %s", table)
+			t.Fatalf("writable reopen lost %s", table)
 		}
 		if table != "comment_revisions" && rowCount(t, writable.DB(), table) != 0 {
 			got := rowCount(t, writable.DB(), table)
-			t.Fatalf("recreated history table %s has %d rows", table, got)
+			t.Fatalf("cleared table %s has %d rows", table, got)
 		}
 	}
 	var historicalComments int

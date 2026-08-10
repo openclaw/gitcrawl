@@ -38,7 +38,7 @@ const (
 type Profile struct {
 	Name          string
 	Version       int
-	DroppedTables []string
+	ClearedTables []string
 	Capabilities  []string
 	Excluded      []string
 	IndexProfile  string
@@ -48,7 +48,7 @@ type Profile struct {
 var currentStateProfile = Profile{
 	Name:    CurrentStateV1,
 	Version: currentProfileVersion,
-	DroppedTables: []string{
+	ClearedTables: []string{
 		"comment_revisions",
 		"thread_key_summaries",
 		"cluster_closures",
@@ -320,13 +320,9 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		return result, err
 	}
 	var droppedTables []string
-	for _, table := range profile.DroppedTables {
-		dropped, err := dropTableIfPresent(ctx, st.DB(), table)
-		if err != nil {
-			return result, err
-		}
-		if dropped {
-			droppedTables = appendUnique(droppedTables, table)
+	for _, table := range profile.ClearedTables {
+		if _, err := st.DB().ExecContext(ctx, `delete from `+quoteIdentifier(table)); err != nil {
+			return result, fmt.Errorf("clear portable table %s: %w", table, err)
 		}
 	}
 	if err := reportProgress(ctx, options.Progress, StageCanonicalShaping); err != nil {
@@ -874,20 +870,6 @@ func verifyRepository(ctx context.Context, db *sql.DB, expected Repository) erro
 		return fmt.Errorf("portable repository restriction did not preserve exactly %s", expected.FullName)
 	}
 	return nil
-}
-
-func dropTableIfPresent(ctx context.Context, db *sql.DB, table string) (bool, error) {
-	var exists int
-	if err := db.QueryRowContext(ctx, `select exists(select 1 from sqlite_schema where type = 'table' and name = ?)`, table).Scan(&exists); err != nil {
-		return false, fmt.Errorf("inspect portable table %s: %w", table, err)
-	}
-	if exists == 0 {
-		return false, nil
-	}
-	if _, err := db.ExecContext(ctx, `drop table `+quoteIdentifier(table)); err != nil {
-		return false, fmt.Errorf("drop portable table %s: %w", table, err)
-	}
-	return true, nil
 }
 
 func quoteIdentifier(value string) string {

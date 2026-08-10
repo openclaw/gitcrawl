@@ -439,32 +439,6 @@ func TestPortableFileHelpersRejectUnsafeDestinations(t *testing.T) {
 	}
 }
 
-func TestPortableTableDropFailsClosedOnForeignKeyConstraint(t *testing.T) {
-	ctx := context.Background()
-	db := openRawDB(t, filepath.Join(t.TempDir(), "drop.db"))
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(ctx, `
-		pragma foreign_keys = on;
-		create table parent(id integer primary key);
-		create table child(parent_id integer references parent(id));
-		insert into parent values(1);
-		insert into child values(1);
-	`); err != nil {
-		t.Fatal(err)
-	}
-	dropped, err := dropTableIfPresent(ctx, db, "parent")
-	if err == nil || dropped || !strings.Contains(err.Error(), "drop portable table parent") {
-		t.Fatalf("foreign-key constrained drop = %v, %v", dropped, err)
-	}
-	if !tableExists(t, db, "parent") {
-		t.Fatal("failed constrained drop removed parent table")
-	}
-	if dropped, err := dropTableIfPresent(ctx, db, "missing"); err != nil || dropped {
-		t.Fatalf("missing table drop = %v, %v", dropped, err)
-	}
-}
-
 func TestCompactReplacementRejectsRetainedSidecars(t *testing.T) {
 	ctx := context.Background()
 	for _, target := range []string{"candidate", "working"} {
@@ -533,7 +507,6 @@ func TestPortableDatabaseHelpersPropagateCancellation(t *testing.T) {
 		{name: "table stats", run: func() error { _, err := databaseTableStats(ctx, db); return err }},
 		{name: "repository", run: func() error { _, err := singleRepository(ctx, db); return err }},
 		{name: "verify repository", run: func() error { return verifyRepository(ctx, db, Repository{FullName: "openclaw/gitcrawl"}) }},
-		{name: "drop table", run: func() error { _, err := dropTableIfPresent(ctx, db, "disposable"); return err }},
 		{name: "metadata", run: func() error { return writeMetadata(ctx, db, map[string]string{"schema": "portable-v1"}) }},
 		{name: "pragma", run: func() error { _, err := checkPragma(ctx, db, "quick_check"); return err }},
 	}
