@@ -4902,6 +4902,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 		"canonical shaping: fingerprints and summaries",
 		"canonical shaping: discarded tables and failure ledger",
 		"canonical shaping: canonical schema finalization",
+		"canonical shaping: canonical schema finalization: disposable table drop",
 		"canonical shaping: threads rebuild: preflight",
 		"canonical shaping: threads rebuild: foreign key proof",
 		"canonical shaping: threads rebuild: compact copy",

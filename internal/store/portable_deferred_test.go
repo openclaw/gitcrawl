@@ -82,8 +82,9 @@ func TestPortablePruneDeferredRewriteVisibleEquivalence(t *testing.T) {
 	if !retained.hasColumn(ctx, "repositories", "raw_json") || !retained.hasColumn(ctx, "threads", "raw_json") || !retained.hasColumn(ctx, "threads", "body") {
 		t.Fatal("sanitized compatibility columns were physically dropped")
 	}
-	if len(retainedStats.DroppedColumns) != 0 {
-		t.Fatalf("retained-column dropped stats = %v", retainedStats.DroppedColumns)
+	wantDroppedColumns := []string{"comments.raw_json_blob_id", "thread_revisions.raw_json_blob_id"}
+	if !slices.Equal(retainedStats.DroppedColumns, wantDroppedColumns) {
+		t.Fatalf("retained-column dropped stats = %v, want %v", retainedStats.DroppedColumns, wantDroppedColumns)
 	}
 	var repositoryRaw, threadRaw, body, excerpt, columnProfile string
 	if err := retained.DB().QueryRowContext(ctx, `select raw_json from repositories where id = 1`).Scan(&repositoryRaw); err != nil {
@@ -149,6 +150,7 @@ func TestPortablePruneRetainedColumnProgressStagesOrdered(t *testing.T) {
 		PortablePruneStageFingerprintsSummaries,
 		PortablePruneStageDiscardedData,
 		PortablePruneStageCanonicalSchemaFinalization,
+		PortablePruneStageDisposableTableDrop,
 		PortablePruneStageThreadsRebuildPreflight,
 		PortablePruneStageThreadsRebuildForeignKeys,
 		PortablePruneStageThreadsRebuildCompactCopy,

@@ -55,6 +55,14 @@ func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T)
 
 	db := openRawDB(t, result.DatabasePath)
 	defer db.Close()
+	for _, column := range []struct{ table, name string }{
+		{table: "comments", name: "raw_json_blob_id"},
+		{table: "thread_revisions", name: "raw_json_blob_id"},
+	} {
+		if columnExists(t, db, column.table, column.name) {
+			t.Fatalf("derived artifact retained dangling column %s.%s", column.table, column.name)
+		}
+	}
 	var journalMode string
 	if err := db.QueryRow(`pragma journal_mode`).Scan(&journalMode); err != nil {
 		t.Fatalf("read artifact journal mode: %v", err)
@@ -488,6 +496,42 @@ func TestExportRejectsForeignKeyViolationBeforeIndexRemoval(t *testing.T) {
 	assertNoExportTemps(t, dir)
 }
 
+func TestExportRejectsRetainedForeignKeyToDisposableTable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	if _, err := st.DB().ExecContext(ctx, `
+		insert into documents(id, thread_id, title, body, raw_text, dedupe_text, updated_at)
+		values(1, 1, 'derived', 'body', 'raw', 'dedupe', '2026-08-09T00:00:00Z');
+		create table retained_document_links(
+			id integer primary key,
+			document_id integer not null references documents(id)
+		);
+	`); err != nil {
+		t.Fatalf("seed retained FK to disposable table: %v", err)
+	}
+	outputDir := filepath.Join(dir, "invalid-retained-fk")
+	options := testExportOptions(sourcePath, outputDir)
+	var stages []Stage
+	options.Progress = func(stage Stage) { stages = append(stages, stage) }
+	_, err := Export(ctx, options)
+	if err == nil || !strings.Contains(err.Error(), "foreign") {
+		t.Fatalf("retained FK export error = %v", err)
+	}
+	if slices.Contains(stages, Stage("canonical shaping: threads rebuild: preflight")) {
+		t.Fatalf("retained FK reached threads rebuild preflight: %v", stages)
+	}
+	if slices.Contains(stages, Stage("canonical shaping: threads rebuild: compact copy")) {
+		t.Fatalf("retained FK reached threads copy: %v", stages)
+	}
+	if _, err := os.Stat(outputDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retained FK failure left target: %v", err)
+	}
+	assertNoExportTemps(t, dir)
+}
+
 func TestConfigureDisposableStoreDisablesJournalDurabilityAndSecureDelete(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "staging.db"))
@@ -685,6 +729,14 @@ func TestExportedDatabaseReopensWritableAndRecreatesOmittedSchema(t *testing.T) 
 		t.Fatalf("writable reopen/migrate: %v", err)
 	}
 	defer writable.Close()
+	for _, column := range []struct{ table, name string }{
+		{table: "comments", name: "raw_json_blob_id"},
+		{table: "thread_revisions", name: "raw_json_blob_id"},
+	} {
+		if !columnExists(t, writable.DB(), column.table, column.name) {
+			t.Fatalf("writable reopen did not restore %s.%s", column.table, column.name)
+		}
+	}
 	for _, table := range currentStateProfile.DroppedTables {
 		if !tableExists(t, writable.DB(), table) {
 			t.Fatalf("migration did not recreate %s", table)
@@ -861,6 +913,30 @@ func indexExists(t *testing.T, db *sql.DB, name string) bool {
 		t.Fatalf("inspect index %s: %v", name, err)
 	}
 	return exists == 1
+}
+
+func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	rows, err := db.Query(`pragma table_info(` + quoteIdentifier(table) + `)`)
+	if err != nil {
+		t.Fatalf("inspect columns for %s: %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan columns for %s: %v", table, err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read columns for %s: %v", table, err)
+	}
+	return false
 }
 
 func rowCount(t *testing.T, db *sql.DB, table string) int {
