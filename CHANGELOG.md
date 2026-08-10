@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.1 - 2026-08-10
 
 **Highlight:** `portable export` now produces stable artifact identities — local
