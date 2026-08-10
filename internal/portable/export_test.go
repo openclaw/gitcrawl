@@ -390,7 +390,7 @@ func TestExportByteBudgetExactAndOneByteOver(t *testing.T) {
 }
 
 func TestExportRejectsUnsafeInputsAndExistingOutput(t *testing.T) {
-	for _, name := range []string{"", ".", "..", "a/b.db", `a\b.db`, "bad\x00.db", "gitcrawl.db-wal", "gitcrawl.db-shm", "gitcrawl.db.manifest.json"} {
+	for _, name := range []string{"", ".", "..", "a/b.db", `a\b.db`, "bad\x00.db", "bad?.db", "gitcrawl.db-wal", "gitcrawl.db-shm", "gitcrawl.db.manifest.json"} {
 		if err := ValidateDatabaseName(name); err == nil {
 			t.Errorf("ValidateDatabaseName(%q) succeeded", name)
 		}
