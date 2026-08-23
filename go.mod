@@ -7,9 +7,9 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/mattn/go-isatty v0.0.24
-	github.com/openclaw/crawlkit v0.14.6
+	github.com/openclaw/crawlkit v0.14.7
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.56.0
