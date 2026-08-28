@@ -1,6 +1,6 @@
 module github.com/openclaw/gitcrawl
 
-go 1.27.0
+go 1.26.7
 
 require (
 	github.com/alecthomas/kong v1.16.1

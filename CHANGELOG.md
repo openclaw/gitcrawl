@@ -2,8 +2,9 @@
 
 ## 0.9.3 - Unreleased
 
-- Update the minimum Go toolchain to 1.27.0, SQLite to v1.57.0, and the current compatible Go dependency closure.
+- Update the minimum Go toolchain to 1.26.7, SQLite to v1.57.0, and the current compatible Go dependency closure; keep Go 1.27 on hold until managed CodeQL supports it.
 - Refresh govulncheck, deadcode, the Dockerfile frontend, and the docs build's Node runtime.
+- Stabilize the coverage gate with direct tests for immutable SQLite reads, PR detail lookups, and vector scopes.
 
 ## v0.9.2 - 2026-08-14
 

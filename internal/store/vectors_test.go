@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"math"
 	"path/filepath"
 	"testing"
@@ -66,6 +67,32 @@ func TestUpsertAndListThreadVectors(t *testing.T) {
 	}
 	if len(vector.Vector) != 3 || vector.Vector[1] != 1 {
 		t.Fatalf("summary vector missing: %#v", vector)
+	}
+	if count, err := st.CountThreadVectorScope(ctx, ThreadVectorQuery{RepoID: repoID}); err != nil || count != 1 {
+		t.Fatalf("open vector scope = %d, err=%v, want 1", count, err)
+	}
+	if err := st.CloseThreadLocally(ctx, repoID, 1, "test"); err != nil {
+		t.Fatalf("close thread: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		query ThreadVectorQuery
+		want  int
+	}{
+		{"open only", ThreadVectorQuery{RepoID: repoID}, 0},
+		{"include closed", ThreadVectorQuery{RepoID: repoID, IncludeClosed: true}, 1},
+		{"other repository", ThreadVectorQuery{RepoID: repoID + 1, IncludeClosed: true}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if count, err := st.CountThreadVectorScope(ctx, tc.query); err != nil || count != tc.want {
+				t.Fatalf("vector scope = %d, err=%v, want %d", count, err, tc.want)
+			}
+		})
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := st.CountThreadVectorScope(canceled, ThreadVectorQuery{RepoID: repoID}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled vector scope error = %v", err)
 	}
 }
 

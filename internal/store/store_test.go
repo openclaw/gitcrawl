@@ -72,6 +72,34 @@ func TestSQLiteBusyRetryDoesNotRetryOtherErrors(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyImmutableRejectsWritesAndMissingDatabase(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
+	if _, err := OpenReadOnlyImmutable(ctx, dbPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing immutable database error = %v", err)
+	}
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	repoID, _ := seedVectorThreads(t, ctx, st)
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	readOnly, err := OpenReadOnlyImmutable(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open immutable store: %v", err)
+	}
+	defer readOnly.Close()
+	if count, err := readOnly.CountThreadVectorScope(ctx, ThreadVectorQuery{RepoID: repoID}); err != nil || count != 2 {
+		t.Fatalf("immutable vector scope = %d, err=%v, want 2", count, err)
+	}
+	if _, err := readOnly.DB().ExecContext(ctx, "delete from threads"); err == nil {
+		t.Fatal("immutable store accepted a write")
+	}
+}
+
 func TestOpenMigratesSchema(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

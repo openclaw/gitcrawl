@@ -45,6 +45,13 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	if err := st.UpsertPullRequestCache(ctx, detail, files, commits, checks, runs); err != nil {
 		t.Fatalf("upsert pr cache: %v", err)
 	}
+	byThread, found, err := st.PullRequestDetailByThread(ctx, threadID)
+	if err != nil || !found || byThread != detail {
+		t.Fatalf("detail by thread = %+v, found=%v, err=%v, want %+v", byThread, found, err, detail)
+	}
+	if missing, found, err := st.PullRequestDetailByThread(ctx, threadIDs[0]); err != nil || found || missing != (PullRequestDetail{}) {
+		t.Fatalf("missing detail = %+v, found=%v, err=%v", missing, found, err)
+	}
 	cache, err := st.PullRequestCache(ctx, repoID, 302)
 	if err != nil {
 		t.Fatalf("pull request cache: %v", err)
