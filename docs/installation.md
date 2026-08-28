@@ -12,7 +12,7 @@ permalink: /installation/
 
 ## Requirements
 
-- **Go 1.26+** if building from source
+- **Go 1.27.0+** if building from source
 - **Git** for cloning the repository (and for portable stores)
 - **A GitHub token** for any command that talks to GitHub (`sync`, `refresh`)
 - **An OpenAI API key** for `summarize`, `embed`, and the embedding stage of `refresh`
