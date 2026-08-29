@@ -5,6 +5,7 @@
 - Fix repeated gzip-only portable initialization and add a locked, bounded, preservation-first `portable refresh` subscriber command with automatic Git maintenance disabled across portable operations.
 - Preserve writable portable runtime data across refresh and ordinary reads, keep prepared raw replicas updating through publisher transitions, report gzip subscriber status from the usable artifact/runtime, and retain explicit Git config isolation with safe scope diagnostics.
 - Reject credential-bearing portable remote URLs while retaining SSH transport usernames.
+- Report actionable portable Git failure categories without exposing raw remote or credential-helper diagnostics.
 - Update the minimum Go toolchain to 1.26.7, SQLite to v1.57.0, and the current compatible Go dependency closure; keep Go 1.27 on hold until managed CodeQL supports it.
 - Refresh govulncheck, deadcode, the Dockerfile frontend, and the docs build's Node runtime.
 - Stabilize the coverage gate with direct tests for immutable SQLite reads, PR detail lookups, and vector scopes.

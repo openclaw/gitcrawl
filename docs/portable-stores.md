@@ -177,7 +177,10 @@ JSON reports `stage`, `result` (`updated`, `no-op`, `refused`, `partial`),
 `artifact_bytes`, `mirror_destination`, `mirror_result`, `capacity` and
 `elapsed_ms`. A refusal includes a bounded `reason` and exits nonzero. Stderr
 contains stage/elapsed/result diagnostics; stdout remains data. A no-op means
-the refs already match; a missing runtime may still be materialized.
+the refs already match; a missing runtime may still be materialized. Git failures
+use fixed, credential-safe repository, authentication, connection or disk-space
+diagnostics when recognized, with general troubleshooting guidance otherwise;
+raw remote/helper stderr is never included.
 
 All portable Git entry points explicitly set `maintenance.auto=false` and
 `gc.auto=0`, including init, implicit reader fetch/merge and retained recovery

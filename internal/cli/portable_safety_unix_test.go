@@ -97,6 +97,44 @@ func TestPortableConfigScopeIsolationAndRefusal(t *testing.T) {
 	}
 }
 
+func TestPortableGitFailureDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	git := filepath.Join(dir, "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\nprintf '%s' \"$GITCRAWL_TEST_DIAGNOSTIC\" >&2\nexit 128\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := portableGitContext(context.Background(), git)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, message, want string }{
+		{"missing-remote", "fatal: synthetic-private-path does not appear to be a git repository", "remote repository unavailable; verify the remote path and read access"},
+		{"missing-local", "fatal: repository 'synthetic-private-path' does not exist", "remote repository unavailable"},
+		{"not-found", "remote: Repository not found. synthetic-private-path", "remote repository unavailable"},
+		{"authentication", "fatal: Authentication failed for synthetic-private-path", "check the credential helper or SSH identity"},
+		{"ssh", "synthetic-private-path: Permission denied (publickey).", "Git authentication failed"},
+		{"prompt", "fatal: could not read Username for synthetic-private-path: terminal prompts disabled", "Git authentication failed"},
+		{"disk", "fatal: cannot write synthetic-private-path: No space left on device", "restore free-space headroom before retrying"},
+		{"dns", "fatal: unable to access synthetic-private-path: Could not resolve host", "check network connectivity and remote availability"},
+		{"connection", "Failed to connect to synthetic-private-path port 443", "Git connection failed"},
+		{"index-lock", "fatal: Unable to create synthetic-private-path/index.lock: File exists", "index.lock file exists"},
+		{"dirty", "Your local changes to synthetic-private-path would be overwritten by merge", "Your local changes would be overwritten by merge"},
+		{"unknown", "unrecognized synthetic-private-path diagnostic", "verify Git version, repository state and remote access"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITCRAWL_TEST_DIAGNOSTIC", tc.message)
+			err := runPortableGit(ctx, dir, io.Discard, "fetch", "origin")
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 128 || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected safe classification %q with exit 128, got %v", tc.want, err)
+			}
+			if strings.Contains(err.Error(), "synthetic-private-path") {
+				t.Fatal("Git failure exposed raw diagnostics")
+			}
+		})
+	}
+}
+
 func TestPortableGitCancellationAllowsOwnedCleanup(t *testing.T) {
 	dir := t.TempDir()
 	owned := filepath.Join(dir, "tmp_pack_owned")

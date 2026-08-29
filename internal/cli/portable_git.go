@@ -107,15 +107,27 @@ func runPortableGit(ctx context.Context, workdir string, output io.Writer, args 
 	select {
 	case err := <-done:
 		if err != nil {
-			// Preserve only the two legacy recovery classifiers, never raw
-			// remote/helper diagnostics or credential-bearing argv.
+			// Return fixed classifications, never raw remote/helper diagnostics.
+			// Keep the legacy recovery classifiers intact.
 			message := diagnostic.String()
-			if strings.Contains(message, "index.lock") && strings.Contains(strings.ToLower(message), "file exists") {
+			lower := strings.ToLower(message)
+			if strings.Contains(message, "index.lock") && strings.Contains(lower, "file exists") {
 				return fmt.Errorf("index.lock file exists: %w", err)
 			}
 			if strings.Contains(message, "Your local changes") || strings.Contains(message, "would be overwritten by merge") {
 				return fmt.Errorf("Your local changes would be overwritten by merge: %w", err)
 			}
+			switch {
+			case strings.Contains(lower, "does not appear to be a git repository") || strings.Contains(lower, "repository") && strings.Contains(lower, "does not exist") || strings.Contains(lower, "repository not found"):
+				return fmt.Errorf("remote repository unavailable; verify the remote path and read access: %w", err)
+			case strings.Contains(lower, "authentication failed") || strings.Contains(lower, "permission denied (publickey") || strings.Contains(lower, "could not read username"):
+				return fmt.Errorf("Git authentication failed; check the credential helper or SSH identity and repository access: %w", err)
+			case strings.Contains(lower, "no space left on device"):
+				return fmt.Errorf("insufficient disk space for Git; restore free-space headroom before retrying: %w", err)
+			case strings.Contains(lower, "could not resolve host") || strings.Contains(lower, "failed to connect") || strings.Contains(lower, "connection timed out") || strings.Contains(lower, "connection refused"):
+				return fmt.Errorf("Git connection failed; check network connectivity and remote availability: %w", err)
+			}
+			return fmt.Errorf("Git command failed; verify Git version, repository state and remote access: %w", err)
 		}
 		return err
 	case <-ctx.Done():
