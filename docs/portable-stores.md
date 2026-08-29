@@ -96,6 +96,20 @@ includes/redirections and unsupported extensions. Resolve these deliberately
 outside the subscriber command. It never resets, cleans, prunes, repacks,
 reclones, deletes backups or sidecars, or invokes reader/doctor auto-repair.
 
+Admission examines every exposed Git configuration scope. Refusals identify
+the scope and unsafe category without printing keys or values. Single-valued
+hooks-path, fsmonitor, attributes-file and SSH-command settings overridden by
+the portable runner are inert; actual checkout hooks/attributes and exposed
+filter definitions still cause refusal. For a dedicated subscriber that must
+exclude machine-wide filters, Unix callers can set
+`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` for this invocation (Windows:
+`GIT_CONFIG_GLOBAL=NUL GIT_CONFIG_NOSYSTEM=1`). `GIT_CONFIG_SYSTEM` may also point
+to the platform null device. These scope-removal controls survive sanitization;
+arbitrary config paths, repository redirection and config injection do not.
+Disabling global configuration also removes global credential helpers, so the
+remaining authentication configuration must support the intended remote.
+No global files are changed, and repository-local safety checks still apply.
+
 Fetch requests only the intended branch into `FETCH_HEAD`, with no pruning,
 tags, submodule recursion or remote-tracking ref updates. Both existing HEAD
 and the tracking ref must be ancestors of the frozen fetched commit. Only its
@@ -108,7 +122,12 @@ Git metadata, cleanliness and capacity are checked again at mutation boundaries.
 The validated runtime generation is atomically renamed outside the checkout.
 A runtime with bytes differing from its recorded source digest, or any SQLite
 sidecars, is preserved as `preserved-local`; it is never overwritten to make
-the subscriber appear fresh. Other Gitcrawl CLI writers obey the lease, but
+the subscriber appear fresh. Writable CLI opens record local ownership before
+SQLite migrations or writes. Ordinary reads retain that ownership and the
+original source identity across later publisher generations; local closures,
+vectors and other runtime work survive repeated reads. A corrupt locally owned
+runtime reports an error without replacement; a corrupt disposable replica
+still follows the legacy recovery path. Other Gitcrawl CLI writers obey the lease, but
 external Git/SQLite writers do not. Observable changes cause refusal; this is
 not a universal filesystem transaction or protection against a hostile writer.
 
@@ -165,7 +184,7 @@ portable commands as well. Gitcrawl does not change global or local Git policy.
 
 ## How read-only commands behave
 
-Read-only commands (`search`, `threads`, `clusters`, `cluster-detail`, `neighbors`, the TUI) refresh the portable-store checkout before reading, so they always see the latest published data:
+Read-only commands (`search`, `threads`, `clusters`, `cluster-detail`, `neighbors`, the TUI) normally refresh the portable-store checkout before reading. A locally owned writable runtime continues serving its local data instead of accepting publisher replacement:
 
 - The refresh is best-effort and non-interactive
 - SSH attempts are bounded so an offline remote does not hang the CLI
@@ -175,6 +194,15 @@ Read-only commands (`search`, `threads`, `clusters`, `cluster-detail`, `neighbor
 - Manifest-backed gzip SQLite artifacts are verified before inflation and still use the uncompressed database digest as the runtime identity
 
 If the remote is unreachable, the read still answers from the local checkout.
+
+`status` is observational: it uses an existing runtime without fetching,
+repairing, migrating, or promoting anything. It reports `state: stale` when
+that runtime's recorded source generation differs from the checkout, with a
+warning for writable local state. Before a gzip-only subscriber has a runtime,
+status validates and reads the artifact in disposable temporary storage; its
+inventory reports the gzip path and compressed on-disk bytes, with a warning
+explaining that distinction. It never reports an absent logical `.db` as an
+empty, current subscriber.
 
 This is the **legacy reader recovery contract**, separate from strict
 `portable refresh`: a marked malformed store can still be backed up, reset and

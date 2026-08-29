@@ -83,6 +83,9 @@ func portableTestManifest(t *testing.T, path, relative string, compressed bool) 
 
 func newPortableRefreshFixture(t *testing.T, compressed bool) portableRefreshFixture {
 	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	dir := t.TempDir()
 	fixture := portableRefreshFixture{remote: filepath.Join(dir, "publisher"), checkout: filepath.Join(dir, "subscriber"), configPath: filepath.Join(dir, "config.toml"), relative: "data/archive.db"}
 	if err := os.MkdirAll(filepath.Join(fixture.remote, "data"), 0o755); err != nil {

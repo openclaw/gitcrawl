@@ -32,13 +32,20 @@ func portableGitArgs(args []string) []string {
 func portableGitEnv() []string {
 	var env []string
 	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
+		name, value, _ := strings.Cut(entry, "=")
+		// Preserve only config selectors that remove an entire scope. Other
+		// paths and GIT_CONFIG_* injection still cannot select Git's inputs.
+		if (name == "GIT_CONFIG_GLOBAL" || name == "GIT_CONFIG_SYSTEM") && value == os.DevNull ||
+			name == "GIT_CONFIG_NOSYSTEM" && (value == "1" || strings.EqualFold(value, "true")) {
+			env = append(env, entry)
+			continue
+		}
 		if strings.HasPrefix(strings.ToUpper(name), "GIT_") || name == "SSH_ASKPASS" {
 			continue
 		}
 		env = append(env, entry)
 	}
-	return append(env, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1",
+	return append(env, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_ATTR_NOSYSTEM=1",
 		"GIT_LFS_SKIP_SMUDGE=1", "GCM_INTERACTIVE=never", "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10")
 }
 

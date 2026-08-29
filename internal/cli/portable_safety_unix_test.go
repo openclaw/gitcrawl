@@ -17,6 +17,86 @@ import (
 	"time"
 )
 
+func TestPortableConfigScopeIsolationAndRefusal(t *testing.T) {
+	fixture := newPortableRefreshFixture(t, true)
+	if _, err := fixture.refresh(t); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "helper-ran")
+	helper := filepath.Join(dir, "helper")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\ntouch \"$GITCRAWL_TEST_MARKER\"\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITCRAWL_TEST_MARKER", marker)
+	t.Setenv("GITCRAWL_TEST_REAL_GIT", realGit)
+	// An operator-selected wrapper supplies a synthetic system scope without
+	// modifying the machine's Git configuration or reading its values.
+	wrapper := filepath.Join(dir, "git")
+	script := "#!/bin/sh\nexport GIT_CONFIG_SYSTEM=\"${GIT_CONFIG_SYSTEM:-$GITCRAWL_TEST_SYSTEM_CONFIG}\"\nexec \"$GITCRAWL_TEST_REAL_GIT\" \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITCRAWL_PORTABLE_GIT", wrapper)
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	for _, scope := range []string{"global", "system"} {
+		t.Run(scope, func(t *testing.T) {
+			configPath := filepath.Join(dir, ".gitconfig")
+			if scope == "system" {
+				configPath = filepath.Join(dir, "system.config")
+				t.Setenv("GITCRAWL_TEST_SYSTEM_CONFIG", configPath)
+				t.Setenv("GIT_CONFIG_SYSTEM", "")
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "")
+			} else {
+				t.Setenv("GIT_CONFIG_GLOBAL", "")
+			}
+			portableTestGit(t, fixture.checkout, "config", "--file", configPath, "filter.fixture.smudge", helper)
+			before := portableTestSnapshot(t, filepath.Dir(fixture.configPath))
+			result, err := fixture.refresh(t)
+			if err == nil || result.Stage != "admission" || result.Reason != "unsupported portable Git configuration ("+scope+" scope: filters)" {
+				t.Fatalf("synthetic %s scope not diagnosed: %+v %v", scope, result, err)
+			}
+			if !bytes.Equal(before, portableTestSnapshot(t, filepath.Dir(fixture.configPath))) {
+				t.Fatal("config refusal mutated subscriber")
+			}
+			t.Setenv("GIT_CONFIG_"+strings.ToUpper(scope), os.DevNull)
+			if result, err := fixture.refresh(t); err != nil || result.MirrorResult != "unchanged" {
+				t.Fatalf("scope isolation was discarded: %+v %v", result, err)
+			}
+		})
+	}
+	// These settings are overridden for every portable operation. Actual hook
+	// files, attributes, filters and redirection remain separate refusals.
+	for _, key := range []string{"core.hooksPath", "core.fsmonitor", "core.attributesFile", "core.sshCommand"} {
+		portableTestGit(t, fixture.checkout, "config", key, helper)
+	}
+	if _, err := fixture.refresh(t); err != nil {
+		t.Fatalf("neutralized config refused: %v", err)
+	}
+	for _, key := range []string{"filter.fixture.smudge", "url.https://example.invalid/private-subsection.insteadOf", "remote.origin.uploadpack"} {
+		t.Run(key, func(t *testing.T) {
+			portableTestGit(t, fixture.checkout, "config", key, helper)
+			before := portableTestSnapshot(t, filepath.Dir(fixture.configPath))
+			result, err := fixture.refresh(t)
+			if err == nil || result.Stage != "admission" || !strings.Contains(result.Reason, "local scope") || strings.Contains(result.Reason, "private-subsection") || strings.Contains(result.Reason, helper) {
+				t.Fatalf("unsafe/unsanitized local config admission: %+v %v", result, err)
+			}
+			if !bytes.Equal(before, portableTestSnapshot(t, filepath.Dir(fixture.configPath))) {
+				t.Fatal("local config refusal mutated subscriber")
+			}
+			portableTestGit(t, fixture.checkout, "config", "--unset", key)
+		})
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("Git executed a neutralized or rejected helper: %v", err)
+	}
+}
+
 func TestPortableGitCancellationAllowsOwnedCleanup(t *testing.T) {
 	dir := t.TempDir()
 	owned := filepath.Join(dir, "tmp_pack_owned")

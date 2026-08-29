@@ -79,6 +79,14 @@ func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
 		}
 		cfg.DBPath = mirrorPath
 		remoteSource = true
+		// Writable opens can migrate schema as well as change user data. Record
+		// ownership before either can happen, without changing source identity.
+		statePath := portableStoreRefreshStatePath(mirrorPath)
+		state := readPortableStoreRefreshState(statePath)
+		state.MirrorWritable = true
+		if err := writePortableStoreRefreshState(statePath, state); err != nil {
+			return localRuntime{}, err
+		}
 		a.dbTargetNoticeOnce.Do(func() {
 			fmt.Fprintf(a.Stderr, "gitcrawl: portable store checkout detected; writes go to the runtime mirror at %s, not the checkout database %s. Run 'gitcrawl portable prune' to publish.\n", mirrorPath, sourceDBPath)
 		})
@@ -310,13 +318,42 @@ func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath stri
 		}
 		defer release()
 	}
+	statePath := portableStoreRefreshStatePath(mirrorPath)
+	state := readPortableStoreRefreshState(statePath)
+	local, err := portableRuntimeHasLocalChanges(ctx, sourceDBPath, mirrorPath, state)
+	if err != nil {
+		return false, err
+	}
+	if local {
+		if err := sqliteStoreHealth(ctx, mirrorPath); err == nil {
+			// Keep the original source digest/stamp: healthy local work does
+			// not become a copy of the publisher's latest generation.
+			changed := !state.MirrorWritable
+			if state.MirrorHealthSourceSHA256 == "" {
+				modTime, size, sha, stampErr := portableDBManifestStamp(sourceDBPath)
+				if stampErr == nil && modTime != "" && portableManifestGenerationUnchanged(state, modTime, size, sha) {
+					state.MirrorHealthSourceSHA256 = sha
+					changed = true
+				}
+			}
+			if changed {
+				state.MirrorWritable = true
+				if err := writePortableStoreRefreshState(statePath, state); err != nil {
+					return false, err
+				}
+			}
+			return false, nil
+		} else if state.MirrorWritable || !isSQLiteCorruption(err) {
+			return false, fmt.Errorf("check locally modified portable runtime (preserved): %w", err)
+		}
+		// A corrupt, never-writable replica still follows normal recovery.
+	}
 	sweepOrphanPortableRuntimeTempFiles(mirrorPath, portableRuntimeTempMaxAge)
 	isRepairablePortableSource := isPortableSource
 	if refresh {
 		_ = refreshPortableStoreForDBIfDue(ctx, sourceDBPath, mirrorPath)
 	}
 	needsCopy, err := portableRuntimeNeedsCopy(sourceDBPath, mirrorPath)
-	statePath := portableStoreRefreshStatePath(mirrorPath)
 	if err != nil {
 		if !isRepairablePortableSource || !errors.Is(err, os.ErrNotExist) {
 			return false, err
@@ -416,11 +453,46 @@ type portableStoreRefreshState struct {
 	MirrorHealthManifestModTime string `json:"mirror_health_manifest_mod_time,omitempty"`
 	MirrorHealthManifestSize    int64  `json:"mirror_health_manifest_size,omitempty"`
 	MirrorHealthSourceSHA256    string `json:"mirror_health_source_sha256,omitempty"`
+	MirrorWritable              bool   `json:"mirror_writable,omitempty"`
 	LastRepair                  string `json:"last_repair,omitempty"`
 	LastRepairBackup            string `json:"last_repair_backup,omitempty"`
 	LastRepairAt                string `json:"last_repair_at,omitempty"`
 	LastRepairError             string `json:"last_repair_error,omitempty"`
 	LastRecloneAttempt          string `json:"last_reclone_attempt,omitempty"`
+}
+
+func portableRuntimeHasLocalChanges(ctx context.Context, source, path string, state portableStoreRefreshState) (bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if state.MirrorWritable {
+		return true, nil
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Stat(path + suffix); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	if state.MirrorHealthSourceSHA256 == "" {
+		return false, nil
+	}
+	// A legacy health stamp can describe local bytes, not a pristine replica.
+	// Recheck the digest whenever the source or runtime may have changed.
+	if state.MirrorHealthSize == info.Size() && state.MirrorHealthModTime == info.ModTime().UTC().Format(time.RFC3339Nano) {
+		modTime, size, sha, err := portableDBManifestStamp(source)
+		needsCopy, copyErr := portableRuntimeNeedsCopy(source, path)
+		if err == nil && copyErr == nil && !needsCopy && portableManifestGenerationUnchanged(state, modTime, size, sha) {
+			return false, nil
+		}
+	}
+	digest, err := portableFileSHA256(ctx, path)
+	return !strings.EqualFold(fmt.Sprintf("%x", digest), state.MirrorHealthSourceSHA256), err
 }
 
 func recoverMissingPortableSource(ctx context.Context, sourceDBPath, configPath, statePath string) error {
@@ -638,6 +710,13 @@ func markPortableMirrorHealthVerified(path, statePath, sourceDBPath string) erro
 	manifestModTime, manifestSize, sourceSHA256, err := portableDBManifestStamp(sourceDBPath)
 	if err != nil {
 		return err
+	}
+	state := readPortableStoreRefreshState(statePath)
+	if state.MirrorWritable {
+		state.MirrorWritable = false
+		if err := writePortableStoreRefreshState(statePath, state); err != nil {
+			return err
+		}
 	}
 	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
 }

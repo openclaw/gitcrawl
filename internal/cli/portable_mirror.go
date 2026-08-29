@@ -74,7 +74,7 @@ func inspectPortableMirror(ctx context.Context, path, source string) (portableMi
 			}
 			sourceSHA = manifest.SHA256
 		}
-		mirror.preserve = !strings.EqualFold(fmt.Sprintf("%x", mirror.digest), sourceSHA)
+		mirror.preserve = state.MirrorWritable || !strings.EqualFold(fmt.Sprintf("%x", mirror.digest), sourceSHA)
 	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		info, err := os.Lstat(path + suffix)

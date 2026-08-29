@@ -317,6 +317,17 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 		if err := markPortableMirrorHealthVerified(mirrorPath, portableStoreRefreshStatePath(mirrorPath), source); err != nil {
 			return result, err
 		}
+	} else if result.MirrorResult == "preserved-local" {
+		// Preserve the decision across ordinary reads, including older mirrors
+		// without a recorded source digest. Do not relabel their generation.
+		statePath := portableStoreRefreshStatePath(mirrorPath)
+		state := readPortableStoreRefreshState(statePath)
+		if !state.MirrorWritable {
+			state.MirrorWritable = true
+			if err := writePortableStoreRefreshState(statePath, state); err != nil {
+				return result, err
+			}
+		}
 	}
 	if err := budget.check(ctx); err != nil {
 		return result, err

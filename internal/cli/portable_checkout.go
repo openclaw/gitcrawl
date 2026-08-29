@@ -128,20 +128,32 @@ func portableConfigIdentity(ctx context.Context, root string) ([32]byte, error) 
 		return digest, fmt.Errorf("unsupported Git configuration output")
 	}
 	for index := 0; index < len(parts); index += 2 {
-		if parts[index] == "command" {
+		scope := parts[index]
+		switch scope {
+		case "command":
 			continue
+		case "system", "global", "local", "worktree":
+		default:
+			return digest, fmt.Errorf("unsupported Git configuration scope")
 		}
 		key, value, _ := strings.Cut(parts[index+1], "\n")
 		key = strings.ToLower(key)
-		if key == "core.hookspath" || key == "core.fsmonitor" || key == "core.sshcommand" || key == "core.gitproxy" ||
-			key == "core.worktree" || key == "core.attributesfile" || key == "core.sparsecheckout" || key == "core.sparsecheckoutcone" ||
-			strings.HasPrefix(key, "filter.") || strings.HasPrefix(key, "submodule.") || strings.HasPrefix(key, "extensions.") ||
+		// The runner overrides these single-valued settings on every call.
+		if key == "core.hookspath" || key == "core.fsmonitor" || key == "core.attributesfile" || key == "core.sshcommand" {
+			continue
+		}
+		if strings.HasPrefix(key, "filter.") {
+			return digest, fmt.Errorf("unsupported portable Git configuration (%s scope: filters)", scope)
+		}
+		if key == "core.gitproxy" || key == "core.worktree" || key == "core.sparsecheckout" || key == "core.sparsecheckoutcone" ||
+			strings.HasPrefix(key, "submodule.") || strings.HasPrefix(key, "extensions.") ||
 			strings.HasPrefix(key, "include") || strings.HasPrefix(key, "url.") || key == "core.alternaterefscommand" ||
 			(strings.HasPrefix(key, "remote.") && !strings.HasPrefix(key, "remote.origin.")) {
-			return digest, fmt.Errorf("unsupported portable Git configuration (hooks, filters, redirection or extensions)")
+			// Never print key names: URL subsections can contain credentials.
+			return digest, fmt.Errorf("unsupported portable Git configuration (%s scope: redirection, submodules or extensions)", scope)
 		}
 		if strings.HasPrefix(key, "remote.origin.") && key != "remote.origin.url" && key != "remote.origin.fetch" && key != "remote.origin.tagopt" {
-			return digest, fmt.Errorf("unsupported origin configuration")
+			return digest, fmt.Errorf("unsupported portable Git configuration (%s scope: origin options)", scope)
 		}
 		if key == "core.bare" && value != "false" {
 			return digest, fmt.Errorf("portable checkout cannot be bare")

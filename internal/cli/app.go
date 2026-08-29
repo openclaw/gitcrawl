@@ -4419,22 +4419,11 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	if cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
 		return a.runRemoteStatusWithConfig(ctx, cfg)
 	}
-	status := store.Status{DBPath: cfg.DBPath}
-	if _, err := os.Stat(cfg.DBPath); err == nil {
-		st, err := store.OpenReadOnly(ctx, cfg.DBPath)
-		if err != nil {
-			return err
-		}
-		defer st.Close()
-		status, err = st.Status(ctx)
-		if err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	status, err := a.localArchiveStatus(ctx, cfg)
+	if err != nil {
 		return err
 	}
-	status.DBPath = cfg.DBPath
-	return a.writeOutput("status", controlStatus(config.ResolvePath(a.configPath), cfg, status), false)
+	return a.writeOutput("status", status, false)
 }
 
 func (a *App) runRemoteStatusWithConfig(ctx context.Context, cfg config.Config) error {
