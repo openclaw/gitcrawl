@@ -8,7 +8,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/openclaw/gitcrawl/internal/store"
 )
+
+func openPortableMirrorReadOnly(ctx context.Context, path, source string) (*store.Store, error) {
+	mirror, err := inspectPortableMirror(ctx, path, source)
+	if err != nil {
+		return nil, err
+	}
+	if err := mirror.recheck(ctx); err != nil {
+		return nil, err
+	}
+	if mirror.exists && !mirror.preserve {
+		// A normal SQLite read of a WAL-mode replica creates sidecars that
+		// would falsely claim local ownership on the next refresh.
+		return store.OpenReadOnlyImmutable(ctx, path)
+	}
+	return store.OpenReadOnly(ctx, path)
+}
 
 type portableMirror struct {
 	path     string

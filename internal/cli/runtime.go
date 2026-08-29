@@ -112,9 +112,15 @@ func (a *App) openLocalRuntimeReadOnlyWithConfig(ctx context.Context, cfg config
 	}
 	sourceDBPath := cfg.DBPath
 	remoteSource := false
-	if _, ok, err := portableStoreRoot(ctx, cfg.DBPath); err != nil {
+	if root, ok, err := portableStoreRoot(ctx, cfg.DBPath); err != nil {
 		return localRuntime{}, err
 	} else if ok {
+		var release func()
+		ctx, release, err = acquirePortableOwner(ctx, root)
+		if err != nil {
+			return localRuntime{}, err
+		}
+		defer release()
 		mirrorPath, _, err := a.ensurePortableRuntimeDB(ctx, cfg.DBPath, true)
 		if err != nil {
 			return localRuntime{}, err
@@ -122,7 +128,13 @@ func (a *App) openLocalRuntimeReadOnlyWithConfig(ctx context.Context, cfg config
 		cfg.DBPath = mirrorPath
 		remoteSource = true
 	}
-	st, err := store.OpenReadOnly(ctx, cfg.DBPath)
+	open := store.OpenReadOnly
+	if remoteSource {
+		open = func(ctx context.Context, path string) (*store.Store, error) {
+			return openPortableMirrorReadOnly(ctx, path, sourceDBPath)
+		}
+	}
+	st, err := open(ctx, cfg.DBPath)
 	if err != nil {
 		return localRuntime{}, err
 	}
@@ -434,11 +446,14 @@ func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath stri
 	if !needsCopy {
 		return false, nil
 	}
-	if err := copySQLiteFileAtomicVerified(ctx, sourceDBPath, mirrorPath); err != nil {
+	digest, err := copySQLiteFileAtomicVerified(ctx, sourceDBPath, mirrorPath)
+	if err != nil {
 		return false, err
 	}
 	if isRepairablePortableSource {
-		_ = markPortableMirrorHealthVerified(mirrorPath, statePath, sourceDBPath)
+		if err := markPortableMirrorHealthVerified(mirrorPath, statePath, sourceDBPath, fmt.Sprintf("%x", digest)); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }
@@ -625,20 +640,6 @@ func recordPortableRepairState(path string, result portableRepairResult, repairE
 	_ = writePortableStoreRefreshState(path, state)
 }
 
-func sqliteStoreOpenHealth(ctx context.Context, path string) error {
-	if strings.TrimSpace(path) == "" {
-		return os.ErrNotExist
-	}
-	if _, err := os.Stat(path); err != nil {
-		return err
-	}
-	st, err := store.OpenReadOnly(ctx, path)
-	if err != nil {
-		return err
-	}
-	return st.Close()
-}
-
 func portableMirrorCachedHealth(ctx context.Context, mirrorPath, sourceDBPath, statePath string) error {
 	manifestModTime, manifestSize, sourceSHA256, err := portableDBManifestStamp(sourceDBPath)
 	if err != nil {
@@ -651,6 +652,9 @@ func portableMirrorCachedHealth(ctx context.Context, mirrorPath, sourceDBPath, s
 }
 
 func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath, statePath, manifestModTime string, manifestSize int64, sourceSHA256 string) error {
+	open := func(ctx context.Context, path string) (*store.Store, error) {
+		return openPortableMirrorReadOnly(ctx, path, sourceDBPath)
+	}
 	return sqliteStoreCachedHealthWithManifestChecks(
 		ctx,
 		path,
@@ -659,8 +663,16 @@ func sqliteStoreCachedHealthWithManifest(ctx context.Context, path, sourceDBPath
 		manifestModTime,
 		manifestSize,
 		sourceSHA256,
-		sqliteStoreOpenHealth,
-		sqliteStoreHealth,
+		func(ctx context.Context, path string) error {
+			st, err := open(ctx, path)
+			if err != nil {
+				return err
+			}
+			return st.Close()
+		},
+		func(ctx context.Context, path string) error {
+			return sqliteStoreHealthWithOpen(ctx, path, open)
+		},
 	)
 }
 
@@ -690,7 +702,10 @@ func sqliteStoreCachedHealthWithManifestChecks(ctx context.Context, path, source
 		}
 		return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
 	}
-	if err := validatePortableSQLiteFile(ctx, path, sourceDBPath); err != nil {
+	if err := fullHealthCheck(ctx, path); err != nil {
+		return err
+	}
+	if err := validatePortableDBManifest(ctx, path, portableDBManifestPath(sourceDBPath)); err != nil {
 		return err
 	}
 	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
@@ -706,10 +721,13 @@ func portableManifestGenerationUnchanged(state portableStoreRefreshState, manife
 		state.MirrorHealthManifestModTime == manifestModTime
 }
 
-func markPortableMirrorHealthVerified(path, statePath, sourceDBPath string) error {
+func markPortableMirrorHealthVerified(path, statePath, sourceDBPath, replicaSHA256 string) error {
 	manifestModTime, manifestSize, sourceSHA256, err := portableDBManifestStamp(sourceDBPath)
 	if err != nil {
 		return err
+	}
+	if sourceSHA256 != "" && !strings.EqualFold(sourceSHA256, replicaSHA256) {
+		return fmt.Errorf("portable manifest changed after runtime validation")
 	}
 	state := readPortableStoreRefreshState(statePath)
 	if state.MirrorWritable {
@@ -718,7 +736,9 @@ func markPortableMirrorHealthVerified(path, statePath, sourceDBPath string) erro
 			return err
 		}
 	}
-	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, sourceSHA256)
+	// The caller just promoted validated bytes. A raw source without a
+	// manifest still has a replica identity; health-only checks cannot invent it.
+	return markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime, manifestSize, replicaSHA256)
 }
 
 func markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime string, manifestSize int64, sourceSHA256 string) error {
@@ -731,7 +751,9 @@ func markSQLiteStoreHealthVerifiedWithManifest(path, statePath, manifestModTime 
 	state.MirrorHealthModTime = info.ModTime().UTC().Format(time.RFC3339Nano)
 	state.MirrorHealthManifestSize = manifestSize
 	state.MirrorHealthManifestModTime = manifestModTime
-	state.MirrorHealthSourceSHA256 = sourceSHA256
+	if sourceSHA256 != "" {
+		state.MirrorHealthSourceSHA256 = sourceSHA256
+	}
 	return writePortableStoreRefreshState(statePath, state)
 }
 
@@ -1148,10 +1170,11 @@ func stageFileCopyTempContext(ctx context.Context, sourcePath, targetPath string
 	return tempPath, nil
 }
 
-func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath string) error {
+func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath string) ([32]byte, error) {
+	var digest [32]byte
 	tempPath, err := stagePortableSQLiteSourceTempContext(ctx, sourcePath, targetPath, 0o600)
 	if err != nil {
-		return err
+		return digest, err
 	}
 	cleanup := true
 	defer func() {
@@ -1161,15 +1184,19 @@ func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath st
 		}
 	}()
 	if err := validatePortableSQLiteFile(ctx, tempPath, sourcePath); err != nil {
-		return fmt.Errorf("validate portable runtime temp db: %w", err)
+		return digest, fmt.Errorf("validate portable runtime temp db: %w", err)
+	}
+	digest, err = portableFileSHA256(ctx, tempPath)
+	if err != nil {
+		return digest, err
 	}
 	if err := os.Rename(tempPath, targetPath); err != nil {
-		return fmt.Errorf("replace portable runtime db: %w", err)
+		return digest, fmt.Errorf("replace portable runtime db: %w", err)
 	}
 	cleanup = false
 	removeSQLiteTempSidecars(tempPath)
 	removeSQLiteTempSidecars(targetPath)
-	return nil
+	return digest, nil
 }
 
 func stagePortableSQLiteSourceTemp(sourceDBPath, targetPath string, mode os.FileMode) (string, error) {

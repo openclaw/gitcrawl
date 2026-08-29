@@ -18,6 +18,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 	var warnings []string
 	stale := false
 	immutable := false
+	runtimeMirror := false
 	_, portable, err := portableStoreRoot(ctx, cfg.DBPath)
 	if err != nil {
 		return control.Status{}, err
@@ -29,6 +30,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		}
 		if _, err := os.Stat(mirror); err == nil {
 			path, reportedPath = mirror, mirror
+			runtimeMirror = true
 			state := readPortableStoreRefreshState(portableStoreRefreshStatePath(mirror))
 			modTime, size, sha, stampErr := portableDBManifestStamp(cfg.DBPath)
 			if stampErr != nil || !portableManifestGenerationUnchanged(state, modTime, size, sha) {
@@ -68,6 +70,10 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		open := store.OpenReadOnly
 		if immutable {
 			open = store.OpenReadOnlyImmutable
+		} else if runtimeMirror {
+			open = func(ctx context.Context, path string) (*store.Store, error) {
+				return openPortableMirrorReadOnly(ctx, path, cfg.DBPath)
+			}
 		}
 		st, err := open(ctx, path)
 		if err != nil {

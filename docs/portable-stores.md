@@ -122,7 +122,10 @@ Git metadata, cleanliness and capacity are checked again at mutation boundaries.
 The validated runtime generation is atomically renamed outside the checkout.
 A runtime with bytes differing from its recorded source digest, or any SQLite
 sidecars, is preserved as `preserved-local`; it is never overwritten to make
-the subscriber appear fresh. Writable CLI opens record local ownership before
+the subscriber appear fresh. Newly materialized raw replicas record their digest
+even without a manifest. Verified disposable replicas use immutable SQLite reads
+so ordinary reads do not create sidecars that would claim local ownership.
+Writable CLI opens record local ownership before
 SQLite migrations or writes. Ordinary reads retain that ownership and the
 original source identity across later publisher generations; local closures,
 vectors and other runtime work survive repeated reads. A corrupt locally owned

@@ -239,7 +239,7 @@ func TestCopySQLiteFileAtomicVerifiedRemovesTempFiles(t *testing.T) {
 	source := filepath.Join(dir, "source.db")
 	target := filepath.Join(dir, "target.db")
 	seedPortableThread(t, source, 1, "copy temp cleanup")
-	if err := copySQLiteFileAtomicVerified(context.Background(), source, target); err != nil {
+	if _, err := copySQLiteFileAtomicVerified(context.Background(), source, target); err != nil {
 		t.Fatalf("copy verified sqlite file: %v", err)
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, ".target.db.tmp-*"))
@@ -254,7 +254,7 @@ func TestCopySQLiteFileAtomicVerifiedRemovesTempFiles(t *testing.T) {
 	if err := os.WriteFile(invalidSource, []byte("not sqlite"), 0o600); err != nil {
 		t.Fatalf("write invalid source: %v", err)
 	}
-	if err := copySQLiteFileAtomicVerified(context.Background(), invalidSource, failedTarget); err == nil {
+	if _, err := copySQLiteFileAtomicVerified(context.Background(), invalidSource, failedTarget); err == nil {
 		t.Fatal("invalid sqlite source should fail validation")
 	}
 	matches, err = filepath.Glob(filepath.Join(dir, ".failed.db.tmp-*"))

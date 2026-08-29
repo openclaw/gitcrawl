@@ -314,7 +314,7 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 		}
 		advanced = true
 		result.MirrorResult = "promoted"
-		if err := markPortableMirrorHealthVerified(mirrorPath, portableStoreRefreshStatePath(mirrorPath), source); err != nil {
+		if err := markPortableMirrorHealthVerified(mirrorPath, portableStoreRefreshStatePath(mirrorPath), source, manifest.SHA256); err != nil {
 			return result, err
 		}
 	} else if result.MirrorResult == "preserved-local" {

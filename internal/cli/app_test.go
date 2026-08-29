@@ -3849,7 +3849,7 @@ func TestPortableRuntimeRejectsManifestMismatchBeforeReplacingMirror(t *testing.
 	if err := os.WriteFile(portableDBManifestPath(checkoutDB), data, 0o644); err != nil {
 		t.Fatalf("write bad manifest: %v", err)
 	}
-	if err := copySQLiteFileAtomicVerified(ctx, checkoutDB, mirrorPath); err == nil || !strings.Contains(err.Error(), "portable manifest mismatch") {
+	if _, err := copySQLiteFileAtomicVerified(ctx, checkoutDB, mirrorPath); err == nil || !strings.Contains(err.Error(), "portable manifest mismatch") {
 		t.Fatalf("manifest mismatch should fail without copy, err=%v", err)
 	}
 	after, err := fileSHA256(mirrorPath)
@@ -3862,7 +3862,7 @@ func TestPortableRuntimeRejectsManifestMismatchBeforeReplacingMirror(t *testing.
 	if err := os.WriteFile(portableDBManifestPath(checkoutDB), []byte("{}\n"), 0o644); err != nil {
 		t.Fatalf("write incomplete manifest: %v", err)
 	}
-	if err := copySQLiteFileAtomicVerified(ctx, checkoutDB, mirrorPath); err == nil || !strings.Contains(err.Error(), "schema missing") {
+	if _, err := copySQLiteFileAtomicVerified(ctx, checkoutDB, mirrorPath); err == nil || !strings.Contains(err.Error(), "schema missing") {
 		t.Fatalf("incomplete manifest should fail without copy, err=%v", err)
 	}
 	info, err := os.Stat(checkoutDB)
