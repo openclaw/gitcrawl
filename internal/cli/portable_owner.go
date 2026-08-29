@@ -204,6 +204,12 @@ func validatePortableRemote(value string) error {
 		if err != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("invalid portable remote URL")
 		}
+		if parsed.User != nil {
+			_, password := parsed.User.Password()
+			if parsed.Scheme != "ssh" || password || parsed.User.Username() == "" {
+				return fmt.Errorf("credentials are not allowed in portable remote URLs")
+			}
+		}
 		switch parsed.Scheme {
 		case "https", "http", "ssh", "git", "file":
 		default:

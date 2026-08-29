@@ -80,6 +80,8 @@ intended store; they do not reconfigure it. `--expected-remote` is required
 because legacy configs do not pin an origin URL. `--branch` defaults to `main`;
 the checkout must be on that branch and track the matching origin branch.
 No credentials belong in the URL or command line; use Git's credential helper.
+HTTP(S) URL userinfo and passwords in any URL are refused. SSH transport
+usernames such as `ssh://git@host/repo` and `git@host:repo` remain supported.
 
 Refresh takes a nonblocking advisory lock for the canonical store path. All
 Gitcrawl portable Git writers, legacy recovery, runtime promotion and CLI

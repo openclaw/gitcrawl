@@ -52,6 +52,8 @@ func TestPortableRefreshRejectsArgumentsBeforeConfigOrGit(t *testing.T) {
 		{"zero-reserve", []string{"--min-free-bytes", "0"}, "positive timeout and byte limits"},
 		{"negative-growth", []string{"--max-growth-bytes=-1"}, "positive timeout and byte limits"},
 		{"missing-remote", nil, "--expected-remote is required"},
+		{"remote-userinfo", []string{"--expected-remote", "https://git@example.invalid/store.git"}, "--expected-remote is required"},
+		{"remote-password-field", []string{"--expected-remote", "ssh://git:@example.invalid/store.git"}, "--expected-remote is required"},
 		{"unsafe-path", []string{"--expected-remote", "https://example.invalid/store.git", "--portable-db", "../archive.db"}, "clean relative slash path"},
 		{"relative-git", []string{"--expected-remote", "https://example.invalid/store.git", "--git", "relative-git"}, "absolute path"},
 		{"unsafe-branch", []string{"--expected-remote", "https://example.invalid/store.git", "--git", os.Args[0], "--branch=-option"}, "invalid --branch"},

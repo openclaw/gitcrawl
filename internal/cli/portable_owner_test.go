@@ -110,7 +110,7 @@ func TestPortablePathAndRemoteAdmission(t *testing.T) {
 			t.Fatalf("valid remote %q rejected: %v", remote, err)
 		}
 	}
-	for _, remote := range []string{"", " --upload-pack=helper", "-option", "ext::helper", "https://example.invalid/archive?token=synthetic", "https://example.invalid/archive#fragment", "https://%invalid/archive", "ftp://example.invalid/archive", "ssh://example.invalid/archive\nargument"} {
+	for _, remote := range []string{"", " --upload-pack=helper", "-option", "ext::helper", "https://example.invalid/archive?token=synthetic", "https://example.invalid/archive#fragment", "https://%invalid/archive", "ftp://example.invalid/archive", "ssh://example.invalid/archive\nargument", "https://git@example.invalid/archive.git", "http://git@example.invalid/archive.git", "git://git@example.invalid/archive.git", "file://git@example.invalid/archive.git", "ssh://git:@example.invalid/archive.git", "ssh://@example.invalid/archive.git"} {
 		if err := validatePortableRemote(remote); err == nil {
 			t.Fatalf("unsafe remote %q accepted", remote)
 		}
