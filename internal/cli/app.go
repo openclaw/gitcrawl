@@ -143,6 +143,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if releaseNotificationAllowed(rest) {
 		a.maybeNotifyRelease(ctx, rest)
 	}
+	// Writable runtimes retain ownership through SQLite Close. Readers release
+	// after mirror preparation, so a long-lived TUI does not block subscribers.
+	session := &portableCommandSession{}
+	ctx = context.WithValue(ctx, portableCommandKey{}, session)
+	defer session.close()
 
 	switch rest[0] {
 	case "version":
@@ -3300,6 +3305,9 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
+	if fs.NArg() != 0 {
+		return usageErr(fmt.Errorf("init does not take positional arguments"))
+	}
 	localDBPath := strings.TrimSpace(*dbPath)
 	isolatedRuntimeDir := strings.TrimSpace(*runtimeDir)
 	portableStoreURL := strings.TrimSpace(*portableStore)
@@ -3338,6 +3346,15 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 			TokenEnv: crawlremote.DefaultTokenEnv,
 		}
 	} else if portableStoreURL != "" {
+		if err := validatePortableRemote(portableStoreURL); err != nil {
+			return usageErr(err)
+		}
+		if err := validatePortableRelativePath(*portableDB); err != nil {
+			return usageErr(err)
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, portableOperationTimeout)
+		defer cancel()
 		portableStoreDir = strings.TrimSpace(*storeDir)
 		if portableStoreDir == "" {
 			portableStoreDir = defaultPortableStoreDir(config.ResolvePath(a.configPath), portableStoreURL)
@@ -3346,18 +3363,20 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("resolve --store-dir path: %w", err)
 		}
+		var release func()
+		ctx, release, err = acquirePortableOwner(ctx, portableStoreDir)
+		if err != nil {
+			return err
+		}
+		defer release()
 		action, err := syncPortableStore(ctx, portableStoreURL, portableStoreDir)
 		if err != nil {
 			return err
 		}
 		portableStoreAction = action
-		relativeDB := filepath.Clean(filepath.FromSlash(strings.TrimLeft(strings.TrimSpace(*portableDB), "/")))
-		if relativeDB == "." || filepath.IsAbs(relativeDB) || strings.HasPrefix(relativeDB, ".."+string(os.PathSeparator)) || relativeDB == ".." {
-			return usageErr(fmt.Errorf("invalid --portable-db %q", *portableDB))
-		}
-		cfg.DBPath = filepath.Join(portableStoreDir, relativeDB)
-		if _, err := os.Stat(cfg.DBPath); err != nil {
-			return fmt.Errorf("portable database not found at %s: %w", cfg.DBPath, err)
+		cfg.DBPath = filepath.Join(portableStoreDir, filepath.FromSlash(*portableDB))
+		if err := validatePortableSQLiteSourceFile(ctx, cfg.DBPath, cfg.DBPath); err != nil {
+			return fmt.Errorf("validate portable database: %w", err)
 		}
 	}
 	if localDBPath != "" {
@@ -3426,6 +3445,8 @@ func (a *App) runPortable(ctx context.Context, args []string) error {
 		return a.runPortablePrune(ctx, args[1:])
 	case "export":
 		return a.runPortableExport(ctx, args[1:])
+	case "refresh":
+		return a.runPortableRefresh(ctx, args[1:])
 	default:
 		return usageErr(fmt.Errorf("unknown portable subcommand %q", args[0]))
 	}
@@ -3693,12 +3714,23 @@ func safePathName(value string) string {
 }
 
 func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, portableOperationTimeout)
+	defer cancel()
 	if strings.TrimSpace(remoteURL) == "" {
 		return "", fmt.Errorf("portable store URL is required")
 	}
 	if strings.TrimSpace(dir) == "" {
 		return "", fmt.Errorf("portable store directory is required")
 	}
+	if err := validatePortableRemote(remoteURL); err != nil {
+		return "", err
+	}
+	ctx, release, err := acquirePortableOwner(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	dir = ctx.Value(portableOwnerKey{}).(*portableOwner).root
 	gitDir := filepath.Join(dir, ".git")
 	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
 		if err := ensurePortableStoreRemote(ctx, remoteURL, dir); err != nil {
@@ -3747,7 +3779,7 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", fmt.Errorf("create portable store parent: %w", err)
 	}
-	if err := runGit(ctx, "", "clone", "--depth", "1", remoteURL, dir); err != nil {
+	if err := runGit(ctx, "", "clone", "--depth", "1", "--", remoteURL, dir); err != nil {
 		return "", err
 	}
 	if err := markPortableStoreCheckout(dir); err != nil {
@@ -3849,13 +3881,19 @@ func isDirtyPortablePullError(err error) bool {
 }
 
 func fastForwardGitCheckout(ctx context.Context, dir string, quiet bool) error {
+	ctx, release, err := acquirePortableOwner(ctx, dir)
+	if err != nil {
+		return err
+	}
+	defer release()
+	dir = ctx.Value(portableOwnerKey{}).(*portableOwner).root
 	branch := currentGitBranch(ctx, dir)
 	remote := gitBranchRemote(ctx, dir, branch)
-	fetchArgs := []string{"-C", dir, "fetch", "--prune"}
+	fetchArgs := []string{"-C", dir, "fetch", "--no-auto-maintenance", "--no-prune", "--no-prune-tags", "--no-tags", "--no-recurse-submodules"}
 	if quiet {
 		fetchArgs = append(fetchArgs, "--quiet")
 	}
-	fetchArgs = append(fetchArgs, remote)
+	fetchArgs = append(fetchArgs, "--", remote)
 	if err := runGit(ctx, "", fetchArgs...); err != nil {
 		return err
 	}
@@ -3870,11 +3908,11 @@ func fastForwardGitCheckout(ctx context.Context, dir string, quiet bool) error {
 			return fmt.Errorf("resolve portable store upstream branch: remote %q has no HEAD", remote)
 		}
 	}
-	mergeArgs := []string{"-C", dir, "merge", "--ff-only"}
+	mergeArgs := []string{"-C", dir, "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore"}
 	if quiet {
 		mergeArgs = append(mergeArgs, "--quiet")
 	}
-	mergeArgs = append(mergeArgs, target)
+	mergeArgs = append(mergeArgs, "--", target)
 	return runGit(ctx, "", mergeArgs...)
 }
 
@@ -3915,6 +3953,9 @@ func gitConfigValue(ctx context.Context, dir, key string) (string, error) {
 func runGit(ctx context.Context, workdir string, args ...string) error {
 	out, err := runGitCommandOutput(ctx, workdir, args...)
 	if err != nil {
+		if _, portable := ctx.Value(portableGitKey{}).(portableGitExecutable); portable {
+			return fmt.Errorf("portable git failed: %w", err)
+		}
 		return fmt.Errorf("git %s failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(out))
 	}
 	return nil
@@ -3930,6 +3971,10 @@ func runGitCommandOutputWithEnv(ctx context.Context, workdir string, env []strin
 }
 
 func runGitCommandOutputWithEnvSeparate(ctx context.Context, workdir string, env []string, args ...string) (string, string, error) {
+	if _, portable := ctx.Value(portableGitKey{}).(portableGitExecutable); portable {
+		out, err := portableGitOutput(ctx, workdir, args...)
+		return out, "", err
+	}
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
@@ -4324,24 +4369,25 @@ func (a *App) runMetadata(args []string) error {
 	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "capture", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "summaries", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
-		"status":          {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
-		"remote-status":   {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
-		"remote-archives": {Title: "Remote archive list", Argv: []string{"gitcrawl", "remote", "archives", "--json"}, JSON: true},
-		"remote-login":    {Title: "Remote GitHub login", Argv: []string{"gitcrawl", "remote", "login", "--json"}, JSON: true, Mutates: true},
-		"cloud-publish":   {Title: "Publish cloud archive", Argv: []string{"gitcrawl", "cloud", "publish", "--json"}, JSON: true, Mutates: true},
-		"whoami":          {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
-		"check-update":    {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
-		"doctor":          {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
-		"coverage":        {Title: "Archive coverage", Argv: []string{"gitcrawl", "coverage", "--json"}, JSON: true},
-		"sync":            {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
-		"capture":         {Title: "Export conversation capture", Argv: []string{"gitcrawl", "capture", "--json"}, JSON: true},
-		"search":          {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
-		"code-index":      {Title: "Code index", Argv: []string{"gitcrawl", "code", "index", "--json"}, JSON: true, Mutates: true},
-		"tui":             {Title: "Terminal cluster browser", Argv: []string{"gitcrawl", "tui"}},
-		"tui-json":        {Title: "Terminal cluster data", Argv: []string{"gitcrawl", "tui", "--json"}, JSON: true},
-		"portable":        {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "prune", "--json"}, JSON: true, Mutates: true},
-		"clusters":        {Title: "Clusters", Argv: []string{"gitcrawl", "clusters", "--json"}, JSON: true},
-		"legacy-sync-api": {Title: "Legacy sync-status alias", Argv: []string{"gitcrawl", "sync-status"}, Legacy: true, Deprecated: true},
+		"status":           {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
+		"remote-status":    {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
+		"remote-archives":  {Title: "Remote archive list", Argv: []string{"gitcrawl", "remote", "archives", "--json"}, JSON: true},
+		"remote-login":     {Title: "Remote GitHub login", Argv: []string{"gitcrawl", "remote", "login", "--json"}, JSON: true, Mutates: true},
+		"cloud-publish":    {Title: "Publish cloud archive", Argv: []string{"gitcrawl", "cloud", "publish", "--json"}, JSON: true, Mutates: true},
+		"whoami":           {Title: "Remote identity", Argv: []string{"gitcrawl", "whoami", "--json"}, JSON: true},
+		"check-update":     {Title: "Check for updates", Argv: []string{"gitcrawl", "check-update", "--json"}, JSON: true},
+		"doctor":           {Title: "Doctor", Argv: []string{"gitcrawl", "doctor", "--json"}, JSON: true},
+		"coverage":         {Title: "Archive coverage", Argv: []string{"gitcrawl", "coverage", "--json"}, JSON: true},
+		"sync":             {Title: "Sync repository", Argv: []string{"gitcrawl", "sync", "--json"}, JSON: true, Mutates: true},
+		"capture":          {Title: "Export conversation capture", Argv: []string{"gitcrawl", "capture", "--json"}, JSON: true},
+		"search":           {Title: "Search", Argv: []string{"gitcrawl", "search", "--json"}, JSON: true},
+		"code-index":       {Title: "Code index", Argv: []string{"gitcrawl", "code", "index", "--json"}, JSON: true, Mutates: true},
+		"tui":              {Title: "Terminal cluster browser", Argv: []string{"gitcrawl", "tui"}},
+		"tui-json":         {Title: "Terminal cluster data", Argv: []string{"gitcrawl", "tui", "--json"}, JSON: true},
+		"portable":         {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "prune", "--json"}, JSON: true, Mutates: true},
+		"portable-refresh": {Title: "Refresh portable subscriber", Argv: []string{"gitcrawl", "portable", "refresh", "--expected-remote", "URL", "--json"}, JSON: true, Mutates: true},
+		"clusters":         {Title: "Clusters", Argv: []string{"gitcrawl", "clusters", "--json"}, JSON: true},
+		"legacy-sync-api":  {Title: "Legacy sync-status alias", Argv: []string{"gitcrawl", "sync-status"}, Legacy: true, Deprecated: true},
 	}
 	return a.writeOutput("metadata", manifest, false)
 }
@@ -5313,6 +5359,7 @@ Core commands:
   gh                   moved to Octopool; prints migration note
   portable prune       prune volatile payloads from a portable store
   portable export      create an immutable derived portable generation
+  portable refresh     safely refresh a configured portable subscriber
   tui [owner/repo]     browse clusters in the terminal UI; repo is inferred when omitted
 
 No API server is provided. There is intentionally no serve command.
@@ -5528,10 +5575,12 @@ The TUI quietly refreshes from the local store every 15 seconds and leaves the c
 const portableUsageText = `gitcrawl portable manages local portable-store snapshots.
 
 Usage:
+  gitcrawl portable refresh --expected-remote URL [--store-dir PATH] [--portable-db PATH] [--branch main] [--git PATH] [--timeout 2m] [--min-free-bytes N] [--max-growth-bytes N] [--json]
   gitcrawl portable prune [--body-chars N] [--no-vacuum] [--include-sync-failures] [--no-publish] [--json]
   gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo] [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--compression gzip] [--max-archive-bytes N] [--json]
 
 Subcommands:
+  refresh             validate and fast-forward a clean configured subscriber
   prune               prune volatile payloads from the configured portable store
   export              create a validated portable artifact in a new directory
 
@@ -5545,4 +5594,9 @@ a complete database and manifest generation at a previously nonexistent path.
 With --compression gzip, it commits the gzip archive and manifest without the
 uncompressed database; --max-archive-bytes applies to that published archive.
 --repository semantically restricts the disposable snapshot to one owner/repo.
+Refresh never regenerates config or invokes repair. It requires a matching
+origin, clean checkout and manifest-backed artifact. --git requires an absolute
+path (or set GITCRAWL_PORTABLE_GIT). Timeout defaults to 2m; free-space reserve
+and measured growth budget each default to 2147483648 bytes. Refusals exit
+nonzero; JSON distinguishes updated, no-op, refused and partial results.
 `

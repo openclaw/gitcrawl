@@ -136,6 +136,7 @@ octopool gh api repos/openclaw/openclaw/pulls/123
 
 | Command | Purpose | Docs |
 | --- | --- | --- |
+| `gitcrawl portable refresh --expected-remote URL [--store-dir PATH --portable-db PATH --branch main --git PATH --timeout 2m --min-free-bytes N --max-growth-bytes N --json]` | Validate and fast-forward a clean configured subscriber without regenerating config or invoking repair | [Portable stores](/portable-stores/#routine-subscriber-refresh) |
 | `gitcrawl portable prune [--body-chars --no-vacuum --include-sync-failures --no-publish --json]` | Build a compact portable v2 backup and (optionally) `VACUUM` for publishing | [Portable stores](/portable-stores/#publishing-gitcrawl-portable-prune) |
 | `gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo --body-chars --database-name --public-path --max-bytes --json]` | Create a validated, optionally repository-scoped database-and-manifest generation without changing or publishing the active database | [Portable stores](/portable-stores/#derived-generations-gitcrawl-portable-export) |
 

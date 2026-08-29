@@ -2,10 +2,12 @@ package portable
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,10 +168,16 @@ type artifactIdentityOptions struct {
 // ComputeArtifactID returns the semantic identity for a finalized current-state
 // SQLite artifact. It never opens the artifact writable.
 func ComputeArtifactID(ctx context.Context, dbPath, profile string) (string, error) {
+	return ComputeArtifactIDInDirectory(ctx, dbPath, profile, "")
+}
+
+// ComputeArtifactIDInDirectory confines disposable identity work to tempParent,
+// allowing callers to account for its disk growth on a selected filesystem.
+func ComputeArtifactIDInDirectory(ctx context.Context, dbPath, profile, tempParent string) (string, error) {
 	if profile != CurrentStateSemanticV1 {
 		return "", fmt.Errorf("unsupported artifact identity profile %q; supported profile: %s", profile, CurrentStateSemanticV1)
 	}
-	return computeArtifactIDWithOptions(ctx, dbPath, currentStateSemanticPolicy, artifactIdentityOptions{})
+	return computeArtifactIDWithOptions(ctx, dbPath, currentStateSemanticPolicy, artifactIdentityOptions{TempParent: tempParent})
 }
 
 func computeArtifactIDWithOptions(
@@ -255,14 +263,14 @@ func computeArtifactIDWithOptions(
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("artifact identity canceled before hashing: %w", err)
 	}
-	digest, err := hashArtifactIdentityFile(compactPath)
+	digest, err := hashArtifactIdentityFile(ctx, compactPath)
 	if err != nil {
 		return "", fmt.Errorf("hash artifact identity database: %w", err)
 	}
 	return digest, nil
 }
 
-func hashArtifactIdentityFile(filePath string) (string, error) {
+func hashArtifactIdentityFile(ctx context.Context, filePath string) (string, error) {
 	file, err := os.OpenFile(filePath, os.O_RDWR, 0)
 	if err != nil {
 		return "", err
@@ -291,7 +299,26 @@ func hashArtifactIdentityFile(filePath string) (string, error) {
 	if err := file.Close(); err != nil {
 		return "", err
 	}
-	return fileSHA256(filePath)
+	input, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	hash := sha256.New()
+	buffer := make([]byte, 128<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		count, err := input.Read(buffer)
+		_, _ = hash.Write(buffer[:count])
+		if err == io.EOF {
+			return fmt.Sprintf("%x", hash.Sum(nil)), nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
 }
 
 func normalizeArtifactIdentity(ctx context.Context, db *sql.DB, policy artifactIdentityPolicy) error {

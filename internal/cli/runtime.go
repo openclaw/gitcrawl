@@ -56,6 +56,11 @@ const staleGitIndexLockAge = 2 * time.Second
 var errPortableStoreDirty = errors.New("portable store checkout has local changes")
 
 func (a *App) openLocalRuntime(ctx context.Context) (localRuntime, error) {
+	if session, ok := ctx.Value(portableCommandKey{}).(*portableCommandSession); ok {
+		session.mu.Lock()
+		session.retain = true
+		session.mu.Unlock()
+	}
 	cfg, err := config.LoadRuntime(a.configPath)
 	if err != nil {
 		return localRuntime{}, err
@@ -139,6 +144,12 @@ func refreshPortableStoreForDB(ctx context.Context, dbPath string) error {
 	if !ok {
 		return nil
 	}
+	ctx, release, err := acquirePortableOwner(ctx, root)
+	if err != nil {
+		return err
+	}
+	defer release()
+	root = ctx.Value(portableOwnerKey{}).(*portableOwner).root
 	clean := gitWorktreeClean(ctx, root)
 	if !clean {
 		removed, _ := removeStaleGitIndexLock(ctx, root, staleGitIndexLockAge)
@@ -173,6 +184,12 @@ func repairMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath s
 	if !ok {
 		return result, nil
 	}
+	ctx, release, err := acquirePortableOwner(ctx, root)
+	if err != nil {
+		return result, err
+	}
+	defer release()
+	root = ctx.Value(portableOwnerKey{}).(*portableOwner).root
 	if !portableStoreRepairAllowed(root, configPath) {
 		return result, fmt.Errorf("refuse destructive repair for unmarked portable store checkout %s", root)
 	}
@@ -207,6 +224,12 @@ func recloneMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath 
 	if !ok {
 		return result, nil
 	}
+	ctx, release, err := acquirePortableOwner(ctx, root)
+	if err != nil {
+		return result, err
+	}
+	defer release()
+	root = ctx.Value(portableOwnerKey{}).(*portableOwner).root
 	if !portableStoreRepairAllowed(root, configPath) {
 		return result, fmt.Errorf("refuse reclone for unmarked portable store checkout %s", root)
 	}
@@ -230,7 +253,7 @@ func recloneMalformedPortableStoreForDB(ctx context.Context, dbPath, configPath 
 	if strings.TrimSpace(branch) != "" {
 		cloneArgs = append(cloneArgs, "--branch", branch)
 	}
-	cloneArgs = append(cloneArgs, remote, root)
+	cloneArgs = append(cloneArgs, "--", remote, root)
 	if err := runGit(cloneCtx, "", cloneArgs...); err != nil {
 		_ = os.RemoveAll(root)
 		_ = os.Rename(backupPath, root)
@@ -275,11 +298,19 @@ func (a *App) portableRuntimeDBPath(ctx context.Context, sourceDBPath string) (s
 func refreshPortableRuntimeDB(ctx context.Context, sourceDBPath, mirrorPath string, refresh bool, configPath string) (bool, error) {
 	portableRuntimeMu.Lock()
 	defer portableRuntimeMu.Unlock()
-	sweepOrphanPortableRuntimeTempFiles(mirrorPath, portableRuntimeTempMaxAge)
-	_, isPortableSource, err := portableStoreRoot(ctx, sourceDBPath)
+	root, isPortableSource, err := portableStoreRoot(ctx, sourceDBPath)
 	if err != nil {
 		return false, err
 	}
+	if isPortableSource {
+		var release func()
+		ctx, release, err = acquirePortableOwner(ctx, root)
+		if err != nil {
+			return false, err
+		}
+		defer release()
+	}
+	sweepOrphanPortableRuntimeTempFiles(mirrorPath, portableRuntimeTempMaxAge)
 	isRepairablePortableSource := isPortableSource
 	if refresh {
 		_ = refreshPortableStoreForDBIfDue(ctx, sourceDBPath, mirrorPath)
@@ -421,6 +452,15 @@ func recoverMissingPortableSource(ctx context.Context, sourceDBPath, configPath,
 }
 
 func refreshPortableStoreForDBIfDue(ctx context.Context, sourceDBPath, mirrorPath string) error {
+	root, ok, err := portableStoreRoot(ctx, sourceDBPath)
+	if err != nil || !ok {
+		return err
+	}
+	ctx, release, err := acquirePortableOwner(ctx, root)
+	if err != nil {
+		return err
+	}
+	defer release()
 	ttl := portableStoreRefreshInterval()
 	statePath := portableStoreRefreshStatePath(mirrorPath)
 	state := readPortableStoreRefreshState(statePath)
@@ -431,26 +471,16 @@ func refreshPortableStoreForDBIfDue(ctx context.Context, sourceDBPath, mirrorPat
 	if ttl > 0 && recentPortableRefresh(state.LastFailure, now, portableStoreRefreshFailureBackoff) {
 		return nil
 	}
-	lockPath := statePath + ".lock"
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		return err
 	}
-	removeStalePortableRefreshLock(lockPath, now)
-	lock, locked := tryGHCommandCacheLock(lockPath)
-	if !locked {
-		return nil
-	}
-	defer func() {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
-	}()
 	state = readPortableStoreRefreshState(statePath)
 	now = time.Now().UTC()
 	if ttl > 0 && recentPortableRefresh(state.LastSuccess, now, ttl) {
 		return nil
 	}
 	state.LastAttempt = now.Format(time.RFC3339Nano)
-	err := refreshPortableStoreForDB(ctx, sourceDBPath)
+	err = refreshPortableStoreForDB(ctx, sourceDBPath)
 	if err != nil {
 		state.LastFailure = time.Now().UTC().Format(time.RFC3339Nano)
 		state.Error = err.Error()
@@ -461,17 +491,6 @@ func refreshPortableStoreForDBIfDue(ctx context.Context, sourceDBPath, mirrorPat
 	state.LastFailure = ""
 	state.Error = ""
 	return writePortableStoreRefreshState(statePath, state)
-}
-
-func removeStalePortableRefreshLock(path string, now time.Time) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return
-	}
-	if now.Sub(info.ModTime()) <= 2*portableStoreRefreshTimeout {
-		return
-	}
-	_ = os.Remove(path)
 }
 
 func portableStoreRefreshInterval() time.Duration {
@@ -740,7 +759,7 @@ func validatePortableSQLiteSourceFile(ctx context.Context, dbPath, manifestDBPat
 		return fmt.Errorf("create portable source validation dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
-	tempPath, err := stagePortableSQLiteSourceTemp(dbPath, filepath.Join(tempDir, filepath.Base(dbPath)), 0o600)
+	tempPath, err := stagePortableSQLiteSourceTempContext(ctx, dbPath, filepath.Join(tempDir, filepath.Base(dbPath)), 0o600)
 	if err != nil {
 		return err
 	}
@@ -781,7 +800,7 @@ func validatePortableDBManifest(ctx context.Context, dbPath, manifestPath string
 	if manifest.OutputBytes > 0 && info.Size() != manifest.OutputBytes {
 		return fmt.Errorf("portable manifest mismatch: size %d != %d", info.Size(), manifest.OutputBytes)
 	}
-	sum, err := fileSHA256(dbPath)
+	sum, err := portableFileSHA256(ctx, dbPath)
 	if err != nil {
 		return err
 	}
@@ -804,7 +823,8 @@ func validatePortableDBManifest(ctx context.Context, dbPath, manifestPath string
 		if artifactIDProfile != portableexport.CurrentStateSemanticV1 {
 			return fmt.Errorf("portable manifest mismatch: unsupported artifactIdProfile %q", manifest.ArtifactIDProfile)
 		}
-		computedArtifactID, err := portableexport.ComputeArtifactID(ctx, dbPath, artifactIDProfile)
+		tempParent, _ := ctx.Value(portableValidationDirKey{}).(string)
+		computedArtifactID, err := portableexport.ComputeArtifactIDInDirectory(ctx, dbPath, artifactIDProfile, tempParent)
 		if err != nil {
 			return fmt.Errorf("portable manifest mismatch: recompute artifactId: %w", err)
 		}
@@ -880,6 +900,10 @@ func portableSourceArtifact(dbPath string) (string, portableDBManifest, bool, er
 }
 
 func validatePortableArchive(path string, manifest portableDBManifest) error {
+	return validatePortableArchiveContext(context.Background(), path, manifest)
+}
+
+func validatePortableArchiveContext(ctx context.Context, path string, manifest portableDBManifest) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -891,7 +915,7 @@ func validatePortableArchive(path string, manifest portableDBManifest) error {
 			manifest.ArchiveBytes,
 		)
 	}
-	sum, err := fileSHA256(path)
+	sum, err := portableFileSHA256(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -1006,6 +1030,10 @@ func copyFileAtomic(sourcePath, targetPath string) error {
 }
 
 func stageFileCopyTemp(sourcePath, targetPath string, mode os.FileMode) (string, error) {
+	return stageFileCopyTempContext(context.Background(), sourcePath, targetPath, mode)
+}
+
+func stageFileCopyTempContext(ctx context.Context, sourcePath, targetPath string, mode os.FileMode) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return "", fmt.Errorf("create portable runtime dir: %w", err)
 	}
@@ -1026,7 +1054,7 @@ func stageFileCopyTemp(sourcePath, targetPath string, mode os.FileMode) (string,
 			removeSQLiteTempSidecars(tempPath)
 		}
 	}()
-	if _, err := io.Copy(temp, source); err != nil {
+	if _, err := io.Copy(temp, portableContextReader{ctx: ctx, reader: source}); err != nil {
 		_ = temp.Close()
 		return "", fmt.Errorf("copy portable runtime db: %w", err)
 	}
@@ -1042,7 +1070,7 @@ func stageFileCopyTemp(sourcePath, targetPath string, mode os.FileMode) (string,
 }
 
 func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath string) error {
-	tempPath, err := stagePortableSQLiteSourceTemp(sourcePath, targetPath, 0o600)
+	tempPath, err := stagePortableSQLiteSourceTempContext(ctx, sourcePath, targetPath, 0o600)
 	if err != nil {
 		return err
 	}
@@ -1066,14 +1094,18 @@ func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath st
 }
 
 func stagePortableSQLiteSourceTemp(sourceDBPath, targetPath string, mode os.FileMode) (string, error) {
+	return stagePortableSQLiteSourceTempContext(context.Background(), sourceDBPath, targetPath, mode)
+}
+
+func stagePortableSQLiteSourceTempContext(ctx context.Context, sourceDBPath, targetPath string, mode os.FileMode) (string, error) {
 	sourcePath, manifest, compressed, err := portableSourceArtifact(sourceDBPath)
 	if err != nil {
 		return "", err
 	}
 	if !compressed {
-		return stageFileCopyTemp(sourcePath, targetPath, mode)
+		return stageFileCopyTempContext(ctx, sourcePath, targetPath, mode)
 	}
-	if err := validatePortableArchive(sourcePath, manifest); err != nil {
+	if err := validatePortableArchiveContext(ctx, sourcePath, manifest); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
@@ -1101,7 +1133,11 @@ func stagePortableSQLiteSourceTemp(sourceDBPath, targetPath string, mode os.File
 			removeSQLiteTempSidecars(tempPath)
 		}
 	}()
-	written, copyErr := io.Copy(temp, io.LimitReader(reader, manifest.OutputBytes+1))
+	if manifest.OutputBytes <= 0 || manifest.OutputBytes == int64(^uint64(0)>>1) {
+		_ = temp.Close()
+		return "", fmt.Errorf("portable manifest mismatch: invalid outputBytes")
+	}
+	written, copyErr := io.Copy(temp, portableContextReader{ctx: ctx, reader: io.LimitReader(reader, manifest.OutputBytes+1)})
 	if copyErr != nil {
 		_ = temp.Close()
 		return "", fmt.Errorf("inflate portable runtime db: %w", copyErr)
@@ -1130,6 +1166,18 @@ func stagePortableSQLiteSourceTemp(sourceDBPath, targetPath string, mode os.File
 // checkout before the first rename so a staging or validation failure leaves
 // the previously published pair untouched.
 func publishPortableCheckoutPair(ctx context.Context, mirrorDBPath, mirrorManifestPath, checkoutDBPath, checkoutManifestPath string) error {
+	root, ok, err := portableStoreRoot(ctx, checkoutDBPath)
+	if err != nil {
+		return err
+	}
+	if ok {
+		var release func()
+		ctx, release, err = acquirePortableOwner(ctx, root)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(checkoutDBPath); err == nil {
 		mode = info.Mode().Perm()
@@ -1294,21 +1342,25 @@ func probePortableStoreGitWorktree(ctx context.Context, dir string) (bool, error
 	if !initialized {
 		return false, nil
 	}
+	ctx, err = portableGitContext(ctx, "")
+	if err != nil {
+		return false, err
+	}
 
-	topLevel, stderr, err := runGitCommandOutputWithEnvSeparate(ctx, "", portableStoreGitProbeEnv(), "-C", dir, "rev-parse", "--show-toplevel")
+	topLevel, err := portableGitOutput(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return false, ctxErr
 		}
-		return false, fmt.Errorf("resolve portable store worktree: %w\n%s", err, strings.TrimSpace(stderr))
+		return false, fmt.Errorf("resolve portable store worktree: %w", err)
 	}
 	if !sameExistingPath(strings.TrimSpace(topLevel), dir) {
 		return false, fmt.Errorf("Git resolved portable store candidate %s to worktree %s", dir, strings.TrimSpace(topLevel))
 	}
 
-	gitDir, stderr, err := runGitCommandOutputWithEnvSeparate(ctx, "", portableStoreGitProbeEnv(), "-C", dir, "rev-parse", "--absolute-git-dir")
+	gitDir, err := portableGitOutput(ctx, dir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
-		return false, fmt.Errorf("resolve portable store Git directory: %w\n%s", err, strings.TrimSpace(stderr))
+		return false, fmt.Errorf("resolve portable store Git directory: %w", err)
 	}
 	if !sameExistingPath(strings.TrimSpace(gitDir), filepath.Join(dir, ".git")) {
 		return false, fmt.Errorf("Git resolved portable store candidate %s to Git directory %s", dir, strings.TrimSpace(gitDir))
@@ -1340,36 +1392,6 @@ func sameExistingPath(left, right string) bool {
 	return err == nil && os.SameFile(leftInfo, rightInfo)
 }
 
-func portableStoreGitProbeEnv() []string {
-	repositoryEnv := map[string]struct{}{
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
-		"GIT_CEILING_DIRECTORIES":          {},
-		"GIT_COMMON_DIR":                   {},
-		"GIT_DIR":                          {},
-		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
-		"GIT_GRAFT_FILE":                   {},
-		"GIT_INDEX_FILE":                   {},
-		"GIT_NAMESPACE":                    {},
-		"GIT_OBJECT_DIRECTORY":             {},
-		"GIT_PREFIX":                       {},
-		"GIT_QUARANTINE_PATH":              {},
-		"GIT_SHALLOW_FILE":                 {},
-		"GIT_WORK_TREE":                    {},
-	}
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		upperName := strings.ToUpper(name)
-		_, excluded := repositoryEnv[upperName]
-		if excluded || upperName == "GIT_CONFIG_COUNT" || upperName == "GIT_CONFIG_PARAMETERS" ||
-			strings.HasPrefix(upperName, "GIT_CONFIG_KEY_") || strings.HasPrefix(upperName, "GIT_CONFIG_VALUE_") {
-			continue
-		}
-		env = append(env, entry)
-	}
-	return env
-}
-
 func portableStoreRemoteURL(ctx context.Context, root string) string {
 	branch := currentGitBranch(ctx, root)
 	remoteName := gitBranchRemote(ctx, root, branch)
@@ -1395,6 +1417,11 @@ func portableStoreRepairAllowed(root, configPath string) bool {
 }
 
 func gitWorktreeClean(ctx context.Context, dir string) bool {
+	ctx, release, err := acquirePortableOwner(ctx, dir)
+	if err != nil {
+		return false
+	}
+	defer release()
 	if err := runGit(ctx, "", "-C", dir, "update-index", "-q", "--refresh"); err != nil {
 		return false
 	}
@@ -1408,7 +1435,12 @@ func gitWorktreeClean(ctx context.Context, dir string) bool {
 }
 
 func fastForwardGitCheckoutWithStaleIndexLockRetry(ctx context.Context, root string, quiet bool) (bool, error) {
-	err := fastForwardGitCheckout(ctx, root, quiet)
+	ctx, release, err := acquirePortableOwner(ctx, root)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	err = fastForwardGitCheckout(ctx, root, quiet)
 	if err == nil {
 		return false, nil
 	}
@@ -1426,7 +1458,12 @@ func fastForwardGitCheckoutWithStaleIndexLockRetry(ctx context.Context, root str
 }
 
 func runGitWithStaleIndexLockRetry(ctx context.Context, root string, args ...string) (bool, error) {
-	err := runGit(ctx, "", args...)
+	ctx, release, err := acquirePortableOwner(ctx, root)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	err = runGit(ctx, "", args...)
 	if err == nil {
 		return false, nil
 	}

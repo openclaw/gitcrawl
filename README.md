@@ -62,6 +62,7 @@ Octopool owns pooled live `gh` reads. Gitcrawl keeps local mirror, search, clust
 | Job | Command | Guide |
 | --- | --- | --- |
 | Check archive health | `gitcrawl status` / `gitcrawl doctor` | [Configuration](docs/configuration.md) |
+| Refresh a portable subscriber | `gitcrawl portable refresh --expected-remote URL` | [Portable stores](docs/portable-stores.md#routine-subscriber-refresh) |
 | Mirror GitHub threads | `gitcrawl sync owner/repo` | [Sync](docs/sync.md) |
 | Search threads or indexed code | `gitcrawl search ...` | [Search](docs/search.md) |
 | Build and inspect clusters | `gitcrawl refresh`, `clusters`, `tui` | [Clustering](docs/clustering.md) |

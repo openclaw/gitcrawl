@@ -242,11 +242,11 @@ func TestArtifactIdentityHashCanonicalizesSQLiteWriterHeader(t *testing.T) {
 	if hashFile(t, firstPath) == hashFile(t, secondPath) {
 		t.Fatal("fixture writer headers did not change exact file hashes")
 	}
-	firstHash, err := hashArtifactIdentityFile(firstPath)
+	firstHash, err := hashArtifactIdentityFile(context.Background(), firstPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondHash, err := hashArtifactIdentityFile(secondPath)
+	secondHash, err := hashArtifactIdentityFile(context.Background(), secondPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestArtifactIdentityHashCanonicalizesSQLiteWriterHeader(t *testing.T) {
 	if err := os.WriteFile(invalidPath, make([]byte, 100), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hashArtifactIdentityFile(invalidPath); err == nil || !strings.Contains(err.Error(), "invalid SQLite header") {
+	if _, err := hashArtifactIdentityFile(context.Background(), invalidPath); err == nil || !strings.Contains(err.Error(), "invalid SQLite header") {
 		t.Fatalf("invalid identity header error = %v", err)
 	}
 }

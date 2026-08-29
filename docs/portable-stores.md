@@ -55,6 +55,114 @@ size and SHA-256, runs SQLite `quick_check`, and only then atomically replaces
 the runtime mirror. Legacy raw SQLite stores continue to use the same manifest
 without compression fields.
 
+Initialization validates portable arguments before invoking Git and validates
+the artifact before saving configuration. Repeated initialization and a
+publisher's raw-to-gzip transition do not require a raw `.db` in the checkout.
+Use `init` for setup; it still regenerates configuration on success.
+
+## Routine subscriber refresh
+
+Use the strict subscriber command for scheduled updates:
+
+```bash
+gitcrawl --config /path/to/config.toml portable refresh \
+  --expected-remote https://github.com/example/archive-store.git \
+  --git /absolute/path/to/git \
+  --timeout 2m \
+  --min-free-bytes 2147483648 \
+  --max-growth-bytes 2147483648 \
+  --json
+```
+
+This uses the configured logical database and its existing checkout. Optional
+`--store-dir` and `--portable-db` assert that those configured paths match the
+intended store; they do not reconfigure it. `--expected-remote` is required
+because legacy configs do not pin an origin URL. `--branch` defaults to `main`;
+the checkout must be on that branch and track the matching origin branch.
+No credentials belong in the URL or command line; use Git's credential helper.
+
+Refresh takes a nonblocking advisory lock for the canonical store path. All
+Gitcrawl portable Git writers, legacy recovery, runtime promotion and CLI
+writable-runtime sessions share that lease. Symlink aliases converge. Its
+permanent sibling `.STORE.gitcrawl.lock` file is never removed or stolen based
+on age; the operating system releases ownership when the process exits.
+An occupied lock is a refusal, not a reason to kill another process.
+
+Strict refresh refuses dirty indexes/worktrees, **all untracked or ignored
+checkout files**, hidden index entries, unrelated origins, divergent history,
+active Git locks or operation state, orphan/temporary packs, hooks, filters,
+attributes, submodules, linked worktrees, alternate object stores, config
+includes/redirections and unsupported extensions. Resolve these deliberately
+outside the subscriber command. It never resets, cleans, prunes, repacks,
+reclones, deletes backups or sidecars, or invokes reader/doctor auto-repair.
+
+Fetch requests only the intended branch into `FETCH_HEAD`, with no pruning,
+tags, submodule recursion or remote-tracking ref updates. Both existing HEAD
+and the tracking ref must be ancestors of the frozen fetched commit. Only its
+manifest and selected artifact are extracted into private staging beside the
+runtime mirror. Existing raw/gzip digest, expanded-size, SQLite `quick_check`
+and semantic-identity validation run before a fast-forward checkout. Tracking
+ref advancement uses compare-and-swap. Configuration, refs, store identity,
+Git metadata, cleanliness and capacity are checked again at mutation boundaries.
+
+The validated runtime generation is atomically renamed outside the checkout.
+A runtime with bytes differing from its recorded source digest, or any SQLite
+sidecars, is preserved as `preserved-local`; it is never overwritten to make
+the subscriber appear fresh. Other Gitcrawl CLI writers obey the lease, but
+external Git/SQLite writers do not. Observable changes cause refusal; this is
+not a universal filesystem transaction or protection against a hostile writer.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--expected-remote URL` | required | Expected identity of `origin` |
+| `--store-dir PATH` | configured store | Assert canonical store directory |
+| `--portable-db PATH` | configured logical DB | Assert clean relative slash path; never the gzip path |
+| `--branch NAME` | `main` | Expected local and origin branch |
+| `--git PATH` | `GITCRAWL_PORTABLE_GIT`, then resolved process PATH | Absolute executable; no login shell is used |
+| `--timeout DURATION` | `2m` | Total operation deadline, plus bounded process cleanup |
+| `--min-free-bytes N` | `2147483648` (2 GiB) | Free-space reserve on store and staging filesystems |
+| `--max-growth-bytes N` | `2147483648` (2 GiB) | Positive logical-file growth budget |
+| `--json` | off | Structured success, no-op, refusal or partial result |
+
+Admission requires reserve **plus the full growth budget** available on both
+filesystems. Growth is the sum of positive per-path size deltas under the
+checkout (including `.git`) and runtime database directory, relative to
+admission. Deleting/shrinking old files does not credit the budget. Metadata
+scans run at stage boundaries and every 100 ms in flight, with a 200,000-file
+scan limit; they never read or copy historical pack contents. Blob extraction
+is capped at its frozen Git size, and manifest-based staging estimates allow
+for inflation and semantic-identity copies. A budget is a sampled cancellation
+boundary, **not an OS quota**: rapid Git or filesystem writes can overshoot
+between scans. Reserve is also affected by unrelated processes. Use filesystem
+quotas where a hard physical allocation ceiling is required.
+
+On cancellation, owned Git process groups receive a graceful termination
+request, then are forced after at most 750 ms and reaped (pipe cleanup adds at
+most one second). Windows starts Git suspended, assigns a kill-on-close job,
+then resumes it; console break is best-effort before job termination. Unrelated
+processes are never targeted. Only this operation's private staging is removed.
+Filesystem and SQLite cancellation is cooperative; a kernel I/O stall can
+delay cancellation or process reaping beyond the requested deadline.
+Fetched objects and `FETCH_HEAD` may remain after failure. If checkout, tracking
+ref or mirror advancement has already started, JSON reports `partial`; no
+successful rollback is claimed, and an interrupted Git operation may need
+operator inspection before another strict refresh.
+
+JSON reports `stage`, `result` (`updated`, `no-op`, `refused`, `partial`),
+`before_commit`, `after_commit`, `target_commit`, `artifact_id`, `sha256`,
+`artifact_bytes`, `mirror_destination`, `mirror_result`, `capacity` and
+`elapsed_ms`. A refusal includes a bounded `reason` and exits nonzero. Stderr
+contains stage/elapsed/result diagnostics; stdout remains data. A no-op means
+the refs already match; a missing runtime may still be materialized.
+
+All portable Git entry points explicitly set `maintenance.auto=false` and
+`gc.auto=0`, including init, implicit reader fetch/merge and retained recovery
+clone/reset helpers. Fetch also uses `--no-auto-maintenance`. Hooks, fsmonitor
+and recursive submodule operations are disabled in the portable runner.
+Unsupported Git options fail closed; there is no fallback that drops safety
+flags. Set `GITCRAWL_PORTABLE_GIT` to an absolute path to select Git for legacy
+portable commands as well. Gitcrawl does not change global or local Git policy.
+
 ## How read-only commands behave
 
 Read-only commands (`search`, `threads`, `clusters`, `cluster-detail`, `neighbors`, the TUI) refresh the portable-store checkout before reading, so they always see the latest published data:
@@ -67,6 +175,14 @@ Read-only commands (`search`, `threads`, `clusters`, `cluster-detail`, `neighbor
 - Manifest-backed gzip SQLite artifacts are verified before inflation and still use the uncompressed database digest as the runtime identity
 
 If the remote is unreachable, the read still answers from the local checkout.
+
+This is the **legacy reader recovery contract**, separate from strict
+`portable refresh`: a marked malformed store can still be backed up, reset and
+recloned with the existing recovery backoff. Its historical stale-index-lock
+check requires both age and an external open-file probe. Do not use these
+commands as a preservation-first subscriber verification step. They now share
+the canonical store lease and maintenance suppression, but do not inherit
+strict refresh's capacity limits or clean-only policy.
 
 ## How write commands behave
 

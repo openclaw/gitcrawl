@@ -60,6 +60,26 @@ Run `gitcrawl refresh owner/repo` on a cron, systemd timer, or `launchd` agent e
 
 For multiple repos, loop in a small shell script — gitcrawl is happy to run sequentially against a shared SQLite file.
 
+### Portable subscribers
+
+After one-time initialization, schedule `portable refresh`, not repeated
+`init` or `doctor`. It retains configuration and refuses unsafe checkout state:
+
+```bash
+gitcrawl --config /path/to/config.toml portable refresh \
+  --expected-remote https://github.com/example/archive-store.git \
+  --git /absolute/path/to/git --timeout 2m \
+  --min-free-bytes 2147483648 --max-growth-bytes 2147483648 \
+  --json > refresh.json 2> refresh.log
+```
+
+Treat nonzero exits as refusals requiring inspection. Do not automatically
+delete locks, temporary packs, backups or SQLite sidecars and retry. A `partial`
+result identifies an interrupted advancement, not a rollback. A
+`mirror_result` of `preserved-local` means local runtime writes remain intact.
+See [Portable stores](/portable-stores/#routine-subscriber-refresh) for the
+admission rules, sampled growth budget and exact JSON contract.
+
 ## Agent recipes
 
 ### "Look up an issue without burning quota"

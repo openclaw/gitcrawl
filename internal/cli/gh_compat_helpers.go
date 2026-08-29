@@ -44,15 +44,6 @@ func (a *App) ghCommandCacheDir() (string, error) {
 	return dir, nil
 }
 
-func tryGHCommandCacheLock(path string) (*os.File, bool) {
-	lock, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, false
-	}
-	_, _ = fmt.Fprintf(lock, "%d\n", os.Getpid())
-	return lock, true
-}
-
 func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

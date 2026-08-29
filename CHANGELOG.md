@@ -2,6 +2,7 @@
 
 ## 0.9.3 - Unreleased
 
+- Fix repeated gzip-only portable initialization and add a locked, bounded, preservation-first `portable refresh` subscriber command with automatic Git maintenance disabled across portable operations.
 - Update the minimum Go toolchain to 1.26.7, SQLite to v1.57.0, and the current compatible Go dependency closure; keep Go 1.27 on hold until managed CodeQL supports it.
 - Refresh govulncheck, deadcode, the Dockerfile frontend, and the docs build's Node runtime.
 - Stabilize the coverage gate with direct tests for immutable SQLite reads, PR detail lookups, and vector scopes.
