@@ -88,14 +88,17 @@ For broad backlog sweeps, keep the first pass metadata-only. Hydrate comments an
 
 ## Know the Octopool boundary
 
-Gitcrawl owns the local SQLite mirror, search, clustering, TUI, and read-only JSON control surfaces. Octopool owns pooled live `gh` reads:
+Gitcrawl owns the local SQLite mirror, search, clustering, TUI, and read-only JSON control surfaces. Octopool owns pooled live `gh` reads. For an exact candidate, read the archive first, then verify fresh metadata through the existing bare PATH `gh`:
 
 ```bash
-octopool login
-octopool gh api repos/openclaw/gitcrawl/issues/82
+gitcrawl threads owner/repo --numbers 123 --include-closed --json
 ```
 
-Use `gitcrawl search` and `gitcrawl cluster-detail` for local discovery. Use Octopool, or the real `gh` CLI when you need to write, for final live verification, comments, labels, PR creation, and other GitHub mutations.
+```bash
+gh pr view 123 -R owner/repo --json number,title,state,url,headRefOid
+```
+
+Use `gitcrawl search` and `gitcrawl cluster-detail` for broader local discovery. Keep JSON reads on the existing Octopool-backed `gh` shim; use that same bare `gh` for authorized GitHub mutations, which Octopool forwards to the real CLI. Do not bypass the shim or change authentication, tokens, PATH, or configuration to replace retired `gitcrawl gh` recipes. See [gh shim migration](/gh-shim/) for the archive/cache boundary and separate first-time setup.
 
 ## First-run checklist
 
@@ -105,4 +108,4 @@ Use `gitcrawl search` and `gitcrawl cluster-detail` for local discovery. Use Oct
 4. Search locally with `--sync-if-stale` when freshness matters.
 5. Use `sync --numbers` to hydrate only the candidate issues or pull requests you are actively triaging.
 6. Check `gitcrawl runs owner/repo --kind sync --json` if freshness or last-run status is unclear.
-7. Use Octopool or real `gh` for final live GitHub reads and all write actions.
+7. Read exact candidates with `gitcrawl threads --numbers`; use the existing bare PATH `gh` for final live GitHub reads and authorized write actions.

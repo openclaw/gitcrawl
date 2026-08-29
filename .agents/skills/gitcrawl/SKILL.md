@@ -1,6 +1,6 @@
 ---
 name: gitcrawl
-description: Use for local GitHub issue/PR archive search, sync freshness, clusters, durable maintainer triage, gh-shim cache reads, and Gitcrawl repo/release work.
+description: Use for local GitHub issue/PR archive search, sync freshness, clusters, durable maintainer triage, handoff to Octopool-backed gh reads, and Gitcrawl repo/release work.
 ---
 
 # Gitcrawl
@@ -55,8 +55,8 @@ gitcrawl sync owner/repo --numbers 123,456 --with pr-details
 ```
 
 `--with pr-details` hydrates PR files, commits, checks, workflow runs, and
-review-thread resolution state. Use it when cached PR status reports missing PR
-details, unknown checks, or unknown review-thread resolution.
+review-thread resolution state in the local archive. Use it when the review
+needs those details; it does not populate Octopool's separate `gh` cache.
 
 For agent-driven discovery, prefer bounded freshness:
 
@@ -77,29 +77,35 @@ Common commands:
 gitcrawl search issues "query" -R owner/repo --state open --json number,title,url
 gitcrawl clusters owner/repo --sort size --min-size 5
 gitcrawl cluster-detail owner/repo --id <id>
-gitcrawl gh pr status 123 -R owner/repo --compact
-gitcrawl gh pr view 123 -R owner/repo --json number,title,state,url
+gitcrawl threads owner/repo --numbers 123 --include-closed --json
 ```
 
-For PR triage, start with cached status, then drill down only into blockers:
+For an exact PR, read the archive with `threads` first. `--include-closed`
+keeps closed or merged candidates in scope; archive state is not proof of
+current GitHub state. Then use bare PATH `gh` for fresh metadata when needed,
+including before final merge/comment decisions:
 
 ```bash
-gitcrawl gh pr status <number-or-url> -R owner/repo --compact
-gitcrawl gh pr view <number-or-url> -R owner/repo --json number,title,state,url,isDraft,headRef,headSha
-gitcrawl gh pr checks <number-or-url> -R owner/repo --json name,state,conclusion,detailsUrl
+gh pr view 123 -R owner/repo --json number,title,state,url,isDraft,headRefName,headRefOid
 ```
 
-`pr status` exits `0` clean, `1` action needed, `2` error, or `3` pending. Use `--live` before final merge/comment decisions when liveness matters; it refreshes exact PR details/review threads, then returns the same normalized status shape. Use `--cached` when measuring local cache coverage.
+Drill down into checks only when needed:
 
-Readiness is conservative: non-open PRs, drafts, failing/unknown checks,
-pending checks, merge conflicts or blocked/unknown mergeability, unresolved or
-unknown review threads, active requested changes, and missing approval block
-ready. Bodyless approvals count. Review state is the latest non-stale decision
-per reviewer, so a later approval supersedes an earlier changes-requested.
+```bash
+gh pr checks 123 -R owner/repo --json name,state,bucket,link
+```
 
-Default `pr status` may auto-hydrate when the PR row exists but PR details or
-review-thread markers are missing. `GITCRAWL_GH_AUTO_HYDRATE=0` and `--cached`
-keep it local-only.
+Keep the existing Octopool-backed `gh` shim and use narrow JSON field lists so
+supported reads share its cache. Native `gh` uses `headRefName`/`headRefOid`
+for PR refs and `bucket`/`link` for check classification and URLs, not the old
+Gitcrawl field names.
+
+`gitcrawl gh` is removed and exits `2` with a migration note. Do not retry its
+`status`, `view`, or `checks` recipes, pass its `--live`/`--cached` flags to
+`gh`, or rebuild an older Gitcrawl to recover that cache. This is a command
+migration, not an authentication failure: do not run `octopool login`, change
+tokens, auth, PATH, or config, or bypass the existing shim to repair it. See
+[the gh migration guide](../../../docs/gh-shim.md) for ownership and first-time setup.
 
 ## SQL
 
@@ -128,9 +134,9 @@ a verified `openclaw/gitcrawl` checkout before concluding the feature is missing
 ## Maintainer Boundaries
 
 `close-thread`, `close-cluster`, exclusions, and canonical-member choices are
-local maintainer overrides; they do not write back to GitHub. Set
-`GITCRAWL_GH_PATH` explicitly when using the gh shim so it cannot recurse into
-itself.
+local maintainer overrides; they do not write back to GitHub. Use bare PATH
+`gh` for authorized GitHub writes; Octopool handles fallback to the real CLI.
+Gitcrawl no longer owns the `gh` shim or its configuration.
 
 ## Verification
 
@@ -146,6 +152,6 @@ Then run targeted CLI smoke for the touched surface, for example:
 gitcrawl doctor --json
 gitcrawl status --json
 gitcrawl search issues "test" -R openclaw/gitcrawl --state open --limit 5
-gitcrawl gh --live pr status https://github.com/openclaw/openclaw/pull/<n> --compact
-gitcrawl gh pr status https://github.com/openclaw/openclaw/pull/<n> --compact
+gitcrawl threads owner/repo --numbers 123 --include-closed --json
+gh pr view 123 -R owner/repo --json number,title,state,url,headRefOid
 ```
