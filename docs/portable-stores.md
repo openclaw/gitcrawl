@@ -59,6 +59,9 @@ Initialization validates portable arguments before invoking Git and validates
 the artifact before saving configuration. Repeated initialization and a
 publisher's raw-to-gzip transition do not require a raw `.db` in the checkout.
 Use `init` for setup; it still regenerates configuration on success.
+If a dirty merge triggers legacy reset recovery and that reset fails, `init`
+reports the reset failure with the same credential-safe Git diagnostics used
+elsewhere, so the error identifies the recovery step that needs attention.
 
 ## Routine subscriber refresh
 

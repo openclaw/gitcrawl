@@ -3756,7 +3756,7 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 				return "", err
 			}
 			if resetErr := runGit(ctx, "", "-C", dir, "reset", "--hard", "HEAD"); resetErr != nil {
-				return "", err
+				return "", resetErr
 			}
 			if retryErr := fastForwardGitCheckout(ctx, dir, false); retryErr != nil {
 				return "", retryErr

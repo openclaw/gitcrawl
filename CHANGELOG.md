@@ -2,6 +2,8 @@
 
 ## 0.9.4 - Unreleased
 
+- Report the actual reset failure when portable-store initialization cannot recover from a dirty merge. Thanks @SebTardif.
+
 ## 0.9.3 - 2026-08-29
 
 - Fix repeated gzip-only portable initialization and add a locked, bounded, preservation-first `portable refresh` subscriber command with automatic Git maintenance disabled across portable operations.

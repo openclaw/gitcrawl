@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -130,6 +131,56 @@ func TestPortableGitFailureDiagnostics(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "synthetic-private-path") {
 				t.Fatal("Git failure exposed raw diagnostics")
+			}
+		})
+	}
+}
+
+func TestSyncPortableStoreReturnsResetFailure(t *testing.T) {
+	for _, dirtyBeforePull := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dirty-before-pull=%t", dirtyBeforePull), func(t *testing.T) {
+			fixture := newPortableRefreshFixture(t, false)
+			if err := os.WriteFile(filepath.Join(fixture.remote, "incoming.txt"), []byte("remote data\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			portableTestCommit(t, fixture.remote)
+			localPath := filepath.Join(fixture.checkout, "incoming.txt")
+			if dirtyBeforePull {
+				localPath = filepath.Join(fixture.checkout, fixture.relative)
+			}
+			if err := os.WriteFile(localPath, []byte("local data\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if clean := gitWorktreeClean(context.Background(), fixture.checkout); clean == dirtyBeforePull {
+				t.Fatalf("unexpected tracked worktree cleanliness: %t", clean)
+			}
+
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrapper := filepath.Join(t.TempDir(), "git")
+			script := `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = reset ]; then
+    echo 'synthetic-private-path: No space left on device' >&2
+    exit 79
+  fi
+done
+exec "$GITCRAWL_TEST_REAL_GIT" "$@"
+`
+			if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GITCRAWL_TEST_REAL_GIT", realGit)
+			t.Setenv("GITCRAWL_PORTABLE_GIT", wrapper)
+			_, err = syncPortableStore(context.Background(), fixture.remote, fixture.checkout)
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 79 || !strings.Contains(err.Error(), "insufficient disk space for Git") {
+				t.Fatalf("expected reset failure with exit 79 and disk-space guidance, got %v", err)
+			}
+			if strings.Contains(err.Error(), "synthetic-private-path") || isDirtyPortablePullError(err) {
+				t.Fatalf("reset error exposed raw diagnostics or retained the earlier merge failure: %v", err)
 			}
 		})
 	}
