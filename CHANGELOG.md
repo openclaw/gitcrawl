@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.4 - 2026-08-30
 
 - Report the actual reset failure when portable-store initialization cannot recover from a dirty merge. Thanks @SebTardif.
