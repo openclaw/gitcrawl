@@ -1,6 +1,6 @@
 module github.com/openclaw/gitcrawl
 
-go 1.26.7
+go 1.27.0
 
 require (
 	github.com/alecthomas/kong v1.16.1
@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/mattn/go-isatty v0.0.24
-	github.com/openclaw/crawlkit v0.14.7
+	github.com/openclaw/crawlkit v0.14.8
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.57.0
