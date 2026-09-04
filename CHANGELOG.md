@@ -2,6 +2,8 @@
 
 ## 0.9.5 - Unreleased
 
+- Stop review-thread GraphQL pagination when GitHub returns an empty or repeated endCursor. Thanks @SebTardif.
+
 ## 0.9.4 - 2026-08-30
 
 - Report the actual reset failure when portable-store initialization cannot recover from a dirty merge. Thanks @SebTardif.
