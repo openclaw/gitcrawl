@@ -2,6 +2,8 @@
 
 ## 0.9.5 - Unreleased
 
+- Update the Go 1.26 toolchain to 1.26.8, SQLite to v1.58.0, compatible Go dependency patches, and TruffleHog to v3.97.4.
+
 ## 0.9.4 - 2026-08-30
 
 - Report the actual reset failure when portable-store initialization cannot recover from a dirty merge. Thanks @SebTardif.
