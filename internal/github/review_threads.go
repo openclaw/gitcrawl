@@ -122,6 +122,7 @@ type graphqlResponseEnvelope struct {
 func (c *Client) ListPullReviewThreads(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	var out []map[string]any
 	var cursor string
+	seen := make(map[string]struct{})
 	for {
 		vars := map[string]any{
 			"owner": owner,
@@ -148,7 +149,15 @@ func (c *Client) ListPullReviewThreads(ctx context.Context, owner, repo string, 
 		if !page.PageInfo.HasNextPage {
 			break
 		}
-		cursor = page.PageInfo.EndCursor
+		next := page.PageInfo.EndCursor
+		if next == "" {
+			return nil, fmt.Errorf("review threads page missing endCursor")
+		}
+		if _, ok := seen[next]; ok {
+			return nil, fmt.Errorf("review threads page repeated endCursor %q", next)
+		}
+		seen[next] = struct{}{}
+		cursor = next
 	}
 	return out, nil
 }
@@ -162,11 +171,16 @@ func (c *Client) completeReviewThreadComments(ctx context.Context, thread map[st
 	if !comments.PageInfo.HasNextPage {
 		return nil
 	}
+	seen := make(map[string]struct{})
 	for comments.PageInfo.HasNextPage {
 		cursor := comments.PageInfo.EndCursor
 		if cursor == "" {
 			return fmt.Errorf("review thread %s comments page missing endCursor", threadID)
 		}
+		if _, ok := seen[cursor]; ok {
+			return fmt.Errorf("review thread %s comments page repeated endCursor %q", threadID, cursor)
+		}
+		seen[cursor] = struct{}{}
 		vars := map[string]any{"threadID": threadID, "cursor": cursor}
 		var resp pullReviewThreadCommentsResponse
 		if err := c.doGraphQL(ctx, pullReviewThreadCommentsQuery, vars, reporter, &resp); err != nil {
