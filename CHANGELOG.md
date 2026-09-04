@@ -2,6 +2,9 @@
 
 ## 0.9.5 - Unreleased
 
+- Raise the source-build minimum to Go 1.27.1 for CrawlKit v0.14.8 and align the Docker builder; newly built macOS binaries require macOS 13 Ventura or newer.
+- Update SQLite to v1.58.0, compatible Go dependency patches, the Dockerfile frontend to 1.27, and TruffleHog to v3.97.4; retain SQLite's required libc v1.75.6.
+
 ## 0.9.4 - 2026-08-30
 
 - Report the actual reset failure when portable-store initialization cannot recover from a dirty merge. Thanks @SebTardif.
