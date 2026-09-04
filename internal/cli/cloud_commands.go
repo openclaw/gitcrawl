@@ -715,16 +715,16 @@ func sendSnapshotIngestRows(
 			if !fits {
 				if end == start {
 					return ingestProgress{
-							RowsAccepted:  total,
-							MutationToken: mutationToken,
-							Result:        lastResult,
-						}, fmt.Errorf(
-							"ingest table %s row %d encoded request is %d bytes, limit %d",
-							table,
-							start,
-							encodedBytes,
-							gitcrawlCloudIngestRequestMaxBytes,
-						)
+						RowsAccepted:  total,
+						MutationToken: mutationToken,
+						Result:        lastResult,
+					}, fmt.Errorf(
+						"ingest table %s row %d encoded request is %d bytes, limit %d",
+						table,
+						start,
+						encodedBytes,
+						gitcrawlCloudIngestRequestMaxBytes,
+					)
 				}
 				break
 			}

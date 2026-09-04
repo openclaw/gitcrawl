@@ -12,13 +12,17 @@ permalink: /installation/
 
 ## Requirements
 
-- **Go 1.26.7+** if building from source
+- **Go 1.27.1+** if building from source
 - **Git** for cloning the repository (and for portable stores)
 - **A GitHub token** for any command that talks to GitHub (`sync`, `refresh`)
 - **An OpenAI API key** for `summarize`, `embed`, and the embedding stage of `refresh`
 - **`gh` CLI** optional, used by gitcrawl only as a token source via `gh auth token`
 
-gitcrawl runs on macOS and Linux. Windows is not actively tested.
+gitcrawl runs on macOS 13 Ventura or newer and Linux. Windows is not actively tested.
+
+CrawlKit v0.14.8 requires Go 1.27, so source and Docker builds use Go 1.27.1
+or newer. Go 1.27 also raises the minimum macOS version for newly built binaries
+to macOS 13; the previous Go 1.26 build baseline no longer applies.
 
 ## Install from Homebrew
 
