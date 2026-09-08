@@ -831,6 +831,9 @@ func (f *delayedObservationGitHub) ListRepositoryIssues(
 	options gh.ListIssuesOptions,
 	reporter gh.Reporter,
 ) ([]map[string]any, error) {
+	if options.State == "closed" {
+		return nil, nil
+	}
 	f.mu.Lock()
 	f.listCalls++
 	call := f.listCalls
@@ -1093,11 +1096,13 @@ func (f *sinceCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, re
 
 type stateCaptureGitHub struct {
 	fakeGitHub
-	state string
+	state  string
+	states []string
 }
 
 func (f *stateCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
 	f.state = options.State
+	f.states = append(f.states, options.State)
 	return nil, nil
 }
 
@@ -3960,8 +3965,8 @@ func TestSyncDefaultsToOpenState(t *testing.T) {
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if client.state != "open" {
-		t.Fatalf("default state = %q, want open", client.state)
+	if len(client.states) != 2 || client.states[0] != "open" || client.states[1] != "closed" {
+		t.Fatalf("default states = %v, want open then closed reconciliation", client.states)
 	}
 }
 

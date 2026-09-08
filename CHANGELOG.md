@@ -2,6 +2,7 @@
 
 ## 0.9.5 - Unreleased
 
+- Reconcile observed closures during default sync, retaining successful sweep coverage across offline periods without retiring omitted threads.
 - Fill bounded embedding runs from older eligible threads when newer vectors are already current.
 - Add `--github-token-command` for managed, rotating GitHub credentials during long synchronizations on Unix. Requests and quota reservations use the current credential without changing static authentication or remote-store sessions.
 
