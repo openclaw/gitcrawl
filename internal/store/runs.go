@@ -128,6 +128,39 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, repoID int64) (time.Ti
 	return parsed, nil
 }
 
+// ClosedSweepWatermark ignores runs that did not establish complete default
+// coverage. Old archives bootstrap from their oldest still-open observation.
+func (s *Store) ClosedSweepWatermark(ctx context.Context, repoID int64) (time.Time, error) {
+	var raw sql.NullString
+	err := s.q().QueryRowContext(ctx, `
+		select coalesce(
+			(select json_extract(stats_json, '$.closed_sweep_through')
+			 from sync_runs
+			 where repo_id = ? and status in ('success', 'completed')
+			   and scope in ('open', 'closed', 'all')
+			   and json_valid(stats_json)
+			   and json_type(case when json_valid(stats_json) then stats_json else '{}' end,
+			                 '$.closed_sweep_through') = 'text'
+			 order by julianday(json_extract(stats_json, '$.closed_sweep_through')) desc, id desc
+			 limit 1),
+			(select min(coalesce(nullif(last_pulled_at, ''), nullif(first_pulled_at, ''),
+			                     nullif(updated_at_gh, ''), updated_at))
+			 from threads where repo_id = ? and state = 'open')
+		)
+	`, repoID, repoID).Scan(&raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read closed sweep watermark: %w", err)
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, nil
+	}
+	value, err := time.Parse(time.RFC3339Nano, raw.String)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse closed sweep watermark: %w", err)
+	}
+	return value, nil
+}
+
 func (s *Store) LastSuccessfulListSyncAt(ctx context.Context, repoID int64, state string) (time.Time, error) {
 	state = normalizedListSyncState(state)
 	if state == "" || !s.hasColumns(ctx, "sync_runs", "repo_id", "scope", "status", "finished_at") {

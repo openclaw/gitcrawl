@@ -229,8 +229,8 @@ func TestGitHubTokenCommandSharedSyncOwnerAndInspection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if requests != 6 {
-		t.Fatalf("sync requests=%d", requests)
+	if requests != 8 {
+		t.Fatalf("sync requests=%d, want 8 including refresh/search closed reconciliation", requests)
 	}
 	before, err := os.ReadFile(marker)
 	if err != nil {

@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,7 @@ type Stats struct {
 	ThreadsClosed        int    `json:"threads_closed"`
 	ThreadsSkippedStale  int    `json:"threads_skipped_stale"`
 	RequestedSince       string `json:"requested_since,omitempty"`
+	ClosedSweepThrough   string `json:"closed_sweep_through,omitempty"`
 	Limit                int    `json:"limit,omitempty"`
 	Numbers              []int  `json:"numbers,omitempty"`
 	MetadataOnly         bool   `json:"metadata_only"`
@@ -117,13 +119,14 @@ func New(client GitHubClient, st *store.Store) *Syncer {
 }
 
 func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
-	started := s.now().Format(time.RFC3339Nano)
+	startedAt := s.now()
+	started := startedAt.Format(time.RFC3339Nano)
 	if err := reportSyncProgress(options.Progress, SyncProgress{
 		Stage: SyncProgressConnecting,
 	}); err != nil {
 		return Stats{}, err
 	}
-	since, err := normalizeSince(options.Since, s.now())
+	since, err := normalizeSince(options.Since, startedAt)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -159,9 +162,30 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 
 	var closedOverlapRows []map[string]any
-	needsClosedOverlap := len(numbers) == 0 && state == "open" && since != "" && options.Limit <= 0
+	needsClosedOverlap := len(numbers) == 0 && state == "open" && options.Limit <= 0
 	if needsClosedOverlap {
-		closedOverlapRows, err = s.fetchClosedOverlapRows(ctx, options, since)
+		closedSince := since
+		if closedSince == "" {
+			watermark := startedAt.Add(-24 * time.Hour)
+			repo, lookupErr := s.store.RepositoryByFullName(ctx, options.Owner+"/"+options.Repo)
+			if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+				return Stats{}, lookupErr
+			}
+			if lookupErr == nil {
+				previous, err := s.store.ClosedSweepWatermark(ctx, repo.ID)
+				if err != nil {
+					return Stats{}, err
+				}
+				if !previous.IsZero() {
+					watermark = previous
+				}
+			}
+			if watermark.After(startedAt) {
+				watermark = startedAt
+			}
+			closedSince = watermark.Add(-time.Minute).Format(time.RFC3339Nano)
+		}
+		closedOverlapRows, err = s.fetchClosedOverlapRows(ctx, options, closedSince)
 		if err != nil {
 			return Stats{}, err
 		}
@@ -255,6 +279,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		Numbers:        numbers,
 		MetadataOnly:   !options.IncludeComments && !options.IncludePRMetadata && !options.IncludePRDetails,
 		StartedAt:      started,
+	}
+	if len(numbers) == 0 && options.Limit <= 0 && since == "" {
+		stats.ClosedSweepThrough = started
 	}
 	tracker := progress.New(options.Logger, progress.Options{
 		Name:  "sync",

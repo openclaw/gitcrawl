@@ -145,6 +145,13 @@ func TestGHSearchSyncIfStaleHydratesCache(t *testing.T) {
 		case "/repos/openclaw/openclaw":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "full_name": "openclaw/openclaw"})
 		case "/repos/openclaw/openclaw/issues":
+			if r.URL.Query().Get("state") == "closed" {
+				if r.URL.Query().Get("since") == "" {
+					t.Error("default closed reconciliation needs a coverage watermark")
+				}
+				_ = json.NewEncoder(w).Encode([]map[string]any{})
+				return
+			}
 			if got := r.URL.Query().Get("state"); got != "open" {
 				t.Fatalf("state query = %q", got)
 			}
