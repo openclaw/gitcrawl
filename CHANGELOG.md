@@ -2,6 +2,8 @@
 
 ## 0.9.5 - Unreleased
 
+- Add `--github-token-command` for managed, rotating GitHub credentials during long synchronizations on Unix. Requests and quota reservations use the current credential without changing static authentication or remote-store sessions.
+
 - Stop review-thread GraphQL pagination when GitHub returns an empty or repeated endCursor. Thanks @SebTardif.
 - Raise the source-build minimum to Go 1.27.1 for CrawlKit v0.14.8 and align the Docker builder; newly built macOS binaries require macOS 13 Ventura or newer.
 - Update SQLite to v1.58.0, compatible Go dependency patches, the Dockerfile frontend to 1.27, and TruffleHog to v3.97.4; retain SQLite's required libc v1.75.6.

@@ -936,7 +936,7 @@ func TestRateLimitReserveSerializesConcurrentRateStatus(t *testing.T) {
 		InitialRateLimits: []RateLimitSnapshot{{
 			Limit: 5000, Remaining: 11, ResetAt: resetAt, Resource: "core",
 		}},
-		RateLimit: func(snapshot RateLimitSnapshot) {
+		RateLimit: func(_ string, snapshot RateLimitSnapshot) {
 			observedMu.Lock()
 			defer observedMu.Unlock()
 			observed = append(observed, snapshot.Remaining)
@@ -1086,7 +1086,7 @@ func TestRateLimitObserverUsesFinalRedirectResource(t *testing.T) {
 
 	client := New(Options{
 		BaseURL: server.URL,
-		RateLimit: func(value RateLimitSnapshot) {
+		RateLimit: func(_ string, value RateLimitSnapshot) {
 			snapshot = value
 		},
 	})
@@ -1240,7 +1240,7 @@ func TestRateLimitObserverIncludesAPIHost(t *testing.T) {
 	client := New(Options{
 		BaseURL:   server.URL,
 		PageDelay: -1,
-		RateLimit: func(value RateLimitSnapshot) {
+		RateLimit: func(_ string, value RateLimitSnapshot) {
 			snapshot = value
 		},
 	})

@@ -20,6 +20,7 @@ These work on every command.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--config <path>` | `$GITCRAWL_CONFIG` or default | Override config path |
+| `--github-token-command <path>` | _(off)_ | Absolute executable for managed GitHub credentials; Unix only |
 | `--format text\|json\|log` | `text` | Output format |
 | `--json` | _(off)_ | Shorthand for `--format json` |
 | `--no-color` | _(off)_ | Suppress ANSI color |

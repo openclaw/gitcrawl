@@ -6624,6 +6624,11 @@ func TestSyncCommandPublishesSanitizedFailureProgress(t *testing.T) {
 }
 
 func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
+	testFillPRDetailsHydratesMissingPullRequestDetails(t, "")
+}
+
+func testFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T, tokenCommand string) {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -6655,8 +6660,12 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 		t.Fatalf("close seed store: %v", err)
 	}
 
+	expectedToken := "test-gh-token"
+	if tokenCommand != "" {
+		expectedToken = "managed-fill-token"
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+expectedToken {
 			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
 		}
 		w.Header().Set("X-RateLimit-Limit", "5000")
@@ -6725,7 +6734,11 @@ func TestFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	run.Stdout = &stdout
 	run.Stderr = &stderr
-	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--batch-size", "1", "--reserve-rate-limit", "10", "--json-progress", "--json"}); err != nil {
+	args := []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--batch-size", "1", "--reserve-rate-limit", "10", "--json-progress", "--json"}
+	if tokenCommand != "" {
+		args = append([]string{"--github-token-command", tokenCommand}, args...)
+	}
+	if err := run.Run(ctx, args); err != nil {
 		t.Fatalf("fill-pr-details: %v\nstderr=%s", err, stderr.String())
 	}
 	var result struct {

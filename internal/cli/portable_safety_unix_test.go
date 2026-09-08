@@ -36,9 +36,20 @@ func TestPortableConfigScopeIsolationAndRefusal(t *testing.T) {
 	t.Setenv("GITCRAWL_TEST_MARKER", marker)
 	t.Setenv("GITCRAWL_TEST_REAL_GIT", realGit)
 	// An operator-selected wrapper supplies a synthetic system scope without
-	// modifying the machine's Git configuration or reading its values.
+	// reading machine or Apple Git Xcode configuration. Keep /dev/null isolation.
 	wrapper := filepath.Join(dir, "git")
-	script := "#!/bin/sh\nexport GIT_CONFIG_SYSTEM=\"${GIT_CONFIG_SYSTEM:-$GITCRAWL_TEST_SYSTEM_CONFIG}\"\nexec \"$GITCRAWL_TEST_REAL_GIT\" \"$@\"\n"
+	script := `#!/bin/sh
+export GIT_CONFIG_NOSYSTEM=1
+case "$*" in
+  *" config --null --list --show-scope")
+    if [ -n "$GITCRAWL_TEST_SYSTEM_CONFIG" ] && [ "${GIT_CONFIG_SYSTEM:-}" != /dev/null ]; then
+      printf 'system\000filter.fixture.smudge\n'
+      "$GITCRAWL_TEST_REAL_GIT" config --file "$GITCRAWL_TEST_SYSTEM_CONFIG" --null --get filter.fixture.smudge || exit $?
+    fi
+    ;;
+esac
+exec "$GITCRAWL_TEST_REAL_GIT" "$@"
+`
 	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
