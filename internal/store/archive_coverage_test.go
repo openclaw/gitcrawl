@@ -436,6 +436,65 @@ func TestArchiveCoveragePRFilesUsesLegacySnapshotProof(t *testing.T) {
 	assertMetric(1, 0, false)
 }
 
+func TestArchiveCoveragePRFilesDistinguishesMetadataOnlyFromLegacy(t *testing.T) {
+	for _, mode := range []string{"legacy", "metadata", "full"} {
+		for _, files := range []int{0, 1} {
+			t.Run(fmt.Sprintf("%s/%d-files", mode, files), func(t *testing.T) {
+				ctx := context.Background()
+				st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer st.Close()
+				const observed = "2026-07-12T12:00:00Z"
+				repoID, err := st.UpsertRepository(ctx, Repository{
+					Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: observed,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				thread := archiveCoverageThread(repoID, 1, "pull_request")
+				thread.UpdatedAtGitHub = observed
+				threadID, err := st.UpsertThread(ctx, thread)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var rows []PullRequestFile
+				if files > 0 {
+					rows = []PullRequestFile{{ThreadID: threadID, Path: "README.md", RawJSON: "{}", FetchedAt: observed}}
+				}
+				if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{
+					ThreadID: threadID, RepoID: repoID, Number: 1, ChangedFiles: files, RawJSON: "{}", FetchedAt: observed, UpdatedAt: observed,
+				}, rows, nil, nil, nil); err != nil {
+					t.Fatal(err)
+				}
+				if mode != "legacy" {
+					if _, err := st.ReserveThreadChildObservation(ctx, threadID, ThreadChildPullRequestDetails, observed, 1); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "full" {
+					if _, err := st.ReserveThreadChildObservation(ctx, threadID, ThreadChildPullRequestFiles, observed, 1); err != nil {
+						t.Fatal(err)
+					}
+				}
+				coverage, err := st.ArchiveCoverage(ctx, ArchiveCoverageOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				metric := coverage.Rows[0].Enrichment.PRFiles
+				want := 1
+				if mode == "metadata" {
+					want = 0
+				}
+				if metric.Covered != want || metric.Fresh != want || metric.Complete != (want == 1) {
+					t.Fatalf("file coverage=%+v", metric)
+				}
+			})
+		}
+	}
+}
+
 func TestArchiveObservationFreshnessUsesSequenceForEqualSource(t *testing.T) {
 	const source = "2026-07-12T12:00:00Z"
 	if archiveObservationAtOrAfter(source, 10, source, 11) {
