@@ -46,12 +46,21 @@ type workflowRunLookupClient interface {
 	) (map[string]any, error)
 }
 
-func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, number int) (pullRequestDetailRows, error) {
+func (s *Syncer) fetchPullRequestMetadata(ctx context.Context, options Options, number int) (pullRequestDetailRows, error) {
 	fetchedAt := s.now().Format(time.RFC3339Nano)
 	pull, err := s.client.GetPull(ctx, options.Owner, options.Repo, number, options.Reporter)
 	if err != nil {
 		return pullRequestDetailRows{}, err
 	}
+	return pullRequestDetailRows{fetchedAt: fetchedAt, pull: pull}, nil
+}
+
+func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, number int) (pullRequestDetailRows, error) {
+	metadata, err := s.fetchPullRequestMetadata(ctx, options, number)
+	if err != nil {
+		return pullRequestDetailRows{}, err
+	}
+	pull := metadata.pull
 	filesRaw, err := s.client.ListPullFiles(ctx, options.Owner, options.Repo, number, options.Reporter)
 	if err != nil {
 		return pullRequestDetailRows{}, err
@@ -85,7 +94,7 @@ func (s *Syncer) fetchPullRequestDetails(ctx context.Context, options Options, n
 		return pullRequestDetailRows{}, err
 	}
 	return pullRequestDetailRows{
-		fetchedAt:               fetchedAt,
+		fetchedAt:               metadata.fetchedAt,
 		workflowSourceUpdatedAt: workflowSourceUpdatedAt,
 		workflowSnapshotFresh:   workflowSnapshotFresh,
 		workflowBaseline:        workflowBaseline,

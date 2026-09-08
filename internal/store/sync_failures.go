@@ -83,9 +83,22 @@ where repo_id = ? and number = ? and operation = ? and error_class = ?
 	return id, nil
 }
 
-func (s *Store) ResolveSyncAttemptFailures(ctx context.Context, repoID int64, number int, resolvedAt string) (int, error) {
+func (s *Store) ResolveSyncAttemptFailures(ctx context.Context, repoID int64, number int, resolvedAt string, operations ...string) (int, error) {
 	if repoID == 0 || number <= 0 {
 		return 0, nil
+	}
+	operationFilter := ""
+	args := []any{resolvedAt, resolvedAt, repoID, number}
+	if len(operations) > 0 {
+		placeholders := make([]string, len(operations))
+		for i, operation := range operations {
+			if strings.TrimSpace(operation) == "" {
+				return 0, fmt.Errorf("resolve sync attempt failures: missing operation")
+			}
+			placeholders[i] = "?"
+			args = append(args, operation)
+		}
+		operationFilter = " and operation in (" + strings.Join(placeholders, ",") + ")"
 	}
 	result, err := s.q().ExecContext(ctx, `
 update sync_attempt_failures
@@ -93,7 +106,7 @@ set resolved_at = ?, last_seen_at = ?
 where repo_id = ?
   and number = ?
   and resolved_at is null
-`, resolvedAt, resolvedAt, repoID, number)
+`+operationFilter, args...)
 	if err != nil {
 		return 0, fmt.Errorf("resolve sync attempt failures: %w", err)
 	}
