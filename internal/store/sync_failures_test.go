@@ -95,6 +95,35 @@ func TestSyncAttemptFailureRetryAndResolve(t *testing.T) {
 	}
 }
 
+func TestSyncAttemptFailureResolutionScopesOperations(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := seedPortableSyncFailure(t, ctx, "full hydration failed")
+	defer st.Close()
+	for _, operation := range []string{"pull_request_metadata", "pull_review_threads"} {
+		if _, err := st.RecordSyncAttemptFailure(ctx, SyncAttemptFailure{
+			RepoID: repoID, Number: 90, Operation: operation, LastSeenAt: "2026-07-16T00:00:00Z",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, 90, "2026-07-16T00:01:00Z", ""); err == nil {
+		t.Fatal("empty operation must not resolve failures")
+	}
+	resolved, err := st.ResolveSyncAttemptFailures(ctx, repoID, 90, "2026-07-16T00:01:00Z", "pull_request_metadata")
+	if err != nil || resolved != 1 {
+		t.Fatalf("resolved=%d err=%v", resolved, err)
+	}
+	failures, err := st.ListSyncAttemptFailures(ctx, SyncAttemptFailureListOptions{RepoID: repoID})
+	if err != nil || len(failures) != 2 {
+		t.Fatalf("unrelated failures=%+v err=%v", failures, err)
+	}
+	for _, failure := range failures {
+		if failure.Operation == "pull_request_metadata" {
+			t.Fatal("metadata failure remains unresolved")
+		}
+	}
+}
+
 func TestListSyncAttemptFailuresTreatsPreLedgerReadOnlyStoreAsEmpty(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")

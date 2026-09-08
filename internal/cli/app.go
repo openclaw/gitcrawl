@@ -380,7 +380,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	noCluster := fs.Bool("no-cluster", false, "skip clustering stage")
 	includeComments := fs.Bool("include-comments", false, "hydrate comments during sync")
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, workflow runs, and review threads")
-	withRaw := fs.String("with", "", "additional sync hydration: pr-details")
+	withRaw := fs.String("with", "", "additional sync hydration: pr-metadata, pr-details")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	since := fs.String("since", "", "GitHub since timestamp")
 	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
@@ -444,11 +444,12 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	if !*noSync {
 		fmt.Fprintln(a.Stderr, "[refresh] sync")
 		stats, target, err := a.syncRepository(ctx, owner, repoName, syncOptions{
-			Since:            strings.TrimSpace(*since),
-			State:            strings.TrimSpace(*state),
-			Limit:            limit,
-			IncludeComments:  *includeComments,
-			IncludePRDetails: *includePRDetails || with["pr-details"],
+			Since:             strings.TrimSpace(*since),
+			State:             strings.TrimSpace(*state),
+			Limit:             limit,
+			IncludeComments:   *includeComments,
+			IncludePRMetadata: with["pr-metadata"],
+			IncludePRDetails:  *includePRDetails || with["pr-details"],
 		})
 		if err != nil {
 			return err
@@ -2901,7 +2902,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, and workflow runs")
-	withRaw := fs.String("with", "", "extra hydration: pr-details")
+	withRaw := fs.String("with", "", "extra hydration: pr-metadata, pr-details")
 	progressFile := fs.String("progress-file", "", "write an atomic sanitized sync progress snapshot")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"numbers": true, "since": true, "state": true, "limit": true, "with": true, "progress-file": true})); err != nil {
@@ -2941,13 +2942,14 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	}
 
 	stats, target, err := a.syncRepository(ctx, owner, repo, syncOptions{
-		Since:            strings.TrimSpace(*since),
-		State:            strings.TrimSpace(*state),
-		Limit:            limit,
-		Numbers:          numbers,
-		IncludeComments:  *includeComments,
-		IncludePRDetails: *includePRDetails || with["pr-details"],
-		Progress:         progress.report,
+		Since:             strings.TrimSpace(*since),
+		State:             strings.TrimSpace(*state),
+		Limit:             limit,
+		Numbers:           numbers,
+		IncludeComments:   *includeComments,
+		IncludePRMetadata: with["pr-metadata"],
+		IncludePRDetails:  *includePRDetails || with["pr-details"],
+		Progress:          progress.report,
 	})
 	if err != nil {
 		if progressErr := progress.finish(syncProgressFailed); progressErr != nil {
@@ -2966,15 +2968,16 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 }
 
 type syncOptions struct {
-	Since            string
-	State            string
-	Limit            int
-	Numbers          []int
-	IncludeComments  bool
-	IncludePRDetails bool
-	Quiet            bool
-	RateLimitReserve int
-	Progress         syncer.SyncProgressReporter
+	Since             string
+	State             string
+	Limit             int
+	Numbers           []int
+	IncludeComments   bool
+	IncludePRMetadata bool
+	IncludePRDetails  bool
+	Quiet             bool
+	RateLimitReserve  int
+	Progress          syncer.SyncProgressReporter
 }
 
 type fillPRDetailsResult struct {
@@ -3225,7 +3228,7 @@ func parseSyncWith(value string) (map[string]bool, error) {
 			continue
 		}
 		switch name {
-		case "pr-details":
+		case "pr-metadata", "pr-details":
 			out[name] = true
 		default:
 			return nil, fmt.Errorf("unsupported --with value %q", name)
@@ -3285,17 +3288,18 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	})
 	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
-		Owner:            owner,
-		Repo:             repo,
-		State:            strings.TrimSpace(options.State),
-		Since:            strings.TrimSpace(options.Since),
-		Limit:            options.Limit,
-		Numbers:          options.Numbers,
-		IncludeComments:  options.IncludeComments,
-		IncludePRDetails: options.IncludePRDetails,
-		Reporter:         reporter,
-		Logger:           logger,
-		Progress:         options.Progress,
+		Owner:             owner,
+		Repo:              repo,
+		State:             strings.TrimSpace(options.State),
+		Since:             strings.TrimSpace(options.Since),
+		Limit:             options.Limit,
+		Numbers:           options.Numbers,
+		IncludeComments:   options.IncludeComments,
+		IncludePRMetadata: options.IncludePRMetadata,
+		IncludePRDetails:  options.IncludePRDetails,
+		Reporter:          reporter,
+		Logger:            logger,
+		Progress:          options.Progress,
 	})
 	if err != nil {
 		return syncer.Stats{}, target, err
@@ -5432,7 +5436,10 @@ Usage:
 	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
 
 Usage:
-  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-details] [--include-pr-details] [--json]
+  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-pr-details] [--json]
+
+pr-metadata fetches only the pull request object; pr-details also hydrates files,
+commits, checks, workflows, and review threads. Comments are selected separately.
 `,
 	"sync-failures": `gitcrawl sync-failures lists failed sync hydration attempts.
 
@@ -5459,7 +5466,7 @@ choose a different floor.
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 
 Usage:
-  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--strict-vectors] [--json]
+  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-metadata|pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--strict-vectors] [--json]
 `,
 	"summarize": `gitcrawl summarize generates key summaries for current thread revisions.
 

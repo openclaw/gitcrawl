@@ -80,11 +80,25 @@ issue or pull request URLs.
 | Flag | What it adds |
 | --- | --- |
 | `--include-comments` | Issue comments, PR review comments, reviews |
-| `--include-pr-details` | PR files, commits, status checks, workflow runs |
+| `--with pr-metadata` | PR object, including merge attribution, head/base references, and diff counts |
+| `--include-pr-details` | PR object, files, commits, status checks, workflow runs, review threads |
 | `--with pr-details` | Same as `--include-pr-details` (gh-style flag) |
 | `--progress-file <absolute-path>` | Atomically publish sanitized machine-readable activity |
 
-PR details land in `pr_files`, `pr_commits`, `pr_checks`, and `pr_runs` tables for local review, search, clustering, and TUI workflows.
+`pr-metadata` writes only `pull_request_details`, using the normal per-thread
+observation ordering. It does not fetch, clear, or mark files, commits, checks,
+workflow runs, or review-thread resolution as fresh. Comments remain independent:
+add `--include-comments` when needed. Selecting both hydration modes uses full
+`pr-details` hydration. Metadata-only hydration does not create full PR revisions
+or fingerprints, and it resolves only earlier metadata-fetch failures.
+
+Full PR details also populate `pull_request_files`, `pull_request_commits`,
+`pull_request_checks`, and `github_workflow_runs` for local review and search.
+
+`fill-pr-details` selects PRs without a metadata row; it does not upgrade existing
+metadata-only rows. To upgrade them, use
+`gitcrawl sync owner/repo --numbers 123,456 --with pr-details`
+(and `--include-comments` for full revision evidence).
 
 Review-thread and nested-comment pagination fails if GitHub claims another page
 but returns an empty or previously followed `endCursor`. Sync reports a

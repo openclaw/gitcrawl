@@ -2675,8 +2675,8 @@ func TestControlRepositoryAndClusterHelperBranches(t *testing.T) {
 		t.Fatalf("short github remote repo = %q", got)
 	}
 
-	with, err := parseSyncWith(" pr-details, ")
-	if err != nil || !with["pr-details"] {
+	with, err := parseSyncWith(" pr-details, pr-metadata, ")
+	if err != nil || !with["pr-details"] || !with["pr-metadata"] {
 		t.Fatalf("parse sync with = %#v, %v", with, err)
 	}
 	if _, err := parseSyncWith("reviews"); err == nil {
