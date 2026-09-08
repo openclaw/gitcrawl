@@ -19,6 +19,12 @@ local tool.
 `capture` reads the local database. It does not call GitHub or fill missing
 comments.
 
+`capture` does not support `--github-token-command`. It rejects this selection
+before opening the store or writing output, without invoking the command.
+Offline quota provenance across managed-credential invocations is not yet
+supported; repeating the sync does not resolve this limitation. Static-token
+capture is unchanged.
+
 Run a successful sync before each capture:
 
 ```bash

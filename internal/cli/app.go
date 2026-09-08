@@ -64,8 +64,11 @@ type referenceEvidence struct {
 }
 
 type App struct {
-	Stdout io.Writer
-	Stderr io.Writer
+	githubTokenCommand  *string
+	githubTokenMu       sync.Mutex
+	observedGitHubToken string
+	Stdout              io.Writer
+	Stderr              io.Writer
 
 	configPath            string
 	format                OutputFormat
@@ -109,7 +112,7 @@ func New() *App {
 }
 
 func (a *App) Run(ctx context.Context, args []string) error {
-	if len(args) == 0 || rootHelpRequested(args, "config", "format") {
+	if len(args) == 0 || rootHelpRequested(args, "config", "format", "github-token-command") {
 		a.printUsage()
 		return nil
 	}
@@ -124,6 +127,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 	a.configPath = strings.TrimSpace(global.Config)
 	a.format = resolvedFormat
+	a.githubTokenCommand = global.GitHubTokenCommand
+	a.observedGitHubToken = ""
 
 	rest := global.Args
 	if global.Version {
@@ -139,6 +144,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		}
 		a.printUsage()
 		return nil
+	}
+	if a.githubTokenCommand != nil && rest[0] == "capture" {
+		return usageErr(fmt.Errorf("capture does not support --github-token-command: offline quota provenance for managed credentials is unavailable"))
 	}
 	if releaseNotificationAllowed(rest) {
 		a.maybeNotifyRelease(ctx, rest)
@@ -239,12 +247,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 }
 
 type gitcrawlRootArgs struct {
-	Config  string   `help:"Config path."`
-	Format  string   `default:"text" help:"Output format: text, json, or log."`
-	JSON    bool     `name:"json" help:"Write JSON output."`
-	Version bool     `help:"Print version."`
-	NoColor bool     `name:"no-color" help:"Disable color output."`
-	Args    []string `arg:"" optional:"" passthrough:"partial" name:"command" help:"Command and arguments."`
+	GitHubTokenCommand *string  `name:"github-token-command" help:"Absolute executable supplying managed GitHub tokens (not supported on Windows)."`
+	Config             string   `help:"Config path."`
+	Format             string   `default:"text" help:"Output format: text, json, or log."`
+	JSON               bool     `name:"json" help:"Write JSON output."`
+	Version            bool     `help:"Print version."`
+	NoColor            bool     `name:"no-color" help:"Disable color output."`
+	Args               []string `arg:"" optional:"" passthrough:"partial" name:"command" help:"Command and arguments."`
 }
 
 func rootHelpRequested(args []string, valueFlags ...string) bool {
@@ -3231,7 +3240,21 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		return syncer.Stats{}, dbTargetInfo{}, err
 	}
 	token := a.resolveGitHubToken(ctx, cfg)
-	if token.Value == "" {
+	var provider func(context.Context) (string, error)
+	if a.githubTokenCommand != nil {
+		var command func(context.Context) (string, error)
+		command, err = githubTokenProvider(*a.githubTokenCommand)
+		if err != nil {
+			return syncer.Stats{}, dbTargetInfo{}, err
+		}
+		provider = func(ctx context.Context) (string, error) {
+			a.githubTokenMu.Lock()
+			a.observedGitHubToken = ""
+			a.githubTokenMu.Unlock()
+			return command(ctx)
+		}
+	}
+	if provider == nil && token.Value == "" {
 		return syncer.Stats{}, dbTargetInfo{}, fmt.Errorf("missing GitHub token: set %s or authenticate gh", cfg.GitHub.TokenEnv)
 	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
@@ -3255,8 +3278,9 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	baseURL := githubBaseURL()
 	client := gh.New(gh.Options{
 		Token:            token.Value,
+		TokenProvider:    provider,
 		BaseURL:          baseURL,
-		RateLimit:        a.observeGitHubRateLimit(ctx, token.Value),
+		RateLimit:        a.observeGitHubRateLimit(ctx),
 		RateLimitReserve: options.RateLimitReserve,
 	})
 	service := syncer.New(client, rt.Store)
@@ -5301,6 +5325,7 @@ Usage:
   gitcrawl help <command>
 
 Global flags:
+  --github-token-command <path>  absolute GitHub credential executable (Unix only)
   --config <path>       config path
   --format <mode>      output format: text|json|log
   --json               write JSON output
@@ -5452,6 +5477,8 @@ Usage:
   gitcrawl threads owner/repo [--include-closed] [--numbers refs] [--limit N] [--json]
 `,
 	"capture": `gitcrawl capture exports a stable code-free conversation snapshot.
+
+Managed --github-token-command credentials are not supported by offline capture.
 
 Usage:
   gitcrawl capture owner/repo [--schema gitcrawl.capture.v1] [--since RFC3339] [--output path] [--json]

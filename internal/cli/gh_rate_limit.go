@@ -32,8 +32,11 @@ type ghSharedRateLimitState struct {
 	Threshold int       `json:"threshold"`
 }
 
-func (a *App) observeGitHubRateLimit(ctx context.Context, token string) gh.RateLimitObserver {
-	return func(snapshot gh.RateLimitSnapshot) {
+func (a *App) observeGitHubRateLimit(ctx context.Context) gh.RateLimitObserver {
+	return func(token string, snapshot gh.RateLimitSnapshot) {
+		a.githubTokenMu.Lock()
+		a.observedGitHubToken = token
+		a.githubTokenMu.Unlock()
 		_ = a.writeSharedRateLimit(ctx, token, snapshot, "syncer")
 	}
 }

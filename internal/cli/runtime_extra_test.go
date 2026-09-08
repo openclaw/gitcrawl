@@ -618,6 +618,9 @@ func TestPublishPortableCheckoutPairPreservesCheckoutMode(t *testing.T) {
 	if err := os.WriteFile(checkoutManifest, []byte("old manifest"), 0o640); err != nil {
 		t.Fatalf("write old checkout manifest: %v", err)
 	}
+	if err := os.Chmod(checkoutManifest, 0o640); err != nil {
+		t.Fatalf("chmod old checkout manifest: %v", err)
+	}
 
 	if err := publishPortableCheckoutPair(ctx, mirrorDB, mirrorManifest, checkoutDB, checkoutManifest); err != nil {
 		t.Fatalf("publish portable checkout pair: %v", err)
@@ -1122,6 +1125,14 @@ func TestPortableRuntimeUtilityBranches(t *testing.T) {
 	if err := os.Chtimes(lockPath, oldLock, oldLock); err != nil {
 		t.Fatalf("age index lock: %v", err)
 	}
+	fakeBin := filepath.Join(dir, "fake-bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "lsof"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write no-holder lsof: %v", err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	removed, err := removeStaleGitIndexLock(context.Background(), lockRoot, staleGitIndexLockAge)
 	if err != nil || !removed {
 		t.Fatalf("remove stale index lock removed=%v err=%v", removed, err)
@@ -1136,14 +1147,9 @@ func TestPortableRuntimeUtilityBranches(t *testing.T) {
 	if err := os.Chtimes(lockPath, oldLock, oldLock); err != nil {
 		t.Fatalf("age index lock with failing lsof: %v", err)
 	}
-	fakeBin := filepath.Join(dir, "fake-bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatalf("mkdir fake bin: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(fakeBin, "lsof"), []byte("#!/bin/sh\nexit 2\n"), 0o755); err != nil {
 		t.Fatalf("write fake lsof: %v", err)
 	}
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	removed, err = removeStaleGitIndexLock(context.Background(), lockRoot, staleGitIndexLockAge)
 	if err != nil || removed {
 		t.Fatalf("failing lsof should not remove lock, removed=%v err=%v", removed, err)

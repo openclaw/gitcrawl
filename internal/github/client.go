@@ -20,23 +20,26 @@ import (
 type Reporter func(message string)
 
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	graphQLURL string
-	token      string
-	userAgent  string
-	pageDelay  time.Duration
-	rateLimit  RateLimitObserver
-	reserve    *rateLimitReserve
+	httpClient    *http.Client
+	baseURL       string
+	graphQLURL    string
+	token         string
+	tokenProvider func(context.Context) (string, error)
+	userAgent     string
+	pageDelay     time.Duration
+	rateLimit     RateLimitObserver
+	reserve       *rateLimitReserve
 }
 
 type Options struct {
-	Token      string
-	BaseURL    string
-	UserAgent  string
-	HTTPClient *http.Client
-	PageDelay  time.Duration
-	RateLimit  RateLimitObserver
+	Token string
+	// TokenProvider exclusively selects credentials immediately before dispatch.
+	TokenProvider func(context.Context) (string, error)
+	BaseURL       string
+	UserAgent     string
+	HTTPClient    *http.Client
+	PageDelay     time.Duration
+	RateLimit     RateLimitObserver
 	// RateLimitReserve preserves a best-effort observed floor for the shared
 	// token. Guarded requests refresh /rate_limit before dispatch so other token
 	// consumers are observed, but unrelated consumers cannot be locked between
@@ -47,7 +50,7 @@ type Options struct {
 
 // RateLimitObserver receives synchronous quota snapshots. An observer used by
 // a reserve-guarded client must not call back into that same Client.
-type RateLimitObserver func(RateLimitSnapshot)
+type RateLimitObserver func(token string, snapshot RateLimitSnapshot)
 
 type RateLimitSnapshot struct {
 	Host      string
@@ -130,13 +133,14 @@ func New(options Options) *Client {
 		userAgent = "gitcrawl"
 	}
 	client := &Client{
-		httpClient: httpClient,
-		baseURL:    baseURL,
-		graphQLURL: graphQLURLForBaseURL(baseURL),
-		token:      options.Token,
-		userAgent:  userAgent,
-		pageDelay:  options.PageDelay,
-		rateLimit:  options.RateLimit,
+		httpClient:    httpClient,
+		baseURL:       baseURL,
+		graphQLURL:    graphQLURLForBaseURL(baseURL),
+		token:         options.Token,
+		tokenProvider: options.TokenProvider,
+		userAgent:     userAgent,
+		pageDelay:     options.PageDelay,
+		rateLimit:     options.RateLimit,
 	}
 	if options.RateLimitReserve > 0 {
 		client.reserve = newRateLimitReserve(options.RateLimitReserve, options.InitialRateLimits)
@@ -216,6 +220,11 @@ func (c *Client) GetRepo(ctx context.Context, owner, repo string, reporter Repor
 }
 
 func (c *Client) GetRateLimits(ctx context.Context, reporter Reporter) ([]RateLimitSnapshot, error) {
+	snapshots, _, err := c.getRateLimits(ctx, reporter, nil)
+	return snapshots, err
+}
+
+func (c *Client) getRateLimits(ctx context.Context, reporter Reporter, selectedToken *string) ([]RateLimitSnapshot, string, error) {
 	if c.reserve != nil {
 		lockedReserve, _ := ctx.Value(rateLimitRequestLockKey{}).(*rateLimitReserve)
 		if lockedReserve != c.reserve {
@@ -231,9 +240,15 @@ func (c *Client) GetRateLimits(ctx context.Context, reporter Reporter) ([]RateLi
 			Reset     int64 `json:"reset"`
 		} `json:"resources"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, "/rate_limit", nil, reporter, &payload); err != nil {
-		return nil, err
+	resp, err := c.doWithToken(ctx, http.MethodGet, "/rate_limit", nil, reporter, selectedToken)
+	if err != nil {
+		return nil, "", err
 	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, "", fmt.Errorf("decode github response: %w", err)
+	}
+	token := strings.TrimPrefix(resp.Request.Header.Get("Authorization"), "Bearer ")
 	host := rateLimitHostForBaseURL(c.baseURL)
 	out := make([]RateLimitSnapshot, 0, len(payload.Resources))
 	for resource, value := range payload.Resources {
@@ -252,12 +267,12 @@ func (c *Client) GetRateLimits(ctx context.Context, reporter Reporter) ([]RateLi
 	if c.rateLimit != nil {
 		for _, snapshot := range out {
 			if snapshot.Resource == "core" {
-				c.rateLimit(snapshot)
+				c.rateLimit(token, snapshot)
 				break
 			}
 		}
 	}
-	return out, nil
+	return out, token, nil
 }
 
 func (c *Client) GetIssue(ctx context.Context, owner, repo string, number int, reporter Reporter) (map[string]any, error) {
@@ -450,6 +465,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body io.Reader
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {
+	return c.doWithToken(ctx, method, path, body, reporter, nil)
+}
+
+func (c *Client) doWithToken(ctx context.Context, method, path string, body io.Reader, reporter Reporter, selectedToken *string) (*http.Response, error) {
 	var bodyBytes []byte
 	if body != nil {
 		var err error
@@ -464,7 +483,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, re
 		}
 		return bytes.NewReader(bodyBytes)
 	}
-	resp, err := c.doOnce(ctx, method, path, bodyReader(), reporter)
+	resp, err := c.doOnce(ctx, method, path, bodyReader(), reporter, selectedToken)
 	if err == nil {
 		return resp, nil
 	}
@@ -480,13 +499,22 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, re
 		return nil, ctx.Err()
 	case <-timer.C:
 	}
-	return c.doOnce(ctx, method, path, bodyReader(), reporter)
+	return c.doOnce(ctx, method, path, bodyReader(), reporter, nil)
 }
 
-func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader, reporter Reporter) (*http.Response, error) {
+func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader, reporter Reporter, selectedToken *string) (*http.Response, error) {
 	fullURL := path
 	if !isAbsoluteURL(path) {
 		fullURL = c.baseURL + path
+	}
+	if c.tokenProvider != nil {
+		target, targetErr := url.Parse(fullURL)
+		origin, originErr := url.Parse(c.baseURL)
+		if targetErr != nil || originErr != nil || target.User != nil || origin.Host == "" ||
+			(target.Scheme != "https" && target.Scheme != "http") ||
+			!strings.EqualFold(target.Scheme, origin.Scheme) || !strings.EqualFold(target.Host, origin.Host) {
+			return nil, errors.New("GitHub token provider requires the configured API origin")
+		}
 	}
 	resource, cost := c.requestRateLimit(method, fullURL)
 	if c.reserve != nil {
@@ -497,14 +525,42 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 			ctx = context.WithValue(ctx, rateLimitRequestLockKey{}, c.reserve)
 		}
 	}
+	var probeToken string
 	if c.reserve != nil && cost > 0 {
-		if _, err := c.GetRateLimits(ctx, reporter); err != nil {
+		var err error
+		_, probeToken, err = c.getRateLimits(ctx, reporter, nil)
+		if err != nil {
 			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", err)
+		}
+	}
+	token := c.token
+	if selectedToken != nil {
+		token = *selectedToken
+	} else {
+		var err error
+		token, err = c.requestToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if c.tokenProvider != nil && c.reserve != nil && cost > 0 && token != probeToken {
+		// A new token cannot spend the previous token's quota. Allow one new
+		// probe, then reject further rotation before the protected request.
+		_, probeToken, err := c.getRateLimits(ctx, reporter, &token)
+		if err != nil {
+			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", err)
+		}
+		token, err = c.requestToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if token != probeToken {
+			return nil, errors.New("GitHub token changed during rate limit reservation")
 		}
 	}
 	if err := c.reserve.beforeRequest(resource, cost); err != nil {
 		var expired *rateLimitStatusExpiredError
-		if !errors.As(err, &expired) {
+		if c.tokenProvider != nil || !errors.As(err, &expired) {
 			return nil, err
 		}
 		_, refreshErr := c.GetRateLimits(ctx, reporter)
@@ -525,8 +581,8 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	reporter.Printf("[github] request %s %s", method, path)
 	resp, err := c.guardedHTTPClient().Do(req)
@@ -534,8 +590,9 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		return nil, fmt.Errorf("github request: %w", err)
 	}
 	responseResource, responseCost := c.requestRateLimit(resp.Request.Method, resp.Request.URL.String())
-	if responseCost > 0 && !c.observeRateLimit(resp.Header, responseResource) {
-		c.observeReservedRateLimit(responseResource)
+	responseToken := strings.TrimPrefix(resp.Request.Header.Get("Authorization"), "Bearer ")
+	if responseCost > 0 && !c.observeRateLimit(responseToken, resp.Header, responseResource) {
+		c.observeReservedRateLimit(responseToken, responseResource)
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
@@ -552,12 +609,15 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 }
 
 func (c *Client) guardedHTTPClient() *http.Client {
-	if c.reserve == nil {
+	if c.reserve == nil && c.tokenProvider == nil {
 		return c.httpClient
 	}
 	client := *c.httpClient
 	checkRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if c.tokenProvider != nil {
+			return http.ErrUseLastResponse
+		}
 		if checkRedirect != nil {
 			if err := checkRedirect(req, via); err != nil {
 				return err
@@ -566,6 +626,20 @@ func (c *Client) guardedHTTPClient() *http.Client {
 		return http.ErrUseLastResponse
 	}
 	return &client
+}
+
+func (c *Client) requestToken(ctx context.Context) (string, error) {
+	if c.tokenProvider == nil {
+		return c.token, nil
+	}
+	token, err := c.tokenProvider(ctx)
+	if err != nil || token == "" {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", errors.New("GitHub token provider failed")
+	}
+	return token, nil
 }
 
 func (c *Client) requestRateLimit(method, fullURL string) (string, int) {
@@ -600,7 +674,7 @@ func graphQLURLForBaseURL(baseURL string) string {
 	return parsed.String()
 }
 
-func (c *Client) observeRateLimit(header http.Header, fallbackResource string) bool {
+func (c *Client) observeRateLimit(token string, header http.Header, fallbackResource string) bool {
 	remaining, err := strconv.Atoi(strings.TrimSpace(header.Get("X-RateLimit-Remaining")))
 	if err != nil {
 		return false
@@ -625,18 +699,18 @@ func (c *Client) observeRateLimit(header http.Header, fallbackResource string) b
 	}
 	c.reserve.observe(snapshot)
 	if c.rateLimit != nil {
-		c.rateLimit(snapshot)
+		c.rateLimit(token, snapshot)
 	}
 	return true
 }
 
-func (c *Client) observeReservedRateLimit(resource string) {
+func (c *Client) observeReservedRateLimit(token, resource string) {
 	snapshot, ok := c.reserve.snapshot(resource)
 	if !ok || c.rateLimit == nil {
 		return
 	}
 	snapshot.Host = rateLimitHostForBaseURL(c.baseURL)
-	c.rateLimit(snapshot)
+	c.rateLimit(token, snapshot)
 }
 
 func rateLimitHostForBaseURL(baseURL string) string {

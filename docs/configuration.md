@@ -182,12 +182,44 @@ These flags work on every command:
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--config <path>` | `$GITCRAWL_CONFIG` or default | Override config path for this invocation |
+| `--github-token-command <path>` | _(off)_ | Use an absolute executable for managed GitHub credentials |
 | `--format text\|json\|log` | `text` | Output format |
 | `--json` | _(off)_ | Shorthand for `--format json` |
 | `--no-color` | _(off)_ | Suppress ANSI color codes |
 | `--version` | _(off)_ | Print version and exit (global only) |
 
 `--json` overrides `--format`. Both are honored on subcommands that produce output.
+
+### Managed GitHub credentials
+
+For long synchronizations with expiring credentials, select a trusted executable:
+
+```bash
+gitcrawl --github-token-command /usr/local/bin/github-token sync owner/repo --state all
+```
+
+The executable receives no arguments and inherits the process environment. It
+must print exactly one nonempty token line to stdout. Gitcrawl invokes it before
+each GitHub HTTP dispatch, including after rate-limit waits. The executable owns
+credential caching and renewal; Gitcrawl does not persist its output. Selection
+is exclusive: command failure never falls back to environment, config, or `gh`
+credentials. Remote-store login and session authentication are unchanged.
+
+This mode supports Unix only. Windows returns an unsupported-platform error
+before running a synchronization; static credentials remain supported. Helper
+execution is limited to 30 seconds or parent cancellation, with at most two
+seconds of pipe cleanup. Stdout is capped at 4096 bytes; stderr is discarded.
+Use a trusted executable that manages its own credential storage securely.
+
+The same selection covers `sync`, `refresh`, `fill-pr-details`, and
+`search --sync-if-stale`. Help, status, doctor, and `refresh --no-sync` do not
+execute it. Doctor reports the selected source without asserting credentials
+are available. Quota metadata is unavailable until this invocation observes
+the selected token's response. Provider-mode requests do not follow redirects.
+If credentials rotate during quota reservation, Gitcrawl makes at most one
+replacement quota probe, then stops if the token changes again.
+`capture` rejects this option: offline quota provenance across managed-credential
+invocations is not yet supported. Repeating a sync does not resolve that limitation.
 
 ## `gitcrawl configure`
 
