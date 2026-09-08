@@ -2,6 +2,7 @@
 
 ## 0.9.5 - Unreleased
 
+- Exclude raw comment and review-thread revision payloads and sync failure diagnostics from cloud SQLite snapshots while preserving canonical bodies, history rows, and PR patches without changing the source archive.
 - Add `--github-token-command` for managed, rotating GitHub credentials during long synchronizations on Unix. Requests and quota reservations use the current credential without changing static authentication or remote-store sessions.
 
 - Stop review-thread GraphQL pagination when GitHub returns an empty or repeated endCursor. Thanks @SebTardif.
