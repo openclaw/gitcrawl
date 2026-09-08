@@ -42,17 +42,18 @@ type Syncer struct {
 }
 
 type Options struct {
-	Owner            string
-	Repo             string
-	State            string
-	Since            string
-	Limit            int
-	Numbers          []int
-	IncludeComments  bool
-	IncludePRDetails bool
-	Reporter         gh.Reporter
-	Logger           *slog.Logger
-	Progress         SyncProgressReporter
+	Owner             string
+	Repo              string
+	State             string
+	Since             string
+	Limit             int
+	Numbers           []int
+	IncludeComments   bool
+	IncludePRMetadata bool
+	IncludePRDetails  bool
+	Reporter          gh.Reporter
+	Logger            *slog.Logger
+	Progress          SyncProgressReporter
 }
 
 type Stats struct {
@@ -234,6 +235,16 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			pullDetails.workflowObservationOrder = workflowObservationOrder
 			payload.pullDetails = pullDetails
 			payload.hasPullDetails = true
+		} else if options.IncludePRMetadata && kind == "pull_request" {
+			pullDetails, err := s.fetchPullRequestMetadata(ctx, options, number)
+			if err != nil {
+				if recordErr := s.recordPullRequestSyncFailure(ctx, options, repoRaw, row, "pull_request_metadata", err); recordErr != nil {
+					return Stats{}, fmt.Errorf("%w; additionally failed to record sync attempt failure: %v", err, recordErr)
+				}
+				return Stats{}, err
+			}
+			payload.pullDetails = pullDetails
+			payload.hasPullDetails = true
 		}
 		payloads = append(payloads, payload)
 		if err := reportSyncProgress(options.Progress, received); err != nil {
@@ -266,7 +277,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		RequestedSince: since,
 		Limit:          options.Limit,
 		Numbers:        numbers,
-		MetadataOnly:   !options.IncludeComments && !options.IncludePRDetails,
+		MetadataOnly:   !options.IncludeComments && !options.IncludePRMetadata && !options.IncludePRDetails,
 		StartedAt:      started,
 	}
 	if len(numbers) == 0 && options.Limit <= 0 && since == "" {
@@ -368,9 +379,13 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 			}
+			if payload.hasPullDetails {
+				if err := reserveChild(store.ThreadChildPullRequestDetails); err != nil {
+					return err
+				}
+			}
 			if options.IncludePRDetails && thread.Kind == "pull_request" {
 				for _, family := range []store.ThreadChildObservationFamily{
-					store.ThreadChildPullRequestDetails,
 					store.ThreadChildPullRequestFiles,
 					store.ThreadChildPullRequestCommits,
 					store.ThreadChildPullRequestChecks,
@@ -409,7 +424,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 			}
-			if options.IncludePRDetails && thread.Kind == "pull_request" {
+			if payload.hasPullDetails {
 				if childReservations[store.ThreadChildReviewThreads] {
 					count, err := s.persistPullReviewThreads(ctx, st, thread, payload.reviewThreads, payload.reviewThreadsFetchedAt)
 					if err != nil {
@@ -417,34 +432,39 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					}
 					attempt.ReviewThreadsSynced += count
 				}
-				if payload.hasPullDetails {
-					detailStats, err := s.persistPullRequestDetails(
-						ctx,
-						st,
-						thread,
-						payload.pullDetails,
-						store.PullRequestHydrationFamilies{
-							Details:      childReservations[store.ThreadChildPullRequestDetails],
-							Files:        childReservations[store.ThreadChildPullRequestFiles],
-							Commits:      childReservations[store.ThreadChildPullRequestCommits],
-							Checks:       childReservations[store.ThreadChildPullRequestChecks],
-							WorkflowRuns: workflowRunsEligible,
-						},
-					)
-					if err != nil {
-						return err
-					}
-					if detailStats.details {
-						attempt.PRDetailsSynced++
-					}
-					if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano)); err != nil {
-						return err
-					}
-					attempt.PRFilesSynced += detailStats.files
-					attempt.PRCommitsSynced += detailStats.commits
-					attempt.PRChecksSynced += detailStats.checks
-					attempt.WorkflowRunsSynced += detailStats.runs
+				detailStats, err := s.persistPullRequestDetails(
+					ctx,
+					st,
+					thread,
+					payload.pullDetails,
+					store.PullRequestHydrationFamilies{
+						Details:      childReservations[store.ThreadChildPullRequestDetails],
+						Files:        childReservations[store.ThreadChildPullRequestFiles],
+						Commits:      childReservations[store.ThreadChildPullRequestCommits],
+						Checks:       childReservations[store.ThreadChildPullRequestChecks],
+						WorkflowRuns: workflowRunsEligible,
+					},
+				)
+				if err != nil {
+					return err
 				}
+				if detailStats.details {
+					attempt.PRDetailsSynced++
+				}
+				// Metadata cannot repair failures from child collections it did not fetch.
+				var operations []string
+				if !options.IncludePRDetails {
+					operations = []string{"pull_request_metadata"}
+				}
+				if options.IncludePRDetails || detailStats.details {
+					if _, err := st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano), operations...); err != nil {
+						return err
+					}
+				}
+				attempt.PRFilesSynced += detailStats.files
+				attempt.PRCommitsSynced += detailStats.commits
+				attempt.PRChecksSynced += detailStats.checks
+				attempt.WorkflowRunsSynced += detailStats.runs
 			}
 			var pullFiles []store.PullRequestFile
 			var pullCommits []store.PullRequestCommit

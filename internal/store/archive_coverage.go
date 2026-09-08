@@ -698,8 +698,13 @@ func (s *Store) archivePRFileCoverage(
 		left join thread_child_observation_reservations reservation
 			on reservation.thread_id = t.id
 				and reservation.family = 'pull_request_files'
+		left join thread_child_observation_reservations detail_reservation
+			on detail_reservation.thread_id = t.id
+				and detail_reservation.family = 'pull_request_details'
 		`
-		reservationPresent = "case when reservation.thread_id is null then 0 else 1 end"
+		// A details-only observation is not proof of an empty or complete file snapshot.
+		// Rows with neither reservation retain the legacy count/timestamp contract.
+		reservationPresent = "case when reservation.thread_id is not null then 1 when detail_reservation.thread_id is not null then -1 else 0 end"
 		reservationSourceUpdatedAt = "coalesce(reservation.source_updated_at, '')"
 		reservationObservationSequence = "coalesce(reservation.observation_sequence, 0)"
 	}
@@ -759,7 +764,7 @@ func (s *Store) archivePRFileCoverage(
 			return EnrichmentCoverageMetric{}, fmt.Errorf("scan archive PR file coverage: %w", err)
 		}
 		metric.Eligible++
-		if hasDetail == 0 || changedFiles < 0 || files != changedFiles {
+		if hasReservation < 0 || hasDetail == 0 || changedFiles < 0 || files != changedFiles {
 			continue
 		}
 		metric.Covered++
