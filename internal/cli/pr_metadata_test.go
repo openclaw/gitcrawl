@@ -75,11 +75,16 @@ func TestPRMetadataSyncAndRefreshCommands(t *testing.T) {
 }
 
 func TestPRMetadataHelpDoesNotRequireAuthentication(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
 	for _, command := range []string{"sync", "refresh"} {
 		app := New()
+		app.githubAuthTokenLookup = func(context.Context) (string, error) {
+			t.Fatal("help requested GitHub credentials")
+			return "", nil
+		}
 		var stdout bytes.Buffer
 		app.Stdout = &stdout
-		if err := app.Run(context.Background(), []string{command, "--help"}); err != nil {
+		if err := app.Run(context.Background(), []string{"help", command}); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(stdout.String(), "pr-metadata") {
