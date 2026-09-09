@@ -376,7 +376,7 @@ func (c *Client) GetWorkflowRun(
 func (c *Client) paginate(ctx context.Context, firstPath string, limit int, expectedItems int, reporter Reporter) ([]map[string]any, error) {
 	return c.paginatePages(ctx, firstPath, limit, expectedItems, reporter, func(resp *http.Response) ([]map[string]any, error) {
 		var rows []map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		if err := decodeJSON(resp.Body, &rows); err != nil {
 			return nil, fmt.Errorf("decode github page: %w", err)
 		}
 		return rows, nil
@@ -394,7 +394,7 @@ func (c *Client) paginateEnvelope(ctx context.Context, firstPath string, limit i
 			return nil, fmt.Errorf("decode github page: missing %q", field)
 		}
 		var rows []map[string]any
-		if err := json.Unmarshal(raw, &rows); err != nil {
+		if err := decodeJSON(bytes.NewReader(raw), &rows); err != nil {
 			return nil, fmt.Errorf("decode github page %q: %w", field, err)
 		}
 		return rows, nil
@@ -452,13 +452,20 @@ func (c *Client) paginatePages(ctx context.Context, firstPath string, limit int,
 	return out, nil
 }
 
+func decodeJSON(reader io.Reader, out any) error {
+	// Preserve provider IDs before untyped maps reach persistence.
+	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
+	return decoder.Decode(out)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, body io.Reader, reporter Reporter, out any) error {
 	resp, err := c.do(ctx, method, path, body, reporter)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := decodeJSON(resp.Body, out); err != nil {
 		return fmt.Errorf("decode github response: %w", err)
 	}
 	return nil
