@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.5 - 2026-09-09
 
 - Update CrawlKit to v0.15.0 while retaining the existing Go 1.27.1 source-build minimum.
