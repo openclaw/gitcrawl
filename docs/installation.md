@@ -20,7 +20,7 @@ permalink: /installation/
 
 gitcrawl runs on macOS 13 Ventura or newer and Linux. Windows is not actively tested.
 
-CrawlKit v0.14.8 requires Go 1.27, so source and Docker builds use Go 1.27.1
+CrawlKit v0.15.0 requires Go 1.27, so source and Docker builds use Go 1.27.1
 or newer. Go 1.27 also raises the minimum macOS version for newly built binaries
 to macOS 13; the previous Go 1.26 build baseline no longer applies.
 
