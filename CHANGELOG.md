@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve newly fetched GitHub numeric IDs exactly across REST and GraphQL syncs, including IDs above the floating-point precision limit. Previously stored IDs are not repaired.
+
 ## 0.9.5 - 2026-09-09
 
 - Update CrawlKit to v0.15.0 while retaining the existing Go 1.27.1 source-build minimum.

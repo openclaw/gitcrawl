@@ -248,7 +248,7 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return fmt.Errorf("github graphql response missing data")
 	}
-	if err := json.Unmarshal(envelope.Data, out); err != nil {
+	if err := decodeJSON(bytes.NewReader(envelope.Data), out); err != nil {
 		return fmt.Errorf("decode github graphql data: %w", err)
 	}
 	return nil
