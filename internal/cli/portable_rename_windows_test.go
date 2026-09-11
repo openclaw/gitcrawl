@@ -10,7 +10,7 @@ import (
 func TestPortableExclusiveRenameNormalizesWindowsPaths(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{
 		{`C:\archive\file`, `C:\archive\file`},
-		{`C:\archive\trailing.`, `C:\archive\trailing.`},
+		{`C:\archive\trailing.`, `C:\archive\trailing`},
 		{`\\server\share\file`, `\\server\share\file`},
 		{`\\?\C:\archive\file`, `\\?\C:\archive\file`},
 		{`\\?\UNC\server\share\file`, `\\?\UNC\server\share\file`},

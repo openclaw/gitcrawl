@@ -82,7 +82,7 @@ exec "$GITCRAWL_TEST_REAL_GIT" "$@"
 			if existing {
 				stagingParent = target
 			}
-			staging, err := filepath.Glob(filepath.Join(stagingParent, ".checkout.clone-*"))
+			staging, err := filepath.Glob(filepath.Join(stagingParent, ".gitcrawl-clone-*"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,6 +94,26 @@ exec "$GITCRAWL_TEST_REAL_GIT" "$@"
 				t.Fatalf("retry: action=%q err=%v", action, err)
 			}
 			checkOriginal()
+			if err := sqliteStoreHealth(context.Background(), filepath.Join(target, fixture.relative)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestSyncPortableStoreLongDestinationName(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing=%t", existing), func(t *testing.T) {
+			fixture := newPortableRefreshFixture(t, false)
+			target := filepath.Join(t.TempDir(), strings.Repeat("x", 240))
+			if existing {
+				if err := os.Mkdir(target, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if action, err := syncPortableStore(context.Background(), fixture.remote, target); err != nil || action != "cloned" {
+				t.Fatalf("clone into long directory name: %q %v", action, err)
+			}
 			if err := sqliteStoreHealth(context.Background(), filepath.Join(target, fixture.relative)); err != nil {
 				t.Fatal(err)
 			}

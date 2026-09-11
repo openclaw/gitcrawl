@@ -31,7 +31,7 @@ func clonePortableStoreWithRename(ctx context.Context, remoteURL, dir string, re
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read portable clone destination: %w", err)
 	}
-	staging, err := os.MkdirTemp(parent, "."+filepath.Base(dir)+".clone-")
+	staging, err := os.MkdirTemp(parent, ".gitcrawl-clone-")
 	if err != nil {
 		return fmt.Errorf("create portable clone staging directory: %w", err)
 	}
