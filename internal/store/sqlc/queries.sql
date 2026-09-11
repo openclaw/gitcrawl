@@ -16,16 +16,6 @@ select cast(coalesce(max(finished_at), '') as text) as last_sync from sync_runs 
 -- name: PortableExportedAt :one
 select value from portable_metadata where key = 'exported_at';
 
--- name: RepoSyncStateLastSync :one
-select cast(coalesce(
-  max(last_open_close_reconciled_at),
-  max(last_overlapping_open_scan_completed_at),
-  max(last_non_overlapping_scan_completed_at),
-  max(last_full_open_scan_started_at),
-  max(updated_at),
-  ''
-) as text) as last_sync from repo_sync_state;
-
 -- name: UpsertRepository :one
 insert into repositories(owner, name, full_name, github_repo_id, raw_json, updated_at)
 values(sqlc.arg(owner), sqlc.arg(name), sqlc.arg(full_name), sqlc.narg(github_repo_id), sqlc.arg(raw_json), sqlc.arg(updated_at))

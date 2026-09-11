@@ -215,6 +215,21 @@ inventory reports the gzip path and compressed on-disk bytes, with a warning
 explaining that distinction. It never reports an absent logical `.db` as an
 empty, current subscriber.
 
+`status --json` and `doctor --json` report snapshot publication as
+`last_export_at`, separately from `last_sync_at`. The export time comes from
+the snapshot manifest, or from database metadata for legacy pruned stores.
+A runtime only uses the checkout's export time when its recorded source
+identity matches that manifest. A stale runtime does not borrow a newer
+checkout's timestamp.
+
+`last_sync_at` requires a retained successful sync run. Portable exports omit
+run history, so this timestamp is normally absent from subscriber status.
+An old scan checkpoint is not a substitute. Export time establishes when a
+snapshot was produced, not whether all GitHub data was collected. Use
+`coverage` and the relevant thread records to assess the evidence you need;
+`state: current` means the runtime matches its source generation, not that
+every record is current on GitHub.
+
 This is the **legacy reader recovery contract**, separate from strict
 `portable refresh`: a marked malformed store can still be backed up, reset and
 recloned with the existing recovery backoff. Its historical stale-index-lock

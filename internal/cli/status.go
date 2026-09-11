@@ -3,8 +3,11 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/gitcrawl/internal/config"
@@ -18,7 +21,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 	var warnings []string
 	stale := false
 	immutable := false
-	runtimeMirror := false
+	runtimePath := ""
 	_, portable, err := portableStoreRoot(ctx, cfg.DBPath)
 	if err != nil {
 		return control.Status{}, err
@@ -30,7 +33,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		}
 		if _, err := os.Stat(mirror); err == nil {
 			path, reportedPath = mirror, mirror
-			runtimeMirror = true
+			runtimePath = mirror
 			state := readPortableStoreRefreshState(portableStoreRefreshStatePath(mirror))
 			modTime, size, sha, stampErr := portableDBManifestStamp(cfg.DBPath)
 			if stampErr != nil || !portableManifestGenerationUnchanged(state, modTime, size, sha) {
@@ -70,7 +73,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		open := store.OpenReadOnly
 		if immutable {
 			open = store.OpenReadOnlyImmutable
-		} else if runtimeMirror {
+		} else if runtimePath != "" {
 			open = func(ctx context.Context, path string) (*store.Store, error) {
 				return openPortableMirrorReadOnly(ctx, path, cfg.DBPath)
 			}
@@ -88,6 +91,15 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		return control.Status{}, err
 	}
 	status.DBPath = reportedPath
+	if portable && !stale {
+		exportedAt, err := portableExportTime(cfg.DBPath, runtimePath)
+		if err != nil {
+			return control.Status{}, err
+		}
+		if !exportedAt.IsZero() {
+			status.LastExportAt = exportedAt
+		}
+	}
 	out := controlStatus(config.ResolvePath(a.configPath), cfg, status)
 	if stale {
 		out.State = "stale"
@@ -97,4 +109,23 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		out.Databases[0].Kind = "sqlite-gzip"
 	}
 	return out, nil
+}
+
+// A checkout's manifest describes a runtime only while their source identities match.
+func portableExportTime(sourcePath, runtimePath string) (time.Time, error) {
+	manifest, exists, err := readPortableDBManifest(portableDBManifestPath(sourcePath))
+	if err != nil || !exists || manifest.ExportedAt == "" {
+		return time.Time{}, err
+	}
+	if runtimePath != "" {
+		state := readPortableStoreRefreshState(portableStoreRefreshStatePath(runtimePath))
+		if state.MirrorHealthSourceSHA256 == "" || !strings.EqualFold(state.MirrorHealthSourceSHA256, manifest.SHA256) {
+			return time.Time{}, nil
+		}
+	}
+	exportedAt, err := time.Parse(time.RFC3339Nano, manifest.ExportedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("portable manifest exportedAt: %w", err)
+	}
+	return exportedAt, nil
 }

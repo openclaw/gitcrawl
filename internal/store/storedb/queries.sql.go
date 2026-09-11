@@ -1114,24 +1114,6 @@ func (q *Queries) ReopenThreadLocally(ctx context.Context, arg ReopenThreadLocal
 	return result.RowsAffected()
 }
 
-const repoSyncStateLastSync = `-- name: RepoSyncStateLastSync :one
-select cast(coalesce(
-  max(last_open_close_reconciled_at),
-  max(last_overlapping_open_scan_completed_at),
-  max(last_non_overlapping_scan_completed_at),
-  max(last_full_open_scan_started_at),
-  max(updated_at),
-  ''
-) as text) as last_sync from repo_sync_state
-`
-
-func (q *Queries) RepoSyncStateLastSync(ctx context.Context) (string, error) {
-	row := q.db.QueryRowContext(ctx, repoSyncStateLastSync)
-	var last_sync string
-	err := row.Scan(&last_sync)
-	return last_sync, err
-}
-
 const repositoryByFullName = `-- name: RepositoryByFullName :one
 select id, owner, name, full_name, github_repo_id, coalesce(raw_json, '') as raw_json, updated_at
 from repositories
