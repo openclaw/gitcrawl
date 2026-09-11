@@ -3807,13 +3807,7 @@ func syncPortableStore(ctx context.Context, remoteURL, dir string) (string, erro
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", fmt.Errorf("create portable store parent: %w", err)
 	}
-	if err := runGit(ctx, "", "clone", "--depth", "1", "--", remoteURL, dir); err != nil {
-		return "", err
-	}
-	if err := markPortableStoreCheckout(dir); err != nil {
-		return "", err
-	}
-	if err := removePortableSQLiteSidecars(dir); err != nil {
+	if err := clonePortableStore(ctx, remoteURL, dir); err != nil {
 		return "", err
 	}
 	return "cloned", nil
