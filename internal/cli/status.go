@@ -92,12 +92,8 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 	}
 	status.DBPath = reportedPath
 	if portable && !stale {
-		exportedAt, err := portableExportTime(cfg.DBPath, runtimePath)
-		if err != nil {
+		if err := applyPortableExportTime(&status, cfg.DBPath, runtimePath); err != nil {
 			return control.Status{}, err
-		}
-		if !exportedAt.IsZero() {
-			status.LastExportAt = exportedAt
 		}
 	}
 	out := controlStatus(config.ResolvePath(a.configPath), cfg, status)
@@ -112,20 +108,23 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 }
 
 // A checkout's manifest describes a runtime only while their source identities match.
-func portableExportTime(sourcePath, runtimePath string) (time.Time, error) {
+func applyPortableExportTime(status *store.Status, sourcePath, runtimePath string) error {
 	manifest, exists, err := readPortableDBManifest(portableDBManifestPath(sourcePath))
 	if err != nil || !exists || manifest.ExportedAt == "" {
-		return time.Time{}, err
+		return err
 	}
 	if runtimePath != "" {
 		state := readPortableStoreRefreshState(portableStoreRefreshStatePath(runtimePath))
 		if state.MirrorHealthSourceSHA256 == "" || !strings.EqualFold(state.MirrorHealthSourceSHA256, manifest.SHA256) {
-			return time.Time{}, nil
+			return nil
 		}
 	}
 	exportedAt, err := time.Parse(time.RFC3339Nano, manifest.ExportedAt)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("portable manifest exportedAt: %w", err)
+		return fmt.Errorf("portable manifest exportedAt: %w", err)
 	}
-	return exportedAt, nil
+	if !exportedAt.IsZero() {
+		status.LastExportAt = exportedAt
+	}
+	return nil
 }

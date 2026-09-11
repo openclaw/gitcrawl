@@ -257,12 +257,12 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("count clusters: %w", err)
 	}
 	status.ClusterCount = int(clusterCount)
-	var lastSync string
 	if s.hasTable(ctx, "sync_runs") {
-		lastSync, err = s.qsql().MaxSuccessfulSyncFinishedAt(ctx)
+		lastSync, err := s.qsql().MaxSuccessfulSyncFinishedAt(ctx)
 		if err != nil {
 			return Status{}, fmt.Errorf("read last sync: %w", err)
 		}
+		status.LastSyncAt, _ = time.Parse(timeLayout, lastSync)
 	}
 	if s.hasTable(ctx, "portable_metadata") {
 		exportedAt, err := s.qsql().PortableExportedAt(ctx)
@@ -270,12 +270,6 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 			return Status{}, fmt.Errorf("read portable exported timestamp: %w", err)
 		}
 		status.LastExportAt, _ = time.Parse(timeLayout, exportedAt)
-	}
-	if lastSync != "" {
-		parsed, err := time.Parse(timeLayout, lastSync)
-		if err == nil {
-			status.LastSyncAt = parsed
-		}
 	}
 	return status, nil
 }

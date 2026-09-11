@@ -4139,11 +4139,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		}
 		storeStatus, err = rt.Store.Status(ctx)
 		if err == nil && rt.RemoteSource {
-			var exportedAt time.Time
-			exportedAt, err = portableExportTime(rt.SourceDBPath, rt.Config.DBPath)
-			if !exportedAt.IsZero() {
-				storeStatus.LastExportAt = exportedAt
-			}
+			err = applyPortableExportTime(&storeStatus, rt.SourceDBPath, rt.Config.DBPath)
 		}
 		if err != nil {
 			runtimeStatusError = err.Error()

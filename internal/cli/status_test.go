@@ -117,7 +117,7 @@ func TestPortableStatusSeparatesExportFromSync(t *testing.T) {
 	}
 }
 
-func TestPortableExportTime(t *testing.T) {
+func TestApplyPortableExportTime(t *testing.T) {
 	const exportedAt = "2026-06-01T02:03:04.123456789Z"
 	for _, tc := range []struct {
 		name       string
@@ -133,6 +133,7 @@ func TestPortableExportTime(t *testing.T) {
 		{name: "matching runtime", manifest: `{"sha256":"ABC","exportedAt":"` + exportedAt + `"}`, runtime: true, runtimeSHA: "abc", wantTime: true},
 		{name: "stale runtime", manifest: `{"sha256":"abc","exportedAt":"` + exportedAt + `"}`, runtime: true, runtimeSHA: "def"},
 		{name: "unknown runtime source", manifest: `{"exportedAt":"` + exportedAt + `"}`, runtime: true},
+		{name: "zero timestamp", manifest: `{"exportedAt":"0001-01-01T00:00:00Z"}`},
 		{name: "invalid timestamp", manifest: `{"exportedAt":"invalid"}`, wantError: true},
 		{name: "invalid manifest", manifest: `{`, wantError: true},
 	} {
@@ -150,16 +151,19 @@ func TestPortableExportTime(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := portableExportTime(source, runtime)
-			if (err != nil) != tc.wantError {
-				t.Fatalf("error = %v, want error=%t", err, tc.wantError)
-			}
-			if tc.wantTime {
-				if got.Format(time.RFC3339Nano) != exportedAt {
-					t.Fatalf("export time = %s, want %s", got, exportedAt)
+			for _, storedTime := range []time.Time{{}, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)} {
+				status := store.Status{LastExportAt: storedTime}
+				err := applyPortableExportTime(&status, source, runtime)
+				if (err != nil) != tc.wantError {
+					t.Fatalf("error = %v, want error=%t", err, tc.wantError)
 				}
-			} else if !got.IsZero() {
-				t.Fatalf("unexpected export time: %s", got)
+				if tc.wantTime {
+					if status.LastExportAt.Format(time.RFC3339Nano) != exportedAt {
+						t.Fatalf("export time = %s, want %s", status.LastExportAt, exportedAt)
+					}
+				} else if !status.LastExportAt.Equal(storedTime) {
+					t.Fatalf("stored export time changed: got %s, want %s", status.LastExportAt, storedTime)
+				}
 			}
 		})
 	}
