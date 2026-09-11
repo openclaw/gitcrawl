@@ -95,3 +95,19 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
+
+  portable-windows:
+    name: Portable filesystem / windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test exclusive publication and long paths
+        run: go test ./internal/cli -run '^TestPortableExclusiveRename' -count=1
+      - name: Build and smoke test CLI
+        run: |
+          go build -o gitcrawl.exe ./cmd/gitcrawl
+          ./gitcrawl.exe --version

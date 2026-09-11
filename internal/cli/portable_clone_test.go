@@ -3,11 +3,27 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestPortableExclusiveRenameInitialClone(t *testing.T) {
+	fixture := newPortableRefreshFixture(t, false)
+	var result struct {
+		Threads []struct {
+			Number int `json:"number"`
+		} `json:"threads"`
+	}
+	if err := json.Unmarshal(fixture.command(t, "threads", "openclaw/openclaw", "--json"), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Threads) != 1 || result.Threads[0].Number != 1 {
+		t.Fatalf("cloned archive is not readable: %+v", result)
+	}
+}
 
 func TestPortableExclusiveRenamePreservesExistingDestination(t *testing.T) {
 	for _, directory := range []bool{false, true} {
