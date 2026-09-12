@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+**Highlights:** Exact GitHub IDs and retryable portable-store initialization.
+
 - Preserve newly fetched GitHub numeric IDs exactly across REST and GraphQL syncs, including IDs above the floating-point precision limit. Previously stored IDs are not repaired.
+- Stage initial portable-store clones before publication so failed Git clones leave the destination unchanged and initialization can be retried.
+- Update CrawlKit to v0.16.1, x/sys to v0.48.0 (thanks @dependabot), terminal-width and Go support dependencies, and the deadcode checker; retain Go 1.27.1 and SQLite's required libc v1.75.6.
 
 ## 0.9.5 - 2026-09-09
 
