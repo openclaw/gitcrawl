@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.6 - 2026-09-11
 
 **Highlights:** Exact GitHub IDs and retryable portable-store initialization.
