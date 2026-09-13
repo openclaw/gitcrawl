@@ -164,10 +164,6 @@ func TestSemanticArtifactIdentityRetainsStoreHydrationProgressInExport(t *testin
 	sourcePath := filepath.Join(dir, "source.db")
 	st := seedExportSource(t, ctx, sourcePath)
 	defer st.Close()
-	before, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "before")))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := st.DB().ExecContext(ctx, `
 		create table gitcrawl_store_hydration_progress(
 			repo_id integer not null references repositories(id) on delete cascade,
@@ -180,7 +176,11 @@ func TestSemanticArtifactIdentityRetainsStoreHydrationProgressInExport(t *testin
 	`); err != nil {
 		t.Fatal(err)
 	}
-	for _, cursor := range []int{10, 30} {
+	before, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "before")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cursor := range []int{30, 40} {
 		if _, err := st.DB().ExecContext(ctx, `update gitcrawl_store_hydration_progress set cursor = ? where phase = 'historical-pr-details'`, cursor); err != nil {
 			t.Fatal(err)
 		}
@@ -207,6 +207,16 @@ func TestSemanticArtifactIdentityRetainsStoreHydrationProgressInExport(t *testin
 		if historical != cursor || active != 20 {
 			t.Fatalf("exported hydration progress = (%d, %d), want (%d, 20)", historical, active, cursor)
 		}
+	}
+	if _, err := st.DB().ExecContext(ctx, `update threads set title = 'changed source fact' where id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "source-change")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.ArtifactID == before.ArtifactID {
+		t.Fatal("hydration progress table hid a meaningful source change")
 	}
 }
 

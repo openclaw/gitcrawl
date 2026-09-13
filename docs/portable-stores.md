@@ -369,13 +369,18 @@ tables and columns are skipped safely. The `current-state-semantic-v1` policy is
 
 | Action | Tables or columns |
 | --- | --- |
-| Delete local-only tables when present | `observation_schema_convergence`, `repo_pipeline_state`, `repo_sync_state`, `sqlite_stat1`, `sqlite_stat4`, `thread_observation_sequence`, `thread_child_observation_reservations`, `workflow_run_observation_reservations`, `pull_request_review_thread_syncs` |
+| Delete local-only tables when present | `gitcrawl_store_hydration_progress`, `observation_schema_convergence`, `repo_pipeline_state`, `repo_sync_state`, `sqlite_stat1`, `sqlite_stat4`, `thread_observation_sequence`, `thread_child_observation_reservations`, `workflow_run_observation_reservations`, `pull_request_review_thread_syncs` |
 | Clear repository ingestion time | `repositories.updated_at` |
 | Clear thread ingestion/order fields | `threads.first_pulled_at`, `last_pulled_at`, `updated_at`, `observation_sequence`, `evidence_observation_sequence`, `evidence_source_updated_at` |
 | Clear revision/fingerprint record bookkeeping | `thread_revisions.observation_sequence`, `thread_revisions.created_at`, `thread_fingerprints.created_at` |
 | Clear membership ordering but retain membership | `thread_child_observation_memberships.observation_sequence` becomes `1`; `member_ids_json` is retained |
 | Clear PR/workflow fetch and local record times | `pull_request_details.fetched_at` and `updated_at`; `pull_request_files.fetched_at`; `pull_request_commits.fetched_at`; `pull_request_checks.fetched_at`; `pull_request_review_threads.fetched_at`; `pull_request_review_thread_revisions.fetched_at` and `recorded_at`; `github_workflow_runs.fetched_at` |
 | Preserve tombstone state without local observation time | Non-NULL `threads.closed_at_local` and `deleted_at` values on comments, PR commits, review threads, and review-thread revisions become an empty non-NULL marker; NULL remains NULL |
+
+`gitcrawl_store_hydration_progress` belongs to the gitcrawl-store producer.
+Its checkpoints remain in runtime caches and generated portable SQLite files.
+Cursor-only changes do not require publishing a new archive, so a publisher's
+semantic no-op can leave the published checkpoint behind the runtime cache.
 
 The policy also removes the named observation-convergence triggers associated
 with the deleted allocator/reservation state and normalizes SQLite's transient
