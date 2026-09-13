@@ -75,7 +75,7 @@ console.log(`built docs site: ${path.relative(root, outDir)}`);
 function llmsTxt() {
   const origin = siteBase.replace(/\/$/, "");
   const source = repoBase;
-  const name = path.basename(root);
+  const name = "gitcrawl";
   const description = `${name} documentation index.`;
   const docPages = docsLlmsPages().map((page) => `- ${page.title}: ${pageUrl(origin, page.outRel)}`);
   const lines = [
@@ -432,7 +432,7 @@ function inline(text, currentRel) {
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<em>$2</em>")
     .replace(/(^|[^_])_([^_\s][^_]*?)_(?!_)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${escapeAttr(rewriteHref(href, currentRel))}">${label}</a>`)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${escapeAttr(rewriteHref(decodeHtmlText(href), currentRel))}">${label}</a>`)
     .replace(/&lt;(https?:\/\/[^\s<>]+)&gt;/g, '<a href="$1">$1</a>');
   return out.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[Number(i)]);
 }
@@ -647,8 +647,8 @@ function validateLinks(outputDir) {
   for (const file of allHtml(outputDir)) {
     const html = fs.readFileSync(file, "utf8");
     for (const match of html.matchAll(/href="([^"]+)"/g)) {
-      const href = match[1];
-      if (/^(#|https?:|mailto:|tel:|javascript:)/.test(href)) continue;
+      const href = decodeHtmlText(match[1]);
+      if (/^(https?:|mailto:|tel:|javascript:)/.test(href)) continue;
       const [rawPath, anchor = ""] = href.split("#");
       const targetPath = rawPath
         ? path.resolve(path.dirname(file), rawPath)
@@ -661,8 +661,15 @@ function validateLinks(outputDir) {
         continue;
       }
       if (anchor) {
+        let fragment;
+        try {
+          fragment = escapeAttr(decodeURIComponent(anchor));
+        } catch {
+          failures.push(`${path.relative(outputDir, file)}: ${href} -> invalid anchor encoding`);
+          continue;
+        }
         const targetHtml = fs.readFileSync(target, "utf8");
-        if (!targetHtml.includes(`id="${anchor}"`) && !targetHtml.includes(`name="${anchor}"`)) {
+        if (!targetHtml.includes(`id="${fragment}"`) && !targetHtml.includes(`name="${fragment}"`)) {
           failures.push(`${path.relative(outputDir, file)}: ${href} -> missing anchor`);
         }
       }
