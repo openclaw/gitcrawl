@@ -118,7 +118,7 @@ func (a *App) runTUI(ctx context.Context, args []string) error {
 			RepoID:        repo.ID,
 			IncludeClosed: showClosed,
 			MinSize:       1,
-			Limit:         maxInt(defaultTUIWorkingSetLimit, limit),
+			Limit:         max(defaultTUIWorkingSetLimit, limit),
 			Sort:          sort,
 		})
 		if err != nil {
