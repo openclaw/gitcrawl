@@ -404,12 +404,14 @@ func (c *Client) paginateEnvelope(ctx context.Context, firstPath string, limit i
 func (c *Client) paginatePages(ctx context.Context, firstPath string, limit int, expectedItems int, reporter Reporter, decode func(*http.Response) ([]map[string]any, error)) ([]map[string]any, error) {
 	var out []map[string]any
 	nextPath := firstPath
+	visited := make(map[string]struct{})
 	page := 0
 	totalPages := 0
 	if expectedItems > 0 {
 		totalPages = (expectedItems + 99) / 100
 	}
 	for nextPath != "" {
+		visited[nextPath] = struct{}{}
 		page++
 		resp, err := c.do(ctx, http.MethodGet, nextPath, nil, reporter)
 		if err != nil {
@@ -441,6 +443,9 @@ func (c *Client) paginatePages(ctx context.Context, firstPath string, limit int,
 			break
 		}
 		nextPath = nextPage(linkHeader, c.baseURL)
+		if _, repeated := visited[nextPath]; repeated {
+			return nil, fmt.Errorf("github pagination repeated next link")
+		}
 		if nextPath != "" && c.pageDelay > 0 {
 			select {
 			case <-ctx.Done():

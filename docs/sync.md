@@ -144,6 +144,11 @@ gitcrawl sync owner/repo --limit 200
 
 `--limit` caps the number of rows fetched in this invocation. The underlying GitHub paginator surfaces total page counts in run records and honors GitHub's `Retry-After` and rate-limit response headers, so partial syncs interrupted by rate limiting resume cleanly.
 
+REST pagination stops with an error if a `next` link returns to an already
+fetched page. This prevents repeated requests and avoids treating a cyclic
+response as a complete page collection. Retry when GitHub or the proxy returns
+advancing links.
+
 ## JSON output
 
 The result reports processed thread and hydration counts, not separate insert
