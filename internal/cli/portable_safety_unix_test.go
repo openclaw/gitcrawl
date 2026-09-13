@@ -230,18 +230,7 @@ wait
 	}
 	done := make(chan error, 1)
 	go func() { done <- runPortableGit(ctx, dir, io.Discard, "fetch") }()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, err := os.Stat(ready); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			cancel()
-			<-done
-			t.Fatal("child not ready")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForPortableGitReady(t, ready, cancel, done)
 	started := time.Now()
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
@@ -269,13 +258,37 @@ wait
 	}
 }
 
+func waitForPortableGitReady(t *testing.T, ready string, cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("child not ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestPortableGitGrowthCancelsOnlyOwnedProcess(t *testing.T) {
 	dir := t.TempDir()
 	git := filepath.Join(t.TempDir(), "git")
-	if err := os.WriteFile(git, []byte("#!/bin/sh\ntrap 'exit 143' TERM\ndd if=/dev/zero of=owned-growth bs=1024 count=64 2>/dev/null\nsleep 30 & wait\n"), 0o755); err != nil {
+	growth := filepath.Join(filepath.Dir(git), "growth")
+	ready := filepath.Join(filepath.Dir(git), "ready")
+	if err := os.WriteFile(growth, make([]byte, 64<<10), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, err := portableGitContext(context.Background(), git)
+	t.Setenv("GITCRAWL_TEST_READY", ready)
+	if err := os.WriteFile(git, []byte("#!/bin/sh\ntrap 'exit 143' TERM\necho ready > \"$GITCRAWL_TEST_READY\"\nsleep 30 & wait\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx, err := portableGitContext(ctx, git)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,16 +298,26 @@ func TestPortableGitGrowthCancelsOnlyOwnedProcess(t *testing.T) {
 	}
 	ctx, stop := budget.monitor(ctx)
 	defer stop()
+	done := make(chan error, 1)
+	go func() { done <- runPortableGit(ctx, dir, io.Discard, "fetch") }()
+	waitForPortableGitReady(t, ready, cancel, done)
+	// Time cancellation after startup, and publish all 64 KiB together: partial
+	// writes can correctly trigger the 32 KiB limit before reaching that size.
 	started := time.Now()
-	err = runPortableGit(ctx, dir, io.Discard, "fetch")
+	if err := os.Rename(growth, filepath.Join(dir, "owned-growth")); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	err = <-done
 	if err == nil || !strings.Contains(err.Error(), "growth budget") {
 		t.Fatalf("growth: %v", err)
 	}
 	if time.Since(started) > 3*time.Second {
 		t.Fatal("growth cancellation exceeded bound")
 	}
-	if budget.snapshot().PeakGrowth < 64<<10 {
-		t.Fatal("missing growth observation")
+	if observed := budget.snapshot().PeakGrowth; observed < 64<<10 {
+		t.Fatalf("peak growth = %d, want at least %d", observed, 64<<10)
 	}
 }
 

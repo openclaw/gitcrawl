@@ -18,6 +18,7 @@ jobs:
   test:
     name: Go / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -27,10 +28,10 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -39,11 +40,13 @@ jobs:
         run: go mod download
 
       - name: Check module tidiness
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
       - name: Check formatting
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then
@@ -55,7 +58,7 @@ jobs:
         run: go vet ./...
 
       - name: Vulnerability scan
-        run: GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        run: GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
       - name: Deadcode
         run: |
@@ -90,10 +93,11 @@ jobs:
         run: ./scripts/test-release.sh
 
       - name: Snapshot release build
-        uses: goreleaser/goreleaser-action@v7.2.3
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "v2.18.1"
           args: release --snapshot --clean --skip=publish
 
   portable-windows:
@@ -101,8 +105,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: Test exclusive publication and long paths
@@ -111,3 +115,15 @@ jobs:
         run: |
           go build -o gitcrawl.exe ./cmd/gitcrawl
           ./gitcrawl.exe --version
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Build documentation and validate links
+        run: make docs

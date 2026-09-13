@@ -1,9 +1,10 @@
 BINARY := gitcrawl
 VERSION ?= dev
+NODE ?= node
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate-sqlc tidy-check fmt lint test test-coverage run clean smoke test-release check snapshot release verify-release release-artifacts release-snapshot
+.PHONY: help build docs generate-sqlc tidy-check fmt lint test test-coverage run clean smoke test-release check snapshot release verify-release release-artifacts release-snapshot
 
 help:
 	@printf '%s\n' \
@@ -11,6 +12,7 @@ help:
 		'  help              Print available targets (default).' \
 		'  build             Build the CLI into bin/$(BINARY).' \
 		'  test              Run the full Go test suite.' \
+		'  docs              Build documentation and validate links.' \
 		'  fmt               Check Go formatting.' \
 		'  lint              Run vet, vulnerability, and dead-code checks.' \
 		'  check             Run every local gate enforced by CI.' \
@@ -45,7 +47,7 @@ fmt:
 
 lint:
 	go vet ./...
-	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' 0; \
@@ -78,7 +80,10 @@ smoke: build
 test-release:
 	./scripts/test-release.sh
 
-check: tidy-check fmt lint test-coverage smoke test-release snapshot
+docs:
+	$(NODE) scripts/build-docs-site.mjs
+
+check: tidy-check fmt lint test-coverage smoke test-release docs snapshot
 
 snapshot:
 	GOWORK=off goreleaser release --snapshot --clean --skip=publish

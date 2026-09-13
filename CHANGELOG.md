@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate documentation builds before merge, pin CI actions and build tools to verified releases, update govulncheck to v1.8.0, and avoid duplicate cross-platform snapshot builds.
+
 ## 0.9.6 - 2026-09-11
 
 **Highlights:** Exact GitHub IDs and retryable portable-store initialization.
