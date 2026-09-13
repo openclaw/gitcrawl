@@ -386,6 +386,135 @@ func TestSyncPersistenceBookkeepingFailurePreservesOriginalErrorAndPriorCommit(t
 	assertTableRowCount(t, st, "sync_attempt_failures", 0)
 }
 
+func TestSyncChildFailureResolvesOnlyCommittedParentFailure(t *testing.T) {
+	for _, fixture := range []struct {
+		number    int
+		operation string
+		guard     string
+	}{
+		{7, "issue_comments", ""},
+		{8, "issue_comments", ""},
+		{8, "pull_reviews", ""},
+		{8, "pull_review_comments", ""},
+		{8, "pull_review_threads", ""},
+		{8, "pull_request_metadata", ""},
+		{8, "pull_request_details", ""},
+		{8, "issue_comments", "stale"},
+		{8, "issue_comments", "failure rollback"},
+		{8, "issue_comments", "resolution rollback"},
+	} {
+		t.Run(fmt.Sprint(fixture), func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			client := &partialGitHub{failNumber: fixture.number, operation: "issue"}
+			s := New(client, st)
+			now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
+			s.now = func() time.Time { return now }
+			opts := Options{Owner: "fixture", Repo: "repo", Numbers: []int{fixture.number},
+				IncludeComments: true, IncludePRMetadata: true,
+				IncludePRDetails: fixture.operation != "pull_request_metadata"}
+			if _, err := s.Sync(ctx, opts); err == nil {
+				t.Fatal("initial parent fetch unexpectedly succeeded")
+			}
+			repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			watermark, err := st.ClosedSweepWatermark(ctx, repo.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.operation = fixture.operation
+			switch fixture.guard {
+			case "stale":
+				row, err := client.GetIssue(ctx, opts.Owner, opts.Repo, fixture.number, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				row["title"], row["updated_at"] = "newer retained parent", "2026-07-15T00:00:00Z"
+				if _, err := st.UpsertThread(ctx, mapIssueToThread(repo.ID, row, now.Format(time.RFC3339Nano)),
+					store.UpsertThreadOptions{IncompleteEvidence: true}); err != nil {
+					t.Fatal(err)
+				}
+			case "failure rollback":
+				if _, err := st.DB().ExecContext(ctx, `create trigger reject_child_failure before insert on sync_attempt_failures
+					when new.operation = 'issue_comments'
+					begin select raise(abort, 'failure ledger rejected'); end`); err != nil {
+					t.Fatal(err)
+				}
+			case "resolution rollback":
+				if _, err := st.DB().ExecContext(ctx, `create trigger reject_parent_resolution before update on sync_attempt_failures
+					when new.operation = 'issue' and new.resolved_at is not null
+					begin select raise(abort, 'parent resolution rejected'); end`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			now = now.Add(time.Hour)
+			stats, err := s.Sync(ctx, opts)
+			if err == nil || !strings.Contains(err.Error(), fixture.operation+" unavailable") ||
+				stats.ThreadsSynced != 0 || stats.EvidenceObserved != 0 || stats.ClosedSweepThrough != "" {
+				t.Fatalf("child failure or incomplete counts lost: %+v err=%v", stats, err)
+			}
+			rollback := strings.HasSuffix(fixture.guard, "rollback")
+			if rollback && !strings.Contains(err.Error(), "rejected") {
+				t.Fatalf("bookkeeping failure lost: %v", err)
+			}
+			failures, err := st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID, IncludeResolved: true})
+			wantFailures := 2
+			if rollback {
+				wantFailures = 1
+			}
+			if err != nil || len(failures) != wantFailures {
+				t.Fatalf("failure history=%+v err=%v", failures, err)
+			}
+			for _, failure := range failures {
+				switch failure.Operation {
+				case "issue":
+					if (failure.ResolvedAt != "") != (fixture.guard == "") {
+						t.Fatalf("parent resolution disagrees with committed observation: %+v", failure)
+					}
+				case fixture.operation:
+					if failure.ResolvedAt != "" || failure.ThreadID == 0 {
+						t.Fatalf("failed child incorrectly resolved or detached: %+v", failure)
+					}
+				default:
+					t.Fatalf("unexpected failure family: %+v", failure)
+				}
+			}
+			wantThreads := 1
+			if rollback {
+				wantThreads = 0
+			}
+			assertTableRowCount(t, st, "threads", wantThreads)
+			if wantThreads > 0 {
+				var title, evidenceAt string
+				var sequence, evidenceSequence int64
+				if err := st.DB().QueryRowContext(ctx, `select title, observation_sequence,
+					evidence_source_updated_at, evidence_observation_sequence from threads`).Scan(
+					&title, &sequence, &evidenceAt, &evidenceSequence); err != nil {
+					t.Fatal(err)
+				}
+				if sequence >= 0 || evidenceSequence != 0 || evidenceAt != "" ||
+					fixture.guard == "stale" && title != "newer retained parent" {
+					t.Fatalf("parent freshness overclaimed: title=%q sequence=%d evidence=%d/%q", title, sequence, evidenceSequence, evidenceAt)
+				}
+			}
+			for _, table := range []string{"comments", "documents", "thread_revisions", "thread_fingerprints", "thread_child_observation_reservations"} {
+				assertTableRowCount(t, st, table, 0)
+			}
+			assertNoSuccessfulSync(t, st, repo.ID)
+			after, err := st.ClosedSweepWatermark(ctx, repo.ID)
+			if err != nil || !after.Equal(watermark) {
+				t.Fatalf("failed retry advanced checkpoint: before=%v after=%v err=%v", watermark, after, err)
+			}
+		})
+	}
+}
+
 func TestSyncNoPersistedFamilyDoesNotResolveFailures(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))

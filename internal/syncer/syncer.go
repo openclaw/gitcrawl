@@ -664,12 +664,20 @@ func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw
 		if row != nil {
 			thread := mapIssueToThread(repoID, row, now)
 			_, hasDraft := row["draft"]
-			threadID, err = st.UpsertThread(recordCtx, thread, store.UpsertThreadOptions{
+			upsert, err := st.UpsertThreadObservation(recordCtx, thread, store.UpsertThreadOptions{
 				IncompleteEvidence: true,
 				PreserveDraft:      thread.Kind == "pull_request" && !hasDraft,
 			})
 			if err != nil {
 				return err
+			}
+			threadID = upsert.ID
+			// The parent is retained even when children fail. Resolve only its
+			// applied observation, atomically with the failed-child bookkeeping.
+			if upsert.Applied {
+				if _, err := st.ResolveSyncAttemptFailures(recordCtx, repoID, number, now, "issue"); err != nil {
+					return err
+				}
 			}
 		} else {
 			threads, err := st.ListThreadsFiltered(recordCtx, store.ThreadListOptions{
