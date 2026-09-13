@@ -81,6 +81,7 @@ test-release:
 	./scripts/test-release.sh
 
 docs:
+	$(NODE) --test scripts/build-docs-site.test.mjs
 	$(NODE) scripts/build-docs-site.mjs
 
 check: tidy-check fmt lint test-coverage smoke test-release docs snapshot
