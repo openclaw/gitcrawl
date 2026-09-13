@@ -28,7 +28,7 @@ A sync writes:
 - `thread_revisions` — immutable revisions with content-addressed canonical evidence payloads when fully hydrated thread or review evidence changes
 - `thread_fingerprints` — one deterministic `thread-fingerprint-v2` row for each persisted revision
 - `documents` — canonical thread documents (when bodies change)
-- `run_records` — sync run statistics
+- `sync_runs` — sync run statistics and retry checkpoints
 
 Revision and fingerprint production fails closed on incomplete evidence. Issues require
 `--include-comments`; pull requests require both `--include-comments` and
@@ -90,7 +90,8 @@ observation ordering. It does not fetch, clear, or mark files, commits, checks,
 workflow runs, or review-thread resolution as fresh. Comments remain independent:
 add `--include-comments` when needed. Selecting both hydration modes uses full
 `pr-details` hydration. Metadata-only hydration does not create full PR revisions
-or fingerprints, and it resolves only earlier metadata-fetch failures.
+or fingerprints. It resolves PR metadata-fetch failures, not failures of omitted
+child collections.
 
 Full PR details also populate `pull_request_files`, `pull_request_commits`,
 `pull_request_checks`, and `github_workflow_runs` for local review and search.
@@ -108,7 +109,40 @@ the incomplete review-thread response is not saved as complete evidence.
 
 Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness after a sync. It reports issue, PR, comment, and review counts alongside hydrated PR detail rows, missing PR details, known failed hydrations, and detail-table row counts per repository. The additive `enrichment` object exposes supported, eligible, covered, fresh, missing, stale, completeness, ratios, and latest timestamps for revisions, fingerprints, key summaries, clusters, and PR details. Use `--repos owner/a,owner/b` to compare selected repositories and `--min-missing-pr-details N` to focus backfill work on repositories with gaps.
 
-`gitcrawl sync-failures owner/repo --json` lists unresolved PR hydration failures with their operation, error class and message, timestamps, and retry count. Add `--include-resolved` to inspect failures cleared by a later successful hydration. This operational ledger stays local when `portable prune` runs unless the publisher explicitly passes `--include-sync-failures`, which retains the ledger only after replacing every error message with a redaction marker.
+`gitcrawl sync-failures owner/repo --json` lists unresolved issue, comment, and PR hydration failures with their operation, error class and message, timestamps, and retry count. Add `--include-resolved` to inspect failures cleared by a later successful hydration of that same family. This operational ledger stays local when `portable prune` runs unless the publisher explicitly passes `--include-sync-failures`, which retains the ledger only after replacing every error message with a redaction marker.
+
+## Partial failures
+
+Each completed issue or PR commits atomically with its requested children,
+document, revision, fingerprint, and failure resolutions. A failed item does not
+roll back completed siblings. Shared-head workflow observations are consolidated
+before those writes, so sibling ordering cannot replace a newer snapshot.
+A consolidation failure excludes only its shared-head group, records those
+items as failed PR-detail hydrations, and preserves unrelated completed items.
+
+An item fetch failure records its actual operation: `issue`, `issue_comments`,
+`pull_reviews`, `pull_review_comments`, `pull_review_threads`,
+`pull_request_metadata`, or `pull_request_details`. A failed issue lookup does
+not create a thread stub. Failed child fetches can retain the observed parent
+metadata, but do not replace incomplete child collections or certify complete
+evidence. Cancellation stops further work; transactions already committed remain.
+A quota-reserve failure also stops new acquisition, including quota probes.
+Completed payloads can still commit. Skipped requests are not recorded as
+failures; shared-head groups that still need verification remain uncommitted.
+
+An item transaction failure records each requested operation after rollback,
+with only an existing parent reference when available. It does not recreate the
+rolled-back item. A retry resolves only the families it actually persists:
+metadata-only retries leave comments and full-detail failures unresolved.
+
+An incomplete batch exits nonzero and never records a successful sync or advances
+the closed-sweep watermark. Before partial writes, archives without a recorded
+watermark retain their previous retry lower bound as a `checkpoint` in
+`sync_runs`. A new archive uses the default 24-hour lower bound. This checkpoint
+is not successful list coverage or freshness. Retry the failed numbers with the
+same hydration flags after resolving the reported cause.
+Older binaries can read these archives but do not honor the retry checkpoint
+when writing. Do not downgrade the writer to resume a partially completed sync.
 
 `--include-code` is accepted for compatibility but is currently a no-op.
 
@@ -176,6 +210,15 @@ The full result also includes PR-detail and enrichment counters, closure and
 stale-observation counts, the requested scope when present, and the database
 write destination. Use `gitcrawl runs owner/repo --kind sync --json` for
 recorded run IDs.
+
+After partial persistence, `sync --json` still emits committed counts, but exits
+nonzero and leaves progress marked `failed`. `fill-pr-details --json` likewise
+reports committed `filled` and remaining selected items, including a partially
+completed batch. A quota stop exits nonzero with
+`stopped_reason: "rate-limit-reserve"`; other sync failures use `"sync-failed"`.
+The partial batch and final result retain the stopping request's quota snapshot
+without a subsequent credential or quota lookup.
+Automation must check the exit status, not treat a JSON result as success.
 
 ## Common workflows
 

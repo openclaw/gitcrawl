@@ -266,11 +266,16 @@ func (s *Syncer) workflowSnapshotObservation(
 	return sourceUpdatedAt, true, baseline, deletedRunIDs, nil
 }
 
+var errWorkflowVerificationNotAttempted = errors.New("workflow verification not attempted after acquisition stopped")
+
+// A present index excludes that payload. A nil error means verification was
+// deliberately not attempted, so it must not create an acquisition failure.
 func (s *Syncer) consolidateWorkflowSnapshots(
 	ctx context.Context,
 	options Options,
 	payloads []threadSyncPayload,
-) error {
+	allowRequests bool,
+) map[int]error {
 	type snapshotGroup struct {
 		headSHA  string
 		baseline store.WorkflowRunSnapshotState
@@ -309,108 +314,91 @@ func (s *Syncer) consolidateWorkflowSnapshots(
 		groups[groupIndex].indices = append(groups[groupIndex].indices, index)
 	}
 
+	var failures map[int]error
 	for _, group := range groups {
 		if len(group.indices) < 2 {
 			continue
 		}
-		observationIndices := append([]int(nil), group.indices...)
-		sort.SliceStable(observationIndices, func(i, j int) bool {
-			left := payloads[observationIndices[i]].pullDetails.workflowObservationOrder
-			right := payloads[observationIndices[j]].pullDetails.workflowObservationOrder
-			if left <= 0 {
-				left = observationIndices[i] + 1
-			}
-			if right <= 0 {
-				right = observationIndices[j] + 1
-			}
-			return left < right
-		})
-		sourceUpdatedAt := ""
-		rowsByID := make(map[string]map[string]any)
-		deletedRunIDs := make(map[string]struct{})
-		observedRunIDs := make(map[string]struct{})
-		laterAbsentRunIDs := make(map[string]struct{})
-		for _, index := range observationIndices {
-			rows := &payloads[index].pullDetails
-			var err error
-			sourceUpdatedAt, err = latestWorkflowTimestamp(
-				sourceUpdatedAt,
-				rows.workflowSourceUpdatedAt,
-			)
-			if err != nil {
-				return err
-			}
-			for _, runID := range rows.workflowDeletedRunIDs {
-				if runID != "" {
-					deletedRunIDs[runID] = struct{}{}
-				}
-			}
-			presentRunIDs := make(map[string]struct{}, len(rows.runsRaw))
-			for _, row := range rows.runsRaw {
-				runID := jsonID(row["id"])
-				if runID == "" {
-					continue
-				}
-				presentRunIDs[runID] = struct{}{}
-				existing, found := rowsByID[runID]
-				if !found {
-					rowsByID[runID] = row
-					continue
-				}
-				incomingSource, err := workflowRunTimestamp(
-					stringValue(row["updated_at"]),
-					stringValue(row["created_at"]),
-				)
-				if err != nil {
-					return fmt.Errorf("workflow run %s source: %w", runID, err)
-				}
-				existingSource, err := workflowRunTimestamp(
-					stringValue(existing["updated_at"]),
-					stringValue(existing["created_at"]),
-				)
-				if err != nil {
-					return fmt.Errorf("workflow run %s source: %w", runID, err)
-				}
-				switch {
-				case workflowTimestampBefore(existingSource, incomingSource):
-					rowsByID[runID] = row
-				case workflowTimestampBefore(incomingSource, existingSource):
-				default:
-					if mustJSON(existing) != mustJSON(row) {
-						return fmt.Errorf(
-							"conflicting workflow run %s observations share one sync generation",
-							runID,
-						)
-					}
-				}
-			}
-			for runID := range observedRunIDs {
-				if _, present := presentRunIDs[runID]; !present {
-					laterAbsentRunIDs[runID] = struct{}{}
-				}
-			}
-			for runID := range presentRunIDs {
-				observedRunIDs[runID] = struct{}{}
+		err := s.consolidateWorkflowSnapshotGroup(ctx, options, payloads, group.indices, group.headSHA, allowRequests)
+		if err == nil {
+			continue
+		}
+		if failures == nil {
+			failures = make(map[int]error)
+		}
+		var reserveErr *gh.RateLimitReserveError
+		if errors.As(err, &reserveErr) || ctx.Err() != nil {
+			allowRequests = false
+		}
+		if errors.Is(err, errWorkflowVerificationNotAttempted) {
+			err = nil
+		}
+		for _, index := range group.indices {
+			failures[index] = err
+		}
+	}
+	return failures
+}
+
+func (s *Syncer) consolidateWorkflowSnapshotGroup(
+	ctx context.Context,
+	options Options,
+	payloads []threadSyncPayload,
+	indices []int,
+	headSHA string,
+	allowRequests bool,
+) error {
+	observationIndices := append([]int(nil), indices...)
+	sort.SliceStable(observationIndices, func(i, j int) bool {
+		left := payloads[observationIndices[i]].pullDetails.workflowObservationOrder
+		right := payloads[observationIndices[j]].pullDetails.workflowObservationOrder
+		if left <= 0 {
+			left = observationIndices[i] + 1
+		}
+		if right <= 0 {
+			right = observationIndices[j] + 1
+		}
+		return left < right
+	})
+	sourceUpdatedAt := ""
+	rowsByID := make(map[string]map[string]any)
+	deletedRunIDs := make(map[string]struct{})
+	observedRunIDs := make(map[string]struct{})
+	laterAbsentRunIDs := make(map[string]struct{})
+	for _, index := range observationIndices {
+		rows := &payloads[index].pullDetails
+		var err error
+		sourceUpdatedAt, err = latestWorkflowTimestamp(
+			sourceUpdatedAt,
+			rows.workflowSourceUpdatedAt,
+		)
+		if err != nil {
+			return err
+		}
+		for _, runID := range rows.workflowDeletedRunIDs {
+			if runID != "" {
+				deletedRunIDs[runID] = struct{}{}
 			}
 		}
-		for runID := range laterAbsentRunIDs {
-			if _, deleted := deletedRunIDs[runID]; deleted {
+		presentRunIDs := make(map[string]struct{}, len(rows.runsRaw))
+		for _, row := range rows.runsRaw {
+			runID := jsonID(row["id"])
+			if runID == "" {
 				continue
 			}
-			exact, deleted, err := s.verifySiblingWorkflowRunDeletion(
-				ctx,
-				options,
-				group.headSHA,
-				runID,
+			presentRunIDs[runID] = struct{}{}
+			existing, found := rowsByID[runID]
+			if !found {
+				rowsByID[runID] = row
+				continue
+			}
+			incomingSource, err := workflowRunTimestamp(
+				stringValue(row["updated_at"]),
+				stringValue(row["created_at"]),
 			)
 			if err != nil {
-				return err
+				return fmt.Errorf("workflow run %s source: %w", runID, err)
 			}
-			if deleted {
-				deletedRunIDs[runID] = struct{}{}
-				continue
-			}
-			existing := rowsByID[runID]
 			existingSource, err := workflowRunTimestamp(
 				stringValue(existing["updated_at"]),
 				stringValue(existing["created_at"]),
@@ -418,52 +406,101 @@ func (s *Syncer) consolidateWorkflowSnapshots(
 			if err != nil {
 				return fmt.Errorf("workflow run %s source: %w", runID, err)
 			}
-			exactSource, err := workflowRunTimestamp(
-				stringValue(exact["updated_at"]),
-				stringValue(exact["created_at"]),
-			)
-			if err != nil {
-				return fmt.Errorf("exact workflow run %s source: %w", runID, err)
-			}
-			sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, exactSource)
-			if err != nil {
-				return err
-			}
-			if workflowTimestampBefore(existingSource, exactSource) {
-				merged := make(map[string]any, len(existing)+len(exact))
-				for key, value := range existing {
-					merged[key] = value
+			switch {
+			case workflowTimestampBefore(existingSource, incomingSource):
+				rowsByID[runID] = row
+			case workflowTimestampBefore(incomingSource, existingSource):
+			default:
+				if mustJSON(existing) != mustJSON(row) {
+					return fmt.Errorf(
+						"conflicting workflow run %s observations share one sync generation",
+						runID,
+					)
 				}
-				for key, value := range exact {
-					merged[key] = value
-				}
-				rowsByID[runID] = merged
 			}
 		}
-		for runID := range deletedRunIDs {
-			delete(rowsByID, runID)
+		for runID := range observedRunIDs {
+			if _, present := presentRunIDs[runID]; !present {
+				laterAbsentRunIDs[runID] = struct{}{}
+			}
 		}
+		for runID := range presentRunIDs {
+			observedRunIDs[runID] = struct{}{}
+		}
+	}
+	for runID := range laterAbsentRunIDs {
+		if _, deleted := deletedRunIDs[runID]; deleted {
+			continue
+		}
+		if !allowRequests {
+			return errWorkflowVerificationNotAttempted
+		}
+		exact, deleted, err := s.verifySiblingWorkflowRunDeletion(
+			ctx,
+			options,
+			headSHA,
+			runID,
+		)
+		if err != nil {
+			return err
+		}
+		if deleted {
+			deletedRunIDs[runID] = struct{}{}
+			continue
+		}
+		existing := rowsByID[runID]
+		existingSource, err := workflowRunTimestamp(
+			stringValue(existing["updated_at"]),
+			stringValue(existing["created_at"]),
+		)
+		if err != nil {
+			return fmt.Errorf("workflow run %s source: %w", runID, err)
+		}
+		exactSource, err := workflowRunTimestamp(
+			stringValue(exact["updated_at"]),
+			stringValue(exact["created_at"]),
+		)
+		if err != nil {
+			return fmt.Errorf("exact workflow run %s source: %w", runID, err)
+		}
+		sourceUpdatedAt, err = latestWorkflowTimestamp(sourceUpdatedAt, exactSource)
+		if err != nil {
+			return err
+		}
+		if workflowTimestampBefore(existingSource, exactSource) {
+			merged := make(map[string]any, len(existing)+len(exact))
+			for key, value := range existing {
+				merged[key] = value
+			}
+			for key, value := range exact {
+				merged[key] = value
+			}
+			rowsByID[runID] = merged
+		}
+	}
+	for runID := range deletedRunIDs {
+		delete(rowsByID, runID)
+	}
 
-		runIDs := make([]string, 0, len(rowsByID))
-		for runID := range rowsByID {
-			runIDs = append(runIDs, runID)
-		}
-		sort.Strings(runIDs)
-		consolidatedRows := make([]map[string]any, 0, len(runIDs))
-		for _, runID := range runIDs {
-			consolidatedRows = append(consolidatedRows, rowsByID[runID])
-		}
-		tombstones := make([]string, 0, len(deletedRunIDs))
-		for runID := range deletedRunIDs {
-			tombstones = append(tombstones, runID)
-		}
-		sort.Strings(tombstones)
-		for _, index := range group.indices {
-			rows := &payloads[index].pullDetails
-			rows.workflowSourceUpdatedAt = sourceUpdatedAt
-			rows.workflowDeletedRunIDs = append([]string(nil), tombstones...)
-			rows.runsRaw = append([]map[string]any(nil), consolidatedRows...)
-		}
+	runIDs := make([]string, 0, len(rowsByID))
+	for runID := range rowsByID {
+		runIDs = append(runIDs, runID)
+	}
+	sort.Strings(runIDs)
+	consolidatedRows := make([]map[string]any, 0, len(runIDs))
+	for _, runID := range runIDs {
+		consolidatedRows = append(consolidatedRows, rowsByID[runID])
+	}
+	tombstones := make([]string, 0, len(deletedRunIDs))
+	for runID := range deletedRunIDs {
+		tombstones = append(tombstones, runID)
+	}
+	sort.Strings(tombstones)
+	for _, index := range indices {
+		rows := &payloads[index].pullDetails
+		rows.workflowSourceUpdatedAt = sourceUpdatedAt
+		rows.workflowDeletedRunIDs = append([]string(nil), tombstones...)
+		rows.runsRaw = append([]map[string]any(nil), consolidatedRows...)
 	}
 	return nil
 }
