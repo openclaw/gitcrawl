@@ -91,11 +91,57 @@ gitcrawl cloud publish \
   --json
 ```
 
-A later publish verifies the candidate through the publisher-only status projection. It skips repeated ingest only when the digest, source sync, schema, resolved publication profile, generation timestamp, and coverage match.
+A later publish verifies the candidate through the publisher-only status projection. It skips repeated ingest only when the digest, source sync, schema, resolved publication profile, immutable warnings, generation timestamp, and coverage match.
 
 Cutover requires reader-authenticated `GET /sqlite`. Gitcrawl validates the cutover acknowledgement, polls the scoped reader projection until its digest, profile, generation, and dataset coverage match, rechecks the publisher metadata, downloads the bound SQLite image, and verifies its hash before reporting success. Without `--stage-only`, a successful publish moves unpinned reads to the complete snapshot.
 
 Incomplete local enrichment fails before remote mutation. `--allow-incomplete` is the explicit override. `--observation-order` publishes durable fetch ordering only after the remote operator fence is enabled.
+
+## Archive admission
+
+To publish a raw archive with explicitly reported source and enrichment gaps:
+
+```bash
+gitcrawl cloud publish \
+  --remote URL \
+  --archive gitcrawl/openclaw__openclaw \
+  --admission-policy=archive-v1 \
+  --observation-order \
+  --stage-only \
+  --json
+```
+
+This opt-in policy requires the remote capabilities
+`gitcrawl.archive-admission.v1` and `gitcrawl.observation-order.v1`.
+An older remote or a disabled observation fence fails preflight before upload.
+Do not combine the policy with `--allow-incomplete`. Omitting the policy retains
+the strict default.
+
+Archive admission still requires SQLite integrity, compatible canonical tables,
+repositories, referential closure, full bodies, and the existing privacy scrub.
+Use the full runtime archive, not a lossy portable export. Native portable
+profiles that declare excerpts or excluded patches/history are rejected even
+when current bodies fit the excerpt limit. Empty patch rows in a full runtime
+are not proof of loss. The existing
+4 GiB SQLite, 512 MiB gzip, eight-part, staging, and cutover limits still apply.
+Admission does not request summaries, embeddings, or other model work.
+
+The JSON result includes typed `admission` evidence and stable `warnings`.
+Repository inventory observations distinguish unsupported, unknown, missing,
+partial, complete, and empty observations. Child observations also report stale
+reservations relative to the archived thread. Complete observations describe
+the recorded scope, not current GitHub state. Workflow freshness and current
+remote freshness remain unknown; export clocks never establish either.
+Source gaps, PR detail/file gaps, and all six enrichment metrics remain visible.
+Incomplete current revisions retain their actual coverage counts and
+`complete: false`; admission does not make stale enrichment current for readers.
+
+The sanitized SQLite copy stores the same deterministic evidence in
+`portable_metadata.cloud_admission_v1` before hashing. Existing source markers
+are not trusted, and strict exports remove them. The original database is not
+changed. Canonically sorted warnings are part of immutable snapshot identity,
+including stage-only replay and reader verification. Warnings alone never
+enable admission.
 
 ## Privacy and retention
 

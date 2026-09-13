@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -38,45 +39,76 @@ type gitcrawlCloudSnapshot struct {
 	Capabilities       []string
 	Datasets           []gitcrawlCloudDataset
 	Hydration          crawlstore.EnrichmentCoverage
+	Admission          *gitcrawlCloudAdmission
+	Warnings           []string
 }
 
 func buildGitcrawlCloudSnapshot(
 	ctx context.Context,
 	db *sql.DB,
 	snapshotPath string,
-	allowIncomplete bool,
-	observationOrder bool,
+	options gitcrawlCloudPublishOptions,
+	admission *gitcrawlCloudAdmission,
 ) (gitcrawlCloudSnapshot, error) {
+	if err := options.validate(); err != nil {
+		return gitcrawlCloudSnapshot{}, err
+	}
+	if (options.AdmissionPolicy != "") != (admission != nil) {
+		return gitcrawlCloudSnapshot{}, fmt.Errorf("cloud admission policy does not match frozen assessment")
+	}
 	snapshotID, err := cloudFileSHA256(snapshotPath)
 	if err != nil {
 		return gitcrawlCloudSnapshot{}, err
 	}
-	sourceSyncAt, err := gitcrawlCloudSourceSyncAt(ctx, db)
+	capabilities, err := gitcrawlCloudCapabilities(ctx, db, options.ObservationOrder)
 	if err != nil {
 		return gitcrawlCloudSnapshot{}, err
 	}
-	capabilities, err := gitcrawlCloudCapabilities(ctx, db, observationOrder)
-	if err != nil {
-		return gitcrawlCloudSnapshot{}, err
-	}
-	hydration, err := gitcrawlCloudHydration(ctx, snapshotPath)
-	if err != nil {
-		return gitcrawlCloudSnapshot{}, err
-	}
-	datasets, err := loadGitcrawlCloudDatasets(
-		ctx,
-		db,
-		slices.Contains(capabilities, gitcrawlObservationOrderCapability),
-		hydration,
-	)
-	if err != nil {
-		return gitcrawlCloudSnapshot{}, err
+	var sourceSyncAt string
+	var hydration crawlstore.EnrichmentCoverage
+	var datasets []gitcrawlCloudDataset
+	var warnings []string
+	if admission != nil {
+		encoded, err := json.Marshal(admission)
+		if err != nil {
+			return gitcrawlCloudSnapshot{}, err
+		}
+		var frozenEvidence string
+		if err := db.QueryRowContext(ctx, `select value from portable_metadata where key = ?`,
+			gitcrawlCloudAdmissionMetadataKey).Scan(&frozenEvidence); err != nil ||
+			admission.Policy != options.AdmissionPolicy || frozenEvidence != string(encoded) {
+			return gitcrawlCloudSnapshot{}, fmt.Errorf("cloud admission assessment does not match frozen evidence")
+		}
+		if !admission.Integrity.SQLite || !admission.Integrity.CompatibleSchema ||
+			!admission.Integrity.RequiredData || !admission.Integrity.ReferentialClosure ||
+			!admission.Integrity.FullBodies || !admission.Integrity.Privacy {
+			return gitcrawlCloudSnapshot{}, fmt.Errorf("frozen archive admission integrity is incomplete")
+		}
+		sourceSyncAt, hydration, datasets = admission.sourceSyncAt(), admission.Enrichment, admission.datasets
+		warnings, err = gitcrawlArchiveWarnings(*admission)
+		if err != nil || !gitcrawlCloudWarningsMatch(warnings, admission.Warnings) {
+			return gitcrawlCloudSnapshot{}, fmt.Errorf("frozen archive admission warnings do not match assessment")
+		}
+		capabilities = append(capabilities, gitcrawlArchiveAdmissionCapability)
+	} else {
+		sourceSyncAt, err = gitcrawlCloudSourceSyncAt(ctx, db)
+		if err != nil {
+			return gitcrawlCloudSnapshot{}, err
+		}
+		hydration, err = gitcrawlCloudHydration(ctx, snapshotPath)
+		if err != nil {
+			return gitcrawlCloudSnapshot{}, err
+		}
+		datasets, err = loadGitcrawlCloudDatasets(ctx, db, options.ObservationOrder, hydration)
+		if err != nil {
+			return gitcrawlCloudSnapshot{}, err
+		}
 	}
 	if len(datasets) == 0 || datasets[0].RowCount == 0 {
 		return gitcrawlCloudSnapshot{}, fmt.Errorf("cloud snapshot has no repositories")
 	}
 	missing := incompleteGitcrawlCloudHydration(hydration)
-	if len(missing) > 0 && !allowIncomplete {
+	if len(missing) > 0 && !options.AllowIncomplete && admission == nil {
 		return gitcrawlCloudSnapshot{}, fmt.Errorf(
 			"cloud snapshot enrichment is incomplete (%s); hydrate the archive or pass --allow-incomplete",
 			strings.Join(missing, ", "),
@@ -89,6 +121,8 @@ func buildGitcrawlCloudSnapshot(
 		Capabilities:       capabilities,
 		Datasets:           datasets,
 		Hydration:          hydration,
+		Admission:          admission,
+		Warnings:           warnings,
 	}, nil
 }
 
@@ -109,6 +143,7 @@ func gitcrawlCloudManifest(archive string, snapshot gitcrawlCloudSnapshot) crawl
 		SnapshotID:    snapshot.ID,
 		SourceSHA256:  snapshot.ID,
 		Capabilities:  capabilities,
+		Warnings:      slices.Clone(snapshot.Warnings),
 	}
 }
 

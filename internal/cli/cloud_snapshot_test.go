@@ -121,7 +121,7 @@ with a second line', 'https://github.com/example/repo/pull/1',
 		checks[i].excludedBefore = readValues(db, checks[i].table, checks[i].excluded)
 	}
 
-	snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, dbPath)
+	snapshotPath, _, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, dbPath, gitcrawlCloudPublishOptions{})
 	if err != nil {
 		t.Fatalf("cloud snapshot: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestCloudSQLiteSnapshotLegacyPrivacyColumns(t *testing.T) {
 			if _, err := db.ExecContext(ctx, tc.schema); err != nil {
 				t.Fatalf("seed legacy source: %v", err)
 			}
-			snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, "")
+			snapshotPath, _, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, "", gitcrawlCloudPublishOptions{})
 			if err != nil {
 				t.Fatalf("legacy cloud snapshot: %v", err)
 			}
@@ -385,7 +385,7 @@ func TestGitcrawlCloudSourceSyncAtUsesPortableMetadataWithoutSyncRuns(t *testing
 		t.Fatalf("reopen portable sqlite: %v", err)
 	}
 	defer db.Close()
-	snapshot, err := buildGitcrawlCloudSnapshot(ctx, db, path, true, false)
+	snapshot, err := buildGitcrawlCloudSnapshot(ctx, db, path, gitcrawlCloudPublishOptions{AllowIncomplete: true}, nil)
 	if err != nil {
 		t.Fatalf("build portable cloud snapshot: %v", err)
 	}

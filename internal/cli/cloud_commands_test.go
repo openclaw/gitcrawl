@@ -994,6 +994,20 @@ func TestGitcrawlReaderStatusMatchesCompleteServingSnapshot(t *testing.T) {
 	if !gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
 		t.Fatal("complete serving snapshot did not match")
 	}
+	manifest.Warnings = []string{"gitcrawl.archive.source.unknown"}
+	status.Warnings = slices.Clone(manifest.Warnings)
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
+		t.Fatal("transient status warnings replaced immutable snapshot warnings")
+	}
+	status.Snapshot.Warnings = slices.Clone(manifest.Warnings)
+	if !gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
+		t.Fatal("matching snapshot warnings did not match")
+	}
+	manifest.Warnings = nil
+	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
+		t.Fatal("nonempty-to-empty snapshot warning drift matched")
+	}
+	status.Snapshot.Warnings = nil
 
 	status.CoverageComplete = false
 	if gitcrawlReaderStatusMatches(status, snapshot, manifest, capabilities, cutoverAt) {
@@ -1322,6 +1336,7 @@ func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t 
 		ID:                 snapshotID,
 		SourceSyncAt:       "2026-07-12T12:00:00Z",
 		DatasetGeneratedAt: "2026-07-12T12:01:00Z",
+		Warnings:           []string{"gitcrawl.archive.source.unknown"},
 	}
 	manifest := gitcrawlCloudManifest("gitcrawl/openclaw__openclaw", snapshot)
 	publicationCapabilities := gitcrawlCloudPublicationCapabilities(manifest.Capabilities)
@@ -1333,12 +1348,20 @@ func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t 
 		coverageComplete bool
 		wantGeneration   string
 		want             string
+		omitWarnings     bool
 	}{
 		{
 			name:             "independent winner generation",
 			activeSnapshotID: snapshotID,
 			coverageComplete: true,
 			wantGeneration:   winnerGeneration,
+		},
+		{
+			name:             "missing immutable warnings",
+			activeSnapshotID: snapshotID,
+			coverageComplete: true,
+			omitWarnings:     true,
+			want:             "does not match the requested digest, profile, and coverage",
 		},
 		{
 			name:             "unrelated active candidate",
@@ -1358,6 +1381,10 @@ func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t 
 					http.Error(w, fmt.Sprintf("snapshot_id = %q, want %q", got, snapshotID), http.StatusBadRequest)
 					return
 				}
+				warnings := manifest.Warnings
+				if test.omitWarnings {
+					warnings = nil
+				}
 				_ = json.NewEncoder(w).Encode(crawlremote.PublisherStatus{
 					App:              manifest.App,
 					Archive:          manifest.Archive,
@@ -1373,6 +1400,7 @@ func TestRecoverConcurrentGitcrawlSnapshotAdoptsOnlyMatchingCompletedSnapshot(t 
 						SchemaHash:         manifest.SchemaHash,
 						Capabilities:       publicationCapabilities,
 						CoverageComplete:   test.coverageComplete,
+						Warnings:           warnings,
 					},
 				})
 			}))

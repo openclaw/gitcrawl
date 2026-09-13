@@ -437,7 +437,7 @@ func TestCloudSQLiteSnapshotDropsLocalCodeCorpus(t *testing.T) {
 		`, repoID, repoID, repoID, repoID, repoID, repoID); err != nil {
 		t.Fatalf("seed private cloud payloads: %v", err)
 	}
-	snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, st.DB(), dbPath)
+	snapshotPath, _, cleanup, err := cloudSQLiteSnapshotPath(ctx, st.DB(), dbPath, gitcrawlCloudPublishOptions{})
 	if err != nil {
 		t.Fatalf("cloud snapshot: %v", err)
 	}
@@ -1083,6 +1083,11 @@ func TestGitcrawlPublisherStatusMatchesExactMetadata(t *testing.T) {
 }
 
 func TestCloudPublishSendsLocalRows(t *testing.T) {
+	t.Run("legacy allow incomplete", func(t *testing.T) { testCloudPublishSendsLocalRows(t, false) })
+	t.Run("archive admission", func(t *testing.T) { testCloudPublishSendsLocalRows(t, true) })
+}
+
+func testCloudPublishSendsLocalRows(t *testing.T, archiveAdmission bool) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
@@ -1107,10 +1112,21 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	var publishedDatasets []crawlremote.DatasetCoverage
 	var publisherStatusSnapshotIDs []string
 	mutationCounter := 0
+	uploadRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
 			w.Header().Set("content-type", "application/json")
-			_ = json.NewEncoder(w).Encode(testSnapshotPublishContract())
+			contract := testSnapshotPublishContract()
+			if archiveAdmission {
+				contract.Apps[0].Capabilities = append(contract.Apps[0].Capabilities, gitcrawlArchiveAdmissionCapability, gitcrawlObservationOrderCapability)
+				for index := range contract.Apps[0].IngestTables {
+					table := &contract.Apps[0].IngestTables[index]
+					if table.Name == "threads" || table.Name == "thread_revisions" {
+						table.Columns = append(table.Columns, "observation_sequence")
+					}
+				}
+			}
+			_ = json.NewEncoder(w).Encode(contract)
 			return
 		}
 		if got := r.Header.Get("authorization"); got != "Bearer publish-token" {
@@ -1127,6 +1143,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodPut && r.URL.EscapedPath() == "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw__openclaw/sqlite" {
+			uploadRequests++
 			uploadKind := r.Header.Get("x-crawl-sqlite-upload")
 			payload, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -1338,6 +1355,7 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 				SourceSyncAt:       body.Manifest.SourceSyncAt,
 				DatasetGeneratedAt: fmt.Sprint(body.Rows[0][5]),
 				CoverageComplete:   true,
+				Warnings:           slices.Clone(body.Manifest.Warnings),
 			}
 		}
 		seenTables[body.Table] = body
@@ -1360,15 +1378,20 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 	app := New()
 	var out bytes.Buffer
 	app.Stdout = &out
-	if err := app.Run(ctx, []string{
+	args := []string{
 		"--config", cfgPath,
 		"cloud", "publish",
 		"--remote", server.URL,
 		"--archive", "gitcrawl/openclaw__openclaw",
 		"--token-env", tokenEnv,
-		"--allow-incomplete",
 		"--json",
-	}); err != nil {
+	}
+	if archiveAdmission {
+		args = append(args, "--admission-policy=archive-v1", "--observation-order")
+	} else {
+		args = append(args, "--allow-incomplete")
+	}
+	if err := app.Run(ctx, args); err != nil {
 		t.Fatalf("cloud publish: %v", err)
 	}
 
@@ -1425,6 +1448,24 @@ func TestCloudPublishSendsLocalRows(t *testing.T) {
 		privacy["includes_source_code"] != true {
 		t.Fatalf("missing sqlite bundle privacy output: %#v", payload)
 	}
+	if archiveAdmission {
+		if len(publishedSnapshot.Warnings) == 0 || payload["admission"] == nil {
+			t.Fatal("archive publication lost persistent admission evidence")
+		}
+		for _, dataset := range publishedDatasets {
+			if dataset.Dataset == "thread_revisions" && (dataset.EligibleCount != 3 || dataset.Complete) {
+				t.Fatalf("archive admission hid incomplete revision coverage: %+v", dataset)
+			}
+		}
+	}
+	beforeMutations, beforeUploads := mutationCounter, uploadRequests
+	out.Reset()
+	if err := app.Run(ctx, append(args, "--stage-only")); err != nil {
+		t.Fatalf("stage-only replay: %v", err)
+	}
+	if mutationCounter != beforeMutations || uploadRequests != beforeUploads {
+		t.Fatal("identical staged snapshot was uploaded or ingested again")
+	}
 }
 
 func TestCloudPublishRejectsMissingSnapshotCapabilityBeforeUpload(t *testing.T) {
@@ -1480,7 +1521,20 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 		name              string
 		args              []string
 		missingCapability string
+		archiveAdmission  bool
 	}{
+		{
+			name:              "archive admission",
+			args:              []string{"--admission-policy=archive-v1", "--observation-order", "--stage-only"},
+			missingCapability: gitcrawlArchiveAdmissionCapability,
+			archiveAdmission:  true,
+		},
+		{
+			name:              "archive observation fence",
+			args:              []string{"--admission-policy=archive-v1", "--observation-order", "--stage-only"},
+			missingCapability: gitcrawlObservationOrderCapability,
+			archiveAdmission:  true,
+		},
 		{
 			name:              "observation order",
 			args:              []string{"--observation-order", "--stage-only"},
@@ -1515,6 +1569,15 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet && r.URL.EscapedPath() == "/v1/contract" {
 					contract := testSnapshotPublishContract()
+					if test.archiveAdmission {
+						contract.Apps[0].Capabilities = append(contract.Apps[0].Capabilities, gitcrawlArchiveAdmissionCapability, gitcrawlObservationOrderCapability)
+						for index := range contract.Apps[0].IngestTables {
+							table := &contract.Apps[0].IngestTables[index]
+							if table.Name == "threads" || table.Name == "thread_revisions" {
+								table.Columns = append(table.Columns, "observation_sequence")
+							}
+						}
+					}
 					capabilities := make([]string, 0, len(contract.Apps[0].Capabilities))
 					for _, capability := range contract.Apps[0].Capabilities {
 						if capability != test.missingCapability {
@@ -1537,8 +1600,10 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 				"--remote", server.URL,
 				"--archive", "gitcrawl/openclaw__openclaw",
 				"--token-env", tokenEnv,
-				"--allow-incomplete",
 				"--json",
+			}
+			if !test.archiveAdmission {
+				args = append(args, "--allow-incomplete")
 			}
 			args = append(args, test.args...)
 			err := New().Run(ctx, args)

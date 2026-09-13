@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add explicit cloud archive admission with immutable source, integrity, enrichment, and warning evidence while preserving strict publication defaults. Thanks @vincentkoc.
 - Honor the global `--no-color` flag in the terminal browser.
 
 - Compatibility: report portable publication time as `last_export_at`; `last_sync_at` now describes retained successful sync runs instead of old repository scan checkpoints. Thanks @obviyus.

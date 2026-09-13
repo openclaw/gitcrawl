@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"database/sql"
+
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +13,7 @@ import (
 
 	crawlremote "github.com/openclaw/crawlkit/remote"
 	"github.com/openclaw/gitcrawl/internal/config"
+	crawlstore "github.com/openclaw/gitcrawl/internal/store"
 )
 
 const (
@@ -75,14 +76,21 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	tokenEnv := fs.String("token-env", "", "remote token environment variable")
 	allowIncomplete := fs.Bool("allow-incomplete", false, "publish even when local enrichment coverage is incomplete")
 	observationOrder := fs.Bool("observation-order", false, "publish durable observation ordering when the remote fence is enabled")
+	admissionPolicy := fs.String("admission-policy", "", "explicit archive admission policy (archive-v1)")
 	stageOnly := fs.Bool("stage-only", false, "stage the immutable snapshot without moving unpinned reads")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"remote": true, "archive": true, "token-env": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"remote": true, "archive": true, "token-env": true, "admission-policy": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() != 0 {
 		return usageErr(fmt.Errorf("cloud publish takes flags only"))
+	}
+	options := gitcrawlCloudPublishOptions{
+		AllowIncomplete: *allowIncomplete, ObservationOrder: *observationOrder, AdmissionPolicy: *admissionPolicy,
+	}
+	if err := options.validate(); err != nil {
+		return usageErr(err)
 	}
 	cutover := !*stageOnly
 
@@ -121,22 +129,23 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	snapshotPath, cleanupSnapshot, err := cloudSQLiteSnapshotPath(ctx, rt.Store.DB(), rt.Store.Path())
+	snapshotPath, admission, cleanupSnapshot, err := cloudSQLiteSnapshotPath(ctx, rt.Store.DB(), rt.Store.Path(), options)
 	if err != nil {
 		return err
 	}
 	defer cleanupSnapshot()
-	snapshotDB, err := sql.Open("sqlite", snapshotPath)
+	frozen, err := crawlstore.OpenReadOnlyImmutable(ctx, snapshotPath)
 	if err != nil {
 		return fmt.Errorf("open frozen cloud snapshot: %w", err)
 	}
-	defer snapshotDB.Close()
+	defer frozen.Close()
+	snapshotDB := frozen.DB()
 	snapshot, err := buildGitcrawlCloudSnapshot(
 		ctx,
 		snapshotDB,
 		snapshotPath,
-		*allowIncomplete,
-		*observationOrder,
+		options,
+		admission,
 	)
 	if err != nil {
 		return err
@@ -341,6 +350,8 @@ func (a *App) runCloudPublish(ctx context.Context, args []string) error {
 		"capabilities":          manifest.Capabilities,
 		"datasets":              counts,
 		"hydration":             snapshot.Hydration,
+		"admission":             snapshot.Admission,
+		"warnings":              snapshot.Warnings,
 		"already_staged":        alreadyStaged,
 		"already_cut_over":      alreadyCutOver,
 		"mutation_token":        mutationToken,

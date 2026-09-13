@@ -10,7 +10,7 @@ import (
 )
 
 func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, archive string, db *sql.DB, dbPath string, manifest crawlremote.IngestManifest, counts map[string]int64) (*crawlremote.SQLiteBundle, error) {
-	snapshotPath, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, dbPath)
+	snapshotPath, _, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, dbPath, gitcrawlCloudPublishOptions{})
 	if err != nil {
 		return nil, err
 	}
