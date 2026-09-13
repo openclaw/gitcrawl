@@ -71,6 +71,9 @@ var currentStateSemanticPolicy = artifactIdentityPolicy{
 		"observation_convergence_allocator_delete",
 	},
 	DroppedTables: []string{
+		// gitcrawl-store owns these resumable hydration cursors, not source facts.
+		// Retain them in exports but do not republish unchanged data for cursor churn.
+		"gitcrawl_store_hydration_progress",
 		"observation_schema_convergence",
 		"repo_pipeline_state",
 		"repo_sync_state",

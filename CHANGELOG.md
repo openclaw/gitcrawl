@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep gitcrawl-store hydration checkpoints in portable exports without treating local cursor changes as new source data.
 - Add explicit cloud archive admission with immutable source, integrity, enrichment, and warning evidence while preserving strict publication defaults. Thanks @vincentkoc.
 - Compatibility: report portable publication time as `last_export_at`; `last_sync_at` now describes retained successful sync runs instead of old repository scan checkpoints. Thanks @obviyus.
 - Stop REST pagination when GitHub returns repeated or cyclic next links, preventing repeated requests and incomplete sync results.

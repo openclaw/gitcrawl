@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -133,6 +134,7 @@ func TestSemanticArtifactIdentityIncludesMeaningfulState(t *testing.T) {
 		{name: "workflow public state", sql: `update github_workflow_runs set status = 'in_progress'`},
 		{name: "public timestamp", sql: `update threads set updated_at_gh = '2026-08-09T00:00:00Z'`},
 		{name: "repository identity", sql: `update repositories set full_name = 'openclaw/renamed'`},
+		{name: "unknown future table", sql: `create table gitcrawl_store_public_facts(value text); insert into gitcrawl_store_public_facts values('retained')`},
 		{name: "unknown future column", sql: `alter table threads add column future_public_value text; update threads set future_public_value = 'retained'`},
 	}
 	for _, mutation := range mutations {
@@ -153,6 +155,58 @@ func TestSemanticArtifactIdentityIncludesMeaningfulState(t *testing.T) {
 				t.Fatalf("meaningful mutation retained artifact identity %s", got)
 			}
 		})
+	}
+}
+
+func TestSemanticArtifactIdentityRetainsStoreHydrationProgressInExport(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	st := seedExportSource(t, ctx, sourcePath)
+	defer st.Close()
+	before, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, "before")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `
+		create table gitcrawl_store_hydration_progress(
+			repo_id integer not null references repositories(id) on delete cascade,
+			phase text not null,
+			cursor integer not null,
+			primary key(repo_id, phase)
+		);
+		insert into gitcrawl_store_hydration_progress values(1, 'historical-pr-details', 10);
+		insert into gitcrawl_store_hydration_progress values(1, 'active-pr-context', 20);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for _, cursor := range []int{10, 30} {
+		if _, err := st.DB().ExecContext(ctx, `update gitcrawl_store_hydration_progress set cursor = ? where phase = 'historical-pr-details'`, cursor); err != nil {
+			t.Fatal(err)
+		}
+		result, err := Export(ctx, testExportOptions(sourcePath, filepath.Join(dir, fmt.Sprintf("cursor-%d", cursor))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.ArtifactID != before.ArtifactID {
+			t.Fatalf("hydration progress changed semantic identity: got %s, want %s", result.ArtifactID, before.ArtifactID)
+		}
+		if result.SHA256 == before.SHA256 {
+			t.Fatal("checkpoint-bearing export retained the previous exact file hash")
+		}
+		exported := openRawDB(t, result.DatabasePath)
+		var historical, active int
+		err = exported.QueryRowContext(ctx, `select cursor from gitcrawl_store_hydration_progress where repo_id = 1 and phase = 'historical-pr-details'`).Scan(&historical)
+		if err == nil {
+			err = exported.QueryRowContext(ctx, `select cursor from gitcrawl_store_hydration_progress where repo_id = 1 and phase = 'active-pr-context'`).Scan(&active)
+		}
+		closeErr := exported.Close()
+		if err != nil || closeErr != nil {
+			t.Fatalf("read exported hydration progress: %v; close: %v", err, closeErr)
+		}
+		if historical != cursor || active != 20 {
+			t.Fatalf("exported hydration progress = (%d, %d), want (%d, 20)", historical, active, cursor)
+		}
 	}
 }
 
@@ -388,6 +442,7 @@ func TestCurrentStateSemanticPolicyIsExplicitAndValid(t *testing.T) {
 		t.Fatalf("current semantic identity policy: %v", err)
 	}
 	wantDropped := []string{
+		"gitcrawl_store_hydration_progress",
 		"observation_schema_convergence",
 		"pull_request_review_thread_syncs",
 		"repo_pipeline_state",
