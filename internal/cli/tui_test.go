@@ -555,7 +555,7 @@ func TestTUIClusterAgeHeaderTogglesDirection(t *testing.T) {
 	})
 	model.width = 140
 	model.height = 32
-	columns := clusterColumns(maxInt(24, model.layout().clusters.w-4), model.payload.Sort)
+	columns := clusterColumns(max(24, model.layout().clusters.w-4), model.payload.Sort)
 	ageX := columnLeftEdge(columns, len(columns)-1)
 
 	model.sortClustersFromHeader(ageX)
@@ -566,7 +566,7 @@ func TestTUIClusterAgeHeaderTogglesDirection(t *testing.T) {
 		t.Fatalf("oldest sort first cluster id = %d, want 1", model.payload.Clusters[0].ID)
 	}
 
-	columns = clusterColumns(maxInt(24, model.layout().clusters.w-4), model.payload.Sort)
+	columns = clusterColumns(max(24, model.layout().clusters.w-4), model.payload.Sort)
 	model.sortClustersFromHeader(columnLeftEdge(columns, len(columns)-1))
 	if model.payload.Sort != "recent" {
 		t.Fatalf("age header second sort = %q, want recent", model.payload.Sort)
@@ -590,7 +590,7 @@ func TestTUIMemberAgeHeaderTogglesDirection(t *testing.T) {
 	}}
 	model.hasDetail = true
 	model.sortMembers()
-	columns := memberColumns(maxInt(24, model.layout().members.w-4), model.memberSort)
+	columns := memberColumns(max(24, model.layout().members.w-4), model.memberSort)
 	ageX := columnLeftEdge(columns, 2)
 
 	model.sortMembersFromHeader(ageX)
@@ -601,7 +601,7 @@ func TestTUIMemberAgeHeaderTogglesDirection(t *testing.T) {
 		t.Fatalf("recent member first id = %d, want 2", model.memberRows[0].member.Thread.ID)
 	}
 
-	columns = memberColumns(maxInt(24, model.layout().members.w-4), model.memberSort)
+	columns = memberColumns(max(24, model.layout().members.w-4), model.memberSort)
 	model.sortMembersFromHeader(columnLeftEdge(columns, 2))
 	if model.memberSort != memberSortOldest {
 		t.Fatalf("member age header second sort = %q, want oldest", model.memberSort)
