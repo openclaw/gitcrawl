@@ -163,14 +163,6 @@ func validateExactQuery(query []float64) error {
 	if maxAbs == 0 {
 		return errors.New("query vector is zero")
 	}
-	var magnitude float64
-	for _, value := range query {
-		scaled := value / maxAbs
-		magnitude += scaled * scaled
-	}
-	if magnitude == 0 {
-		return errors.New("query vector is zero")
-	}
 	return nil
 }
 
@@ -215,9 +207,6 @@ func Cosine(left, right []float64) float64 {
 		dot += leftValue * rightValue
 		leftMag += leftValue * leftValue
 		rightMag += rightValue * rightValue
-	}
-	if leftMag == 0 || rightMag == 0 {
-		return 0
 	}
 	score := dot / (math.Sqrt(leftMag) * math.Sqrt(rightMag))
 	if score > 1 {

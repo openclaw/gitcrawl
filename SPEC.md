@@ -32,7 +32,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 ## Architecture
 
 - `cmd/gitcrawl`: executable entrypoint
-- `internal/cli`: command parsing and output
+- `internal/cli`: root dispatch, command parsing and output, local/remote runtime adapters, and the terminal browser; command and `tui_*` files group their own responsibilities
 - `internal/config`: config and env resolution
 - `internal/store`: SQLite schema and persistence
 - `internal/github`: GitHub API client
@@ -41,10 +41,9 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - `internal/codeindex`: tracked source-file scanning
 - `internal/openai`: OpenAI summaries and embeddings
 - `internal/vector`: vector search abstraction
-- `internal/cluster`: similarity and durable cluster governance
-- `internal/search`: keyword, semantic, and hybrid search
-- `internal/portable`: compact sync export/import
-- `internal/tui`: terminal UI
+- `internal/cluster`: bounded similarity-graph grouping; `internal/store` owns durable cluster persistence and governance
+- Search orchestration lives in `internal/cli/search.go`; SQLite keyword queries live in `internal/store/search.go`.
+- `internal/portable`: compact snapshot export, profiles, manifests, artifact I/O, and deterministic identity
 
 TUI guidance:
 

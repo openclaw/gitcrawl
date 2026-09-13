@@ -185,7 +185,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "tui":
 		return a.runTUI(ctx, rest[1:])
 	case "key-summaries", "cluster-experiment", "merge-clusters", "split-cluster", "export-sync", "import-sync", "validate-sync", "portable-size", "sync-status", "optimize", "completion":
-		_ = ctx
 		return notImplemented(rest[0])
 	default:
 		return usageErr(fmt.Errorf("unknown command %q", rest[0]))

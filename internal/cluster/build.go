@@ -1,6 +1,9 @@
 package cluster
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 type Node struct {
 	ThreadID int64
@@ -49,13 +52,13 @@ func BuildWithOptions(nodes []Node, edges []Edge, options Options) []Cluster {
 			return sortedEdges[i].Score > sortedEdges[j].Score
 		})
 		for _, edge := range sortedEdges {
-			if uf.unionBounded(edge.LeftThreadID, edge.RightThreadID, options.MaxSize) {
+			if uf.union(edge.LeftThreadID, edge.RightThreadID, options.MaxSize) {
 				keptEdges = append(keptEdges, edge)
 			}
 		}
 	} else {
 		for _, edge := range filteredEdges {
-			uf.union(edge.LeftThreadID, edge.RightThreadID)
+			uf.union(edge.LeftThreadID, edge.RightThreadID, 0)
 		}
 	}
 
@@ -94,7 +97,7 @@ func format(nodes []Node, edges []Edge, byRoot map[int64][]int64) []Cluster {
 
 	out := make([]Cluster, 0, len(byRoot))
 	for _, members := range byRoot {
-		sort.Slice(members, func(i, j int) bool { return members[i] < members[j] })
+		slices.Sort(members)
 		representative := members[0]
 		for _, member := range members[1:] {
 			if betterRepresentative(member, representative, edgeCounts, nodesByID) {
@@ -156,20 +159,7 @@ func (u *unionFind) find(value int64) int64 {
 	return parent
 }
 
-func (u *unionFind) union(left, right int64) {
-	leftRoot := u.find(left)
-	rightRoot := u.find(right)
-	if leftRoot == rightRoot {
-		return
-	}
-	if u.size[leftRoot] < u.size[rightRoot] {
-		leftRoot, rightRoot = rightRoot, leftRoot
-	}
-	u.parent[rightRoot] = leftRoot
-	u.size[leftRoot] += u.size[rightRoot]
-}
-
-func (u *unionFind) unionBounded(left, right int64, maxSize int) bool {
+func (u *unionFind) union(left, right int64, maxSize int) bool {
 	leftRoot := u.find(left)
 	rightRoot := u.find(right)
 	if leftRoot == rightRoot {
@@ -178,7 +168,7 @@ func (u *unionFind) unionBounded(left, right int64, maxSize int) bool {
 	if u.size[leftRoot] < u.size[rightRoot] {
 		leftRoot, rightRoot = rightRoot, leftRoot
 	}
-	if u.size[leftRoot]+u.size[rightRoot] > maxSize {
+	if maxSize > 0 && u.size[leftRoot]+u.size[rightRoot] > maxSize {
 		return false
 	}
 	u.parent[rightRoot] = leftRoot

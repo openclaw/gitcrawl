@@ -73,16 +73,16 @@ func TestBuildIgnoresEdgesWithMissingEndpoints(t *testing.T) {
 
 func TestUnionFindAndRepresentativeTieBranches(t *testing.T) {
 	uf := newUnionFind()
-	uf.union(1, 2)
-	uf.union(1, 2)
-	uf.union(3, 1)
+	uf.union(1, 2, 0)
+	uf.union(1, 2, 0)
+	uf.union(3, 1, 0)
 	if root := uf.find(2); root == 0 {
 		t.Fatalf("root = %d", root)
 	}
-	if !uf.unionBounded(1, 2, 2) {
+	if !uf.union(1, 2, 2) {
 		t.Fatal("same bounded root should be accepted")
 	}
-	if uf.unionBounded(1, 4, 1) {
+	if uf.union(1, 4, 1) {
 		t.Fatal("oversized bounded union should be rejected")
 	}
 	nodes := map[int64]Node{
