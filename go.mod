@@ -46,6 +46,7 @@ require (
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect
+	modernc.org/cc/v4 v4.29.6 // indirect
 	// Match the exact libc version required by modernc.org/sqlite's generated runtime.
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

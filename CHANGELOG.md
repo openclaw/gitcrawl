@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update SQLite's C-parser dependency to v4.29.6 and pin the automation guide's artifact-upload example to v7.0.1.
 - Add explicit cloud archive admission with immutable source, integrity, enrichment, and warning evidence while preserving strict publication defaults. Thanks @vincentkoc.
 - Compatibility: report portable publication time as `last_export_at`; `last_sync_at` now describes retained successful sync runs instead of old repository scan checkpoints. Thanks @obviyus.
 - Stop REST pagination when GitHub returns repeated or cyclic next links, preventing repeated requests and incomplete sync results.

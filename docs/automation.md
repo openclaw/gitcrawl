@@ -175,7 +175,7 @@ Run gitcrawl in CI to validate a portable store's freshness, sanity-check cluste
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-- uses: actions/upload-artifact@v4
+- uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
   with: { name: triage, path: "*.json" }
 ```
 
