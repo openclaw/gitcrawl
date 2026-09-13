@@ -32,7 +32,7 @@ gitcrawl close-cluster owner/repo --id 42 --reason "all members handled"
 gitcrawl reopen-cluster owner/repo --id 42
 ```
 
-The reason defaults to `CLI manual close` and is stored alongside the override for audit. Locally closed threads and clusters are filtered out by `--hide-closed` across `clusters`, `cluster-detail`, the TUI, and search.
+The reason defaults to `CLI manual close` and is stored alongside the override for audit. Locally closed threads and clusters are filtered out by `--hide-closed` across `clusters`, `cluster-detail`, and the TUI. Search has its own state filters; it does not accept `--hide-closed`.
 
 This **does not** change anything on GitHub. It is purely a local triage signal — useful when you have already commented "duplicate of #X" on the upstream issue and want to clear it from your maintainer view.
 

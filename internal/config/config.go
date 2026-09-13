@@ -286,9 +286,6 @@ func (c Config) envOrDefault(primary, fallback string) string {
 }
 
 func (c Config) configEnv(primary string) string {
-	if c.Env == nil {
-		return ""
-	}
 	return strings.TrimSpace(c.Env[primary])
 }
 
