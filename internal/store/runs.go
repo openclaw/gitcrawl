@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -128,21 +129,57 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, repoID int64) (time.Ti
 	return parsed, nil
 }
 
-// ClosedSweepWatermark ignores runs that did not establish complete default
-// coverage. Old archives bootstrap from their oldest still-open observation.
+const recordedClosedSweepWatermarkSQL = `
+	select json_extract(stats_json, '$.closed_sweep_through')
+	from sync_runs
+	where repo_id = ? and status in ('success', 'completed', 'checkpoint')
+	  and scope in ('open', 'closed', 'all')
+	  and json_valid(stats_json)
+	  and json_type(case when json_valid(stats_json) then stats_json else '{}' end,
+	                '$.closed_sweep_through') = 'text'
+	order by julianday(json_extract(stats_json, '$.closed_sweep_through')) desc, id desc
+	limit 1
+`
+
+// PreserveClosedSweepWatermark freezes the legacy lower bound before partial
+// commits can close or refresh its oldest open thread. A checkpoint is not a
+// successful sync and cannot certify list freshness or archive completeness.
+// The caller owns the transaction that precedes thread mutations.
+func (s *Store) PreserveClosedSweepWatermark(ctx context.Context, repoID int64, startedAt time.Time) error {
+	var recorded string
+	err := s.q().QueryRowContext(ctx, recordedClosedSweepWatermarkSQL, repoID).Scan(&recorded)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	watermark, err := s.ClosedSweepWatermark(ctx, repoID)
+	if err != nil {
+		return err
+	}
+	if watermark.IsZero() {
+		watermark = startedAt.Add(-24 * time.Hour)
+	}
+	stats, err := json.Marshal(map[string]string{"closed_sweep_through": watermark.Format(time.RFC3339Nano)})
+	if err != nil {
+		return err
+	}
+	_, err = s.RecordRun(ctx, RunRecord{
+		RepoID: repoID, Kind: "sync", Scope: "open", Status: "checkpoint",
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
+		FinishedAt: startedAt.Format(time.RFC3339Nano), StatsJSON: string(stats),
+	})
+	return err
+}
+
+// ClosedSweepWatermark ignores incomplete runs. A legacy checkpoint retains
+// only the old retry lower bound; complete default syncs advance it.
 func (s *Store) ClosedSweepWatermark(ctx context.Context, repoID int64) (time.Time, error) {
 	var raw sql.NullString
 	err := s.q().QueryRowContext(ctx, `
 		select coalesce(
-			(select json_extract(stats_json, '$.closed_sweep_through')
-			 from sync_runs
-			 where repo_id = ? and status in ('success', 'completed')
-			   and scope in ('open', 'closed', 'all')
-			   and json_valid(stats_json)
-			   and json_type(case when json_valid(stats_json) then stats_json else '{}' end,
-			                 '$.closed_sweep_through') = 'text'
-			 order by julianday(json_extract(stats_json, '$.closed_sweep_through')) desc, id desc
-			 limit 1),
+			(`+recordedClosedSweepWatermarkSQL+`),
 			(select min(coalesce(nullif(last_pulled_at, ''), nullif(first_pulled_at, ''),
 			                     nullif(updated_at_gh, ''), updated_at))
 			 from threads where repo_id = ? and state = 'open')

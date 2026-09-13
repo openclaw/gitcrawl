@@ -76,20 +76,19 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 		IncludePRDetails:  *includePRDetails || with["pr-details"],
 		Progress:          progress.report,
 	})
+	terminalState := syncProgressSucceeded
 	if err != nil {
-		if progressErr := progress.finish(syncProgressFailed); progressErr != nil {
-			return progressErr
-		}
-		return err
+		terminalState = syncProgressFailed
 	}
-	if err := progress.finish(syncProgressSucceeded); err != nil {
+	err = errors.Join(err, progress.finish(terminalState))
+	if stats.Repository == "" {
 		return err
 	}
 	result := struct {
 		syncer.Stats
 		dbTargetInfo
 	}{Stats: stats, dbTargetInfo: target}
-	return a.writeOutput("sync", result, true)
+	return errors.Join(err, a.writeOutput("sync", result, true))
 }
 
 type syncOptions struct {
@@ -208,6 +207,7 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 		ReserveRateLimit: reserve,
 		dbTargetInfo:     rt.dbTarget(),
 	}
+	var syncErr error
 	for i := 0; i < len(numbers); i += batchSize {
 		end := i + batchSize
 		if end > len(numbers) {
@@ -229,16 +229,6 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 			Quiet:            *jsonProgress,
 			RateLimitReserve: reserve,
 		})
-		if err != nil {
-			var reserveErr *gh.RateLimitReserveError
-			if errors.As(err, &reserveErr) {
-				rate := fillRateLimitResultFromSnapshot(reserveErr.RateLimit, reserve)
-				result.StoppedReason = "rate-limit-reserve"
-				result.RateLimit = &rate
-				break
-			}
-			return err
-		}
 		rate, hasRate := a.currentFillRateLimit(ctx, reserve)
 		batch := fillPRDetailsBatch{
 			Index:              len(result.Batches) + 1,
@@ -250,8 +240,21 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 			batch.RateLimit = &rate
 			result.RateLimit = &rate
 		}
-		result.Batches = append(result.Batches, batch)
+		if err == nil || stats.PRDetailsSynced > 0 {
+			result.Batches = append(result.Batches, batch)
+		}
 		result.Filled += stats.PRDetailsSynced
+		if err != nil {
+			syncErr = err
+			result.StoppedReason = "sync-failed"
+			var reserveErr *gh.RateLimitReserveError
+			if errors.As(err, &reserveErr) {
+				rate := fillRateLimitResultFromSnapshot(reserveErr.RateLimit, reserve)
+				result.StoppedReason = "rate-limit-reserve"
+				result.RateLimit = &rate
+			}
+			break
+		}
 		if *jsonProgress {
 			a.writeFillPRDetailsProgress(fillPRDetailsProgressEvent{
 				Event:      "batch_done",
@@ -268,7 +271,7 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 		result.Remaining = 0
 	}
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	return a.writeOutput("fill-pr-details", result, true)
+	return errors.Join(syncErr, a.writeOutput("fill-pr-details", result, true))
 }
 
 type fillPRDetailsProgressEvent struct {
@@ -426,8 +429,5 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		Logger:            logger,
 		Progress:          options.Progress,
 	})
-	if err != nil {
-		return syncer.Stats{}, target, err
-	}
-	return stats, target, nil
+	return stats, target, err
 }

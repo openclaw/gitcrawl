@@ -43,7 +43,7 @@ These work on every command.
 | Command | Purpose | Docs |
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --progress-file <absolute-path> --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
-| `gitcrawl sync-failures owner/repo [--include-resolved --limit N --json]` | List failed PR hydration attempts and optional resolved history | [Sync](/sync/#hydration-depth) |
+| `gitcrawl sync-failures owner/repo [--include-resolved --limit N --json]` | List failed issue, comment, and PR hydration attempts and optional resolved history | [Sync](/sync/#hydration-depth) |
 | `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report archive, PR-detail, and enrichment coverage/freshness | — |
 | `gitcrawl fill-pr-details owner/repo [--limit --order --batch-size --reserve-rate-limit --include-comments --json-progress --json]` | Hydrate locally missing pull request detail rows in bounded batches | — |
 | `gitcrawl capture owner/repo [--schema gitcrawl.capture.v1 --since RFC3339 --output path --json]` | Export a deterministic code-free conversation snapshot | [Conversation capture](/capture/) |
@@ -59,6 +59,8 @@ request would cross that floor. The live probe observes other processes and
 tools that share the token. This is best-effort because an unrelated consumer
 can spend quota between the probe and request; the 1500 default provides
 concurrency headroom. Pass `--reserve-rate-limit N` to choose another floor.
+An incomplete fill, including a quota stop, exits nonzero while returning the
+counts already committed. See [partial failures](/sync/#partial-failures).
 
 For an end-to-end first-run sequence that combines `status --json`, `doctor --json`, `sync --numbers`, bounded `--sync-if-stale` search, `gitcrawl runs`, and Octopool live reads, see the [maintainer archive workflow](/maintainer-archive/).
 

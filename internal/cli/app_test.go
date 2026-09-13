@@ -6895,8 +6895,9 @@ func TestFillPRDetailsDefaultRateLimitFloorUsesLiveSharedQuota(t *testing.T) {
 	run := New()
 	var stdout bytes.Buffer
 	run.Stdout = &stdout
-	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--json"}); err != nil {
-		t.Fatalf("fill-pr-details: %v", err)
+	var reserveErr *gh.RateLimitReserveError
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--json"}); !errors.As(err, &reserveErr) {
+		t.Fatalf("incomplete fill must return quota failure: %v", err)
 	}
 	var result struct {
 		Selected      int                  `json:"selected"`
@@ -7023,8 +7024,9 @@ func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.
 	run := New()
 	var stdout bytes.Buffer
 	run.Stdout = &stdout
-	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--reserve-rate-limit", "10", "--json"}); err != nil {
-		t.Fatalf("fill-pr-details: %v", err)
+	var reserveErr *gh.RateLimitReserveError
+	if err := run.Run(ctx, []string{"--config", configPath, "fill-pr-details", "openclaw/gitcrawl", "--limit", "1", "--reserve-rate-limit", "10", "--json"}); !errors.As(err, &reserveErr) {
+		t.Fatalf("incomplete fill must return quota failure: %v", err)
 	}
 	var result struct {
 		Selected      int                  `json:"selected"`

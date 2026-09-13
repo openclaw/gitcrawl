@@ -216,3 +216,104 @@ func TestClosedSweepPreservesExplicitScopeContracts(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyCheckpointSurvivesCommittedClosureAndFailedRunRecord(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	st, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	client := &defaultSweepGitHub{}
+	s := New(client, st)
+	started := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := started
+	s.now = func() time.Time { return now }
+	opts := Options{Owner: "fixture", Repo: "repo"}
+	if _, err := s.Sync(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `update sync_runs set stats_json = '{}'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `create trigger fail_success before insert on sync_runs
+		when new.status = 'success'
+		begin select raise(abort, 'final run rejected'); end`); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(60 * 24 * time.Hour)
+	client.closed, client.updated = true, now.Format(time.RFC3339Nano)
+	stats, err := s.Sync(ctx, opts)
+	if err == nil || stats.ThreadsClosed != 1 || stats.ThreadsSynced != 1 || stats.ClosedSweepThrough != "" {
+		t.Fatalf("final record failure lost truthful commits: %+v err=%v", stats, err)
+	}
+	threads, err := st.ListThreads(ctx, repo.ID, true)
+	if err != nil || len(threads) != 1 || threads[0].State != "closed" {
+		t.Fatalf("committed closure lost=%+v err=%v", threads, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watermark, err := st.ClosedSweepWatermark(ctx, repo.ID)
+	if err != nil || !watermark.Equal(started) {
+		t.Fatalf("legacy checkpoint lost after reopen=%v err=%v", watermark, err)
+	}
+	last, err := st.LastSuccessfulSyncAt(ctx, repo.ID)
+	if err != nil || !last.Equal(started) {
+		t.Fatalf("failed final record advanced freshness=%v err=%v", last, err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `drop trigger fail_success`); err != nil {
+		t.Fatal(err)
+	}
+	s = New(client, st)
+	s.now = func() time.Time { return now }
+	if _, err := s.Sync(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.requests[len(client.requests)-1].Since; got != started.Add(-time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("retry lost original window=%q", got)
+	}
+	watermark, err = st.ClosedSweepWatermark(ctx, repo.ID)
+	if err != nil || !watermark.Equal(now) {
+		t.Fatalf("complete retry did not advance=%v err=%v", watermark, err)
+	}
+}
+
+func TestNewArchivePartialCommitPreservesInitialSweepLowerBound(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	client := &partialGitHub{failNumber: 8, operation: "issue"}
+	s := New(client, st)
+	started := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return started }
+	stats, err := s.Sync(ctx, Options{Owner: "fixture", Repo: "repo", Numbers: []int{7, 8}})
+	if err == nil || stats.ThreadsSynced != 1 {
+		t.Fatalf("partial sync=%+v err=%v", stats, err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	watermark, err := st.ClosedSweepWatermark(ctx, repo.ID)
+	if err != nil || !watermark.Equal(started.Add(-24*time.Hour)) {
+		t.Fatalf("partial observation advanced initial lower bound=%v err=%v", watermark, err)
+	}
+	assertNoSuccessfulSync(t, st, repo.ID)
+	runs, err := st.ListRuns(ctx, repo.ID, "sync", 10)
+	if err != nil || len(runs) != 1 || runs[0].Status != "checkpoint" {
+		t.Fatalf("checkpoint=%+v err=%v", runs, err)
+	}
+}

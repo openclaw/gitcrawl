@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1245,9 +1246,15 @@ func (failingSecondCommentGitHub) ListIssueComments(ctx context.Context, owner, 
 }
 
 func (g *txProbePullDetailsGitHub) ListPullFiles(ctx context.Context, owner, repo string, number int, reporter gh.Reporter) ([]map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 	storedRepo, err := g.st.RepositoryByFullName(ctx, owner+"/"+repo)
 	if err != nil {
-		g.sawMissingPersistedThread = true
+		if errors.Is(err, sql.ErrNoRows) {
+			g.sawMissingPersistedThread = true
+		} else {
+			g.sawPersistedThreadReadErr = err
+		}
 		return nil, nil
 	}
 	threads, err := g.st.ListThreads(ctx, storedRepo.ID, true)
@@ -1260,6 +1267,7 @@ func (g *txProbePullDetailsGitHub) ListPullFiles(ctx context.Context, owner, rep
 			g.sawPersistedThread = true
 		}
 	}
+	g.sawMissingPersistedThread = !g.sawPersistedThread
 	return nil, nil
 }
 
@@ -3183,7 +3191,7 @@ func TestSyncRollsBackThreadRevisionWhenFingerprintFails(t *testing.T) {
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true, IncludePRDetails: true}); err == nil || !strings.Contains(err.Error(), "fingerprint rejected") {
 		t.Fatalf("sync error = %v", err)
 	}
-	for _, table := range []string{"repositories", "threads", "thread_revisions", "thread_fingerprints"} {
+	for _, table := range []string{"threads", "thread_revisions", "thread_fingerprints"} {
 		var count int
 		if err := st.DB().QueryRowContext(ctx, `select count(*) from `+table).Scan(&count); err != nil {
 			t.Fatalf("%s count: %v", table, err)
@@ -3194,7 +3202,7 @@ func TestSyncRollsBackThreadRevisionWhenFingerprintFails(t *testing.T) {
 	}
 }
 
-func TestSyncWithCommentsRollsBackOnCommentFetchError(t *testing.T) {
+func TestSyncWithCommentsRetainsCompletedItemsOnCommentFetchError(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -3204,18 +3212,19 @@ func TestSyncWithCommentsRollsBackOnCommentFetchError(t *testing.T) {
 
 	s := New(failingSecondCommentGitHub{}, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC) }
-	_, err = s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true})
+	stats, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", IncludeComments: true})
 	if err == nil || !strings.Contains(err.Error(), "comments unavailable") {
 		t.Fatalf("sync error = %v", err)
 	}
-	if _, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl"); err == nil {
-		t.Fatal("repository persisted after failed comment hydration")
+	if stats.ThreadsSynced != 1 || stats.CommentsSynced != 1 || stats.ClosedSweepThrough != "" {
+		t.Fatalf("committed stats = %+v", stats)
 	}
-	assertTableRowCount(t, st, "repositories", 0)
-	assertTableRowCount(t, st, "threads", 0)
-	assertTableRowCount(t, st, "comments", 0)
-	assertTableRowCount(t, st, "documents", 0)
-	assertTableRowCount(t, st, "sync_runs", 0)
+	assertTableRowCount(t, st, "repositories", 1)
+	assertTableRowCount(t, st, "threads", 2)
+	assertTableRowCount(t, st, "comments", 1)
+	assertTableRowCount(t, st, "documents", 1)
+	assertTableRowCount(t, st, "sync_attempt_failures", 1)
+	assertTableRowCount(t, st, "sync_runs", 1)
 }
 
 func TestMetadataOnlySyncPreservesCommentBackedDocumentText(t *testing.T) {
@@ -3715,7 +3724,7 @@ func TestSyncPullRequestDetailsFailsOnReviewThreadFetchError(t *testing.T) {
 		t.Fatalf("failure = %+v", failures[0])
 	}
 	assertTableRowCount(t, st, "pull_request_review_thread_syncs", 0)
-	assertTableRowCount(t, st, "sync_runs", 0)
+	assertTableRowCount(t, st, "sync_runs", 1)
 
 	s = New(pullDetailsGitHub{}, st)
 	s.now = func() time.Time { return time.Date(2026, 4, 26, 0, 1, 0, 0, time.UTC) }
@@ -3763,7 +3772,7 @@ func TestSyncAttemptErrorClass(t *testing.T) {
 	}
 }
 
-func TestRecordPullRequestSyncFailureOutlivesCanceledFetchContext(t *testing.T) {
+func TestRecordSyncFailureOutlivesCanceledFetchContext(t *testing.T) {
 	background := context.Background()
 	st, err := store.Open(background, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -3782,7 +3791,7 @@ func TestRecordPullRequestSyncFailureOutlivesCanceledFetchContext(t *testing.T) 
 	}
 	canceled, cancel := context.WithCancel(background)
 	cancel()
-	if err := s.recordPullRequestSyncFailure(canceled, Options{Owner: "openclaw", Repo: "gitcrawl"}, repoRaw, row, "pull_request_details", context.Canceled); err != nil {
+	if err := s.recordSyncFailure(canceled, Options{Owner: "openclaw", Repo: "gitcrawl"}, repoRaw, row, 8, "pull_request_details", context.Canceled); err != nil {
 		t.Fatalf("record canceled sync failure: %v", err)
 	}
 	repo, err := st.RepositoryByFullName(background, "openclaw/gitcrawl")
@@ -3840,7 +3849,7 @@ func TestSyncPullRequestDetailsDoesNotFetchInsideTransaction(t *testing.T) {
 		t.Fatalf("probe persisted thread: %v", client.sawPersistedThreadReadErr)
 	}
 	if !client.sawMissingPersistedThread {
-		t.Fatal("PR detail fetch saw repository writes before hydration finished")
+		t.Fatal("PR detail fetch saw thread writes before hydration finished")
 	}
 	if client.sawPersistedThread {
 		t.Fatal("PR detail fetch saw persisted PR thread before hydration finished")

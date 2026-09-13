@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Preserve completed issue and PR hydrations when another item fails, with atomic per-item writes, scoped failure resolution, and unchanged successful-sync coverage. Record issue and comment fetch failures in the existing ledger. `sync` and `fill-pr-details` return committed counts while exiting nonzero on incomplete acquisition, including quota stops.
 - Update SQLite's C-parser dependency to v4.29.6 and pin the automation guide's artifact-upload example to v7.0.1.
 - Add explicit cloud archive admission with immutable source, integrity, enrichment, and warning evidence while preserving strict publication defaults. Thanks @vincentkoc.
 - Compatibility: report portable publication time as `last_export_at`; `last_sync_at` now describes retained successful sync runs instead of old repository scan checkpoints. Thanks @obviyus.
