@@ -2695,7 +2695,7 @@ func TestConsolidateWorkflowSnapshotsTombstonesDeletionAcrossStaleReappearanceOr
 			if err := s.consolidateWorkflowSnapshots(ctx, Options{
 				Owner: "openclaw",
 				Repo:  "gitcrawl",
-			}, payloads); err != nil {
+			}, payloads, true); err != nil {
 				t.Fatalf("consolidate workflow snapshots: %v", err)
 			}
 			for index := range payloads {

@@ -90,7 +90,8 @@ observation ordering. It does not fetch, clear, or mark files, commits, checks,
 workflow runs, or review-thread resolution as fresh. Comments remain independent:
 add `--include-comments` when needed. Selecting both hydration modes uses full
 `pr-details` hydration. Metadata-only hydration does not create full PR revisions
-or fingerprints, and it resolves only earlier metadata-fetch failures.
+or fingerprints. It resolves PR metadata-fetch failures, not failures of omitted
+child collections.
 
 Full PR details also populate `pull_request_files`, `pull_request_commits`,
 `pull_request_checks`, and `github_workflow_runs` for local review and search.
@@ -116,6 +117,8 @@ Each completed issue or PR commits atomically with its requested children,
 document, revision, fingerprint, and failure resolutions. A failed item does not
 roll back completed siblings. Shared-head workflow observations are consolidated
 before those writes, so sibling ordering cannot replace a newer snapshot.
+A consolidation failure excludes only its shared-head group, records those
+items as failed PR-detail hydrations, and preserves unrelated completed items.
 
 An item fetch failure records its actual operation: `issue`, `issue_comments`,
 `pull_reviews`, `pull_review_comments`, `pull_review_threads`,
@@ -123,6 +126,14 @@ An item fetch failure records its actual operation: `issue`, `issue_comments`,
 not create a thread stub. Failed child fetches can retain the observed parent
 metadata, but do not replace incomplete child collections or certify complete
 evidence. Cancellation stops further work; transactions already committed remain.
+A quota-reserve failure also stops new acquisition, including quota probes.
+Completed payloads can still commit. Skipped requests are not recorded as
+failures; shared-head groups that still need verification remain uncommitted.
+
+An item transaction failure is recorded as `persistence` after rollback, with
+only an existing parent reference when available. It does not recreate the
+rolled-back item. A later complete item transaction resolves this entry;
+separate acquisition failures still require their own observed families.
 
 An incomplete batch exits nonzero and never records a successful sync or advances
 the closed-sweep watermark. Before partial writes, archives without a recorded
@@ -130,6 +141,8 @@ watermark retain their previous retry lower bound as a `checkpoint` in
 `sync_runs`. A new archive uses the default 24-hour lower bound. This checkpoint
 is not successful list coverage or freshness. Retry the failed numbers with the
 same hydration flags after resolving the reported cause.
+Older binaries can read these archives but do not honor the retry checkpoint
+when writing. Do not downgrade the writer to resume a partially completed sync.
 
 `--include-code` is accepted for compatibility but is currently a no-op.
 

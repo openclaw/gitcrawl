@@ -147,8 +147,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		return Stats{}, err
 	}
 	var failures []error
+	var reserveErr *gh.RateLimitReserveError
 	recordFailure := func(number int, row map[string]any, operation string, cause error) error {
 		failures = append(failures, fmt.Errorf("%s #%d: %w", operation, number, cause))
+		errors.As(cause, &reserveErr)
 		if err := s.recordSyncFailure(ctx, options, repoRaw, row, number, operation, cause); err != nil {
 			failures = append(failures, fmt.Errorf("record sync attempt failure: %w", err))
 			return errors.Join(failures...)
@@ -162,6 +164,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	rows := make([]map[string]any, 0, len(numbers))
 	if len(numbers) > 0 {
 		for _, number := range numbers {
+			if reserveErr != nil {
+				break
+			}
 			row, err := s.client.GetIssue(ctx, options.Owner, options.Repo, number, options.Reporter)
 			if err != nil {
 				if err := recordFailure(number, nil, "issue", err); err != nil {
@@ -229,6 +234,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		payload := threadSyncPayload{row: row}
 		number := intValue(row["number"])
 		kind := issueKind(row)
+		if reserveErr != nil && (options.IncludeComments ||
+			kind == "pull_request" && (options.IncludePRMetadata || options.IncludePRDetails)) {
+			continue
+		}
 		if options.IncludeComments {
 			commentRows, operation, err := s.fetchCommentRows(ctx, options, kind, number)
 			if err != nil {
@@ -277,9 +286,20 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			return Stats{}, err
 		}
 	}
-	if err := s.consolidateWorkflowSnapshots(ctx, options, payloads); err != nil {
-		return Stats{}, err
+	groupFailures := s.consolidateWorkflowSnapshots(ctx, options, payloads, reserveErr == nil)
+	completed := payloads[:0]
+	for index, payload := range payloads {
+		if cause, excluded := groupFailures[index]; excluded {
+			if cause != nil {
+				if err := recordFailure(intValue(payload.row["number"]), payload.row, "pull_request_details", cause); err != nil {
+					return Stats{}, err
+				}
+			}
+			continue
+		}
+		completed = append(completed, payload)
 	}
+	payloads = completed
 	// Order replace-all child snapshots when their complete observations are available.
 	observationSequence, err := s.store.NextThreadObservationSequence(ctx, started)
 	if err != nil {
@@ -392,7 +412,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 			}
-			var resolvedOperations []string
+			resolvedOperations := []string{"persistence"}
 			if upsert.Applied {
 				resolvedOperations = append(resolvedOperations, "issue")
 			}
@@ -532,14 +552,13 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				attempt.IssuesSynced++
 			}
 			// Resolve only observed families, atomically with their persisted data.
-			if len(resolvedOperations) > 0 {
-				_, err = st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano), resolvedOperations...)
-			}
+			_, err = st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano), resolvedOperations...)
 			return err
 		})
 		if err != nil {
-			failures = append(failures, fmt.Errorf("persist thread #%d: %w", intValue(payload.row["number"]), err))
-			if ctx.Err() != nil {
+			// The failed transaction is gone. Record only its existing parent,
+			// never recreate rolled-back thread or child rows for the ledger.
+			if recordErr := recordFailure(intValue(payload.row["number"]), nil, "persistence", err); recordErr != nil {
 				break
 			}
 			continue
@@ -647,6 +666,16 @@ func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw
 			})
 			if err != nil {
 				return err
+			}
+		} else {
+			threads, err := st.ListThreadsFiltered(recordCtx, store.ThreadListOptions{
+				RepoID: repoID, IncludeClosed: true, Numbers: []int{number}, Limit: 1,
+			})
+			if err != nil {
+				return err
+			}
+			if len(threads) > 0 {
+				threadID = threads[0].ID
 			}
 		}
 		_, err = st.RecordSyncAttemptFailure(recordCtx, store.SyncAttemptFailure{
