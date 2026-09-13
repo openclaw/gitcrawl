@@ -53,53 +53,9 @@ func (c *Client) Summarize(ctx context.Context, model, instructions, input strin
 		return "", fmt.Errorf("OpenAI API key is required")
 	}
 
-	deadline := c.now().Add(c.retry.MaxElapsed)
-	var lastErr error
-	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		text, apiErr, err := c.summarizeOnce(ctx, model, instructions, input)
-		if err != nil {
-			if isContextErr(err) {
-				return "", err
-			}
-			lastErr = err
-			if attempt+1 >= c.retry.MaxAttempts {
-				return "", err
-			}
-			delay := c.backoff(attempt, c.retry.BaseDelay, 0)
-			if !c.canSleep(deadline, delay) {
-				return "", err
-			}
-			if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
-				return "", sleepErr
-			}
-			continue
-		}
-		if apiErr == nil {
-			return text, nil
-		}
-		lastErr = apiErr
-		if !apiErr.Retryable() || attempt+1 >= c.retry.MaxAttempts {
-			return "", apiErr
-		}
-		base := c.retry.BaseDelay
-		if apiErr.IsOverloaded() {
-			base = c.retry.OverloadedBase
-		}
-		delay := c.backoff(attempt, base, apiErr.RetryAfter)
-		if !c.canSleep(deadline, delay) {
-			return "", apiErr
-		}
-		if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
-			return "", sleepErr
-		}
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("openai summary: exhausted %d attempts", c.retry.MaxAttempts)
-	}
-	return "", lastErr
+	return retryRequest(ctx, c, func() (string, *APIError, error) {
+		return c.summarizeOnce(ctx, model, instructions, input)
+	})
 }
 
 func (c *Client) summarizeOnce(ctx context.Context, model, instructions, input string) (string, *APIError, error) {
