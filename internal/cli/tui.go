@@ -206,17 +206,19 @@ func (a *App) runInteractiveTUI(ctx context.Context, st *store.Store, repoID int
 	if !ok {
 		return a.writeOutput("tui", payload, true)
 	}
-	tuiCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	model := newClusterBrowserModel(tuiCtx, st, repoID, payload)
-	program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseAllMotion())
-	finalModel, err := program.Run()
-	cancel()
-	if final, ok := finalModel.(clusterBrowserModel); ok && final.store != nil && final.store != st {
-		final.cancelNeighborLoad()
-		_ = final.store.Close()
-	}
-	return err
+	return a.withTUIRenderer(func() error {
+		tuiCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		model := newClusterBrowserModel(tuiCtx, st, repoID, payload)
+		program := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseAllMotion())
+		finalModel, err := program.Run()
+		cancel()
+		if final, ok := finalModel.(clusterBrowserModel); ok && final.store != nil && final.store != st {
+			final.cancelNeighborLoad()
+			_ = final.store.Close()
+		}
+		return err
+	})
 }
 
 func newClusterBrowserModel(ctx context.Context, st *store.Store, repoID int64, payload clusterBrowserPayload) clusterBrowserModel {

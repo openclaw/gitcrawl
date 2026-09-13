@@ -33,6 +33,7 @@ type App struct {
 
 	configPath            string
 	format                OutputFormat
+	noColor               bool
 	getWorkingDirectory   func() (string, error)
 	githubAuthTokenLookup func(context.Context) (string, error)
 	dbTargetNoticeOnce    sync.Once
@@ -73,6 +74,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 	a.configPath = strings.TrimSpace(global.Config)
 	a.format = resolvedFormat
+	a.noColor = global.NoColor
 	a.githubTokenCommand = global.GitHubTokenCommand
 	a.observedGitHubToken = ""
 
