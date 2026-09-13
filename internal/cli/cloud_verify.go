@@ -41,6 +41,9 @@ func gitcrawlPublisherStatusMatches(
 	if !equalUniqueStringSet(snapshot.Capabilities, publicationCapabilities) {
 		return false
 	}
+	if !gitcrawlCloudWarningsMatch(snapshot.Warnings, manifest.Warnings) {
+		return false
+	}
 	return true
 }
 

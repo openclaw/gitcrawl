@@ -112,7 +112,7 @@ Usage:
 	"cloud": `gitcrawl cloud manages Worker-backed remote archives.
 
 Usage:
-  gitcrawl cloud publish --remote URL --archive id [--allow-incomplete] [--observation-order] [--stage-only] [--json]
+  gitcrawl cloud publish --remote URL --archive id [--allow-incomplete | --admission-policy=archive-v1] [--observation-order] [--stage-only] [--json]
 `,
 	"whoami": `gitcrawl whoami prints the configured remote archive identity.
 

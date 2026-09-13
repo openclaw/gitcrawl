@@ -19,50 +19,79 @@ func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {
 	}
 }
 
-func cloudSQLiteSnapshotPath(ctx context.Context, db *sql.DB, dbPath string) (string, func(), error) {
+func cloudSQLiteSnapshotPath(
+	ctx context.Context, db *sql.DB, dbPath string, options gitcrawlCloudPublishOptions,
+) (string, *gitcrawlCloudAdmission, func(), error) {
+	if err := options.validate(); err != nil {
+		return "", nil, func() {}, err
+	}
 	snapshotPath, cleanup, err := sqliteSnapshotPath(ctx, db, "")
 	if err != nil {
 		source := strings.TrimSpace(dbPath)
 		if source == "" {
-			return "", func() {}, err
+			return "", nil, func() {}, err
 		}
 		if _, statErr := os.Stat(source); statErr != nil {
-			return "", func() {}, fmt.Errorf("stat cloud SQLite source: %w", statErr)
+			return "", nil, func() {}, fmt.Errorf("stat cloud SQLite source: %w", statErr)
 		}
 		reopened, openErr := sql.Open("sqlite", source)
 		if openErr != nil {
-			return "", func() {}, fmt.Errorf("reopen cloud SQLite source: %w", openErr)
+			return "", nil, func() {}, fmt.Errorf("reopen cloud SQLite source: %w", openErr)
 		}
 		snapshotPath, cleanup, err = sqliteSnapshotPath(ctx, reopened, "")
 		closeErr := reopened.Close()
 		if err != nil {
-			return "", func() {}, err
+			return "", nil, func() {}, err
 		}
 		if closeErr != nil {
 			cleanup()
-			return "", func() {}, fmt.Errorf("close reopened cloud SQLite source: %w", closeErr)
+			return "", nil, func() {}, fmt.Errorf("close reopened cloud SQLite source: %w", closeErr)
 		}
 	}
 	snapshotDB, err := sql.Open("sqlite", snapshotPath)
 	if err != nil {
 		cleanup()
-		return "", func() {}, fmt.Errorf("open cloud SQLite snapshot: %w", err)
+		return "", nil, func() {}, fmt.Errorf("open cloud SQLite snapshot: %w", err)
+	}
+	// Derive evidence from the frozen copy before the sanitizer removes run
+	// diagnostics. A source's previous admission marker is never consulted.
+	var admission *gitcrawlCloudAdmission
+	if options.AdmissionPolicy == gitcrawlArchiveAdmissionPolicy {
+		admission, err = assessGitcrawlCloudArchive(ctx, snapshotPath)
+		if err != nil {
+			_ = snapshotDB.Close()
+			cleanup()
+			return "", nil, func() {}, err
+		}
 	}
 	if err := sanitizeCloudSQLiteSnapshot(ctx, snapshotDB); err != nil {
 		_ = snapshotDB.Close()
 		cleanup()
-		return "", func() {}, err
+		return "", nil, func() {}, err
+	}
+	if admission != nil {
+		if err := validateGitcrawlArchiveIntegrity(ctx, snapshotDB, admission); err != nil {
+			_ = snapshotDB.Close()
+			cleanup()
+			return "", nil, func() {}, err
+		}
+		admission.Integrity.Privacy = true
+	}
+	if err := writeGitcrawlCloudAdmission(ctx, snapshotDB, admission); err != nil {
+		_ = snapshotDB.Close()
+		cleanup()
+		return "", nil, func() {}, fmt.Errorf("write cloud admission evidence: %w", err)
 	}
 	if _, err := snapshotDB.ExecContext(ctx, `vacuum`); err != nil {
 		_ = snapshotDB.Close()
 		cleanup()
-		return "", func() {}, fmt.Errorf("compact cloud SQLite snapshot: %w", err)
+		return "", nil, func() {}, fmt.Errorf("compact cloud SQLite snapshot: %w", err)
 	}
 	if err := snapshotDB.Close(); err != nil {
 		cleanup()
-		return "", func() {}, fmt.Errorf("close cloud SQLite snapshot: %w", err)
+		return "", nil, func() {}, fmt.Errorf("close cloud SQLite snapshot: %w", err)
 	}
-	return snapshotPath, cleanup, nil
+	return snapshotPath, admission, cleanup, nil
 }
 
 func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
