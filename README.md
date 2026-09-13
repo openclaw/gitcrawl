@@ -78,7 +78,7 @@ make test
 make check
 ```
 
-`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, and snapshot gates used by CI.
+`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.8.2 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.18.1 for snapshot builds.
 
 ## License
 
