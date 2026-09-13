@@ -20,6 +20,24 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+type embeddingRequest struct {
+	Model      string   `json:"model"`
+	Input      []string `json:"input"`
+	Dimensions int      `json:"dimensions,omitempty"`
+}
+
+type embeddingResponse struct {
+	Data []struct {
+		Index     int       `json:"index"`
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	} `json:"error,omitempty"`
+}
+
 func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request embeddingRequest
@@ -381,11 +399,12 @@ func TestEmbedPropagatesContextCancellation(t *testing.T) {
 }
 
 func TestEmbedRetryAfterDateForm(t *testing.T) {
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
 	var calls int32
 	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n == 1 {
-			w.Header().Set("Retry-After", time.Now().Add(3*time.Second).UTC().Format(http.TimeFormat))
+			w.Header().Set("Retry-After", now.Add(3*time.Second).Format(http.TimeFormat))
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -395,15 +414,15 @@ func TestEmbedRetryAfterDateForm(t *testing.T) {
 
 	var slept []time.Duration
 	retry := RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Hour, MaxElapsed: time.Hour}
-	client := New(Options{APIKey: "test", BaseURL: server.URL, Retry: &retry, Sleep: func(_ context.Context, d time.Duration) error {
+	client := New(Options{APIKey: "test", BaseURL: server.URL, Retry: &retry, Now: func() time.Time { return now }, Sleep: func(_ context.Context, d time.Duration) error {
 		slept = append(slept, d)
 		return nil
 	}})
 	if _, err := client.Embed(context.Background(), "model", []string{"hi"}); err != nil {
 		t.Fatalf("embed: %v", err)
 	}
-	if len(slept) != 1 || slept[0] < time.Second || slept[0] > 4*time.Second {
-		t.Fatalf("expected ~3s sleep from HTTP-date Retry-After, got %v", slept)
+	if len(slept) != 1 || slept[0] != 3*time.Second {
+		t.Fatalf("expected exactly 3s sleep from HTTP-date Retry-After, got %v", slept)
 	}
 }
 

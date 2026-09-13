@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	crawlembed "github.com/openclaw/crawlkit/embed"
@@ -52,8 +51,6 @@ type Client struct {
 
 	now   func() time.Time
 	sleep func(context.Context, time.Duration) error
-	rand  *rand.Rand
-	randM sync.Mutex
 }
 
 type Options struct {
@@ -65,24 +62,6 @@ type Options struct {
 
 	Now   func() time.Time
 	Sleep func(context.Context, time.Duration) error
-}
-
-type embeddingRequest struct {
-	Model      string   `json:"model"`
-	Input      []string `json:"input"`
-	Dimensions int      `json:"dimensions,omitempty"`
-}
-
-type embeddingResponse struct {
-	Data []struct {
-		Index     int       `json:"index"`
-		Embedding []float64 `json:"embedding"`
-	} `json:"data"`
-	Error *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-	} `json:"error,omitempty"`
 }
 
 func New(options Options) *Client {
@@ -115,7 +94,6 @@ func New(options Options) *Client {
 		retry:      retry,
 		now:        now,
 		sleep:      sleep,
-		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -149,56 +127,9 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 	}
 	texts = capEmbeddingInputs(texts)
 
-	deadline := c.now().Add(c.retry.MaxElapsed)
-	var lastErr error
-	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		vectors, apiErr, err := c.embedOnce(ctx, model, texts)
-		if err != nil {
-			if isContextErr(err) {
-				return nil, err
-			}
-			lastErr = err
-			if attempt+1 >= c.retry.MaxAttempts {
-				return nil, err
-			}
-			delay := c.backoff(attempt, c.retry.BaseDelay, 0)
-			if !c.canSleep(deadline, delay) {
-				return nil, err
-			}
-			if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
-				return nil, sleepErr
-			}
-			continue
-		}
-		if apiErr == nil {
-			return vectors, nil
-		}
-		lastErr = apiErr
-		if !apiErr.Retryable() {
-			return nil, apiErr
-		}
-		if attempt+1 >= c.retry.MaxAttempts {
-			return nil, apiErr
-		}
-		base := c.retry.BaseDelay
-		if apiErr.IsOverloaded() {
-			base = c.retry.OverloadedBase
-		}
-		delay := c.backoff(attempt, base, apiErr.RetryAfter)
-		if !c.canSleep(deadline, delay) {
-			return nil, apiErr
-		}
-		if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
-			return nil, sleepErr
-		}
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("openai embeddings: exhausted %d attempts", c.retry.MaxAttempts)
-	}
-	return nil, lastErr
+	return retryRequest(ctx, c, func() ([][]float64, *APIError, error) {
+		return c.embedOnce(ctx, model, texts)
+	})
 }
 
 func (c *Client) embedOnce(ctx context.Context, model string, texts []string) ([][]float64, *APIError, error) {
@@ -255,9 +186,7 @@ func (c *Client) backoff(attempt int, base time.Duration, retryAfter time.Durati
 		delay = c.retry.MaxDelay
 	}
 	if c.retry.Jitter > 0 {
-		c.randM.Lock()
-		offset := (c.rand.Float64()*2 - 1) * c.retry.Jitter * float64(delay)
-		c.randM.Unlock()
+		offset := (rand.Float64()*2 - 1) * c.retry.Jitter * float64(delay)
 		delay += time.Duration(offset)
 		if delay < 0 {
 			delay = 0
