@@ -146,29 +146,31 @@ gitcrawl sync owner/repo --limit 200
 
 ## JSON output
 
+The result reports processed thread and hydration counts, not separate insert
+and update counts. For a compact view:
+
 ```bash
-gitcrawl sync owner/repo --json
+gitcrawl sync owner/repo --json \
+  | jq '{repository, threads_synced, issues_synced, pull_requests_synced, comments_synced, metadata_only, started_at, finished_at}'
 ```
 
 ```json
 {
   "repository": "owner/repo",
-  "state": "open",
-  "since": "",
-  "selected": 124,
-  "inserted": 12,
-  "updated": 9,
-  "deleted": 0,
-  "comments_inserted": 0,
-  "comments_updated": 0,
-  "reviews_inserted": 0,
-  "pr_files_inserted": 0,
-  "pr_commits_inserted": 0,
-  "run_id": 42,
+  "threads_synced": 124,
+  "issues_synced": 100,
+  "pull_requests_synced": 24,
+  "comments_synced": 0,
+  "metadata_only": true,
   "started_at": "2026-05-05T07:30:11Z",
   "finished_at": "2026-05-05T07:30:43Z"
 }
 ```
+
+The full result also includes PR-detail and enrichment counters, closure and
+stale-observation counts, the requested scope when present, and the database
+write destination. Use `gitcrawl runs owner/repo --kind sync --json` for
+recorded run IDs.
 
 ## Common workflows
 

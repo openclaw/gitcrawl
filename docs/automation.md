@@ -18,7 +18,7 @@ Stable JSON contracts, agent recipes, and patterns for keeping the local mirror 
 Every command supports `--json` (or the global `--format json`). The resulting payload is pretty-printed with stable field names so you can pipe it directly into `jq` or feed it to an agent as structured context.
 
 ```bash
-gitcrawl sync owner/repo --json | jq '{run_id, inserted, updated}'
+gitcrawl sync owner/repo --json | jq '{threads_synced, comments_synced, finished_at}'
 gitcrawl clusters owner/repo --json --sort size --min-size 5 \
   | jq '.clusters[] | {id, members: .member_count, latest: .latest_thread_number}'
 ```
