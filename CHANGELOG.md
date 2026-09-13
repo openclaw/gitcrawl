@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Honor the global `--no-color` flag in the terminal browser.
+
 - Compatibility: report portable publication time as `last_export_at`; `last_sync_at` now describes retained successful sync runs instead of old repository scan checkpoints. Thanks @obviyus.
 - Stop REST pagination when GitHub returns repeated or cyclic next links, preventing repeated requests and incomplete sync results.
 

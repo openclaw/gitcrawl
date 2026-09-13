@@ -22,6 +22,7 @@ actions, detail rendering, and status chrome wherever the data model allows it.
 
 ```bash
 gitcrawl tui owner/repo
+gitcrawl --no-color tui owner/repo # disable terminal colors
 gitcrawl tui                      # infers the most recently updated local repo
 gitcrawl tui --min-size 5         # default; show clusters with ≥5 active members
 gitcrawl tui --sort recent        # alternate sort
