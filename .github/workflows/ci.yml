@@ -60,7 +60,7 @@ jobs:
       - name: Deadcode
         run: |
           output_file=$(mktemp)
-          go run golang.org/x/tools/cmd/deadcode@v0.49.0 -test ./... > "$output_file"
+          go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... > "$output_file"
           if [ -s "$output_file" ]; then
             cat "$output_file"
             exit 1
@@ -95,3 +95,19 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
+
+  portable-windows:
+    name: Portable filesystem / windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test exclusive publication and long paths
+        run: go test ./internal/cli -run '^TestPortableExclusiveRename' -count=1
+      - name: Build and smoke test CLI
+        run: |
+          go build -o gitcrawl.exe ./cmd/gitcrawl
+          ./gitcrawl.exe --version

@@ -59,6 +59,14 @@ Initialization validates portable arguments before invoking Git and validates
 the artifact before saving configuration. Repeated initialization and a
 publisher's raw-to-gzip transition do not require a raw `.db` in the checkout.
 Use `init` for setup; it still regenerates configuration on success.
+Initial clones are staged privately and published only after Git
+finishes successfully. A failed clone leaves an absent or empty destination
+unchanged, so retrying `init` does not reuse an incomplete Git checkout.
+Pre-created empty directories stay in place with their permissions and ACLs;
+publication refuses to replace concurrently created entries. If publication
+fails after moving files, recovery material is preserved at the reported path.
+Platforms or filesystems without native exclusive renames retain the legacy
+clone behavior; support is probed before transferring data.
 If a dirty merge triggers legacy reset recovery and that reset fails, `init`
 reports the reset failure with the same credential-safe Git diagnostics used
 elsewhere, so the error identifies the recovery step that needs attention.

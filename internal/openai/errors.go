@@ -83,18 +83,7 @@ func apiErrorFromEmbed(err error, now time.Time) *APIError {
 	if !errors.As(err, &httpErr) {
 		return nil
 	}
-	apiErr := &APIError{
-		Status:     httpErr.StatusCode,
-		Message:    strings.TrimSpace(httpErr.Body),
-		RetryAfter: parseRetryAfter(httpErr.Header.Get("Retry-After"), now),
-	}
-	var parsed embeddingResponse
-	if jerr := json.Unmarshal([]byte(httpErr.Body), &parsed); jerr == nil && parsed.Error != nil {
-		apiErr.Message = parsed.Error.Message
-		apiErr.Type = parsed.Error.Type
-		apiErr.Code = parsed.Error.Code
-	}
-	return apiErr
+	return apiErrorFromHTTP(httpErr.StatusCode, httpErr.Header, []byte(httpErr.Body), now)
 }
 
 func parseRetryAfter(header string, now time.Time) time.Duration {

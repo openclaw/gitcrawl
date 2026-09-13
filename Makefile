@@ -49,7 +49,7 @@ lint:
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' 0; \
-	go run golang.org/x/tools/cmd/deadcode@v0.49.0 -test ./... > "$$output_file"; \
+	go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... > "$$output_file"; \
 	if [ -s "$$output_file" ]; then cat "$$output_file"; exit 1; fi
 
 test:
