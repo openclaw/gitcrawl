@@ -229,7 +229,16 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 			Quiet:            *jsonProgress,
 			RateLimitReserve: reserve,
 		})
-		rate, hasRate := a.currentFillRateLimit(ctx, reserve)
+		var reserveErr *gh.RateLimitReserveError
+		var rate fillRateLimitResult
+		var hasRate bool
+		if errors.As(err, &reserveErr) {
+			// The stopping request owns this snapshot; do not resolve credentials
+			// or inspect a different resource after the quota guard has fired.
+			rate, hasRate = fillRateLimitResultFromSnapshot(reserveErr.RateLimit, reserve), true
+		} else if err == nil {
+			rate, hasRate = a.currentFillRateLimit(ctx, reserve)
+		}
 		batch := fillPRDetailsBatch{
 			Index:              len(result.Batches) + 1,
 			Numbers:            batchNumbers,
@@ -247,11 +256,8 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 		if err != nil {
 			syncErr = err
 			result.StoppedReason = "sync-failed"
-			var reserveErr *gh.RateLimitReserveError
-			if errors.As(err, &reserveErr) {
-				rate := fillRateLimitResultFromSnapshot(reserveErr.RateLimit, reserve)
+			if reserveErr != nil {
 				result.StoppedReason = "rate-limit-reserve"
-				result.RateLimit = &rate
 			}
 			break
 		}

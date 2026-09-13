@@ -3791,7 +3791,7 @@ func TestRecordSyncFailureOutlivesCanceledFetchContext(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(background)
 	cancel()
-	if err := s.recordSyncFailure(canceled, Options{Owner: "openclaw", Repo: "gitcrawl"}, repoRaw, row, 8, "pull_request_details", context.Canceled); err != nil {
+	if err := s.recordSyncFailure(canceled, Options{Owner: "openclaw", Repo: "gitcrawl"}, repoRaw, row, 8, context.Canceled, "pull_request_details"); err != nil {
 		t.Fatalf("record canceled sync failure: %v", err)
 	}
 	repo, err := st.RepositoryByFullName(background, "openclaw/gitcrawl")

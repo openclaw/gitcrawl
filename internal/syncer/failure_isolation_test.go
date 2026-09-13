@@ -234,9 +234,12 @@ func TestSyncNativeQuotaStopPreservesCompletedPayloadsWithoutFurtherRequests(t *
 	}
 }
 
-func TestSyncPersistenceFailureLedgerSurvivesRollbackAndRequiresCompleteRetry(t *testing.T) {
-	for _, existing := range []bool{false, true} {
-		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+func TestSyncPersistenceFailureLedgerSurvivesRollbackAndRequiresObservedFamilies(t *testing.T) {
+	for _, fixture := range []struct {
+		number   int
+		existing bool
+	}{{7, false}, {7, true}, {8, false}, {8, true}} {
+		t.Run(fmt.Sprint(fixture), func(t *testing.T) {
 			ctx := context.Background()
 			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 			if err != nil {
@@ -244,8 +247,8 @@ func TestSyncPersistenceFailureLedgerSurvivesRollbackAndRequiresCompleteRetry(t 
 			}
 			defer st.Close()
 			s := New(&partialGitHub{}, st)
-			opts := Options{Owner: "fixture", Repo: "repo", Numbers: []int{8}}
-			if existing {
+			opts := Options{Owner: "fixture", Repo: "repo", Numbers: []int{fixture.number}}
+			if fixture.existing {
 				if _, err := s.Sync(ctx, opts); err != nil {
 					t.Fatal(err)
 				}
@@ -264,11 +267,34 @@ func TestSyncPersistenceFailureLedgerSurvivesRollbackAndRequiresCompleteRetry(t 
 				t.Fatal(err)
 			}
 			failures, err := st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID})
-			if err != nil || len(failures) != 1 || failures[0].Operation != "persistence" || (failures[0].ThreadID != 0) != existing {
+			operations := []string{"issue", "issue_comments"}
+			if fixture.number == 8 {
+				operations = append(operations, "pull_request_metadata", "pull_request_details",
+					"pull_review_threads", "pull_reviews", "pull_review_comments")
+			}
+			slices.Sort(operations)
+			assertFailureOperations := func(failures []store.SyncAttemptFailure, want []string) {
+				t.Helper()
+				var got []string
+				for _, failure := range failures {
+					got = append(got, failure.Operation)
+				}
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Fatalf("failure operations=%v want=%v", got, want)
+				}
+			}
+			if err != nil {
 				t.Fatalf("rollback failure ledger=%+v err=%v", failures, err)
 			}
+			assertFailureOperations(failures, operations)
+			for _, failure := range failures {
+				if (failure.ThreadID != 0) != fixture.existing || !strings.Contains(failure.ErrorMessage, "fingerprint rejected") {
+					t.Fatalf("rollback failure parent/cause=%+v", failure)
+				}
+			}
 			coverage, err := st.ArchiveCoverage(ctx, store.ArchiveCoverageOptions{})
-			if err != nil || coverage.Totals.KnownFailedHydrations == nil || *coverage.Totals.KnownFailedHydrations != 1 {
+			if err != nil || coverage.Totals.KnownFailedHydrations == nil || *coverage.Totals.KnownFailedHydrations != len(operations) {
 				t.Fatalf("inventory hides persistence failure: %+v err=%v", coverage.Totals, err)
 			}
 			assertTableRowCount(t, st, "thread_revisions", 0)
@@ -276,18 +302,57 @@ func TestSyncPersistenceFailureLedgerSurvivesRollbackAndRequiresCompleteRetry(t 
 				t.Fatal("failed retry unexpectedly succeeded")
 			}
 			failures, err = st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID})
-			if err != nil || len(failures) != 1 || failures[0].RetryCount != 1 || failures[0].ResolvedAt != "" {
+			if err != nil {
 				t.Fatalf("rolled-back retry cleared persistence failure=%+v err=%v", failures, err)
 			}
+			assertFailureOperations(failures, operations)
+			for _, failure := range failures {
+				if failure.RetryCount != 1 || failure.ResolvedAt != "" {
+					t.Fatalf("rolled-back retry resolved or failed to count=%+v", failure)
+				}
+			}
+			shallow := opts
+			shallow.IncludeComments, shallow.IncludePRDetails, shallow.IncludePRMetadata = false, false, true
+			if _, err := s.Sync(ctx, shallow); err != nil {
+				t.Fatal(err)
+			}
+			failures, err = st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			remaining := []string{"issue_comments"}
+			if fixture.number == 8 {
+				remaining = append(remaining, "pull_request_details", "pull_review_comments", "pull_review_threads", "pull_reviews")
+			}
+			assertFailureOperations(failures, remaining)
 			if _, err := st.DB().ExecContext(ctx, `drop trigger reject_fingerprint`); err != nil {
 				t.Fatal(err)
 			}
+			shallow.IncludeComments, shallow.IncludePRMetadata = true, false
+			if _, err := s.Sync(ctx, shallow); err != nil {
+				t.Fatal(err)
+			}
+			failures, err = st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			remaining = nil
+			if fixture.number == 8 {
+				remaining = []string{"pull_request_details", "pull_review_threads"}
+			}
+			assertFailureOperations(failures, remaining)
 			if _, err := s.Sync(ctx, opts); err != nil {
 				t.Fatal(err)
 			}
 			failures, err = st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID, IncludeResolved: true})
-			if err != nil || len(failures) != 1 || failures[0].ResolvedAt == "" {
+			if err != nil {
 				t.Fatalf("complete retry failed to resolve=%+v err=%v", failures, err)
+			}
+			assertFailureOperations(failures, operations)
+			for _, failure := range failures {
+				if failure.ResolvedAt == "" {
+					t.Fatalf("complete retry left unresolved family=%+v", failure)
+				}
 			}
 		})
 	}
@@ -305,14 +370,76 @@ func TestSyncPersistenceBookkeepingFailurePreservesOriginalErrorAndPriorCommit(t
 		when (select number from threads where id = new.thread_id) = 8
 		begin select raise(abort, 'original persistence failure'); end;
 		create trigger reject_failure_record before insert on sync_attempt_failures
+		when new.operation = 'issue_comments'
 		begin select raise(abort, 'failure ledger unavailable'); end;`); err != nil {
 		t.Fatal(err)
 	}
-	stats, err := New(&partialGitHub{}, st).Sync(ctx, Options{Owner: "fixture", Repo: "repo", Numbers: []int{7, 8, 9}})
+	stats, err := New(&partialGitHub{}, st).Sync(ctx, Options{
+		Owner: "fixture", Repo: "repo", Numbers: []int{7, 8, 9}, IncludeComments: true,
+	})
 	if err == nil || !strings.Contains(err.Error(), "original persistence failure") ||
 		!strings.Contains(err.Error(), "failure ledger unavailable") || stats.ThreadsSynced != 1 {
 		t.Fatalf("original failure or prior commit lost: %+v err=%v", stats, err)
 	}
 	assertTableRowCount(t, st, "threads", 1)
 	assertTableRowCount(t, st, "documents", 1)
+	assertTableRowCount(t, st, "sync_attempt_failures", 0)
+}
+
+func TestSyncNoPersistedFamilyDoesNotResolveFailures(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	client := &partialGitHub{}
+	s := New(client, st)
+	opts := Options{Owner: "fixture", Repo: "repo", Numbers: []int{7}, IncludeComments: true}
+	if _, err := s.Sync(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSyncAttemptFailure(ctx, store.SyncAttemptFailure{
+		RepoID: repo.ID, Number: 7, Operation: "issue_comments", ErrorMessage: "unavailable",
+		LastSeenAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.beforePersist = func() {
+		row, err := client.GetIssue(ctx, opts.Owner, opts.Repo, 7, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		thread := mapIssueToThread(repo.ID, row, time.Now().UTC().Format(time.RFC3339Nano))
+		if err := st.WithTx(ctx, func(tx *store.Store) error {
+			sequence, err := tx.NextThreadObservationSequence(ctx, thread.UpdatedAt)
+			if err != nil {
+				return err
+			}
+			// A competing observation owns the parent and comments, but has not
+			// advanced complete evidence. This payload can persist only enrichment.
+			upsert, err := tx.UpsertThreadObservation(ctx, thread, store.UpsertThreadOptions{
+				IncompleteEvidence: true, ObservationSequence: sequence,
+			})
+			if err != nil {
+				return err
+			}
+			_, err = tx.ReserveThreadChildObservation(ctx, upsert.ID, store.ThreadChildComments, thread.UpdatedAtGitHub, sequence)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := s.Sync(ctx, opts)
+	if err != nil || stats.ThreadsSynced != 1 || stats.CommentsSynced != 0 || stats.EvidenceObserved != 1 {
+		t.Fatalf("expected enrichment without parent/child replacement: %+v err=%v", stats, err)
+	}
+	failures, err := st.ListSyncAttemptFailures(ctx, store.SyncAttemptFailureListOptions{RepoID: repo.ID})
+	if err != nil || len(failures) != 1 || failures[0].Operation != "issue_comments" {
+		t.Fatalf("empty family set resolved failures: %+v err=%v", failures, err)
+	}
 }

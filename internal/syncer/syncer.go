@@ -148,10 +148,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 	var failures []error
 	var reserveErr *gh.RateLimitReserveError
-	recordFailure := func(number int, row map[string]any, operation string, cause error) error {
-		failures = append(failures, fmt.Errorf("%s #%d: %w", operation, number, cause))
+	recordFailure := func(number int, row map[string]any, cause error, operations ...string) error {
+		failures = append(failures, fmt.Errorf("%s #%d: %w", strings.Join(operations, ", "), number, cause))
 		errors.As(cause, &reserveErr)
-		if err := s.recordSyncFailure(ctx, options, repoRaw, row, number, operation, cause); err != nil {
+		if err := s.recordSyncFailure(ctx, options, repoRaw, row, number, cause, operations...); err != nil {
 			failures = append(failures, fmt.Errorf("record sync attempt failure: %w", err))
 			return errors.Join(failures...)
 		}
@@ -169,7 +169,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			}
 			row, err := s.client.GetIssue(ctx, options.Owner, options.Repo, number, options.Reporter)
 			if err != nil {
-				if err := recordFailure(number, nil, "issue", err); err != nil {
+				if err := recordFailure(number, nil, err, "issue"); err != nil {
 					return Stats{}, err
 				}
 				continue
@@ -241,7 +241,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		if options.IncludeComments {
 			commentRows, operation, err := s.fetchCommentRows(ctx, options, kind, number)
 			if err != nil {
-				if err := recordFailure(number, row, operation, err); err != nil {
+				if err := recordFailure(number, row, err, operation); err != nil {
 					return Stats{}, err
 				}
 				continue
@@ -252,7 +252,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		if options.IncludePRDetails && kind == "pull_request" {
 			reviewThreads, reviewThreadsFetchedAt, err := s.fetchPullReviewThreadRows(ctx, options, number)
 			if err != nil {
-				if err := recordFailure(number, row, "pull_review_threads", err); err != nil {
+				if err := recordFailure(number, row, err, "pull_review_threads"); err != nil {
 					return Stats{}, err
 				}
 				continue
@@ -261,7 +261,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			payload.reviewThreadsFetchedAt = reviewThreadsFetchedAt
 			pullDetails, err := s.fetchPullRequestDetails(ctx, options, number)
 			if err != nil {
-				if err := recordFailure(number, row, "pull_request_details", err); err != nil {
+				if err := recordFailure(number, row, err, "pull_request_details"); err != nil {
 					return Stats{}, err
 				}
 				continue
@@ -273,7 +273,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		} else if options.IncludePRMetadata && kind == "pull_request" {
 			pullDetails, err := s.fetchPullRequestMetadata(ctx, options, number)
 			if err != nil {
-				if err := recordFailure(number, row, "pull_request_metadata", err); err != nil {
+				if err := recordFailure(number, row, err, "pull_request_metadata"); err != nil {
 					return Stats{}, err
 				}
 				continue
@@ -291,7 +291,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	for index, payload := range payloads {
 		if cause, excluded := groupFailures[index]; excluded {
 			if cause != nil {
-				if err := recordFailure(intValue(payload.row["number"]), payload.row, "pull_request_details", cause); err != nil {
+				if err := recordFailure(intValue(payload.row["number"]), payload.row, cause, "pull_request_details"); err != nil {
 					return Stats{}, err
 				}
 			}
@@ -412,7 +412,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 					return err
 				}
 			}
-			resolvedOperations := []string{"persistence"}
+			var resolvedOperations []string
 			if upsert.Applied {
 				resolvedOperations = append(resolvedOperations, "issue")
 			}
@@ -552,13 +552,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				attempt.IssuesSynced++
 			}
 			// Resolve only observed families, atomically with their persisted data.
-			_, err = st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano), resolvedOperations...)
+			// An empty operation filter would resolve every family in the store API.
+			if len(resolvedOperations) > 0 {
+				_, err = st.ResolveSyncAttemptFailures(ctx, repoID, thread.Number, s.now().Format(time.RFC3339Nano), resolvedOperations...)
+			}
 			return err
 		})
 		if err != nil {
 			// The failed transaction is gone. Record only its existing parent,
-			// never recreate rolled-back thread or child rows for the ledger.
-			if recordErr := recordFailure(intValue(payload.row["number"]), nil, "persistence", err); recordErr != nil {
+			// under each requested family so a shallow retry cannot clear children.
+			operations := requestedSyncOperations(options, issueKind(payload.row))
+			if recordErr := recordFailure(intValue(payload.row["number"]), nil, err, operations...); recordErr != nil {
 				break
 			}
 			continue
@@ -644,7 +648,7 @@ func (s *Syncer) upsertRepository(ctx context.Context, st *store.Store, options 
 	})
 }
 
-func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw, row map[string]any, number int, operation string, syncErr error) error {
+func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw, row map[string]any, number int, syncErr error, operations ...string) error {
 	if syncErr == nil {
 		return nil
 	}
@@ -678,17 +682,21 @@ func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw
 				threadID = threads[0].ID
 			}
 		}
-		_, err = st.RecordSyncAttemptFailure(recordCtx, store.SyncAttemptFailure{
-			RepoID:       repoID,
-			ThreadID:     threadID,
-			Number:       number,
-			Operation:    operation,
-			ErrorClass:   syncAttemptErrorClass(syncErr),
-			ErrorMessage: syncErr.Error(),
-			FirstSeenAt:  now,
-			LastSeenAt:   now,
-		})
-		return err
+		for _, operation := range operations {
+			if _, err := st.RecordSyncAttemptFailure(recordCtx, store.SyncAttemptFailure{
+				RepoID:       repoID,
+				ThreadID:     threadID,
+				Number:       number,
+				Operation:    operation,
+				ErrorClass:   syncAttemptErrorClass(syncErr),
+				ErrorMessage: syncErr.Error(),
+				FirstSeenAt:  now,
+				LastSeenAt:   now,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -801,6 +809,25 @@ func (s *Syncer) fetchClosedOverlapRows(ctx context.Context, options Options, si
 
 func hasFreshThreadEvidence(options Options, thread store.Thread) bool {
 	return options.IncludeComments && (thread.Kind != "pull_request" || options.IncludePRDetails)
+}
+
+func requestedSyncOperations(options Options, kind string) []string {
+	operations := []string{"issue"}
+	if options.IncludeComments {
+		operations = append(operations, "issue_comments")
+		if kind == "pull_request" {
+			operations = append(operations, "pull_reviews", "pull_review_comments")
+		}
+	}
+	if kind == "pull_request" {
+		if options.IncludePRMetadata || options.IncludePRDetails {
+			operations = append(operations, "pull_request_metadata")
+		}
+		if options.IncludePRDetails {
+			operations = append(operations, "pull_review_threads", "pull_request_details")
+		}
+	}
+	return operations
 }
 
 func normalizeSince(value string, now time.Time) (string, error) {

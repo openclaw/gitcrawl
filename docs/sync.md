@@ -130,10 +130,10 @@ A quota-reserve failure also stops new acquisition, including quota probes.
 Completed payloads can still commit. Skipped requests are not recorded as
 failures; shared-head groups that still need verification remain uncommitted.
 
-An item transaction failure is recorded as `persistence` after rollback, with
-only an existing parent reference when available. It does not recreate the
-rolled-back item. A later complete item transaction resolves this entry;
-separate acquisition failures still require their own observed families.
+An item transaction failure records each requested operation after rollback,
+with only an existing parent reference when available. It does not recreate the
+rolled-back item. A retry resolves only the families it actually persists:
+metadata-only retries leave comments and full-detail failures unresolved.
 
 An incomplete batch exits nonzero and never records a successful sync or advances
 the closed-sweep watermark. Before partial writes, archives without a recorded
@@ -216,6 +216,8 @@ nonzero and leaves progress marked `failed`. `fill-pr-details --json` likewise
 reports committed `filled` and remaining selected items, including a partially
 completed batch. A quota stop exits nonzero with
 `stopped_reason: "rate-limit-reserve"`; other sync failures use `"sync-failed"`.
+The partial batch and final result retain the stopping request's quota snapshot
+without a subsequent credential or quota lookup.
 Automation must check the exit status, not treat a JSON result as success.
 
 ## Common workflows

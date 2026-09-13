@@ -395,13 +395,14 @@ func (f partialSharedHeadGitHub) GetIssue(ctx context.Context, owner, repo strin
 
 func TestSyncPartialBatchPreservesSharedHeadConsolidation(t *testing.T) {
 	for _, fixture := range []struct {
-		name    string
-		client  sameSyncSharedHeadGitHub
-		wantIDs []string
+		name             string
+		subsetFirst      bool
+		verifiedDeletion bool
+		wantIDs          []string
 	}{
-		{"subset first", sameSyncSharedHeadGitHub{subsetFirst: true}, []string{"900", "901"}},
-		{"superset first", sameSyncSharedHeadGitHub{}, []string{"900", "901"}},
-		{"later deletion", sameSyncSharedHeadGitHub{verifiedDeletion: true}, []string{"900"}},
+		{name: "subset first", subsetFirst: true, wantIDs: []string{"900", "901"}},
+		{name: "superset first", wantIDs: []string{"900", "901"}},
+		{name: "later deletion", verifiedDeletion: true, wantIDs: []string{"900"}},
 	} {
 		for _, numbers := range [][]int{{10, 8, 9}, {8, 10, 9}, {8, 9, 10}} {
 			t.Run(fmt.Sprintf("%s/%v", fixture.name, numbers), func(t *testing.T) {
@@ -411,7 +412,9 @@ func TestSyncPartialBatchPreservesSharedHeadConsolidation(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer st.Close()
-				client := fixture.client
+				client := sameSyncSharedHeadGitHub{
+					subsetFirst: fixture.subsetFirst, verifiedDeletion: fixture.verifiedDeletion,
+				}
 				stats, err := New(partialSharedHeadGitHub{&client}, st).Sync(ctx, Options{
 					Owner: "fixture", Repo: "repo", Numbers: numbers, IncludePRDetails: true,
 				})
