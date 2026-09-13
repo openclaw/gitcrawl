@@ -199,12 +199,6 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 		t.Fatalf("list workflow runs len = %d, %v", len(rows), err)
 	}
 
-	if _, err := st.DB().ExecContext(ctx, `insert into repo_sync_state(repo_id, last_open_close_reconciled_at, updated_at) values(?, ?, ?)`, repoID, later, now); err != nil {
-		t.Fatalf("insert repo sync state: %v", err)
-	}
-	if got, err := q.RepoSyncStateLastSync(ctx); err != nil || got != later {
-		t.Fatalf("repo sync state last sync = %q, %v", got, err)
-	}
 	if _, err := st.DB().ExecContext(ctx, `create table portable_metadata(key text primary key, value text not null)`); err != nil {
 		t.Fatalf("create portable metadata: %v", err)
 	}

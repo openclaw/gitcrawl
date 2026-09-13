@@ -57,6 +57,7 @@ type Status struct {
 	OpenThreadCount int       `json:"open_thread_count"`
 	ClusterCount    int       `json:"cluster_count"`
 	LastSyncAt      time.Time `json:"last_sync_at,omitempty"`
+	LastExportAt    time.Time `json:"last_export_at,omitempty"`
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -256,30 +257,19 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("count clusters: %w", err)
 	}
 	status.ClusterCount = int(clusterCount)
-	var lastSync string
 	if s.hasTable(ctx, "sync_runs") {
-		lastSync, err = s.qsql().MaxSuccessfulSyncFinishedAt(ctx)
+		lastSync, err := s.qsql().MaxSuccessfulSyncFinishedAt(ctx)
 		if err != nil {
 			return Status{}, fmt.Errorf("read last sync: %w", err)
 		}
+		status.LastSyncAt, _ = time.Parse(timeLayout, lastSync)
 	}
-	if lastSync == "" && s.hasTable(ctx, "portable_metadata") {
-		lastSync, err = s.qsql().PortableExportedAt(ctx)
+	if s.hasTable(ctx, "portable_metadata") {
+		exportedAt, err := s.qsql().PortableExportedAt(ctx)
 		if err != nil && err != sql.ErrNoRows {
 			return Status{}, fmt.Errorf("read portable exported timestamp: %w", err)
 		}
-	}
-	if lastSync == "" && s.hasTable(ctx, "repo_sync_state") {
-		lastSync, err = s.qsql().RepoSyncStateLastSync(ctx)
-		if err != nil {
-			return Status{}, fmt.Errorf("read portable sync state: %w", err)
-		}
-	}
-	if lastSync != "" {
-		parsed, err := time.Parse(timeLayout, lastSync)
-		if err == nil {
-			status.LastSyncAt = parsed
-		}
+		status.LastExportAt, _ = time.Parse(timeLayout, exportedAt)
 	}
 	return status, nil
 }

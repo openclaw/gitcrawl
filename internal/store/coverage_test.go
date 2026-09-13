@@ -297,8 +297,8 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("portable status: %v", err)
 	}
-	if status.LastSyncAt.IsZero() {
-		t.Fatalf("portable metadata should provide last sync time: %+v", status)
+	if status.LastExportAt.IsZero() || !status.LastSyncAt.IsZero() {
+		t.Fatalf("portable metadata should provide export time without a sync claim: %+v", status)
 	}
 }
 

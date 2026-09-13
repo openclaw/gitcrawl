@@ -23,7 +23,7 @@ gitcrawl status --json
 gitcrawl doctor --json
 ```
 
-`status --json` is the quick inventory check: it reports the configured archive database, its repository/thread/open-thread/cluster inventory under `databases[].counts`, and the last successful sync time. Use it to confirm that your local archive is present and to decide whether a refresh is needed.
+`status --json` is the quick inventory check: it reports the configured archive database and its repository/thread/open-thread/cluster inventory under `databases[].counts`. `last_sync_at` reports retained successful sync history; `last_export_at` reports a portable snapshot's export time. Portable stores omit sync history, so a missing `last_sync_at` alone is not a reason to reject their data or run a live sync. Check snapshot age and the relevant record coverage before deciding whether a refresh is needed.
 
 `doctor --json` is the setup check: it reports config path, database health, credential discovery, model settings, portable-store status, and the same core counts. Use it when a run fails, when a machine has multiple config paths, or when an agent needs a machine-readable readiness gate.
 

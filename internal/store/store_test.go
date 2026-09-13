@@ -1860,8 +1860,8 @@ func TestOpenReadOnlySupportsCanonicalPortableStore(t *testing.T) {
 	if status.RepositoryCount != 1 || status.ThreadCount != 1 || status.OpenThreadCount != 1 || status.ClusterCount != 1 {
 		t.Fatalf("unexpected portable status: %#v", status)
 	}
-	if status.LastSyncAt.IsZero() {
-		t.Fatalf("portable last sync was not read from repo_sync_state: %#v", status)
+	if !status.LastSyncAt.IsZero() {
+		t.Fatalf("scan checkpoint reported as successful sync: %#v", status)
 	}
 	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
 	if err != nil {
@@ -1889,7 +1889,7 @@ func TestOpenReadOnlySupportsCanonicalPortableStore(t *testing.T) {
 	}
 }
 
-func TestStatusPrefersPortableExportedAt(t *testing.T) {
+func TestStatusSeparatesPortableExportFromSync(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "portable.sync.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -1981,8 +1981,11 @@ func TestStatusPrefersPortableExportedAt(t *testing.T) {
 		t.Fatalf("portable status: %v", err)
 	}
 	want := "2026-04-30T01:11:27.830908426Z"
-	if got := status.LastSyncAt.Format(time.RFC3339Nano); got != want {
-		t.Fatalf("last sync = %q, want portable exported_at %q", got, want)
+	if got := status.LastExportAt.Format(time.RFC3339Nano); got != want {
+		t.Fatalf("last export = %q, want portable exported_at %q", got, want)
+	}
+	if !status.LastSyncAt.IsZero() {
+		t.Fatalf("export reported as successful sync: %+v", status)
 	}
 }
 

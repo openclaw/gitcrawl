@@ -2562,6 +2562,7 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 		OpenThreadCount: 1,
 		ClusterCount:    4,
 		LastSyncAt:      lastSync,
+		LastExportAt:    lastSync.Add(time.Hour),
 	})
 	if out.DatabaseBytes == 0 {
 		t.Fatalf("database bytes should be populated: %#v", out)
@@ -2571,6 +2572,9 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	}
 	if out.LastSyncAt != lastSync.UTC().Format(time.RFC3339) {
 		t.Fatalf("last sync = %q", out.LastSyncAt)
+	}
+	if out.LastExportAt != lastSync.Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("last export = %q", out.LastExportAt)
 	}
 	if len(out.Databases) != 1 || out.Databases[0].Path != sizePath || !out.Databases[0].IsPrimary {
 		t.Fatalf("database metadata = %#v", out.Databases)

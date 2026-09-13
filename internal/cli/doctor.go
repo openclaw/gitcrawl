@@ -98,6 +98,9 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 			dbSchema = sourceSchema
 		}
 		storeStatus, err = rt.Store.Status(ctx)
+		if err == nil && rt.RemoteSource {
+			err = applyPortableExportTime(&storeStatus, rt.SourceDBPath, rt.Config.DBPath)
+		}
 		if err != nil {
 			runtimeStatusError = err.Error()
 			runtimeStatusFailure = err
@@ -129,6 +132,7 @@ func (a *App) runDoctor(ctx context.Context, args []string) error {
 		"open_thread_count":     storeStatus.OpenThreadCount,
 		"cluster_count":         storeStatus.ClusterCount,
 		"last_sync_at":          formatOptionalTime(storeStatus.LastSyncAt),
+		"last_export_at":        formatOptionalTime(storeStatus.LastExportAt),
 		"summary_model":         cfg.OpenAI.SummaryModel,
 		"embed_model":           cfg.OpenAI.EmbedModel,
 		"embed_base_url":        embedBaseURL(cfg),

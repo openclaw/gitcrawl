@@ -124,6 +124,9 @@ func controlStatus(configPath string, cfg config.Config, status store.Status) co
 	if !status.LastSyncAt.IsZero() {
 		out.LastSyncAt = status.LastSyncAt.UTC().Format(time.RFC3339)
 	}
+	if !status.LastExportAt.IsZero() {
+		out.LastExportAt = status.LastExportAt.UTC().Format(time.RFC3339)
+	}
 	db := control.SQLiteDatabase("primary", "GitHub archive", "archive", status.DBPath, true, counts)
 	out.DatabaseBytes = db.Bytes
 	out.WALBytes = fileSize(status.DBPath + "-wal")
