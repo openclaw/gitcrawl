@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Consolidate repeated check-run IDs from overlapping GitHub pages, preserving API order and the latest fetched observation instead of failing PR hydration.
 - Isolate shared-head workflow failures without discarding unrelated completed items, stop acquisition and post-batch lookups at the first quota-reserve failure, and retain rolled-back item failures by requested family so metadata-only retries cannot clear failed children.
 - Preserve completed issue and PR hydrations when another item fails, with atomic per-item writes, scoped failure resolution, and unchanged successful-sync coverage. Record issue and comment fetch failures in the existing ledger; resolve recovered parent failures even when child fetching still fails. `sync` and `fill-pr-details` return committed counts while exiting nonzero on incomplete acquisition, including quota stops.
 - Update SQLite's C-parser dependency to v4.29.6 and pin the automation guide's artifact-upload example to v7.0.1.

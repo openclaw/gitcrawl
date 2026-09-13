@@ -10,12 +10,13 @@ import (
 
 func mapPullChecks(threadID int64, rows []map[string]any, fetchedAt string) []store.PullRequestCheck {
 	out := make([]store.PullRequestCheck, 0, len(rows))
+	byID := make(map[string]int, len(rows))
 	for _, row := range rows {
 		name := stringValue(row["name"])
 		if name == "" {
 			continue
 		}
-		out = append(out, store.PullRequestCheck{
+		check := store.PullRequestCheck{
 			ThreadID:     threadID,
 			Name:         name,
 			Status:       stringValue(row["status"]),
@@ -26,7 +27,17 @@ func mapPullChecks(threadID int64, rows []map[string]any, fetchedAt string) []st
 			CompletedAt:  stringValue(row["completed_at"]),
 			RawJSON:      mustJSON(row),
 			FetchedAt:    fetchedAt,
-		})
+		}
+		if id := jsonID(row["id"]); id != "" {
+			// Moving pagination can repeat a check run. Keep its first position
+			// but replace the whole row with the latest fetched observation.
+			if index, found := byID[id]; found {
+				out[index] = check
+				continue
+			}
+			byID[id] = len(out)
+		}
+		out = append(out, check)
 	}
 	return out
 }
