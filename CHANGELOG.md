@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.10.0 - 2026-09-13
 
 **Highlights:** Explicit cloud archive admission (thanks @vincentkoc), `last_export_at` for portable publication time, and sync that no longer loses completed items when one fails.
