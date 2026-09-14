@@ -1,16 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-09-13
 
-- Consolidate repeated check-run IDs from overlapping GitHub pages, preserving API order and the latest fetched observation instead of failing PR hydration.
-- Isolate shared-head workflow failures without discarding unrelated completed items, stop acquisition and post-batch lookups at the first quota-reserve failure, and retain rolled-back item failures by requested family so metadata-only retries cannot clear failed children.
-- Preserve completed issue and PR hydrations when another item fails, with atomic per-item writes, scoped failure resolution, and unchanged successful-sync coverage. Record issue and comment fetch failures in the existing ledger; resolve recovered parent failures even when child fetching still fails. `sync` and `fill-pr-details` return committed counts while exiting nonzero on incomplete acquisition, including quota stops.
-- Update SQLite's C-parser dependency to v4.29.6 and pin the automation guide's artifact-upload example to v7.0.1.
+**Highlights:** Explicit cloud archive admission (thanks @vincentkoc), `last_export_at` for portable publication time, and sync that no longer loses completed items when one fails.
+
 - Add explicit cloud archive admission with immutable source, integrity, enrichment, and warning evidence while preserving strict publication defaults. Thanks @vincentkoc.
 - Compatibility: report portable publication time as `last_export_at`; `last_sync_at` now describes retained successful sync runs instead of old repository scan checkpoints. Thanks @obviyus.
+- Preserve completed issue and PR hydrations when another item fails, with atomic per-item writes, scoped failure resolution, and unchanged successful-sync coverage. Record issue and comment fetch failures in the existing ledger; resolve recovered parent failures even when child fetching still fails. `sync` and `fill-pr-details` return committed counts while exiting nonzero on incomplete acquisition, including quota stops.
+- Isolate shared-head workflow failures without discarding unrelated completed items, stop acquisition and post-batch lookups at the first quota-reserve failure, and retain rolled-back item failures by requested family so metadata-only retries cannot clear failed children.
+- Consolidate repeated check-run IDs from overlapping GitHub pages, preserving API order and the latest fetched observation instead of failing PR hydration.
 - Stop REST pagination when GitHub returns repeated or cyclic next links, preventing repeated requests and incomplete sync results.
 - Honor the global `--no-color` flag in the terminal browser.
 - Keep the documentation index named Gitcrawl in renamed checkouts, validate same-page links, and escape link URLs exactly once.
+- Update SQLite's C-parser dependency to v4.29.6 and pin the automation guide's artifact-upload example to v7.0.1.
 - Validate documentation builds before merge, pin CI actions and build tools to verified releases, update govulncheck to v1.8.0, and avoid duplicate cross-platform snapshot builds.
 
 ## 0.9.6 - 2026-09-11
