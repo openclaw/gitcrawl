@@ -83,6 +83,7 @@ issue or pull request URLs.
 | `--with pr-metadata` | PR object, including merge attribution, head/base references, and diff counts |
 | `--include-pr-details` | PR object, files, commits, status checks, workflow runs, review threads |
 | `--with pr-details` | Same as `--include-pr-details` (gh-style flag) |
+| `--force` | Download selected data again, bypassing unchanged issue-comment reuse |
 | `--progress-file <absolute-path>` | Atomically publish sanitized machine-readable activity |
 
 `pr-metadata` writes only `pull_request_details`, using the normal per-thread
@@ -95,6 +96,26 @@ child collections.
 
 Full PR details also populate `pull_request_files`, `pull_request_commits`,
 `pull_request_checks`, and `github_workflow_runs` for local review and search.
+
+With `--include-comments`, sync reuses issue comments (including the general
+discussion on PRs) when the freshly fetched parent `updated_at` matches the last
+completed comment observation and its `comments` count matches the exact saved
+issue-comment membership. Missing or pruned payloads, observations, membership, timestamps or counts,
+changed timestamps or counts, and unresolved issue-comment failures require a
+download. Historical comments omitted from the last observation are never reused.
+Reused comments remain in the archive and revision evidence; they do not count
+toward `comments_synced` or progress `comments_received`. The saved observation
+is checked again in the item transaction; concurrent replacement requires a retry.
+
+PR reviews, inline review comments, review-thread resolution, and all selected
+PR details are still fetched on every sync: a parent timestamp or head SHA alone
+does not prove those collections are unchanged. This preserves check and workflow
+transitions in fully hydrated revision evidence.
+
+To refresh issue comments that may have changed without moving either parent
+signal, use `gitcrawl sync owner/repo --include-comments --force` (or the same
+flags with `refresh`). `--force` bypasses reuse within the selected state, time
+window, or `--numbers`; it does not expand that scope or select extra families.
 
 `fill-pr-details` selects PRs without a metadata row; it does not upgrade existing
 metadata-only rows. To upgrade them, use

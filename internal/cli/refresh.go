@@ -28,6 +28,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	noEmbed := fs.Bool("no-embed", false, "skip embedding stage")
 	noCluster := fs.Bool("no-cluster", false, "skip clustering stage")
 	includeComments := fs.Bool("include-comments", false, "hydrate comments during sync")
+	force := fs.Bool("force", false, "download selected sync data even when issue comments are unchanged")
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, workflow runs, and review threads")
 	withRaw := fs.String("with", "", "additional sync hydration: pr-metadata, pr-details")
 	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
@@ -97,6 +98,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 			State:             strings.TrimSpace(*state),
 			Limit:             limit,
 			IncludeComments:   *includeComments,
+			Force:             *force,
 			IncludePRMetadata: with["pr-metadata"],
 			IncludePRDetails:  *includePRDetails || with["pr-details"],
 		})

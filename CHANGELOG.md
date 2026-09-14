@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Skip unchanged issue-comment downloads on issues and PRs using parent timestamps, comment counts, and completed saved observations; keep PR review and detail data live, and add `sync`/`refresh --force` for a full selected refresh. Thanks @vlsi for the report.
+
 ## 0.10.0 - 2026-09-13
 
 **Highlights:** Explicit cloud archive admission (thanks @vincentkoc), `last_export_at` for portable publication time, and sync that no longer loses completed items when one fails.

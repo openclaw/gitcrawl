@@ -33,7 +33,7 @@ Disable any stage with `--no-sync`, `--no-embed`, `--no-cluster`. The remaining 
 
 | Forwarded to | Flag |
 | --- | --- |
-| sync | `--since`, `--state`, `--limit`, `--include-comments`, `--include-pr-details`, `--with pr-details` |
+| sync | `--since`, `--state`, `--limit`, `--include-comments`, `--include-pr-details`, `--with pr-details`, `--force` (bypass unchanged issue-comment reuse) |
 | embed | `--limit` |
 | cluster | `--threshold` (0.80), `--min-size` (1), `--max-cluster-size` (40), `--k` (16), `--cross-kind-threshold` (0.93), `--strict-vectors` |
 
