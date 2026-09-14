@@ -142,10 +142,12 @@ Usage:
 	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
 
 Usage:
-  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-pr-details] [--json]
+  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--force] [--json]
 
 pr-metadata fetches only the pull request object; pr-details also hydrates files,
 commits, checks, workflows, and review threads. Comments are selected separately.
+Unchanged issue comments are reused; --force downloads them again. PR reviews
+and PR details are always fetched when selected.
 `,
 	"sync-failures": `gitcrawl sync-failures lists failed sync hydration attempts.
 
@@ -172,7 +174,9 @@ choose a different floor.
 	"refresh": `gitcrawl refresh runs sync, enrichment, embedding, and clustering.
 
 Usage:
-  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-metadata|pr-details] [--include-pr-details] [--no-sync] [--no-embed] [--no-cluster] [--strict-vectors] [--json]
+  gitcrawl refresh owner/repo [--state open|closed|all] [--with pr-metadata|pr-details] [--include-pr-details] [--force] [--no-sync] [--no-embed] [--no-cluster] [--strict-vectors] [--json]
+
+--force bypasses unchanged issue-comment reuse during sync.
 `,
 	"summarize": `gitcrawl summarize generates key summaries for current thread revisions.
 

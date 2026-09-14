@@ -26,6 +26,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
+	force := fs.Bool("force", false, "download selected data even when issue comments are unchanged")
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, and workflow runs")
 	withRaw := fs.String("with", "", "extra hydration: pr-metadata, pr-details")
 	progressFile := fs.String("progress-file", "", "write an atomic sanitized sync progress snapshot")
@@ -72,6 +73,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 		Limit:             limit,
 		Numbers:           numbers,
 		IncludeComments:   *includeComments,
+		Force:             *force,
 		IncludePRMetadata: with["pr-metadata"],
 		IncludePRDetails:  *includePRDetails || with["pr-details"],
 		Progress:          progress.report,
@@ -97,6 +99,7 @@ type syncOptions struct {
 	Limit             int
 	Numbers           []int
 	IncludeComments   bool
+	Force             bool
 	IncludePRMetadata bool
 	IncludePRDetails  bool
 	Quiet             bool
@@ -429,6 +432,7 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		Limit:             options.Limit,
 		Numbers:           options.Numbers,
 		IncludeComments:   options.IncludeComments,
+		Force:             options.Force,
 		IncludePRMetadata: options.IncludePRMetadata,
 		IncludePRDetails:  options.IncludePRDetails,
 		Reporter:          reporter,

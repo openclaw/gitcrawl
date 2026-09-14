@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ type Options struct {
 	Limit             int
 	Numbers           []int
 	IncludeComments   bool
+	Force             bool
 	IncludePRMetadata bool
 	IncludePRDetails  bool
 	Reporter          gh.Reporter
@@ -103,6 +105,7 @@ type syncPersistStats struct {
 type threadSyncPayload struct {
 	row                    map[string]any
 	commentRows            []commentRow
+	commentReuse           *store.IssueCommentReuse
 	reviewThreads          []map[string]any
 	reviewThreadsFetchedAt string
 	pullDetails            pullRequestDetailRows
@@ -137,8 +140,10 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	var repoID int64
 	if err := s.store.WithTx(ctx, func(st *store.Store) error {
-		repoID, err := s.upsertRepository(ctx, st, options, repoRaw)
+		var err error
+		repoID, err = s.upsertRepository(ctx, st, options, repoRaw)
 		if err != nil {
 			return err
 		}
@@ -239,7 +244,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			continue
 		}
 		if options.IncludeComments {
-			commentRows, operation, err := s.fetchCommentRows(ctx, options, kind, number)
+			if !options.Force {
+				err = s.store.WithTx(ctx, func(st *store.Store) error {
+					var err error
+					payload.commentReuse, err = reusableIssueComments(ctx, st, repoID, row)
+					return err
+				})
+				if err != nil {
+					return Stats{}, err
+				}
+			}
+			commentRows, operation, err := s.fetchCommentRows(ctx, options, kind, number, payload.commentReuse)
 			if err != nil {
 				if err := recordFailure(number, row, err, operation); err != nil {
 					return Stats{}, err
@@ -247,7 +262,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				continue
 			}
 			payload.commentRows = commentRows
-			received.CommentsReceived += len(commentRows)
+			for _, comment := range commentRows {
+				if comment.reusedID == 0 {
+					received.CommentsReceived++
+				}
+			}
 		}
 		if options.IncludePRDetails && kind == "pull_request" {
 			reviewThreads, reviewThreadsFetchedAt, err := s.fetchPullReviewThreadRows(ctx, options, number)
@@ -345,6 +364,17 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			repoID, err := s.upsertRepository(ctx, st, options, repoRaw)
 			if err != nil {
 				return err
+			}
+			if payload.commentReuse != nil {
+				current, err := reusableIssueComments(ctx, st, repoID, payload.row)
+				if err != nil {
+					return err
+				}
+				if current == nil || current.ThreadID != payload.commentReuse.ThreadID ||
+					current.ObservationSequence != payload.commentReuse.ObservationSequence ||
+					!slices.Equal(current.CommentIDs, payload.commentReuse.CommentIDs) {
+					return fmt.Errorf("saved issue comments changed during sync; retry #%d", intValue(payload.row["number"]))
+				}
 			}
 			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
 			_, hasIssueDraft := payload.row["draft"]
@@ -979,14 +1009,28 @@ func persistThreadEnrichment(
 	return st.UpsertThreadRevisionAndFingerprint(ctx, evidence, createdAt)
 }
 
-func (s *Syncer) fetchCommentRows(ctx context.Context, options Options, threadKind string, number int) ([]commentRow, string, error) {
-	var rows []commentRow
-	issueComments, err := s.client.ListIssueComments(ctx, options.Owner, options.Repo, number, options.Reporter)
+func reusableIssueComments(ctx context.Context, st *store.Store, repoID int64, row map[string]any) (*store.IssueCommentReuse, error) {
+	count, err := strconv.Atoi(fmt.Sprint(row["comments"]))
 	if err != nil {
-		return nil, "issue_comments", err
+		return nil, nil
 	}
-	for _, row := range issueComments {
-		rows = append(rows, commentRow{kind: "issue_comment", raw: row})
+	return st.ReusableIssueComments(ctx, repoID, intValue(row["number"]), stringValue(row["updated_at"]), count)
+}
+
+func (s *Syncer) fetchCommentRows(ctx context.Context, options Options, threadKind string, number int, reuse *store.IssueCommentReuse) ([]commentRow, string, error) {
+	var rows []commentRow
+	if reuse != nil {
+		for _, id := range reuse.CommentIDs {
+			rows = append(rows, commentRow{kind: "issue_comment", reusedID: id})
+		}
+	} else {
+		issueComments, err := s.client.ListIssueComments(ctx, options.Owner, options.Repo, number, options.Reporter)
+		if err != nil {
+			return nil, "issue_comments", err
+		}
+		for _, row := range issueComments {
+			rows = append(rows, commentRow{kind: "issue_comment", raw: row})
+		}
 	}
 	if threadKind == "pull_request" {
 		reviews, err := s.client.ListPullReviews(ctx, options.Owner, options.Repo, number, options.Reporter)
@@ -1017,6 +1061,10 @@ func persistComments(
 	synced := 0
 	observedIDs := make([]int64, 0, len(rows))
 	for _, row := range rows {
+		if row.reusedID != 0 {
+			observedIDs = append(observedIDs, row.reusedID)
+			continue
+		}
 		comment := mapComment(thread.ID, row.kind, row.raw)
 		if comment.Body == "" && row.kind != "pull_review" && comment.DeletedAt == "" {
 			continue
@@ -1108,8 +1156,9 @@ func mapPullReviewThread(threadID int64, row map[string]any, fetchedAt string) s
 }
 
 type commentRow struct {
-	kind string
-	raw  map[string]any
+	kind     string
+	raw      map[string]any
+	reusedID int64
 }
 
 func mapComment(threadID int64, kind string, row map[string]any) store.Comment {
