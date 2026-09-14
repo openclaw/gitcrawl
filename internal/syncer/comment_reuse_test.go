@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,7 +101,7 @@ func TestSyncCommentReuseInvalidation(t *testing.T) {
 				t.Fatal(err)
 			}
 			if client.commentCalls != before+1 {
-				t.Fatal("invalidated comments were reused")
+				t.Fatalf("ListIssueComments calls = %d, want %d after invalidation", client.commentCalls, before+1)
 			}
 			if scenario == "pruned" {
 				var body string
@@ -172,8 +173,16 @@ func TestSyncCommentReuseKeepsPRReviewEvidenceLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.commentCalls != 1 || client.reviewCalls != 2 || stats.CommentsSynced != 1 || stats.RevisionsCreated != 1 || stats.PRDetailsSynced != 1 {
-		t.Fatalf("fresh PR evidence lost with reused discussion: calls=%d reviews=%d stats=%+v", client.commentCalls, client.reviewCalls, stats)
+	for name, result := range map[string]struct{ got, want int }{
+		"issue comment requests": {client.commentCalls, 1},
+		"review requests":        {client.reviewCalls, 2},
+		"comments synced":        {stats.CommentsSynced, 1},
+		"revisions created":      {stats.RevisionsCreated, 1},
+		"PR details synced":      {stats.PRDetailsSynced, 1},
+	} {
+		if result.got != result.want {
+			t.Errorf("%s = %d, want %d", name, result.got, result.want)
+		}
 	}
 }
 
@@ -203,7 +212,7 @@ func TestSyncCommentReuseRejectsConcurrentReplacement(t *testing.T) {
 	}
 	stats, err := s.Sync(ctx, opts)
 	if err == nil || !strings.Contains(err.Error(), "saved issue comments changed") {
-		t.Fatalf("err=%v", err)
+		t.Fatalf("Sync error = %v, want saved-comment replacement error", err)
 	}
 	if stats.EvidenceObserved != 0 || stats.ThreadsSynced != 0 {
 		t.Fatalf("certified stale cached evidence: %+v", stats)
@@ -218,29 +227,40 @@ func TestSyncCommentReuseRejectsConcurrentReplacement(t *testing.T) {
 }
 
 func TestSyncReusesUnchangedIssueComments(t *testing.T) {
-	for _, number := range []int{7, 8} {
-		t.Run(map[int]string{7: "issue", 8: "pull_request"}[number], func(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		number      int
+		updatedAt   string
+		wantReviews int
+	}{
+		{"issue_discussion_remains_reusable", 7, "2026-04-26T00:00:00Z", 0},
+		{"PR_discussion_remains_reusable", 8, "2026-04-26T00:00:00Z", 2},
+		{"equivalent_timezone_reuses_comments", 7, "2026-04-26T00:00:00+00:00", 0},
+		{"equivalent_fraction_reuses_comments", 7, "2026-04-26T00:00:00.000Z", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer st.Close()
-			row, _ := (fakeGitHub{}).GetIssue(ctx, "openclaw", "gitcrawl", number, nil)
+			row, _ := (fakeGitHub{}).GetIssue(ctx, "openclaw", "gitcrawl", test.number, nil)
 			comments, _ := (fakeGitHub{}).ListIssueComments(ctx, "openclaw", "gitcrawl", 7, nil)
 			row["comments"] = len(comments)
 			client := &commentReuseGitHub{row: row, comments: comments}
 			s := New(client, st)
 			var received SyncProgress
-			opts := Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{number}, IncludeComments: true,
+			opts := Options{Owner: "openclaw", Repo: "gitcrawl", Numbers: []int{test.number}, IncludeComments: true,
 				Progress: func(p SyncProgress) error { received = p; return nil }}
 			first, err := s.Sync(ctx, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if first.CommentsSynced != 1 {
-				t.Fatalf("first: %+v", first)
+				t.Fatalf("initial CommentsSynced = %d, want 1", first.CommentsSynced)
 			}
+			row["updated_at"] = test.updatedAt
 			second, err := s.Sync(ctx, opts)
 			if err != nil {
 				t.Fatal(err)
@@ -248,15 +268,30 @@ func TestSyncReusesUnchangedIssueComments(t *testing.T) {
 			if client.commentCalls != 1 || second.CommentsSynced != 0 || received.CommentsReceived != 0 {
 				t.Fatalf("unchanged thread re-downloaded comments: calls=%d synced=%d received=%d", client.commentCalls, second.CommentsSynced, received.CommentsReceived)
 			}
-			if number == 8 && client.reviewCalls != 2 {
-				t.Fatal("PR reviews must remain live")
+			if client.reviewCalls != test.wantReviews {
+				t.Errorf("review requests after second sync = %d, want %d", client.reviewCalls, test.wantReviews)
 			}
-			var count int
-			if err := st.DB().QueryRowContext(ctx, "select count(*) from comments where body = 'same bug here'").Scan(&count); err != nil {
+			var threadID, commentID int64
+			var body, deletedAt string
+			if err := st.DB().QueryRowContext(ctx, "select thread_id, id, body, coalesce(deleted_at, '') from comments where github_id='11'").Scan(&threadID, &commentID, &body, &deletedAt); err != nil {
 				t.Fatal(err)
 			}
-			if count != 1 {
-				t.Fatalf("reuse lost archived comments: %d", count)
+			if body != "same bug here" || deletedAt != "" {
+				t.Errorf("saved comment = (%q, deleted_at=%q), want original live comment", body, deletedAt)
+			}
+			_, sequence, found, err := st.ThreadChildObservation(ctx, threadID, store.ThreadChildComments)
+			if err != nil || !found {
+				t.Fatalf("completed comment observation found=%t, err=%v; want present", found, err)
+			}
+			members, found, err := st.ThreadChildObservationMemberIDs(ctx, threadID, store.ThreadChildComments, sequence)
+			if err != nil || !found || !slices.Equal(members, []int64{commentID}) {
+				t.Errorf("latest comment membership = %v, found=%t, err=%v; want [%d]", members, found, err, commentID)
+			}
+			if _, err := s.Sync(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			if client.commentCalls != 1 {
+				t.Errorf("ListIssueComments calls after third sync = %d, want 1", client.commentCalls)
 			}
 		})
 	}
