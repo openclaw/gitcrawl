@@ -86,9 +86,81 @@ host details out of the public documentation and PR. The coordinator's handoff
 should contain the same exact CLI path. Installation alone does not authorize
 collection, imports, scheduling, or a final cutover.
 
+## Hourly collection on macOS
+
+After authorizing local collection, create a separate user LaunchAgent that calls
+the pinned native binary directly. Use absolute paths; launchd does not expand
+`~`, `$HOME`, or shell variables in a plist. Keep the config and logs outside Git
+and shared publication. Give their directories mode `0700` and files mode `0600`.
+Create both log files before bootstrapping the job.
+
+The following is a template for `~/Library/LaunchAgents/org.openclaw.gitcrawl.metrics.plist`.
+Replace `/Users/you` and `SOURCE_COMMIT` with your actual installation paths:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.openclaw.gitcrawl.metrics</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.local/share/gitcrawl/metrics-runtimes/SOURCE_COMMIT/gitcrawl</string>
+    <string>metrics</string><string>collect</string>
+    <string>--config</string><string>/Users/you/.local/share/gitcrawl/metrics.json</string>
+    <string>--json</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/you/.local/share/gitcrawl</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/you</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>GITCRAWL_NO_UPDATE_CHECK</key><string>1</string>
+  </dict>
+  <key>StartCalendarInterval</key><dict><key>Minute</key><integer>6</integer></dict>
+  <key>KeepAlive</key><false/>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardOutPath</key><string>/Users/you/.local/share/gitcrawl/metrics-logs/stdout.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/.local/share/gitcrawl/metrics-logs/stderr.log</string>
+</dict>
+</plist>
+```
+
+The job runs hourly at minute 6 in the host's local time, while observations use
+UTC. `63` is the decimal representation of umask `0077`. The explicit minimal
+`PATH` supports the existing native `gh` credential resolver without interactive
+shell initialization. Do not put credentials in the plist. The versioned runtime
+is not auto-updated; `GITCRAWL_NO_UPDATE_CHECK` also disables release notices.
+
+Validate and bootstrap this new job once, then request one immediate collection:
+
+```sh
+metrics_plist="$HOME/Library/LaunchAgents/org.openclaw.gitcrawl.metrics.plist"
+plutil -lint "$metrics_plist"
+launchctl bootstrap "gui/$(id -u)" "$metrics_plist"
+launchctl kickstart "gui/$(id -u)/org.openclaw.gitcrawl.metrics"
+launchctl print "gui/$(id -u)/org.openclaw.gitcrawl.metrics"
+```
+
+Wait for the job to exit and check its last exit code, private logs, and the latest
+`metric_runs` row using read-only SQLite. Confirm all five required counters for
+every configured target have non-NULL values at that run's timestamp. A successful
+bootstrap or a PID alone is not collection evidence. An unavailable optional clone
+report is not a required-counter failure. On a provider failure, inspect the
+recorded result before retrying; `KeepAlive` is disabled to avoid rapid restarts.
+Existing archive refresh jobs are independent and need no changes.
+
+`collect` and `import` hold a nonblocking native OS lock on
+`<database>.writer.lock` from before database initialization through database
+close. A second writer exits nonzero before collection or import; `status` remains
+read-only and available. Ownership is released even if the process is killed.
+The private lock file remains in place: never delete or replace it while writers
+can run. Use the locking runtime for every writer; older binaries do not honor
+this lock.
+
 ## What is collected
 
-Each invocation observes both configured targets at a single UTC timestamp. Run
+Each invocation observes all configured targets at a single UTC timestamp. Run
 `collect` hourly with an external scheduler when hourly history is required.
 
 | Metric | Meaning |

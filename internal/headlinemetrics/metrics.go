@@ -359,6 +359,13 @@ func Execute(ctx context.Context, command string, c Config, collect Collector, i
 		result.OK = err == nil
 		return result, err
 	}
+	// Own the database from before initialization through provider reads, commit,
+	// and close. SQLite transactions alone do not serialize collection attempts.
+	lock, err := acquireWriter(c.Database)
+	if err != nil {
+		return result, err
+	}
+	defer lock.Close()
 	s, err := Open(ctx, c.Database)
 	if err != nil {
 		return result, err
