@@ -76,6 +76,11 @@ go build \
 
 Symlink or copy `bin/gitcrawl` somewhere on your `PATH` (`~/bin`, `/usr/local/bin`, `~/.local/bin`).
 
+For a metrics-only source deployment alongside an existing portable subscriber,
+use an [isolated versioned metrics runtime](/metrics/#isolated-source-built-installation)
+and verify it with `metrics status` and its separate config. Keep the subscriber's
+binary selection and refresh job unchanged.
+
 ## GitHub CLI shim migration
 
 `gitcrawl gh` moved to Octopool:

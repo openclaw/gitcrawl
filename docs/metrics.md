@@ -44,6 +44,48 @@ An optional `tokenEnv` selects another environment variable. A global
 provider exclusively on supported platforms. Tokens never appear in results.
 The metrics config contains no token values; cookie authentication is not used.
 
+## Isolated source-built installation
+
+A source-built metrics runtime can coexist with an official Gitcrawl installation
+that refreshes a portable mirror. Give the metrics binary a private, versioned
+directory and invoke that exact executable. The installed metrics CLI path is:
+
+```text
+$HOME/.local/share/gitcrawl/metrics-runtimes/<source-commit>/gitcrawl
+```
+
+Copy an already validated artifact into a new directory; do not overwrite an
+existing version. Record its full source commit and expected SHA-256 from the
+validation handoff, verify the hash before and after copying, and use directory
+mode `0700` and executable mode `0500`. This installation does not replace a
+`current` symlink, the command on `PATH`, an archive config, or a refresh job.
+
+Local source builds do not require official release signing credentials under the
+[installation policy](/installation/#install-from-source). On macOS, verify the
+source artifact's signature with `codesign --verify --strict` before and after
+copying. This is source-build verification, not official release notarization;
+official release signing and notarization remain the [release workflow's](/releasing/)
+responsibility. Do not change signing policies or remove quarantine to force an
+untrusted artifact to run.
+
+The installation check is read-only and uses the separately provided metrics config:
+
+```sh
+metrics_revision=SOURCE_COMMIT
+metrics_binary="$HOME/.local/share/gitcrawl/metrics-runtimes/$metrics_revision/gitcrawl"
+"$metrics_binary" --version
+"$metrics_binary" metrics status \
+  --config "$HOME/.local/share/gitcrawl/metrics.json" --json
+```
+
+Keep a machine-local installation receipt at the path returned by
+`git rev-parse --git-path metrics-runtime-installation.json`. Record the exact
+resolved CLI/config/database paths, source commit, artifact hash, signature result,
+read-only status, and preservation checks there. Git metadata keeps these private
+host details out of the public documentation and PR. The coordinator's handoff
+should contain the same exact CLI path. Installation alone does not authorize
+collection, imports, scheduling, or a final cutover.
+
 ## What is collected
 
 Each invocation observes both configured targets at a single UTC timestamp. Run
