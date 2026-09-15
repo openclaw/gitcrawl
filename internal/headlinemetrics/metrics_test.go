@@ -17,7 +17,7 @@ import (
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	return Config{Database: filepath.Join(t.TempDir(), "metrics.sqlite"), Targets: []Target{{Entity: "OpenClaw", Target: "openclaw/openclaw"}, {Entity: "Hermes", Target: "NousResearch/hermes-agent"}}}
+	return Config{Database: filepath.Join(t.TempDir(), "metrics.sqlite"), Targets: []Target{{Entity: "OpenClaw", Target: "openclaw/openclaw"}, {Entity: "Example", Target: "example/project"}}}
 }
 func testRow() Row {
 	return Counter(Target{"OpenClaw", "openclaw/openclaw"}, "stars", Value(12), "2026-09-15T01:00:00Z", "github_rest")
@@ -56,7 +56,7 @@ func TestStorePreservesZerosNullsDecreasesAndIdempotentImports(t *testing.T) {
 		r.Value = v
 		rows = append(rows, r)
 	}
-	event := Row{Type: "event", ID: "import-release", Entity: "Hermes", Target: "NousResearch/hermes-agent", Kind: "release", TS: "2026-09-14T00:00:00Z", ObservedAt: "2026-09-15T00:00:00Z", Provenance: "claw-track", Label: "v1", URL: "https://github.com/NousResearch/hermes-agent/releases/tag/v1"}
+	event := Row{Type: "event", ID: "import-release", Entity: "Example", Target: "example/project", Kind: "release", TS: "2026-09-14T00:00:00Z", ObservedAt: "2026-09-15T00:00:00Z", Provenance: "claw-track", Label: "v1", URL: "https://github.com/example/project/releases/tag/v1"}
 	rows = append(rows, event)
 	for _, want := range []int{5, 0} {
 		n, err := Import(ctx, s, c, strings.NewReader(ndjson(t, rows...)))

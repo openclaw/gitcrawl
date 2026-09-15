@@ -21,7 +21,7 @@ store. The example path is illustrative; choose a private directory on your host
   "database": "/private/metrics/gitcrawl/metrics.sqlite",
   "targets": [
     {"entity": "OpenClaw", "target": "openclaw/openclaw"},
-    {"entity": "Hermes", "target": "NousResearch/hermes-agent"}
+    {"entity": "Example", "target": "example/project"}
   ]
 }
 ```
@@ -140,7 +140,7 @@ Import accepts one JSON object per line on stdin:
 
 ```json
 {"type":"metric","id":"history:github:watchers:1","entity":"OpenClaw","target":"openclaw/openclaw","metric":"watchers","kind":"counter","ts":"2026-09-14T00:00:00Z","value":null,"observed_at":"2026-09-15T00:00:00Z","provenance":"historical-import"}
-{"type":"event","id":"history:github:release:1","entity":"Hermes","target":"NousResearch/hermes-agent","kind":"release","ts":"2026-09-14T00:00:00Z","label":"v1","url":"https://github.com/NousResearch/hermes-agent/releases/tag/v1","observed_at":"2026-09-15T00:00:00Z","provenance":"historical-import"}
+{"type":"event","id":"history:github:release:1","entity":"Example","target":"example/project","kind":"release","ts":"2026-09-14T00:00:00Z","label":"v1","url":"https://github.com/example/project/releases/tag/v1","observed_at":"2026-09-15T00:00:00Z","provenance":"historical-import"}
 ```
 
 IDs are required and idempotent within each destination table. Imported explicit
