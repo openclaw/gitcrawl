@@ -2053,7 +2053,7 @@ func TestTUIJumpAndSortHelpersCoverStoreBackedBranches(t *testing.T) {
 	model.jumping = true
 	updated, _ := model.handleJumpKey(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated
-	if !strings.Contains(model.status, "Enter a positive") {
+	if !strings.Contains(model.status, "expected positive") {
 		t.Fatalf("bad jump status = %q", model.status)
 	}
 	model.startJumpInput()

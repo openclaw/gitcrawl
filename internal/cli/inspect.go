@@ -241,9 +241,12 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	numbers, err := parseOptionalThreadNumberList(*numbersRaw)
+	numbers, err := parseOptionalThreadNumberList(*numbersRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
+	}
+	if flagWasSet(fs, "numbers") && len(numbers) == 0 {
+		return usageErr(fmt.Errorf("--numbers requires at least one thread reference"))
 	}
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {

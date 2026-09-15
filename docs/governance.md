@@ -77,8 +77,9 @@ The chosen `--number` must already be a member of the cluster. The TUI's right-c
 All governance `--number` flags accept the same thread-reference forms as sync:
 bare numbers, `#123`, `issues/123`, `pull/123`, `owner/repo#123`, and full
 GitHub issue or pull request URLs. The command still applies only to the
-`owner/repo` argument you pass to gitcrawl; URL input is accepted so copied
-GitHub links can be pasted directly.
+`owner/repo` argument you pass to gitcrawl. Qualified references must match that
+repository (case-insensitively); a mismatched link is rejected before any local
+override is written.
 
 ## Reopen and undo
 

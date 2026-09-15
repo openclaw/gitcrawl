@@ -304,7 +304,7 @@ func TestTUIJumpKeyAndRefreshCommandBranches(t *testing.T) {
 	input.SetValue("#0")
 	model := clusterBrowserModel{searchInput: input, jumping: true}
 	next, cmd := model.handleJumpKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil || next.jumping || next.status != "Enter a positive issue or PR number" {
+	if cmd != nil || next.jumping || !strings.Contains(next.status, "expected positive") {
 		t.Fatalf("bad enter next=%+v cmd=%v", next, cmd)
 	}
 	input = textinput.New()
@@ -312,7 +312,7 @@ func TestTUIJumpKeyAndRefreshCommandBranches(t *testing.T) {
 	model = clusterBrowserModel{
 		searchInput: input,
 		jumping:     true,
-		payload:     clusterBrowserPayload{Clusters: []store.ClusterSummary{{ID: 1, RepresentativeNumber: 123}}},
+		payload:     clusterBrowserPayload{Repository: "openclaw/openclaw", Clusters: []store.ClusterSummary{{ID: 1, RepresentativeNumber: 123}}},
 		allClusters: []store.ClusterSummary{{ID: 1, RepresentativeNumber: 123}},
 		detailCache: map[string]store.ClusterDetail{},
 	}

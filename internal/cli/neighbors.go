@@ -31,7 +31,7 @@ func (a *App) runNeighbors(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	number, err := parseRequiredThreadNumber("number", *numberRaw)
+	number, err := parseRequiredThreadNumber("number", *numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}

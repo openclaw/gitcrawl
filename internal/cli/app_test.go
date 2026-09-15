@@ -5438,13 +5438,13 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	if owner, repo, err := parseOwnerRepo("https://github.com/openclaw/openclaw/issues/78601"); err != nil || owner != "openclaw" || repo != "openclaw" {
 		t.Fatalf("full issue URL owner/repo = %q/%q err=%v", owner, repo, err)
 	}
-	if got, err := parseOptionalThreadNumber("https://github.com/openclaw/openclaw/issues/78601"); err != nil || got != 78601 {
+	if got, err := parseOptionalThreadNumber("https://github.com/openclaw/openclaw/issues/78601", "openclaw/openclaw"); err != nil || got != 78601 {
 		t.Fatalf("full issue URL number = %d err=%v", got, err)
 	}
-	if got, err := parseOptionalThreadNumber("https://github.com/openclaw/openclaw/pull/78602#issuecomment-1"); err != nil || got != 78602 {
+	if got, err := parseOptionalThreadNumber("https://github.com/openclaw/openclaw/pull/78602#issuecomment-1", "openclaw/openclaw"); err != nil || got != 78602 {
 		t.Fatalf("full pull URL number = %d err=%v", got, err)
 	}
-	if got, err := parseOptionalThreadNumberList("https://github.com/openclaw/openclaw/issues/78601, openclaw/openclaw#78602, pull/78603, #78604"); err != nil || len(got) != 4 || got[0] != 78601 || got[1] != 78602 || got[2] != 78603 || got[3] != 78604 {
+	if got, err := parseOptionalThreadNumberList("https://github.com/openclaw/openclaw/issues/78601, openclaw/openclaw#78602, pull/78603, #78604", "openclaw/openclaw"); err != nil || len(got) != 4 || got[0] != 78601 || got[1] != 78602 || got[2] != 78603 || got[3] != 78604 {
 		t.Fatalf("thread ref list = %#v err=%v", got, err)
 	}
 	if _, _, _, err := parseClusterShapeOptions("test", "bad", "1", "0.5"); err == nil {

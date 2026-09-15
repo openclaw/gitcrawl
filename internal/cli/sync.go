@@ -46,9 +46,12 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	numbers, err := parseOptionalThreadNumberList(*numbersRaw)
+	numbers, err := parseOptionalThreadNumberList(*numbersRaw, owner+"/"+repo)
 	if err != nil {
 		return usageErr(err)
+	}
+	if flagWasSet(fs, "numbers") && len(numbers) == 0 {
+		return usageErr(fmt.Errorf("--numbers requires at least one thread reference"))
 	}
 	with, err := parseSyncWith(*withRaw)
 	if err != nil {

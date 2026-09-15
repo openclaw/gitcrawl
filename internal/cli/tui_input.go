@@ -97,8 +97,12 @@ func (m clusterBrowserModel) handleJumpKey(msg tea.KeyMsg) (clusterBrowserModel,
 		m.jumping = false
 		value := strings.TrimSpace(m.searchInput.Value())
 		m.searchInput.Blur()
-		number, err := parseOptionalThreadNumber(value)
-		if err != nil || number <= 0 {
+		number, err := parseOptionalThreadNumber(value, m.payload.Repository)
+		if err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+		if number <= 0 {
 			m.status = "Enter a positive issue or PR number"
 			return m, nil
 		}

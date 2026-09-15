@@ -75,6 +75,13 @@ gitcrawl sync owner/repo --numbers https://github.com/owner/repo/issues/123 --wi
 `123`, `#123`, `issues/123`, `pull/123`, `owner/repo#123`, and full GitHub
 issue or pull request URLs.
 
+Repository-qualified references must match the `owner/repo` argument
+(case-insensitively). Mismatched repositories, unsupported URL forms, empty
+comma-separated entries, and an explicitly empty `--numbers` value are rejected
+before synchronization starts. Omit `--numbers` to select a repository-wide sync.
+The same rule applies to `threads --numbers` and to `embed` or `summarize
+--number`: an explicitly empty selection is an error, not an omitted filter.
+
 ## Hydration depth
 
 | Flag | What it adds |
