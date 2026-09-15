@@ -359,7 +359,14 @@ func buildThread(
 	}
 	sort.Slice(capturedComments, func(left, right int) bool {
 		if capturedComments[left].CreatedAt != capturedComments[right].CreatedAt {
-			return capturedComments[left].CreatedAt < capturedComments[right].CreatedAt
+			leftCreated, rightCreated := capturedComments[left].CreatedAt, capturedComments[right].CreatedAt
+			if leftCreated == "" || rightCreated == "" {
+				return leftCreated == ""
+			}
+			// Validated RFC3339Nano strings are not ordered by fractional-second precision.
+			leftTime, _ := time.Parse(time.RFC3339Nano, leftCreated)
+			rightTime, _ := time.Parse(time.RFC3339Nano, rightCreated)
+			return leftTime.Before(rightTime)
 		}
 		if capturedComments[left].Kind != capturedComments[right].Kind {
 			return capturedComments[left].Kind < capturedComments[right].Kind

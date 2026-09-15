@@ -71,6 +71,8 @@ The top-level object contains:
 Each thread contains its stable GitHub ID, number, kind, state, title, body,
 author, URL, labels, assignees, timestamps, comments, and semantic
 `content_hash`. Comments are ordered by source time, kind, and stable ID.
+Source times are compared chronologically, including fractional seconds and
+timezone offsets. Comments without a source time sort first.
 
 The semantic hash covers the exported thread before `content_hash` is set. It
 changes when exported thread or comment content changes.
