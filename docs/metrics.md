@@ -124,6 +124,11 @@ requirement in the private receipt. Preserve the original runtime. Point only th
 metrics LaunchAgent's first argument at the signed copy, preserving its other
 settings. If this job was disabled, enable its exact label before bootstrapping.
 Request one collection and let the user approve normal macOS file-access prompts.
+Follow the specific permission request through its prompt and decision: a default
+`SystemPolicyAllFiles` probe denial can precede a normal
+`SystemPolicyRemovableVolumes` prompt. That probe alone does not establish a Full
+Disk Access requirement. Keep the same authorized attempt running while the user
+answers its normal prompt, then verify the terminal result and metrics database.
 If permission remains blocked, stop and disable that job and report the evidence;
 do not retry repeatedly, grant Full Disk Access, export keys, add privileged
 wrappers, or relocate data. Local signing is not official release notarization.
