@@ -37,6 +37,11 @@ func (a *App) maybeNotifyRelease(ctx context.Context, args []string) {
 }
 
 func releaseNotificationAllowed(args []string) bool {
+	// Metrics commands must not touch archive/runtime state or make unrelated
+	// network requests, including during read-only imports and status checks.
+	if len(args) > 0 && args[0] == "metrics" {
+		return false
+	}
 	if len(args) == 0 || args[0] != "fill-pr-details" {
 		return true
 	}
