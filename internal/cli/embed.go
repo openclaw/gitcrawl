@@ -60,9 +60,12 @@ func (a *App) runEmbed(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	number, err := parseOptionalThreadNumber(*numberRaw)
+	number, err := parseOptionalThreadNumber(*numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
+	}
+	if flagWasSet(fs, "number") && number == 0 {
+		return usageErr(fmt.Errorf("--number requires a thread reference"))
 	}
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {

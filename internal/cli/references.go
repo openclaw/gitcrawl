@@ -106,7 +106,7 @@ func parseRequiredPositiveInt(name, value string) (int, error) {
 	return parsed, nil
 }
 
-func parseOptionalThreadNumber(value string) (int, error) {
+func parseOptionalThreadNumber(value, repository string) (int, error) {
 	if strings.TrimSpace(value) == "" {
 		return 0, nil
 	}
@@ -114,11 +114,14 @@ func parseOptionalThreadNumber(value string) (int, error) {
 	if !ok || ref.Number <= 0 {
 		return 0, fmt.Errorf("expected positive issue or pull request number, got %q", value)
 	}
+	if ref.FullName() != "" && !strings.EqualFold(ref.FullName(), repository) {
+		return 0, fmt.Errorf("thread reference repository %q does not match %q", ref.FullName(), repository)
+	}
 	return ref.Number, nil
 }
 
-func parseRequiredThreadNumber(name, value string) (int, error) {
-	parsed, err := parseOptionalThreadNumber(value)
+func parseRequiredThreadNumber(name, value, repository string) (int, error) {
+	parsed, err := parseOptionalThreadNumber(value, repository)
 	if err != nil {
 		return 0, err
 	}
@@ -128,7 +131,7 @@ func parseRequiredThreadNumber(name, value string) (int, error) {
 	return parsed, nil
 }
 
-func parseClusterMemberCommandIDs(command, clusterIDRaw, numberRaw string) (int, int, error) {
+func parseClusterMemberCommandIDs(command, clusterIDRaw, numberRaw, repository string) (int, int, error) {
 	clusterID, err := parseOptionalPositiveInt(clusterIDRaw)
 	if err != nil {
 		return 0, 0, err
@@ -136,7 +139,7 @@ func parseClusterMemberCommandIDs(command, clusterIDRaw, numberRaw string) (int,
 	if clusterID == 0 {
 		return 0, 0, fmt.Errorf("%s requires --id", command)
 	}
-	number, err := parseOptionalThreadNumber(numberRaw)
+	number, err := parseOptionalThreadNumber(numberRaw, repository)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -185,14 +188,14 @@ func parseOptionalPositiveIntList(value string) ([]int, error) {
 	return out, nil
 }
 
-func parseOptionalThreadNumberList(value string) ([]int, error) {
+func parseOptionalThreadNumberList(value, repository string) ([]int, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, nil
 	}
 	parts := strings.Split(value, ",")
 	out := make([]int, 0, len(parts))
 	for _, part := range parts {
-		parsed, err := parseOptionalThreadNumber(strings.TrimSpace(part))
+		parsed, err := parseRequiredThreadNumber("numbers member", strings.TrimSpace(part), repository)
 		if err != nil {
 			return nil, err
 		}
@@ -203,4 +206,4 @@ func parseOptionalThreadNumberList(value string) ([]int, error) {
 
 var githubThreadURLPattern = regexp.MustCompile(`(?i)^https?://github\.com/([\w.-]+)/([\w.-]+)/(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
 var ownerRepoThreadPattern = regexp.MustCompile(`(?i)^([\w.-]+)/([\w.-]+)#(\d+)$`)
-var pathThreadPattern = regexp.MustCompile(`(?i)(?:^|/)(?:issues|pull)/(\d+)(?:[/?#].*)?$`)
+var pathThreadPattern = regexp.MustCompile(`(?i)^(?:issues|pull)/(\d+)(?:[/?#].*)?$`)

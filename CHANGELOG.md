@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reject mismatched repositories in pasted thread references before reads, syncs, enrichment, local overrides, or TUI jumps, and reject empty selections or list entries that could turn a targeted sync into an unrestricted one.
 - Skip unchanged issue-comment downloads on issues and PRs using parent timestamps, comment counts, and completed saved observations; keep PR review and detail data live, and add `sync`/`refresh --force` for a full selected refresh. Thanks @vlsi for the report.
 - Order captured comments chronologically when source timestamps have different fractional-second precision, preserving deterministic ties by kind and stable ID.
 

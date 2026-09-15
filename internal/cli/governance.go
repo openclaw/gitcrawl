@@ -25,7 +25,7 @@ func (a *App) runCloseThread(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	number, err := parseOptionalThreadNumber(*numberRaw)
+	number, err := parseOptionalThreadNumber(*numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -70,7 +70,7 @@ func (a *App) runReopenThread(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	number, err := parseOptionalThreadNumber(*numberRaw)
+	number, err := parseOptionalThreadNumber(*numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -206,7 +206,7 @@ func (a *App) runExcludeClusterMember(ctx context.Context, args []string) error 
 	if err != nil {
 		return usageErr(err)
 	}
-	clusterID, number, err := parseClusterMemberCommandIDs("exclude-cluster-member", *idRaw, *numberRaw)
+	clusterID, number, err := parseClusterMemberCommandIDs("exclude-cluster-member", *idRaw, *numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -248,7 +248,7 @@ func (a *App) runIncludeClusterMember(ctx context.Context, args []string) error 
 	if err != nil {
 		return usageErr(err)
 	}
-	clusterID, number, err := parseClusterMemberCommandIDs("include-cluster-member", *idRaw, *numberRaw)
+	clusterID, number, err := parseClusterMemberCommandIDs("include-cluster-member", *idRaw, *numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -290,7 +290,7 @@ func (a *App) runSetClusterCanonical(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	clusterID, number, err := parseClusterMemberCommandIDs("set-cluster-canonical", *idRaw, *numberRaw)
+	clusterID, number, err := parseClusterMemberCommandIDs("set-cluster-canonical", *idRaw, *numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}
