@@ -86,6 +86,48 @@ host details out of the public documentation and PR. The coordinator's handoff
 should contain the same exact CLI path. Installation alone does not authorize
 collection, imports, scheduling, or a final cutover.
 
+### Local signing for background collection
+
+A directly launched macOS job has its own file-access identity; permission granted
+to a terminal does not prove the background executable has access. When the owner
+authorizes an existing local signing certificate, sign a copy of the verified
+runtime with a stable identifier and an explicit requirement bound to that
+certificate. Use the already selected public SHA-1 fingerprint, without searching
+for another identity or changing keychain trust or access controls.
+
+```sh
+metrics_revision=SOURCE_COMMIT
+metrics_identity=SELECTED_PUBLIC_CERTIFICATE_SHA1
+metrics_identifier=com.example.gitcrawl.metrics
+metrics_source="$HOME/.local/share/gitcrawl/metrics-runtimes/$metrics_revision/gitcrawl"
+metrics_install="$HOME/.local/libexec/gitcrawl-metrics/$metrics_revision"
+metrics_requirement="identifier \"$metrics_identifier\" and certificate leaf = H\"$metrics_identity\""
+codesign --verify --strict "$metrics_source"
+# Check the source SHA-256 against the validation receipt before copying.
+umask 077
+mkdir -p "$(dirname "$metrics_install")"
+mkdir "$metrics_install"
+cp "$metrics_source" "$metrics_install/gitcrawl"
+chmod 0700 "$metrics_install/gitcrawl"
+codesign --force --sign "$metrics_identity" --identifier "$metrics_identifier" \
+  --requirements "=designated => $metrics_requirement" --timestamp=none \
+  "$metrics_install/gitcrawl"
+codesign --verify --strict --test-requirement "=$metrics_requirement" \
+  "$metrics_install/gitcrawl"
+codesign --display --requirements - "$metrics_install/gitcrawl"
+chmod 0500 "$metrics_install/gitcrawl"
+shasum -a 256 "$metrics_source" "$metrics_install/gitcrawl"
+```
+
+Record both hashes, the source commit, certificate fingerprint, identifier and
+requirement in the private receipt. Preserve the original runtime. Point only the
+metrics LaunchAgent's first argument at the signed copy, preserving its other
+settings. If this job was disabled, enable its exact label before bootstrapping.
+Request one collection and let the user approve normal macOS file-access prompts.
+If permission remains blocked, stop and disable that job and report the evidence;
+do not retry repeatedly, grant Full Disk Access, export keys, add privileged
+wrappers, or relocate data. Local signing is not official release notarization.
+
 ## Hourly collection on macOS
 
 After authorizing local collection, create a separate user LaunchAgent that calls
