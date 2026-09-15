@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Skip unchanged issue-comment downloads on issues and PRs using parent timestamps, comment counts, and completed saved observations; keep PR review and detail data live, and add `sync`/`refresh --force` for a full selected refresh. Thanks @vlsi for the report.
+- Order captured comments chronologically when source timestamps have different fractional-second precision, preserving deterministic ties by kind and stable ID.
 
 ## 0.10.0 - 2026-09-13
 
