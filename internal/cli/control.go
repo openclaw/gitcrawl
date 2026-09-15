@@ -37,9 +37,12 @@ func (a *App) runMetadata(args []string) error {
 		DefaultCache:    cfg.CacheDir,
 		DefaultLogs:     cfg.LogDir,
 	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "capture", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "summaries", "embeddings"}
+	manifest.Capabilities = []string{"metadata", "status", "metrics", "doctor", "sync", "capture", "coverage", "search", "code-index", "tui", "portable", "remote", "cloud-publish", "clusters", "summaries", "embeddings"}
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"github", "git", "sqlite", "portable"}}
 	manifest.Commands = map[string]control.Command{
+		"metrics-collect":  {Title: "Collect repository metrics", Argv: []string{"gitcrawl", "metrics", "collect", "--config", "METRICS_CONFIG", "--json"}, JSON: true, Mutates: true},
+		"metrics-import":   {Title: "Import metric history from stdin", Argv: []string{"gitcrawl", "metrics", "import", "--config", "METRICS_CONFIG", "--json"}, JSON: true, Mutates: true},
+		"metrics-status":   {Title: "Metrics database status", Argv: []string{"gitcrawl", "metrics", "status", "--config", "METRICS_CONFIG", "--json"}, JSON: true},
 		"status":           {Title: "Status", Argv: []string{"gitcrawl", "status", "--json"}, JSON: true},
 		"remote-status":    {Title: "Remote archive status", Argv: []string{"gitcrawl", "remote", "status", "--json"}, JSON: true},
 		"remote-archives":  {Title: "Remote archive list", Argv: []string{"gitcrawl", "remote", "archives", "--json"}, JSON: true},
