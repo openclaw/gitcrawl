@@ -46,6 +46,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	maxBytesRaw := fs.String("max-bytes", "", "maximum finalized database bytes")
 	compression := fs.String("compression", "", "artifact compression (gzip)")
 	maxArchiveBytesRaw := fs.String("max-archive-bytes", "", "maximum finalized archive bytes")
+	consumeSource := fs.Bool("consume-source", false, "consume an exclusively owned, backed-up database instead of copying it")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	valueFlags := map[string]bool{
 		"profile": true, "body-chars": true, "output-dir": true,
@@ -139,6 +140,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 		MaxBytes:        maxBytes,
 		Compression:     *compression,
 		MaxArchiveBytes: maxArchiveBytes,
+		ConsumeSource:   *consumeSource,
 		Progress: func(stage portableexport.Stage) {
 			now := time.Now()
 			fmt.Fprintf(

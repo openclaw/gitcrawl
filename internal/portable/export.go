@@ -36,6 +36,7 @@ type ExportOptions struct {
 	MaxBytes        *int64
 	Compression     string
 	MaxArchiveBytes *int64
+	ConsumeSource   bool
 	Progress        ProgressFunc
 }
 
@@ -63,6 +64,7 @@ type ExportResult struct {
 	PortableSchema       string      `json:"portable_schema"`
 	Schema               string      `json:"schema"`
 	SourceDBPath         string      `json:"source_db_path"`
+	SourceConsumed       bool        `json:"source_consumed,omitempty"`
 	OutputDir            string      `json:"output_dir"`
 	DatabasePath         string      `json:"database_path"`
 	ManifestPath         string      `json:"manifest_path"`
@@ -192,8 +194,15 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if err := reportProgress(ctx, options.Progress, StageSnapshot); err != nil {
 		return result, err
 	}
-	if err := snapshotSQLite(ctx, sourcePath, dbPath); err != nil {
-		return result, err
+	if options.ConsumeSource {
+		if err := consumeSQLite(ctx, sourcePath, dbPath); err != nil {
+			return result, err
+		}
+		result.SourceConsumed = true
+	} else {
+		if err := snapshotSQLite(ctx, sourcePath, dbPath); err != nil {
+			return result, err
+		}
 	}
 	// Opening the disposable snapshot migrates valid older/physically-pruned
 	// portable schemas back to the current writable schema before shaping.
