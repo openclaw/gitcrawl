@@ -310,7 +310,7 @@ const portableUsageText = `gitcrawl portable manages local portable-store snapsh
 Usage:
   gitcrawl portable refresh --expected-remote URL [--store-dir PATH] [--portable-db PATH] [--branch main] [--git PATH] [--timeout 2m] [--min-free-bytes N] [--max-growth-bytes N] [--json]
   gitcrawl portable prune [--body-chars N] [--no-vacuum] [--include-sync-failures] [--no-publish] [--json]
-  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo] [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--compression gzip] [--max-archive-bytes N] [--json]
+  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo] [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--compression gzip] [--max-archive-bytes N] [--consume-source] [--json]
 
 Subcommands:
   refresh             validate and fast-forward a clean configured subscriber
