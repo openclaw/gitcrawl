@@ -116,7 +116,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 		}
 		if result, err := s.db.ExecContext(ctx, `
 			update comments
-			   set body_length = length(body),
+			   set body_length = max(body_length, length(body)),
 			       body_excerpt = case when length(body) > ? then substr(body, 1, ?) else body end,
 			       body = case when length(body) > ? then substr(body, 1, ?) else body end
 		`, options.BodyChars, options.BodyChars, options.BodyChars, options.BodyChars); err != nil {
@@ -231,7 +231,7 @@ func (s *Store) preparePortableThreadPayloads(ctx context.Context, options Porta
 		}
 		result, err := s.db.ExecContext(ctx, `
 			update threads
-			   set body_length = case when body is not null then length(body) else body_length end,
+			   set body_length = case when body is not null then max(body_length, length(body)) else body_length end,
 			       body_excerpt = case
 			         when body is not null and length(body) > ? then substr(body, 1, ?)
 			         when body is not null then body
