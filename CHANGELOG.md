@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-09-22
+
+**Highlights:** Lower-disk portable exports, preserved body-length metadata, and fewer redundant GitHub comment downloads.
+
+- Add `portable export --consume-source` for exclusively owned, backed-up databases on the same filesystem, avoiding the initial full-size copy while preserving validation and atomic publication. Thanks @obviyus.
+- Preserve original thread and comment body lengths when exporting an already pruned portable archive again. Thanks @obviyus.
 - Reject mismatched repositories in pasted thread references before reads, syncs, enrichment, local overrides, or TUI jumps, and reject empty selections or list entries that could turn a targeted sync into an unrestricted one.
 - Skip unchanged issue-comment downloads on issues and PRs using parent timestamps, comment counts, and completed saved observations; keep PR review and detail data live, and add `sync`/`refresh --force` for a full selected refresh. Thanks @vlsi for the report.
 - Order captured comments chronologically when source timestamps have different fractional-second precision, preserving deterministic ties by kind and stable ID.
