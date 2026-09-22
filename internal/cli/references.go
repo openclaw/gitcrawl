@@ -172,22 +172,6 @@ func stateIncludesClosed(state string) bool {
 	}
 }
 
-func parseOptionalPositiveIntList(value string) ([]int, error) {
-	if strings.TrimSpace(value) == "" {
-		return nil, nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]int, 0, len(parts))
-	for _, part := range parts {
-		parsed, err := parseOptionalPositiveInt(strings.TrimSpace(part))
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, parsed)
-	}
-	return out, nil
-}
-
 func parseOptionalThreadNumberList(value, repository string) ([]int, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, nil

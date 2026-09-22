@@ -5432,9 +5432,6 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	if _, err := parseOptionalPositiveInt("0"); err == nil {
 		t.Fatal("zero int should fail")
 	}
-	if _, err := parseOptionalPositiveIntList("1, 0"); err == nil {
-		t.Fatal("bad int list should fail")
-	}
 	if owner, repo, err := parseOwnerRepo("https://github.com/openclaw/openclaw/issues/78601"); err != nil || owner != "openclaw" || repo != "openclaw" {
 		t.Fatalf("full issue URL owner/repo = %q/%q err=%v", owner, repo, err)
 	}
