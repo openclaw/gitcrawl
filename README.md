@@ -18,7 +18,7 @@ Homebrew is the smallest install on macOS and Linux:
 brew install openclaw/tap/gitcrawl
 ```
 
-Prebuilt archives for macOS, Linux, and Windows are available from [GitHub Releases](https://github.com/openclaw/gitcrawl/releases/latest). The [installation guide](docs/installation.md) also covers source builds and update checks; source builds require Go 1.27.1 or newer for CrawlKit v0.16.1. Binaries built with this toolchain require macOS 13 Ventura or newer. A [Docker source build](docs/docker.md) keeps its runtime state under one mounted directory.
+Prebuilt archives for macOS, Linux, and Windows are available from [GitHub Releases](https://github.com/openclaw/gitcrawl/releases/latest). The [installation guide](docs/installation.md) also covers source builds and update checks; source builds require Go 1.27.1 or newer for CrawlKit v0.16.4. Binaries built with this toolchain require macOS 13 Ventura or newer. A [Docker source build](docs/docker.md) keeps its runtime state under one mounted directory.
 
 Sync needs a GitHub token from `GITHUB_TOKEN` or `gh auth token`. Generating summaries and embeddings also needs `OPENAI_API_KEY`; semantic search and clustering use those stored embeddings, while ordinary sync and keyword search do not.
 
@@ -78,7 +78,7 @@ make test
 make check
 ```
 
-`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.8.2 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.18.1 for snapshot builds.
+`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.10.0 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.18.2 for snapshot builds.
 
 ## License
 
