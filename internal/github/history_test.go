@@ -58,6 +58,9 @@ func TestGraphQLHistoryBatchNoRESTAndExactIDs(t *testing.T) {
 	if historyMap(item.Thread["_graphql"])["fullDatabaseId"] != "9007199254740993" {
 		t.Fatal("raw payload lost")
 	}
+	if !strings.Contains(strings.Join(log, "\n"), "[github] graphql timing 2 ") {
+		t.Fatal("missing request duration")
+	}
 	if !strings.Contains(strings.Join(log, "\n"), "[github] graphql cost 2 1") {
 		t.Fatal("missing actual quota cost")
 	}

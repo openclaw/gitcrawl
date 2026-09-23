@@ -123,6 +123,13 @@ Sanitized `graphql budget` and `graphql cost` log records expose request sequenc
 conservative unanswered-request charge and actual response cost. External
 multi-process supervisors must additionally preserve a shared point budget
 across token renewals and restarts. REST request counts are not GraphQL costs.
+`graphql timing <sequence> <milliseconds>` records elapsed time for each history
+request, including failed requests. Supervisors can use the sum across parallel
+workers to pace work against GitHub's separate compute-time secondary limit.
+Response time is an estimate, not a measurement of GitHub CPU usage; explicit
+provider cooldowns always take precedence. Internal retry waits are included in
+the timing, so consumers should avoid adding another pacing delay after a known
+provider cooldown.
 
 | Flag | What it adds |
 | --- | --- |
