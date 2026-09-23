@@ -6,7 +6,10 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -35,13 +38,69 @@ func historyConnection(name, fields, after string) string {
 }
 
 type historySession struct {
-	client    *Client
-	reporter  Reporter
-	calls     int
-	remaining int
+	client     *Client
+	reporter   Reporter
+	calls      int
+	remaining  int
+	retrySleep func(context.Context, time.Duration) error
 }
 
 func (h *historySession) request(ctx context.Context, query string, variables map[string]any, estimate int) (map[string]any, error) {
+	for attempt := 0; ; attempt++ {
+		data, err := h.requestOnce(ctx, query, variables, estimate)
+		if err == nil {
+			return data, nil
+		}
+		if attempt >= 2 || ctx.Err() != nil || !transientHistoryError(err) {
+			return nil, err
+		}
+		// An unanswered attempt may have consumed points. Do not let a retry
+		// refund that spending, even if the next provider receipt is higher.
+		h.remaining -= estimate
+		wait := time.Second << attempt
+		var response *RequestError
+		if errors.As(err, &response) {
+			if providerWait, ok := retryAfterWait(response.Headers.Get("Retry-After")); ok {
+				wait = max(wait, providerWait)
+			}
+		}
+		h.reporter.Printf("[github] transient retry wait=%s", wait)
+		sleep := h.retrySleep
+		if sleep == nil {
+			sleep = sleepHistoryRetry
+		}
+		if err := sleep(ctx, wait); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func transientHistoryError(err error) bool {
+	var response *RequestError
+	if errors.As(err, &response) {
+		switch response.Status {
+		case 500, 502, 503, 504:
+			return true
+		}
+		return false
+	}
+	var transport net.Error
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		(errors.As(err, &transport) && (transport.Timeout() || transport.Temporary()))
+}
+
+func sleepHistoryRetry(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (h *historySession) requestOnce(ctx context.Context, query string, variables map[string]any, estimate int) (map[string]any, error) {
 	if h.calls >= 1000 {
 		return nil, fmt.Errorf("GraphQL history pagination budget exceeded")
 	}

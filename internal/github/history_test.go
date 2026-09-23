@@ -3,11 +3,13 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func historyTestConnection(nodes ...any) map[string]any {
@@ -123,5 +125,84 @@ func TestGraphQLHistoryReserveStopsBeforeBatch(t *testing.T) {
 	_, err := New(Options{BaseURL: server.URL}).FetchGraphQLHistory(context.Background(), "fixture", "repo", []int{1}, nil)
 	if err == nil || calls != 1 {
 		t.Fatalf("reserve failed calls=%d error=%v", calls, err)
+	}
+}
+
+func TestGraphQLHistoryTransientRetriesKeepQueryAndAccountEveryAttempt(t *testing.T) {
+	for _, kind := range []string{"gateway", "truncated", "empty"} {
+		t.Run(kind, func(t *testing.T) {
+			calls := 0
+			var queries []string
+			var waits []time.Duration
+			var logs []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var req graphqlEnvelope
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Fatal(err)
+				}
+				queries = append(queries, req.Query)
+				if calls < 3 {
+					switch kind {
+					case "gateway":
+						w.Header().Set("Retry-After", "7")
+						http.Error(w, "temporary gateway failure", 503)
+					case "truncated":
+						fmt.Fprint(w, `{"data":`)
+					case "empty":
+						w.WriteHeader(200)
+					}
+					return
+				}
+				fmt.Fprint(w, `{"data":{"rateLimit":{"cost":6,"remaining":19999,"resetAt":"2099-01-01T01:00:00Z"},"marker":"complete"}}`)
+			}))
+			defer server.Close()
+			h := historySession{client: New(Options{BaseURL: server.URL}), remaining: 20000, reporter: func(s string) { logs = append(logs, s) }, retrySleep: func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }}
+			data, err := h.request(context.Background(), "query { fixture }", nil, 16)
+			if err != nil || data["marker"] != "complete" || calls != 3 {
+				t.Fatalf("calls=%d data=%v err=%v", calls, data, err)
+			}
+			if len(waits) != 2 || queries[0] != queries[1] || queries[1] != queries[2] {
+				t.Fatal("retry changed query or bounds")
+			}
+			want := []time.Duration{time.Second, 2 * time.Second}
+			if kind == "gateway" {
+				want = []time.Duration{7 * time.Second, 7 * time.Second}
+			}
+			if waits[0] != want[0] || waits[1] != want[1] {
+				t.Fatalf("waits %v, want %v", waits, want)
+			}
+			if h.remaining != 19962 {
+				t.Fatalf("failed attempts refunded: %d", h.remaining)
+			}
+			text := strings.Join(logs, "\n")
+			if strings.Count(text, "[github] graphql budget ") != 3 || strings.Count(text, "[github] graphql timing ") != 3 || strings.Count(text, "[github] graphql cost ") != 1 {
+				t.Fatalf("invalid accounting: %s", text)
+			}
+		})
+	}
+}
+
+func TestGraphQLHistoryRetryBoundAndCancellation(t *testing.T) {
+	for _, status := range []int{502, 401, 404} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; http.Error(w, "failure", status) }))
+			defer server.Close()
+			h := historySession{client: New(Options{BaseURL: server.URL}), remaining: 20000, retrySleep: func(context.Context, time.Duration) error { return nil }}
+			_, err := h.request(context.Background(), "query { fixture }", nil, 16)
+			want := 1
+			if status == 502 {
+				want = 3
+			}
+			if err == nil || calls != want {
+				t.Fatalf("calls=%d want=%d err=%v", calls, want, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepHistoryRetry(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled retry: %v", err)
 	}
 }

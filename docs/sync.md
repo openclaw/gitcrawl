@@ -131,6 +131,21 @@ provider cooldowns always take precedence. Internal retry waits are included in
 the timing, so consumers should avoid adding another pacing delay after a known
 provider cooldown.
 
+History reads retry transient HTTP 500/502/503/504 responses, transport timeouts
+and truncated/empty response bodies up to two times in place. The same query and
+variables are retained, so a gateway failure does not immediately discard a
+whole selection and force individual-record retries. Delays are one and two
+seconds; an explicit longer `Retry-After` takes precedence, and cancellation
+stops the wait. Authentication, permission, missing-record and GraphQL semantic
+errors do not get this additional retry policy. Existing rate-limit handling is
+unchanged. Exhausted retries still fail acquisition and leave normal isolated
+recovery available to the supervisor.
+
+Each transient attempt has a separate budget/timing identity. Unanswered attempts
+retain their conservative charge even if a later quota receipt looks higher.
+Transient backoff occurs outside the per-attempt timing; the underlying HTTP
+client's rate-limit retry wait can still be included as described above.
+
 | Flag | What it adds |
 | --- | --- |
 | `--include-comments` | Issue comments, PR review comments, reviews |
