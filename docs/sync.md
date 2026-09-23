@@ -84,6 +84,46 @@ The same rule applies to `threads --numbers` and to `embed` or `summarize
 
 ## Hydration depth
 
+### Batched GraphQL history
+
+```bash
+gitcrawl sync owner/repo --numbers 123,456 --state all --include-comments --with pr-metadata --graphql-history
+```
+
+This opt-in profile fetches exact selections in GraphQL batches of at most 25
+parents. It fully paginates labels, assignees, discussion comments, reviews and
+each review's inline comments, then uses the existing per-thread transactions,
+observation ordering, failure resolution and document persistence. It performs
+no REST requests or fallback. The regular sync path is unchanged.
+
+The profile requires the flags above; it rejects `--since`, `--limit` and full
+PR-detail hydration. It does not collect files, commit bodies, checks or Actions
+logs. An incomplete GraphQL response, unavailable parent, missing identity,
+duplicate child or nonadvancing cursor fails the batch before archive writes.
+Supervisors should retry failed selections in isolation. Empty reviews remain
+retained; the ordinary empty-comment filtering contract is unchanged.
+
+Stored raw maps are explicitly labelled projections: `_gitcrawl_source` is
+`graphql`, and `_graphql` retains the hydrated provider object. Existing thread
+database IDs and legacy `github_id` values are preserved. New threads use the
+opaque GraphQL node ID because a PR's GraphQL database ID is different from its
+REST issue ID. Comments/reviews use exact `fullDatabaseId` strings; PR metadata
+uses its PR database ID. Bot logins receive REST-compatible `[bot]` suffixes in
+normalized fields while raw actor names remain intact. GraphQL review creation,
+update and submission timestamps are retained.
+
+Provider differences remain visible: for example GraphQL can return a null head
+repository when REST previously named one. No missing value is invented from
+that earlier observation. Keep a consistent archive backup when migrating
+transports; this mode does not claim every REST-only field is available through
+GraphQL or reconstruct uncaptured historical edits.
+
+Each command probes GraphQL's own quota and preserves a 500-point floor.
+Sanitized `graphql budget` and `graphql cost` log records expose request sequence,
+conservative unanswered-request charge and actual response cost. External
+multi-process supervisors must additionally preserve a shared point budget
+across token renewals and restarts. REST request counts are not GraphQL costs.
+
 | Flag | What it adds |
 | --- | --- |
 | `--include-comments` | Issue comments, PR review comments, reviews |

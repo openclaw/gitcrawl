@@ -142,12 +142,15 @@ Usage:
 	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
 
 Usage:
-  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--force] [--json]
+  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--graphql-history] [--force] [--json]
 
 pr-metadata fetches only the pull request object; pr-details also hydrates files,
 commits, checks, workflows, and review threads. Comments are selected separately.
 Unchanged issue comments are reused; --force downloads them again. PR reviews
 and PR details are always fetched when selected.
+--graphql-history batches exact numbers through GraphQL with no REST fallback.
+It requires --state all --include-comments --with pr-metadata, and does not
+support --since, --limit, or full pr-details hydration.
 `,
 	"sync-failures": `gitcrawl sync-failures lists failed sync hydration attempts.
 
