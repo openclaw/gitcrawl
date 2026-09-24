@@ -10,7 +10,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/mattn/go-isatty v0.0.24
 	github.com/muesli/termenv v0.16.0
-	github.com/openclaw/crawlkit v0.16.4
+	github.com/openclaw/crawlkit v0.16.5
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.48.0
 	modernc.org/sqlite v1.59.0
