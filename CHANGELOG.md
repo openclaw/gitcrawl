@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-09-24
+
+**Highlights:** Batched GraphQL conversation history, including standalone inline review comments.
+
+- Add opt-in `sync --graphql-history` for batched issue and PR conversations with complete nested pagination, standalone review-thread comments, exact provider IDs, bounded retries, and GraphQL point receipts. Thanks @hannesrudolph.
+
 ## 0.11.0 - 2026-09-22
 
 **Highlights:** Lower-disk portable exports, preserved body-length metadata, and fewer redundant GitHub comment downloads.

@@ -29,9 +29,10 @@ const historyComment = `id __typename fullDatabaseId body ` + historyActor + ` a
 const historyInline = historyComment + ` path diffHunk line startLine originalLine originalStartLine position originalPosition state subjectType outdated commit { oid } originalCommit { oid } replyTo { id fullDatabaseId } pullRequestReview { id fullDatabaseId }`
 
 var historyReview = historyComment + ` state submittedAt commit { oid } ` + historyConnection("comments", historyInline, "")
+var historyReviewThread = `id __typename ` + historyConnection("comments", historyInline, "")
 var historyCommon = `id __typename fullDatabaseId number title body ` + historyActor + ` authorAssociation createdAt updatedAt closedAt url state locked activeLockReason repository { nameWithOwner } milestone { number title state dueOn createdAt updatedAt url } ` + historyConnection("labels", `id name color description`, "") + " " + historyConnection("assignees", `id login __typename url`, "") + " " + historyConnection("comments", historyComment, "")
 var historyIssue = historyCommon + ` stateReason`
-var historyPull = historyCommon + ` isDraft merged mergedAt mergedBy { login __typename url } mergeCommit { oid } mergeable mergeStateStatus maintainerCanModify additions deletions changedFiles headRefName headRefOid baseRefName baseRefOid headRepository { nameWithOwner } baseRepository { nameWithOwner } commits { totalCount } ` + historyConnection("reviews", historyReview, "")
+var historyPull = historyCommon + ` isDraft merged mergedAt mergedBy { login __typename url } mergeCommit { oid } mergeable mergeStateStatus maintainerCanModify additions deletions changedFiles headRefName headRefOid baseRefName baseRefOid headRepository { nameWithOwner } baseRepository { nameWithOwner } commits { totalCount } ` + historyConnection("reviews", historyReview, "") + " " + historyConnection("reviewThreads", historyReviewThread, "")
 
 func historyConnection(name, fields, after string) string {
 	return name + `(first:20` + after + `) { totalCount pageInfo { hasNextPage endCursor } nodes { ` + fields + ` } }`
@@ -202,7 +203,9 @@ func historyFields(typ, key string) (string, error) {
 		return `id login __typename url`, nil
 	case typ == "PullRequest" && key == "reviews":
 		return historyReview, nil
-	case typ == "PullRequestReview" && key == "comments":
+	case typ == "PullRequest" && key == "reviewThreads":
+		return historyReviewThread, nil
+	case (typ == "PullRequestReview" || typ == "PullRequestReviewThread") && key == "comments":
 		return historyInline, nil
 	}
 	return "", fmt.Errorf("unsupported history connection %s.%s", typ, key)
@@ -215,8 +218,8 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 	case "Issue":
 		required = []string{"labels", "assignees", "comments"}
 	case "PullRequest":
-		required = []string{"labels", "assignees", "comments", "reviews"}
-	case "PullRequestReview":
+		required = []string{"labels", "assignees", "comments", "reviews", "reviewThreads"}
+	case "PullRequestReview", "PullRequestReviewThread":
 		required = []string{"comments"}
 	}
 	for _, key := range required {
@@ -229,7 +232,7 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 			return fmt.Errorf("missing provider identity")
 		}
 	}
-	for _, key := range []string{"labels", "assignees", "comments", "reviews"} {
+	for _, key := range []string{"labels", "assignees", "comments", "reviews", "reviewThreads"} {
 		connection, exists := node[key]
 		if !exists {
 			continue
@@ -281,6 +284,9 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 		children, ok := conn["nodes"].([]any)
 		if !ok {
 			return fmt.Errorf("missing history nodes")
+		}
+		if total, ok := historyInt(conn["totalCount"]); !ok || total != len(children) {
+			return fmt.Errorf("incomplete history %s count", key)
 		}
 		ids := map[string]bool{}
 		for _, child := range children {
@@ -348,6 +354,7 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 			pull[side] = map[string]any{"sha": node[side+"RefOid"], "ref": node[side+"RefName"], "repo": map[string]any{"full_name": historyMap(node[side+"Repository"])["nameWithOwner"]}}
 		}
 		item.Pull = pull
+		inlineByID := map[string]map[string]any{}
 		for _, v := range historyNodes(node, "reviews") {
 			r := historyProjection(v)
 			r["state"] = v["state"]
@@ -355,18 +362,43 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 			r["commit_id"] = historyMap(v["commit"])["oid"]
 			item.Reviews = append(item.Reviews, r)
 			for _, comment := range historyNodes(v, "comments") {
-				p := historyProjection(comment)
-				for dest, src := range map[string]string{"path": "path", "diff_hunk": "diffHunk", "line": "line", "start_line": "startLine", "original_line": "originalLine", "original_start_line": "originalStartLine", "position": "position", "original_position": "originalPosition", "subject_type": "subjectType"} {
-					p[dest] = comment[src]
+				if _, exists := inlineByID[historyString(comment["id"])]; exists {
+					continue
 				}
-				p["in_reply_to_id"] = historyMap(comment["replyTo"])["fullDatabaseId"]
+				p := historyInlineProjection(comment)
 				p["pull_request_review_id"] = v["fullDatabaseId"]
+				inlineByID[historyString(comment["id"])] = p
+				item.ReviewComments = append(item.ReviewComments, p)
+			}
+		}
+		// A comment's review association is nullable. Threads independently
+		// supply standalone comments; review bodies and their metadata stay above.
+		for _, thread := range historyNodes(node, "reviewThreads") {
+			for _, comment := range historyNodes(thread, "comments") {
+				id := historyString(comment["id"])
+				if _, exists := inlineByID[id]; exists {
+					continue
+				}
+				p := historyInlineProjection(comment)
+				inlineByID[id] = p
 				item.ReviewComments = append(item.ReviewComments, p)
 			}
 		}
 	}
 	item.Thread = row
 	return item, nil
+}
+
+func historyInlineProjection(comment map[string]any) map[string]any {
+	p := historyProjection(comment)
+	for dest, src := range map[string]string{"path": "path", "diff_hunk": "diffHunk", "line": "line", "start_line": "startLine", "original_line": "originalLine", "original_start_line": "originalStartLine", "position": "position", "original_position": "originalPosition", "subject_type": "subjectType"} {
+		p[dest] = comment[src]
+	}
+	p["in_reply_to_id"] = historyMap(comment["replyTo"])["fullDatabaseId"]
+	p["pull_request_review_id"] = historyMap(comment["pullRequestReview"])["fullDatabaseId"]
+	p["commit_id"] = historyMap(comment["commit"])["oid"]
+	p["original_commit_id"] = historyMap(comment["originalCommit"])["oid"]
+	return p
 }
 
 func historyProjection(node map[string]any) map[string]any {
