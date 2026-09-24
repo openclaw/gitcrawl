@@ -43,6 +43,7 @@ type Syncer struct {
 }
 
 type Options struct {
+	GraphQLHistory    bool
 	Owner             string
 	Repo              string
 	State             string
@@ -136,7 +137,27 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	repoRaw, err := s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
+	var history *gh.HistoryBatch
+	var repoRaw map[string]any
+	if options.GraphQLHistory {
+		if len(options.Numbers) == 0 || !options.IncludeComments || !options.IncludePRMetadata || options.IncludePRDetails || since != "" || options.Limit != 0 || state != "all" {
+			return Stats{}, fmt.Errorf("--graphql-history requires --numbers, --state all, --include-comments and --with pr-metadata; since/limit/pr-details are unsupported")
+		}
+		client, ok := s.client.(interface {
+			FetchGraphQLHistory(context.Context, string, string, []int, gh.Reporter) (gh.HistoryBatch, error)
+		})
+		if !ok {
+			return Stats{}, fmt.Errorf("client does not support GraphQL history")
+		}
+		batch, fetchErr := client.FetchGraphQLHistory(ctx, options.Owner, options.Repo, uniquePositiveNumbers(options.Numbers), options.Reporter)
+		if fetchErr != nil {
+			return Stats{}, fetchErr
+		}
+		history = &batch
+		repoRaw = batch.Repository
+	} else {
+		repoRaw, err = s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
+	}
 	if err != nil {
 		return Stats{}, err
 	}
@@ -167,7 +188,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	}
 	numbers := uniquePositiveNumbers(options.Numbers)
 	rows := make([]map[string]any, 0, len(numbers))
-	if len(numbers) > 0 {
+	if history != nil {
+		for _, item := range history.Items {
+			rows = append(rows, item.Thread)
+		}
+	} else if len(numbers) > 0 {
 		for _, number := range numbers {
 			if reserveErr != nil {
 				break
@@ -239,6 +264,41 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 		payload := threadSyncPayload{row: row}
 		number := intValue(row["number"])
 		kind := issueKind(row)
+		if history != nil {
+			// Keep legacy REST identity stable when revisiting a previously saved
+			// thread. The exact GraphQL identity remains in the provider payload.
+			existing, err := s.store.ListThreadsFiltered(ctx, store.ThreadListOptions{RepoID: repoID, IncludeClosed: true, Numbers: []int{number}, Limit: 1})
+			if err != nil {
+				return Stats{}, err
+			}
+			if len(existing) > 0 {
+				row["id"] = existing[0].GitHubID
+			}
+			for _, item := range history.Items {
+				if intValue(item.Thread["number"]) != number {
+					continue
+				}
+				for _, r := range item.Comments {
+					payload.commentRows = append(payload.commentRows, commentRow{kind: "issue_comment", raw: r})
+				}
+				for _, r := range item.Reviews {
+					payload.commentRows = append(payload.commentRows, commentRow{kind: "pull_review", raw: r})
+				}
+				for _, r := range item.ReviewComments {
+					payload.commentRows = append(payload.commentRows, commentRow{kind: "pull_review_comment", raw: r})
+				}
+				if item.Pull != nil {
+					payload.hasPullDetails = true
+					payload.pullDetails = pullRequestDetailRows{pull: item.Pull, fetchedAt: s.now().Format(time.RFC3339Nano)}
+				}
+			}
+			received.CommentsReceived += len(payload.commentRows)
+			payloads = append(payloads, payload)
+			if err := reportSyncProgress(options.Progress, received); err != nil {
+				return Stats{}, err
+			}
+			continue
+		}
 		if reserveErr != nil && (options.IncludeComments ||
 			kind == "pull_request" && (options.IncludePRMetadata || options.IncludePRDetails)) {
 			continue
