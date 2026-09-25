@@ -24,7 +24,7 @@ type HistoryBatch struct {
 	Items      []HistoryItem
 }
 
-const historyActor = `author { login __typename url }`
+const historyActor = `author { login __typename url ... on Node { id } }`
 const historyComment = `id __typename fullDatabaseId body ` + historyActor + ` authorAssociation createdAt updatedAt publishedAt url isMinimized minimizedReason`
 const historyInline = historyComment + ` path diffHunk line startLine originalLine originalStartLine position originalPosition state subjectType outdated commit { oid } originalCommit { oid } replyTo { id fullDatabaseId } pullRequestReview { id fullDatabaseId }`
 
@@ -35,7 +35,11 @@ var historyIssue = historyCommon + ` stateReason`
 var historyPull = historyCommon + ` isDraft merged mergedAt mergedBy { login __typename url } mergeCommit { oid } mergeable mergeStateStatus maintainerCanModify additions deletions changedFiles headRefName headRefOid baseRefName baseRefOid headRepository { nameWithOwner } baseRepository { nameWithOwner } commits { totalCount } ` + historyConnection("reviews", historyReview, "") + " " + historyConnection("reviewThreads", historyReviewThread, "")
 
 func historyConnection(name, fields, after string) string {
-	return name + `(first:20` + after + `) { totalCount pageInfo { hasNextPage endCursor } nodes { ` + fields + ` } }`
+	size := "20"
+	if after != "" && name != "reviews" && name != "reviewThreads" {
+		size = "100"
+	}
+	return name + `(first:` + size + after + `) { totalCount pageInfo { hasNextPage endCursor } nodes { ` + fields + ` } }`
 }
 
 type historySession struct {

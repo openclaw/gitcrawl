@@ -1,0 +1,46 @@
+package github
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func TestAnalyticsDiscoveryFiltersOldRowsAndRejectsBadCursors(t *testing.T) {
+	more := false
+	cursor := "end"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"rateLimit": map[string]any{"cost": 1, "remaining": 19000, "limit": 20000, "used": 1000, "resetAt": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}, "repository": map[string]any{"issues": map[string]any{"totalCount": 2, "pageInfo": map[string]any{"hasNextPage": more, "endCursor": cursor}, "nodes": []any{map[string]any{"number": 2, "updatedAt": "2026-09-24T00:00:00Z"}, map[string]any{"number": 1, "updatedAt": "2026-09-01T00:00:00Z"}}}}}})
+	}))
+	defer server.Close()
+	c := New(Options{Token: "fixture", BaseURL: server.URL})
+	since, _ := time.Parse(time.RFC3339, "2026-09-23T00:00:00Z")
+	p, e := c.UpdatedNumbers(context.Background(), "fixture", "repo", "issues", "", since)
+	if e != nil || len(p.Numbers) != 1 || p.Numbers[0] != 2 || p.Total != 2 {
+		t.Fatalf("%+v %v", p, e)
+	}
+	more = true
+	cursor = "same"
+	if _, e = c.UpdatedNumbers(context.Background(), "fixture", "repo", "issues", "same", since); e == nil {
+		t.Fatal("non-advancing cursor accepted")
+	}
+}
+func TestAnalyticsUnavailableNodesAreNotAuthorizationSuccess(t *testing.T) {
+	typ := "NOT_FOUND"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{map[string]any{"id": "one", "__typename": "User", "login": "fixture"}, nil}}, "errors": []any{map[string]any{"type": typ, "message": "fixture unavailable", "path": []any{"nodes", 1}}}})
+	}))
+	defer server.Close()
+	c := New(Options{Token: "fixture", BaseURL: server.URL})
+	nodes, e := c.AnalyticsNodes(context.Background(), []string{"one", "two"}, true)
+	if e != nil || len(nodes) != 2 || nodes[1]["id"] != "two" || nodes[1]["__typename"] != "Unavailable" {
+		t.Fatalf("%+v %v", nodes, e)
+	}
+	typ = "FORBIDDEN"
+	if _, e = c.AnalyticsNodes(context.Background(), []string{"one", "two"}, true); e == nil {
+		t.Fatal("authorization failure became missing-data evidence")
+	}
+}

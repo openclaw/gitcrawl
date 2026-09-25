@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	schemaVersion = 13
+	schemaVersion = 14
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -317,6 +317,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureFamilyTombstoneSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureAnalyticsSourceSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureCanonicalObservationTables(ctx); err != nil {

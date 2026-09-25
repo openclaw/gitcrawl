@@ -53,6 +53,7 @@ Core commands:
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
+  analytics            repair publication dates, enrich identities, or watch GraphQL updates
   sync-failures        list failed sync hydration attempts
   coverage             report local archive PR-detail completeness
   fill-pr-details      hydrate locally missing pull request detail rows

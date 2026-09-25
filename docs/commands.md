@@ -43,6 +43,7 @@ These work on every command.
 | Command | Purpose | Docs |
 | --- | --- | --- |
 | `gitcrawl sync owner/repo [--state --since --numbers <refs> --limit --include-comments --include-pr-details --with pr-details --graphql-history --force --progress-file <absolute-path> --json]` | Sync issues and PRs from GitHub into local SQLite | [Sync](/sync/) |
+| `gitcrawl analytics owner/repo [--apply --enrich --watch --once --json]` | Audit/repair source publication dates, enrich stable identities, and maintain GraphQL updates | [Analytics source preparation](/analytics-source/) |
 | `gitcrawl sync-failures owner/repo [--include-resolved --limit N --json]` | List failed issue, comment, and PR hydration attempts and optional resolved history | [Sync](/sync/#hydration-depth) |
 | `gitcrawl coverage [owner/repo \| --repos owner/a,owner/b] [--min-missing-pr-details N --json]` | Report archive, PR-detail, and enrichment coverage/freshness | — |
 | `gitcrawl fill-pr-details owner/repo [--limit --order --batch-size --reserve-rate-limit --include-comments --json-progress --json]` | Hydrate locally missing pull request detail rows in bounded batches | — |

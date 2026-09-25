@@ -1,0 +1,109 @@
+package github
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+// AnalyticsNodes reads public provider evidence for the requested native node IDs.
+func (c *Client) AnalyticsNodes(ctx context.Context, ids []string, profiles bool) ([]map[string]any, error) {
+	fields := `... on Issue {author{login __typename ... on Node{id}}} ... on PullRequest {author{login __typename ... on Node{id}}} ... on IssueComment {author{login __typename ... on Node{id}}} ... on PullRequestReview {author{login __typename ... on Node{id}}} ... on PullRequestReviewComment {author{login __typename ... on Node{id}}}`
+	if profiles {
+		fields = `... on User {login name bio url createdAt} ... on Bot {login url createdAt} ... on Mannequin {login url createdAt}`
+	}
+	payload, e := json.Marshal(graphqlEnvelope{Query: `query($ids:[ID!]!){rateLimit{cost remaining limit used resetAt} nodes(ids:$ids){id __typename ` + fields + `}}`, Variables: map[string]any{"ids": ids}})
+	if e != nil {
+		return nil, e
+	}
+	var envelope struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Path    []any  `json:"path"`
+		} `json:"errors"`
+	}
+	if e = c.doJSON(ctx, http.MethodPost, c.graphQLURL, bytes.NewReader(payload), nil, &envelope); e != nil {
+		return nil, e
+	}
+	for _, failure := range envelope.Errors {
+		if failure.Type != "NOT_FOUND" || len(failure.Path) < 2 || failure.Path[0] != "nodes" {
+			return nil, fmt.Errorf("actor evidence GraphQL error: %s", failure.Message)
+		}
+	}
+	var data map[string]any
+	if e = json.Unmarshal(envelope.Data, &data); e != nil {
+		return nil, e
+	}
+
+	nodes, ok := data["nodes"].([]any)
+	if !ok || len(nodes) != len(ids) {
+		return nil, fmt.Errorf("incomplete actor identity response")
+	}
+	out := make([]map[string]any, 0, len(ids))
+	for i, v := range nodes {
+		n, ok := v.(map[string]any)
+		if !ok {
+			n = map[string]any{"id": ids[i], "__typename": "Unavailable", "unavailable": true}
+		}
+		if n["id"] != ids[i] {
+			return nil, fmt.Errorf("actor node identity mismatch")
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+type UpdatedPage struct {
+	Numbers []int
+	Cursor  string
+	More    bool
+	Total   int
+	Oldest  time.Time
+}
+
+func (c *Client) UpdatedNumbers(ctx context.Context, owner, repo, kind, after string, since time.Time) (UpdatedPage, error) {
+	if kind != "issues" && kind != "pullRequests" {
+		return UpdatedPage{}, fmt.Errorf("invalid discovery kind")
+	}
+	h := historySession{client: c, remaining: 20000}
+	var cursor any
+	if after != "" {
+		cursor = after
+	}
+	data, e := h.request(ctx, `query($owner:String!,$repo:String!,$after:String){rateLimit{cost remaining limit used resetAt} repository(owner:$owner,name:$repo){`+kind+`(first:100,after:$after,orderBy:{field:UPDATED_AT,direction:DESC}){totalCount pageInfo{hasNextPage endCursor} nodes{number updatedAt}}}}`, map[string]any{"owner": owner, "repo": repo, "after": cursor}, 1)
+	if e != nil {
+		return UpdatedPage{}, e
+	}
+	r := historyMap(historyMap(data["repository"])[kind])
+	p := UpdatedPage{}
+	var valid bool
+	p.Total, valid = historyInt(r["totalCount"])
+	if !valid || p.Total < 0 {
+		return p, fmt.Errorf("missing update-discovery count")
+	}
+	info := historyMap(r["pageInfo"])
+	p.More, _ = info["hasNextPage"].(bool)
+	p.Cursor = historyString(info["endCursor"])
+	for _, n := range historyNodes(historyMap(data["repository"]), kind) {
+		number, ok := historyInt(n["number"])
+		at, e := time.Parse(time.RFC3339Nano, historyString(n["updatedAt"]))
+		if !ok || number < 1 || e != nil {
+			return p, fmt.Errorf("invalid update-discovery evidence")
+		}
+		if !at.Before(since) {
+			p.Numbers = append(p.Numbers, number)
+		}
+		if p.Oldest.IsZero() || at.Before(p.Oldest) {
+			p.Oldest = at
+		}
+	}
+	if p.More && (p.Cursor == "" || p.Cursor == after || p.Oldest.IsZero()) {
+		return p, fmt.Errorf("update cursor did not advance")
+	}
+	return p, nil
+}

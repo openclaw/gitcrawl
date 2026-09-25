@@ -265,8 +265,8 @@ func TestGHSearchSyncIfStaleMigratesFreshPortableRuntime(t *testing.T) {
 	if err := rt.Store.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read runtime schema version: %v", err)
 	}
-	if schemaVersion != 13 {
-		t.Fatalf("runtime schema version = %d, want 13", schemaVersion)
+	if schemaVersion != 14 {
+		t.Fatalf("runtime schema version = %d, want 14", schemaVersion)
 	}
 	var tableName string
 	if err := rt.Store.DB().QueryRowContext(ctx, `select name from sqlite_schema where type = 'table' and name = 'sync_runs'`).Scan(&tableName); err != nil {
