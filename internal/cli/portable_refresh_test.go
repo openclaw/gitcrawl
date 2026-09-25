@@ -26,11 +26,35 @@ type portableRefreshFixture struct {
 
 func portableTestGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
+	// Fixture setup must not leave detached maintenance writing during TempDir cleanup.
+	args = append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)
 	output, err := gitOutput(context.Background(), root, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return output
+}
+
+func TestPortableFixtureGitDisablesAutomaticMaintenance(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	portableTestGit(t, root, "init", "-b", "main")
+	for _, config := range []struct {
+		key, local, want string
+	}{
+		{"maintenance.auto", "true", "false"},
+		{"gc.auto", "1", "0"},
+	} {
+		portableTestGit(t, root, "config", config.key, config.local)
+		if got := portableTestGit(t, root, "config", "--get", config.key); got != config.want {
+			t.Errorf("%s = %q, want %q", config.key, got, config.want)
+		}
+		if got := portableTestGit(t, root, "config", "--local", "--get", config.key); got != config.local {
+			t.Errorf("fixture command changed local %s: %q", config.key, got)
+		}
+	}
 }
 
 func portableTestCommit(t *testing.T, root string) {
