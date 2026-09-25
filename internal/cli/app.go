@@ -30,6 +30,7 @@ type App struct {
 	observedGitHubToken string
 	Stdout              io.Writer
 	Stderr              io.Writer
+	Stdin               io.Reader
 
 	configPath            string
 	format                OutputFormat
@@ -53,6 +54,7 @@ func New() *App {
 	return &App{
 		Stdout:              os.Stdout,
 		Stderr:              os.Stderr,
+		Stdin:               os.Stdin,
 		format:              FormatText,
 		getWorkingDirectory: os.Getwd,
 	}
@@ -126,6 +128,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runDoctor(ctx, rest[1:])
 	case "status":
 		return a.runStatus(ctx, rest[1:])
+	case "metrics":
+		return a.runMetrics(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
 	case "fill-pr-details":

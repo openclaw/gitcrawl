@@ -45,6 +45,7 @@ Core commands:
   metadata             print crawlkit control metadata
   check-update         check for a newer gitcrawl release
   status               print fast read-only archive status
+  metrics              collect, import, or inspect an independent metrics database
   remote status        print remote archive status
   remote archives      list remote archives visible to the current identity
   remote login         authenticate with GitHub org access for a remote archive
@@ -90,6 +91,19 @@ No API server is provided. There is intentionally no serve command.
 `
 
 var commandUsageTexts = map[string]string{
+	"metrics": `gitcrawl metrics collects repository headline metrics in a separate SQLite database.
+
+Usage:
+  gitcrawl metrics collect --config /absolute/metrics.json [--json]
+  gitcrawl metrics import --config /absolute/metrics.json [--json] < history.ndjson
+  gitcrawl metrics status --config /absolute/metrics.json [--json]
+
+The JSON config requires database (absolute path) and targets [{entity,target}].
+Optional tokenEnv overrides GITHUB_TOKEN; native gh auth and --github-token-command
+are supported. No archive, portable-store, embedding, or model operations occur.
+Import validates target scope and IDs atomically. Unknown values remain SQL NULL.
+Status is read-only. Clone traffic 403/404 is optional unavailability.
+`,
 	"metadata": `gitcrawl metadata prints crawlkit control metadata.
 
 Usage:

@@ -38,6 +38,17 @@ These work on every command.
 | `gitcrawl configure [--summary-model --embed-model --embedding-basis --json]` | Update model fields in `config.toml` | [Configuration](/configuration/#gitcrawl-configure) |
 | `gitcrawl version` | Print version | — |
 
+## Repository metrics
+
+| Command | Purpose | Docs |
+| --- | --- | --- |
+| `gitcrawl metrics collect --config metrics.json [--json]` | Observe stars, forks, actual watchers, open PRs/issues, optional daily clones, and stable releases in a separate database | [Repository metrics](/metrics/) |
+| `gitcrawl metrics import --config metrics.json [--json]` | Atomically import scoped NDJSON history from stdin, preserving NULLs and IDs | [Repository metrics](/metrics/#storage-imports-and-failures) |
+| `gitcrawl metrics status --config metrics.json [--json]` | Inspect the metrics database without writes or network calls | [Repository metrics](/metrics/) |
+
+For `metrics`, `--config` selects an independent JSON config; it never selects or
+initializes the normal thread archive. No embedding or model calls are made.
+
 ## Sync
 
 | Command | Purpose | Docs |
