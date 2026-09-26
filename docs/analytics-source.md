@@ -46,8 +46,18 @@ and hydrates relevant updated threads. Issue and PR lanes have independent durab
 checkpoints and process at most two discovery pages per cycle. Eight two-thread
 requests progress independently per page. A rejected batch splits into individual
 requests; an item may be passed only after its failure is durably queued. Unrelated
-items and the other discovery lane continue. A cycle also retries at most sixteen
-due items, with a two-minute request deadline and bounded exponential backoff.
+items and the other discovery lane continue. Core retries process at most eight
+due items before discovery, with a two-minute request deadline and bounded
+exponential backoff. After persisting core coverage, targeted review recovery
+uses the time until the next nominal two-minute core poll; it does not add a
+two-minute idle wait after recovery. Each wave rechecks actual GraphQL quota and
+admits up to sixteen items through the existing eight two-item workers. A
+32-point-per-item admission margin and per-request native quota checks preserve
+3,000 points for recovery, leaving 1,500 points above ordinary capture's floor.
+Missing or expired quota stops provider recovery; local discovery can continue.
+The request window yields before core polling and cancellation retains retry
+receipts and the last committed scan. Quota and numeric per-query cost logs make
+the actual spending observable without credentials or content bodies.
 No partial connection is accepted as complete evidence. Non-nested
 continuation pages use 100 nodes to avoid repeated small round trips. Identity/profile enrichment uses eight disjoint 100-node requests with normal
 quota guards and can run concurrently under
@@ -103,7 +113,8 @@ removes retained history. Existing comment IDs/replies and
 `thread_child_observation_memberships` keep their existing contract. Consumers
 must distinguish historical rows from the latest provider membership.
 
-The watch gradually inspects 500 primary-key rows per cycle up to a captured
+The watch inspects bounded chunks of 5,000 primary-key rows within each recovery
+window up to a captured
 ceiling, queuing only PRs with retained review threads or unknown connection data.
 Complete retained zero-count GraphQL connections materialize `[]` using their
 actual retained observation time. Conditional writes preserve a newer live
@@ -132,6 +143,8 @@ Operational tables are **not public conversation datasets**:
 discovery coverage and review-state scan progress without credentials or collection.
 Timestamped logs distinguish `github_update_complete`, `github_update_failed`,
 `github_coverage_pending` (core), and `review_state_progress` (enrichment).
+`review_state_quota` records fresh limit/remaining/reset/reserve and admitted wave
+size; `review_state_cost` records actual provider points per recovery query.
 The older successful-only `sync_runs` table is not a
 complete failure ledger. Existing embeddings are reused; this command does not
 generate embeddings or reinterpret empty review bodies as missing replies.

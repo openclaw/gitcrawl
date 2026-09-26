@@ -50,7 +50,7 @@ func (a *App) analyticsClient(ctx context.Context, cfg config.Config) (*gh.Clien
 	if provider == nil && token.Value == "" {
 		return nil, fmt.Errorf("missing GitHub credential")
 	}
-	return gh.New(gh.Options{Token: token.Value, TokenProvider: provider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: 1500}), nil
+	return gh.New(gh.Options{Token: token.Value, TokenProvider: provider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: analyticsCoreReserve}), nil
 }
 func (a *App) runAnalytics(ctx context.Context, args []string) error {
 	for _, arg := range args {
@@ -190,7 +190,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 	actorClients := make([]*gh.Client, 8)
 	for i := range actorClients {
 		token := a.resolveGitHubToken(ctx, cfg)
-		actorClients[i] = gh.New(gh.Options{Token: token.Value, TokenProvider: a.analyticsTokenProvider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: 1500})
+		actorClients[i] = gh.New(gh.Options{Token: token.Value, TokenProvider: a.analyticsTokenProvider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: analyticsCoreReserve})
 	}
 	parallelWatch := *watch && *enrich
 	if parallelWatch {
@@ -200,12 +200,13 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 		go func() {
 			defer close(done)
 			for {
+				nextPoll := time.Now().Add(analyticsPollInterval)
 				pollErr := a.analyticsCycle(pollCtx, rt.Store, client, owner, repo)
 				a.analyticsUpdateLog(pollErr)
 				select {
 				case <-pollCtx.Done():
 					return
-				case <-time.After(2 * time.Minute):
+				case <-time.After(time.Until(nextPoll)):
 				}
 			}
 		}()
@@ -283,6 +284,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 		return ctx.Err()
 	}
 	for *watch || *once {
+		nextPoll := time.Now().Add(analyticsPollInterval)
 		e = a.analyticsCycle(ctx, rt.Store, client, owner, repo)
 		if e != nil {
 			if !*watch {
@@ -298,7 +300,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Minute):
+		case <-time.After(time.Until(nextPoll)):
 		}
 	}
 	return nil
@@ -322,11 +324,22 @@ func (a *App) syncAnalyticsBatch(ctx context.Context, s *store.Store, owner, rep
 		return err
 	}
 	token := a.resolveGitHubToken(ctx, cfg)
-	client := gh.New(gh.Options{Token: token.Value, TokenProvider: a.analyticsTokenProvider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: 1500})
+	reserve := analyticsCoreReserve
+	var reporter gh.Reporter
+	if operation == "review_state" {
+		reserve = analyticsReviewReserve
+		reporter = func(message string) {
+			var call, cost, remaining, reset int
+			if _, err := fmt.Sscanf(message, "[github] graphql cost %d %d remaining %d reset %d", &call, &cost, &remaining, &reset); err == nil {
+				fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_cost\",\"at\":%q,\"points\":%d,\"remaining\":%d,\"reset_unix\":%d}\n", time.Now().UTC().Format(time.RFC3339Nano), cost, remaining, reset)
+			}
+		}
+	}
+	client := gh.New(gh.Options{Token: token.Value, TokenProvider: a.analyticsTokenProvider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: reserve})
 	// The watch owner has already validated and opened this store. Reopening it
 	// for every two threads repeats full-archive migration audits and serializes
 	// otherwise independent network work. Native transactions still own writes.
-	_, err = syncer.New(client, s).Sync(ctx, syncer.Options{Owner: owner, Repo: repo, GraphQLHistory: true, ReceiptOperation: operation, State: "all", Numbers: numbers, IncludeComments: true, IncludePRMetadata: true})
+	_, err = syncer.New(client, s).Sync(ctx, syncer.Options{Owner: owner, Repo: repo, GraphQLHistory: true, ReceiptOperation: operation, State: "all", Numbers: numbers, IncludeComments: true, IncludePRMetadata: true, Reporter: reporter})
 	return err
 }
 

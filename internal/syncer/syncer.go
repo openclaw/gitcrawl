@@ -124,6 +124,8 @@ func New(client GitHubClient, st *store.Store) *Syncer {
 	}
 }
 
+var errAnalyticsReceipt = errors.New("persist GraphQL attempt")
+
 func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resultErr error) {
 	startedAt := s.now()
 	started := startedAt.Format(time.RFC3339Nano)
@@ -169,7 +171,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			for _, number := range uniquePositiveNumbers(options.Numbers) {
 				err := s.store.RecordAnalyticsAttempt(receiptCtx, store.AnalyticsAttempt{Repository: options.Owner + "/" + options.Repo, Number: number, Operation: operation, StartedAt: started, FinishedAt: finished, Status: status, ErrorClass: class, ErrorText: message, Evidence: evidence})
 				if err != nil {
-					resultErr = errors.Join(resultErr, fmt.Errorf("persist GraphQL attempt: %w", err))
+					resultErr = errors.Join(resultErr, fmt.Errorf("%w: %w", errAnalyticsReceipt, err))
 					return
 				}
 			}

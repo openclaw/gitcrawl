@@ -14,6 +14,13 @@ import (
 
 var errAnalyticsIncomplete = errors.New("analytics coverage remains incomplete")
 
+const (
+	analyticsPollInterval = 2 * time.Minute
+	analyticsCoreReserve  = 1500
+	// Keep another 1500 points available to ordinary capture above its floor.
+	analyticsReviewReserve = 3000
+)
+
 func (a *App) analyticsUpdateLog(err error) {
 	event := "github_update_complete"
 	fields := map[string]any{"at": time.Now().UTC().Format(time.RFC3339Nano)}
@@ -114,23 +121,19 @@ func migrateAnalyticsLanes(ctx context.Context, s *store.Store, repository strin
 }
 
 func (a *App) analyticsCycle(ctx context.Context, s *store.Store, c *gh.Client, owner, repo string) error {
+	nextCore := time.Now().Add(analyticsPollInterval)
 	repository := owner + "/" + repo
 	if err := migrateAnalyticsLanes(ctx, s, repository); err != nil {
 		return err
 	}
-	recovery, err := s.SeedReviewStateRecovery(ctx, repository, 500)
+	// Ordinary capture and its retry obligations always go first. Historical
+	// review enrichment uses only the remaining time before the next core poll.
+	due, err := s.DueAnalyticsRetries(ctx, repository, time.Now().UTC().Format(time.RFC3339Nano), 8, "graphql_history")
 	if err != nil {
 		return err
 	}
-	// Bounded retry work never replaces either independent discovery lane.
-	for _, operation := range []string{"graphql_history", "review_state"} {
-		due, e := s.DueAnalyticsRetries(ctx, repository, time.Now().UTC().Format(time.RFC3339Nano), 8, operation)
-		if e != nil {
-			return e
-		}
-		if e = a.analyticsNumbers(ctx, s, owner, repo, due, false, operation); e != nil {
-			return e
-		}
+	if err = a.analyticsNumbers(ctx, s, owner, repo, due, false, "graphql_history"); err != nil {
+		return err
 	}
 	var failures []error
 	for i, kind := range []string{"issues", "pullRequests"} {
@@ -184,31 +187,159 @@ func (a *App) analyticsCycle(ctx context.Context, s *store.Store, c *gh.Client, 
 	}); err != nil {
 		return err
 	}
-	if err = s.SaveReviewStateCoverage(ctx, repository, recovery); err != nil {
-		return err
-	}
-	totalPending, err := s.AnalyticsOutstanding(ctx, repository)
-	if err != nil {
-		return err
-	}
-	progress, _ := json.Marshal(map[string]any{"event": "review_state_progress", "at": time.Now().UTC().Format(time.RFC3339Nano), "scanned": recovery.Scanned, "ceiling": recovery.Ceiling, "queued": recovery.Queued, "pending_items": totalPending - outstanding, "scan_complete": recovery.Done, "complete": recovery.Done && totalPending == outstanding})
-	fmt.Fprintln(a.Stderr, string(progress))
+	reviewErr := a.analyticsReviewRecovery(ctx, s, c, owner, repo, nextCore.Add(-5*time.Second))
 	if len(failures) > 0 {
-		return errors.Join(failures...)
+		return errors.Join(append(failures, reviewErr)...)
 	}
 	if !complete {
-		return fmt.Errorf("%w: core_unresolved=%d", errAnalyticsIncomplete, outstanding)
+		return errors.Join(fmt.Errorf("%w: core_unresolved=%d", errAnalyticsIncomplete, outstanding), reviewErr)
 	}
-	return nil
+	return reviewErr
 }
 
-func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo string, numbers []int, discovery bool, operation string) error {
+// Fill the time formerly spent idle with bounded, quota-checked waves through
+// the existing executor. Each scan chunk and item receipt remains durable.
+func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh.Client, owner, repo string, deadline time.Time) (resultErr error) {
+	window, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	yield := func(err error) error {
+		if ctx.Err() == nil && window.Err() == context.DeadlineExceeded && analyticsCancellationOnly(err) {
+			fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_yield\",\"at\":%q}\n", time.Now().UTC().Format(time.RFC3339Nano))
+			return nil
+		}
+		return err
+	}
+	repository := owner + "/" + repo
+	var progress store.ReviewStateRecovery
+	haveProgress, quotaBlocked := false, false
+	defer func() {
+		if !haveProgress {
+			return
+		}
+		// Cancellation cannot erase the last committed scan or completed items.
+		receiptCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if err := s.SaveReviewStateCoverage(receiptCtx, repository, progress); err != nil {
+			resultErr = errors.Join(resultErr, err)
+			return
+		}
+		var pending int
+		if err := s.DB().QueryRowContext(receiptCtx, "SELECT pending_items FROM analytics_review_state_coverage WHERE repository=?", repository).Scan(&pending); err != nil {
+			resultErr = errors.Join(resultErr, err)
+			return
+		}
+		encoded, _ := json.Marshal(map[string]any{"event": "review_state_progress", "at": time.Now().UTC().Format(time.RFC3339Nano), "scanned": progress.Scanned, "ceiling": progress.Ceiling, "queued": progress.Queued, "pending_items": pending, "scan_complete": progress.Done, "complete": progress.Done && pending == 0})
+		fmt.Fprintln(a.Stderr, string(encoded))
+	}()
+	for time.Until(deadline) > 5*time.Second {
+		if err := window.Err(); err != nil {
+			return yield(err)
+		}
+		next, err := s.SeedReviewStateRecovery(window, repository, 5000)
+		if err != nil {
+			return yield(err)
+		}
+		progress, haveProgress = next, true
+		// Persist progress even if quota is exhausted or the process is stopped.
+		if err = s.SaveReviewStateCoverage(window, repository, progress); err != nil {
+			return yield(err)
+		}
+		if quotaBlocked {
+			if progress.Done {
+				return nil
+			}
+			continue
+		}
+		due, err := s.DueAnalyticsRetries(window, repository, time.Now().UTC().Format(time.RFC3339Nano), 16, "review_state")
+		if err != nil {
+			return yield(err)
+		}
+		if len(due) == 0 {
+			if progress.Done {
+				return nil
+			}
+			continue
+		}
+		limits, err := c.GetRateLimits(window, nil)
+		if err != nil {
+			if window.Err() != nil {
+				return yield(err)
+			}
+			class, message, _ := gh.HistoryFailureDetails(err)
+			fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_quota_deferred\",\"at\":%q,\"error_class\":%q,\"error\":%q}\n", time.Now().UTC().Format(time.RFC3339Nano), class, message)
+			quotaBlocked = true
+			continue
+		}
+		budget, quota, err := analyticsReviewBudget(limits, time.Now())
+		if err != nil {
+			fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_quota_deferred\",\"at\":%q,\"error\":%q}\n", time.Now().UTC().Format(time.RFC3339Nano), err.Error())
+			quotaBlocked = true
+			continue
+		}
+		encoded, _ := json.Marshal(map[string]any{"event": "review_state_quota", "at": time.Now().UTC().Format(time.RFC3339Nano), "limit": quota.Limit, "remaining": quota.Remaining, "reset_at": quota.ResetAt, "reserve": analyticsReviewReserve, "wave_items": min(len(due), budget)})
+		fmt.Fprintln(a.Stderr, string(encoded))
+		if budget == 0 {
+			quotaBlocked = true
+			continue
+		}
+		// Item-level reserve failures are durably queued and absorbed by
+		// analyticsIsolatedBatch; the next wave reprobes quota and keeps scanning.
+		// Remaining errors include unrecorded storage failures, not safe deferrals.
+		if err = a.analyticsNumbers(window, s, owner, repo, due[:min(len(due), budget)], false, "review_state"); err != nil {
+			return yield(err)
+		}
+	}
+	return ctx.Err()
+}
+
+// Joined storage/receipt errors must never disappear behind a window timeout.
+func analyticsCancellationOnly(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if !analyticsCancellationOnly(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return analyticsCancellationOnly(wrapped.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
+}
+
+func analyticsReviewBudget(limits []gh.RateLimitSnapshot, now time.Time) (int, gh.RateLimitSnapshot, error) {
+	for _, quota := range limits {
+		if quota.Resource != "graphql" {
+			continue
+		}
+		if quota.Limit <= 0 || quota.Remaining < 0 || !quota.ResetAt.After(now) {
+			return 0, quota, fmt.Errorf("fresh GraphQL quota required for review recovery")
+		}
+		// A conservative admission margin limits in-flight overshoot. Native
+		// request guards recheck actual remaining quota before every request.
+		return min(16, max(0, quota.Remaining-analyticsReviewReserve)/32), quota, nil
+	}
+	return 0, gh.RateLimitSnapshot{}, fmt.Errorf("GraphQL quota unavailable for review recovery")
+}
+
+func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo string, numbers []int, discovery bool, operation string) (resultErr error) {
 	var wg sync.WaitGroup
-	defer wg.Wait()
-	slots := make(chan struct{}, 8)
 	var failures []error
+	// Every return, including cancelled admission, waits for durable receipts.
+	defer func() {
+		wg.Wait()
+		resultErr = errors.Join(append(failures, resultErr)...)
+	}()
+	slots := make(chan struct{}, 8)
 	var mu sync.Mutex
 	for i := 0; i < len(numbers); i += 2 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var part []int
 		for _, n := range numbers[i:min(i+2, len(numbers))] {
 			if discovery {
@@ -228,7 +359,15 @@ func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo 
 		if len(part) == 0 {
 			continue
 		}
-		slots <- struct{}{}
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if err := ctx.Err(); err != nil {
+			<-slots
+			return err
+		}
 		wg.Add(1)
 		go func(part []int) {
 			defer wg.Done()
@@ -240,8 +379,7 @@ func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo 
 			}
 		}(part)
 	}
-	wg.Wait()
-	return errors.Join(failures...)
+	return nil
 }
 
 func (a *App) analyticsIsolatedBatch(ctx context.Context, s *store.Store, owner, repo string, numbers []int, operation string) error {

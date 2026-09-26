@@ -102,3 +102,17 @@ func TestGraphQLHistoryUsesNativeTransactionsAndPreservesLegacyIdentity(t *testi
 		t.Fatal("unsupported hydration accepted")
 	}
 }
+
+func TestGraphQLCancellationDoesNotHideReceiptPersistenceFailure(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	client := historyFixtureClient{err: context.DeadlineExceeded}
+	_, err = New(client, st).Sync(ctx, Options{Owner: "fixture", Repo: "repo", Numbers: []int{1}, State: "all", GraphQLHistory: true, IncludeComments: true, IncludePRMetadata: true, ReceiptOperation: "review_state"})
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, errAnalyticsReceipt) {
+		t.Fatalf("missing distinguishable receipt failure: %v", err)
+	}
+}
