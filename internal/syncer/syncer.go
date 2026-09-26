@@ -43,7 +43,8 @@ type Syncer struct {
 }
 
 type Options struct {
-	GraphQLHistory bool
+	GraphQLHistory  bool
+	ReviewStateOnly bool
 	// ReceiptOperation separates targeted review-state recovery from verified
 	// core traversal; both still fetch and validate complete conversations.
 	ReceiptOperation  string
@@ -63,6 +64,9 @@ type Options struct {
 }
 
 type Stats struct {
+	ReviewStateOnly      bool   `json:"review_state_only,omitempty"`
+	FetchMillis          int64  `json:"fetch_ms,omitempty"`
+	PersistMillis        int64  `json:"persist_ms,omitempty"`
 	Repository           string `json:"repository"`
 	ThreadsSynced        int    `json:"threads_synced"`
 	IssuesSynced         int    `json:"issues_synced"`
@@ -127,6 +131,9 @@ func New(client GitHubClient, st *store.Store) *Syncer {
 var errAnalyticsReceipt = errors.New("persist GraphQL attempt")
 
 func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resultErr error) {
+	if options.ReviewStateOnly && !options.GraphQLHistory {
+		return Stats{}, fmt.Errorf("review-state-only requires GraphQL history transport")
+	}
 	startedAt := s.now()
 	started := startedAt.Format(time.RFC3339Nano)
 	if err := reportSyncProgress(options.Progress, SyncProgress{
@@ -155,6 +162,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		if operation != "graphql_history" && operation != "review_state" {
 			return Stats{}, fmt.Errorf("unsupported GraphQL receipt operation")
 		}
+		if options.ReviewStateOnly && operation != "review_state" {
+			return Stats{}, fmt.Errorf("review-state-only fetch requires review recovery operation")
+		}
 		// Fetch/validation failures happen before conversation transactions and
 		// were previously invisible to durable run tables. Keep a receipt even
 		// when the request is cancelled; accepted content remains untouched.
@@ -176,6 +186,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 				}
 			}
 		}()
+		if options.ReviewStateOnly {
+			return s.syncReviewState(ctx, options, started)
+		}
 		client, ok := s.client.(interface {
 			FetchGraphQLHistory(context.Context, string, string, []int, gh.Reporter) (gh.HistoryBatch, error)
 		})

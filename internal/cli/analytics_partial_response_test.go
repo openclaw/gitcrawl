@@ -161,7 +161,7 @@ func TestAnalyticsPairedPartialRejectionIsolatesPeerAndPreservesUnavailableHisto
 	s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=16945 AND operation='review_state' AND status='success'").Scan(&success)
 	var membership, body string
 	s.DB().QueryRow("SELECT x.review_thread_ids_json,t.body FROM threads t JOIN pull_request_review_thread_syncs x ON x.thread_id=t.id WHERE t.number=16945").Scan(&membership, &body)
-	if pending != 1 || peerResolved != 1 || success != 1 || membership != "[]" || body != "isolated success" {
+	if pending != 1 || peerResolved != 1 || success != 1 || membership != "[]" || body != "retained original" {
 		t.Fatalf("isolation/retry proof failed: %d %d %d %s %s", pending, peerResolved, success, membership, body)
 	}
 }

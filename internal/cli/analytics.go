@@ -325,28 +325,51 @@ func (a *App) syncAnalyticsBatch(ctx context.Context, s *store.Store, owner, rep
 	}
 	token := a.resolveGitHubToken(ctx, cfg)
 	reserve := analyticsCoreReserve
+	var responseLimit int64
+	var responseBytes, points, providerMillis int64
 	var reporter gh.Reporter
 	if operation == "review_state" {
 		reserve = analyticsReviewReserve
+		responseLimit = 32 << 20
 		// This call owns its client, history session and reporter. Synchronous
 		// callbacks are never shared with the other analyticsNumbers workers.
 		var effectiveRemaining, effectiveReset int
 		reporter = func(message string) {
+			var bytes, callNumber, millis int64
+			if _, err := fmt.Sscanf(message, "[github] graphql bytes %d", &bytes); err == nil {
+				responseBytes += bytes
+				return
+			}
+			if _, err := fmt.Sscanf(message, "[github] graphql timing %d %d", &callNumber, &millis); err == nil {
+				providerMillis += millis
+				return
+			}
 			var providerRemaining, providerReset int
 			if _, err := fmt.Sscanf(message, "[github] graphql quota provider_remaining %d provider_reset %d effective_remaining %d effective_reset %d", &providerRemaining, &providerReset, &effectiveRemaining, &effectiveReset); err == nil {
 				return
 			}
 			var call, cost, remaining, reset int
 			if _, err := fmt.Sscanf(message, "[github] graphql cost %d %d remaining %d reset %d", &call, &cost, &remaining, &reset); err == nil {
+				points += int64(cost)
 				fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_cost\",\"at\":%q,\"points\":%d,\"remaining\":%d,\"reset_unix\":%d,\"provider_remaining\":%d,\"provider_reset_unix\":%d}\n", time.Now().UTC().Format(time.RFC3339Nano), cost, effectiveRemaining, effectiveReset, remaining, reset)
 			}
 		}
 	}
-	client := gh.New(gh.Options{Token: token.Value, TokenProvider: a.analyticsTokenProvider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: reserve})
+	client := gh.New(gh.Options{Token: token.Value, TokenProvider: a.analyticsTokenProvider, BaseURL: githubBaseURL(), RateLimit: a.observeGitHubRateLimit(ctx), RateLimitReserve: reserve, GraphQLResponseLimit: responseLimit, GraphQLQuotaGuard: operation == "review_state"})
 	// The watch owner has already validated and opened this store. Reopening it
 	// for every two threads repeats full-archive migration audits and serializes
 	// otherwise independent network work. Native transactions still own writes.
-	_, err = syncer.New(client, s).Sync(ctx, syncer.Options{Owner: owner, Repo: repo, GraphQLHistory: true, ReceiptOperation: operation, State: "all", Numbers: numbers, IncludeComments: true, IncludePRMetadata: true, Reporter: reporter})
+	stats, err := syncer.New(client, s).Sync(ctx, syncer.Options{Owner: owner, Repo: repo, GraphQLHistory: true, ReviewStateOnly: operation == "review_state", ReceiptOperation: operation, State: "all", Numbers: numbers, IncludeComments: true, IncludePRMetadata: true, Reporter: reporter})
+	if metrics, ok := ctx.Value(analyticsMetricsKey{}).(*analyticsWorkMetrics); ok {
+		metrics.bytes.Add(responseBytes)
+		metrics.points.Add(points)
+		metrics.providerMillis.Add(providerMillis)
+		metrics.dbMillis.Add(stats.PersistMillis)
+		metrics.attempted.Add(int64(len(numbers)))
+		if err == nil {
+			metrics.recovered.Add(int64(stats.ThreadsSynced))
+		}
+	}
 	return err
 }
 

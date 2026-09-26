@@ -332,3 +332,73 @@ func TestAnalyticsRecoveryRequiresAnAcceptedMembershipObservation(t *testing.T) 
 		t.Fatalf("proven empty membership did not reconcile: %d %v", n, err)
 	}
 }
+
+func TestReviewRetryFairShareAndExplicitUnavailableBackoff(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for n := 1; n <= 100; n++ {
+		if _, err = s.DB().Exec("insert into analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at) values('fixture/repo',?,'review_state','2000-01-01T00:00:00Z','2000-01-01T00:00:00Z','2000-01-01T00:00:00Z')", n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := AnalyticsAttempt{Repository: "fixture/repo", Number: 999, Operation: "review_state", StartedAt: "2026-01-01T00:00:00Z", FinishedAt: "2026-01-01T00:00:01Z", Status: "failed", ErrorClass: "partial_response", Evidence: json.RawMessage(`{"graphql_errors":{"items":[{"type":"NOT_FOUND"}]}}`)}
+	if err = s.RecordAnalyticsAttempt(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	due, err := s.DueReviewStateWork(ctx, "fixture/repo", "2026-01-01T00:02:00Z", 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range due {
+		if n == 999 {
+			t.Fatal("unavailable backoff ignored")
+		}
+	}
+	due, err = s.DueReviewStateWork(ctx, "fixture/repo", "2026-01-01T00:16:00Z", 16)
+	if err != nil || len(due) != 16 || due[0] != 999 {
+		t.Fatalf("failed retry starved by bulk: %v %v", due, err)
+	}
+	a.Operation = "graphql_history"
+	if err = s.RecordAnalyticsAttempt(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	due, err = s.DueReviewStateWork(ctx, "fixture/repo", "2026-01-01T00:16:00Z", 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range due {
+		if n == 999 {
+			t.Fatal("review bypassed core obligation")
+		}
+	}
+	repoID, err := s.UpsertRepository(ctx, Repository{Owner: "fixture", Name: "repo", FullName: "fixture/repo", RawJSON: "{}", UpdatedAt: a.FinishedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid, err := s.UpsertThread(ctx, Thread{RepoID: repoID, GitHubID: "P999", Number: 999, Kind: "pull_request", State: "open", Title: "fixture", HTMLURL: "https://github.com/fixture/repo/pull/999", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h", UpdatedAt: a.FinishedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.UpsertPullRequestReviewThreads(ctx, tid, a.FinishedAt, nil); err != nil {
+		t.Fatal(err)
+	}
+	a.Operation = "review_state"
+	a.Status = "success"
+	if err = s.RecordAnalyticsAttempt(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	s.DB().QueryRow("select status from analytics_fetch_attempts order by id desc limit 1").Scan(&status)
+	if status != "success" {
+		t.Fatal("review success not proven", status)
+	}
+	var unresolved int
+	s.DB().QueryRow("select count(*) from analytics_retries where operation='graphql_history' and resolved_at is null").Scan(&unresolved)
+	if unresolved != 1 {
+		t.Fatal("review-only success cleared core failure")
+	}
+}

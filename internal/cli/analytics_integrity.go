@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gh "github.com/openclaw/gitcrawl/internal/github"
@@ -18,8 +19,28 @@ const (
 	analyticsPollInterval = 2 * time.Minute
 	analyticsCoreReserve  = 1500
 	// Keep another 1500 points available to ordinary capture above its floor.
-	analyticsReviewReserve = 3000
+	analyticsReviewReserve   = 3000
+	analyticsReviewWorkers   = 32
+	analyticsReviewBatch     = 8
+	analyticsReviewWave      = analyticsReviewWorkers * analyticsReviewBatch
+	analyticsReviewWaveBytes = 16 << 20
 )
+
+type analyticsMetricsKey struct{}
+type analyticsWorkMetrics struct {
+	busy, maxBusy, bytes, points, attempted, recovered, providerMillis, dbMillis, workerMillis atomic.Int64
+}
+
+func (m *analyticsWorkMetrics) enter() func() {
+	start := time.Now()
+	busy := m.busy.Add(1)
+	for old := m.maxBusy.Load(); busy > old; old = m.maxBusy.Load() {
+		if m.maxBusy.CompareAndSwap(old, busy) {
+			break
+		}
+	}
+	return func() { m.workerMillis.Add(time.Since(start).Milliseconds()); m.busy.Add(-1) }
+}
 
 func (a *App) analyticsUpdateLog(err error) {
 	event := "github_update_complete"
@@ -211,6 +232,7 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 	}
 	repository := owner + "/" + repo
 	var progress store.ReviewStateRecovery
+	bytesPerItem := int64(64 << 10)
 	haveProgress, quotaBlocked := false, false
 	defer func() {
 		if !haveProgress {
@@ -250,7 +272,7 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 			}
 			continue
 		}
-		due, err := s.DueAnalyticsRetries(window, repository, time.Now().UTC().Format(time.RFC3339Nano), 16, "review_state")
+		due, err := s.DueReviewStateWork(window, repository, time.Now().UTC().Format(time.RFC3339Nano), analyticsReviewWave)
 		if err != nil {
 			return yield(err)
 		}
@@ -276,6 +298,15 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 			quotaBlocked = true
 			continue
 		}
+		budget = min(budget, int(analyticsReviewWaveBytes/bytesPerItem))
+		if budget > 0 && budget < len(due) {
+			// Retry fairness is relative to actual admitted work, including
+			// a smaller point/byte budget, not the maximum wave size.
+			due, err = s.DueReviewStateWork(window, repository, time.Now().UTC().Format(time.RFC3339Nano), budget)
+			if err != nil {
+				return yield(err)
+			}
+		}
 		encoded, _ := json.Marshal(map[string]any{"event": "review_state_quota", "at": time.Now().UTC().Format(time.RFC3339Nano), "limit": quota.Limit, "remaining": quota.Remaining, "reset_at": quota.ResetAt, "provider_remaining": rawQuota.Remaining, "provider_reset_at": rawQuota.ResetAt, "reserve": analyticsReviewReserve, "wave_items": min(len(due), budget)})
 		fmt.Fprintln(a.Stderr, string(encoded))
 		if budget == 0 {
@@ -285,7 +316,15 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 		// Item-level reserve failures are durably queued and absorbed by
 		// analyticsIsolatedBatch; the next wave reprobes quota and keeps scanning.
 		// Remaining errors include unrecorded storage failures, not safe deferrals.
-		if err = a.analyticsNumbers(window, s, owner, repo, due[:min(len(due), budget)], false, "review_state"); err != nil {
+		metrics := &analyticsWorkMetrics{}
+		waveStarted := time.Now()
+		err = a.analyticsNumbers(context.WithValue(window, analyticsMetricsKey{}, metrics), s, owner, repo, due[:min(len(due), budget)], false, "review_state")
+		if metrics.attempted.Load() > 0 {
+			bytesPerItem = max(bytesPerItem, metrics.bytes.Load()/metrics.attempted.Load())
+		}
+		measured, _ := json.Marshal(map[string]any{"event": "review_state_wave", "at": time.Now().UTC().Format(time.RFC3339Nano), "elapsed_ms": time.Since(waveStarted).Milliseconds(), "workers": analyticsReviewWorkers, "max_busy_workers": metrics.maxBusy.Load(), "busy_worker_ms": metrics.workerMillis.Load(), "attempted_items": metrics.attempted.Load(), "recovered_items": metrics.recovered.Load(), "response_bytes": metrics.bytes.Load(), "reported_points": metrics.points.Load(), "provider_ms": metrics.providerMillis.Load(), "db_ms": metrics.dbMillis.Load(), "byte_budget": analyticsReviewWaveBytes})
+		fmt.Fprintln(a.Stderr, string(measured))
+		if err != nil {
 			return yield(err)
 		}
 	}
@@ -321,7 +360,7 @@ func analyticsReviewBudget(limits []gh.RateLimitSnapshot, now time.Time) (int, g
 		}
 		// A conservative admission margin limits in-flight overshoot. Native
 		// request guards recheck actual remaining quota before every request.
-		return min(16, max(0, quota.Remaining-analyticsReviewReserve)/32), quota, nil
+		return min(analyticsReviewWave, max(0, quota.Remaining-analyticsReviewReserve)/32), quota, nil
 	}
 	return 0, gh.RateLimitSnapshot{}, fmt.Errorf("GraphQL quota unavailable for review recovery")
 }
@@ -334,14 +373,18 @@ func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo 
 		wg.Wait()
 		resultErr = errors.Join(append(failures, resultErr)...)
 	}()
-	slots := make(chan struct{}, 8)
+	workers, batchSize := 8, 2
+	if operation == "review_state" {
+		workers, batchSize = analyticsReviewWorkers, analyticsReviewBatch
+	}
+	slots := make(chan struct{}, workers)
 	var mu sync.Mutex
-	for i := 0; i < len(numbers); i += 2 {
+	for i := 0; i < len(numbers); i += batchSize {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var part []int
-		for _, n := range numbers[i:min(i+2, len(numbers))] {
+		for _, n := range numbers[i:min(i+batchSize, len(numbers))] {
 			if discovery {
 				// Review-only recovery must not defer a newly discovered core edit.
 				// If this core attempt fails, it creates graphql_history retry state
@@ -372,6 +415,9 @@ func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo 
 		go func(part []int) {
 			defer wg.Done()
 			defer func() { <-slots }()
+			if metrics, ok := ctx.Value(analyticsMetricsKey{}).(*analyticsWorkMetrics); ok {
+				defer metrics.enter()()
+			}
 			if e := a.analyticsIsolatedBatch(ctx, s, owner, repo, part, operation); e != nil {
 				mu.Lock()
 				failures = append(failures, e)

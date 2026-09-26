@@ -78,7 +78,7 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 			return err
 		}
 		if status == "success" {
-			_, err = tx.q().ExecContext(ctx, `UPDATE analytics_retries SET resolved_at=?,last_attempt_id=? WHERE repository=? AND number=? AND resolved_at IS NULL AND (operation=? OR (? IN ('graphql_history','review_state') AND operation IN ('graphql_history','review_state'))) AND (operation<>'review_state' OR ?)`, a.FinishedAt, id, a.Repository, a.Number, a.Operation, a.Operation, knownReview)
+			_, err = tx.q().ExecContext(ctx, `UPDATE analytics_retries SET resolved_at=?,last_attempt_id=? WHERE repository=? AND number=? AND resolved_at IS NULL AND (operation=? OR (?='graphql_history' AND operation IN ('graphql_history','review_state'))) AND (operation<>'review_state' OR ?)`, a.FinishedAt, id, a.Repository, a.Number, a.Operation, a.Operation, knownReview)
 			return err
 		}
 		if a.Operation != "review_state" {
@@ -91,10 +91,96 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 			return err
 		}
 		delay := time.Duration(1<<min(attempts, 5)) * 30 * time.Second
+		if a.Operation == "review_state" && providerUnavailableEvidence(a.Evidence) {
+			delay = max(delay, 15*time.Minute)
+		}
 		next := finished.Add(delay).Format(time.RFC3339Nano)
 		_, err = tx.q().ExecContext(ctx, `INSERT INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at,attempts,last_attempt_id) VALUES(?,?,?,?,?,?,1,?) ON CONFLICT(repository,number,operation) DO UPDATE SET last_seen_at=excluded.last_seen_at,next_attempt_at=excluded.next_attempt_at,attempts=analytics_retries.attempts+1,last_attempt_id=excluded.last_attempt_id,resolved_at=NULL`, a.Repository, a.Number, a.Operation, a.FinishedAt, a.FinishedAt, next, id)
 		return err
 	})
+}
+
+func providerUnavailableEvidence(evidence json.RawMessage) bool {
+	var value struct {
+		Errors struct {
+			Items []struct {
+				Type string `json:"type"`
+			} `json:"items"`
+		} `json:"graphql_errors"`
+	}
+	if json.Unmarshal(evidence, &value) != nil {
+		return false
+	}
+	for _, item := range value.Errors.Items {
+		if item.Type == "NOT_FOUND" {
+			return true
+		}
+	}
+	return false
+}
+
+// A bounded retry share prevents failed items waiting behind the entire seeded
+// census, without allowing unavailable items to starve first-pass recovery.
+func (s *Store) DueReviewStateWork(ctx context.Context, repository, at string, limit int) ([]int, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	const eligible = `repository=? AND operation='review_state' AND resolved_at IS NULL AND number>0 AND next_attempt_at<=? AND NOT EXISTS(SELECT 1 FROM analytics_retries core WHERE core.repository=analytics_retries.repository AND core.number=analytics_retries.number AND core.operation='graphql_history' AND core.resolved_at IS NULL)`
+	read := func(attempted bool, n int) ([]int, error) {
+		predicate := "attempts=0"
+		if attempted {
+			predicate = "attempts>0"
+		}
+		rows, err := s.q().QueryContext(ctx, "SELECT number FROM analytics_retries WHERE "+eligible+" AND "+predicate+" ORDER BY next_attempt_at,number LIMIT ?", repository, at, n)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []int
+		for rows.Next() {
+			var number int
+			if err = rows.Scan(&number); err != nil {
+				return nil, err
+			}
+			out = append(out, number)
+		}
+		return out, rows.Err()
+	}
+	retries, err := read(true, max(1, limit/4))
+	if err != nil {
+		return nil, err
+	}
+	fresh, err := read(false, limit-len(retries))
+	if err != nil {
+		return nil, err
+	}
+	if len(fresh)+len(retries) < limit {
+		retries, err = read(true, limit-len(fresh))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(retries, fresh...), nil
+}
+
+func (s *Store) ReviewStateParent(ctx context.Context, repository string, number int, providerRepositoryID, providerNodeID string) (Thread, error) {
+	var t Thread
+	var repoID, rawRepo string
+	err := s.q().QueryRowContext(ctx, `SELECT t.id,t.repo_id,t.github_id,t.kind,t.raw_json,r.github_repo_id,r.raw_json FROM threads t JOIN repositories r ON r.id=t.repo_id WHERE r.full_name=? COLLATE NOCASE AND t.number=?`, repository, number).Scan(&t.ID, &t.RepoID, &t.GitHubID, &t.Kind, &t.RawJSON, &repoID, &rawRepo)
+	if err != nil {
+		return t, err
+	}
+	if t.Kind != "pull_request" || repoID != providerRepositoryID {
+		return t, fmt.Errorf("review-state archived repository/PR identity mismatch")
+	}
+	var repo map[string]any
+	if err = json.Unmarshal([]byte(rawRepo), &repo); err != nil {
+		return t, err
+	}
+	if node, ok := repo["node_id"].(string); ok && node != "" && node != providerNodeID {
+		return t, fmt.Errorf("review-state repository node mismatch")
+	}
+	return t, nil
 }
 
 func (s *Store) DueAnalyticsRetries(ctx context.Context, repository, at string, limit int, operations ...string) ([]int, error) {

@@ -21,7 +21,7 @@ import (
 )
 
 func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T) {
-	for _, mode := range []string{"available", "reserved", "quota_drops", "quota_races", "cancel"} {
+	for _, mode := range []string{"available", "reserved", "quota_drops", "quota_races", "concurrent", "cancel", "narrow_fair"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -36,6 +36,9 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 				t.Fatal(err)
 			}
 			oldItems := 48
+			if mode == "quota_drops" || mode == "concurrent" {
+				oldItems = 300
+			}
 			if mode == "quota_races" {
 				oldItems = 6001
 			}
@@ -52,13 +55,29 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 			if err = tx.Commit(); err != nil {
 				t.Fatal(err)
 			}
+			if mode == "narrow_fair" {
+				for n := 1; n <= 16; n++ {
+					if _, err = s.DB().Exec("INSERT INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at,attempts) VALUES('fixture/repo',?,'review_state','2000-01-01T00:00:00Z','2000-01-01T00:00:00Z','2000-01-01T00:00:00Z',1)", n); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			baseline := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
 			if err = s.SaveAnalyticsCoverage(ctx, "fixture/repo", baseline, 0, oldItems); err != nil {
 				t.Fatal(err)
 			}
+			ready := make(chan struct{})
+			var concurrentBatches atomic.Int64
 			var coreSeen, cancelled atomic.Bool
 			var recovered, probes, recoveryProbes atomic.Int64
 			quota := func() int {
+				if mode == "narrow_fair" {
+					if recovered.Load() >= 16 {
+						return 3020
+					}
+					return 3530
+				}
+
 				if mode == "quota_races" && recoveryProbes.Load() > 1 {
 					return 2999
 				}
@@ -105,6 +124,17 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 					}
 					data["repository"] = map[string]any{kind: page}
 				} else if matches := numbers.FindAllStringSubmatch(req.Query, -1); len(matches) > 0 {
+					if mode == "concurrent" && !strings.Contains(req.Query, "number:10000)") {
+						if concurrentBatches.Add(1) == 32 {
+							close(ready)
+						}
+						select {
+						case <-ready:
+						case <-time.After(10 * time.Second):
+							t.Error("32 workers were not active")
+							return
+						}
+					}
 					repo := map[string]any{"id": "repo", "databaseId": 1, "nameWithOwner": "fixture/repo"}
 					for _, m := range matches {
 						n, _ := strconv.Atoi(m[2])
@@ -169,7 +199,14 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 				want = 0
 			}
 			if mode == "quota_drops" {
+				want = analyticsReviewWave
+			}
+			if mode == "narrow_fair" {
 				want = 16
+				var fresh int
+				if err = s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE operation='review_state' AND resolved_at IS NOT NULL AND attempts=0").Scan(&fresh); err != nil || fresh != 12 {
+					t.Fatalf("shrunken wave starved fresh work: %d %v", fresh, err)
+				}
 			}
 			if resolved != want || pending != oldItems-want || scanned != oldItems+1 || (complete == 1) != (want == oldItems) {
 				t.Fatalf("resolved=%d pending=%d scanned=%d complete=%d, want recovered%d", resolved, pending, scanned, complete, want)

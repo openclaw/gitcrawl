@@ -39,7 +39,7 @@ func (r *historyResponseReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (r *historyResponseReader) failure(err error) error {
+func (r *historyResponseReader) failure(err error) *HistoryFailure {
 	evidence, _ := json.Marshal(map[string]any{"version": 1, "response_bytes_read": r.read, "hashed_prefix_bytes": r.hashed, "prefix_sha256": hex.EncodeToString(r.hash.Sum(nil)), "complete_response": false})
 	return &HistoryFailure{Cause: err, Stage: "response_decode", Evidence: evidence}
 }

@@ -69,8 +69,12 @@ type UpdatedPage struct {
 // AnalyticsRateLimit reads the same GraphQL balance charged by history queries.
 // REST resource counters can differ and must not admit recovery on that basis.
 func (c *Client) AnalyticsRateLimit(ctx context.Context) (effective, observed RateLimitSnapshot, err error) {
-	h := historySession{client: c, remaining: 20000}
-	data, err := h.request(ctx, `query { rateLimit { cost limit remaining used resetAt } }`, nil, 1)
+	// Reuse the same credential-bound reserve state without changing ordinary
+	// content clients' existing transport policy.
+	quotaClient := *c
+	quotaClient.graphQLQuotaGuard = true
+	h := historySession{client: &quotaClient, remaining: 20000}
+	data, err := h.quota(ctx)
 	if err != nil {
 		return RateLimitSnapshot{}, RateLimitSnapshot{}, err
 	}

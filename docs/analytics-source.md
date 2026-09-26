@@ -51,9 +51,17 @@ due items before discovery, with a two-minute request deadline and bounded
 exponential backoff. After persisting core coverage, targeted review recovery
 uses the time until the next nominal two-minute core poll; it does not add a
 two-minute idle wait after recovery. Each wave rechecks actual GraphQL quota and
-admits up to sixteen items through the existing eight two-item workers. Admission
+admits up to 256 items through 32 recovery workers, with up to eight PRs per
+request. Waves are also limited to a 16 MiB estimated response budget, using a
+conservative 64 KiB/item initial estimate that grows with measured bytes. Individual
+recovery responses are capped at 32 MiB; rejected batches are isolated normally.
+Ordinary capture retains its existing eight two-item workers. Admission
 uses the authoritative GraphQL `rateLimit` response rather than REST resource
-counters, which can differ. Each history session also enforces its configured
+counters, which can differ. Recovery and its quota probe omit redundant REST
+`/rate_limit` preflights: an explicit GraphQL probe binds actual quota to the
+selected credential, and every content/page request checks that credential and
+unexpired balance against the reserve. Rotation requires a new probe. Ordinary
+core transport retains its existing guards. Each history session also enforces its configured
 floor against observed GraphQL balances before pagination. A
 client retains the lowest observed GraphQL balance until the reset boundary
 passes. An upward sample or a shifted future reset cannot increase admission;
@@ -78,6 +86,23 @@ core data while its verified coverage watermark advances.
 When both queues contain an item, its core retry owns the backoff; the review
 retry pass cannot dispatch the same item. Recovery resolves only after an
 accepted membership observation exists, including a proven empty set.
+
+Targeted recovery fetches only PR identity/update metadata and fully paginated
+review threads with their complete inline comments and reply-to identities. It
+does not request or project the PR body/title, issue comments, or review history.
+An independent native child observation reserves only the review-thread family;
+existing review state, revisions and exact membership publish in one transaction
+after repository/node/number binding. Canonical threads, comments, revisions and
+vectors remain untouched. Current content changes remain ordinary capture's job.
+A review-only success cannot resolve a core traversal failure.
+
+Up to one quarter of a recovery wave is reserved for already-attempted due retries;
+the remaining slots serve first-pass work, with unused capacity shared. This avoids
+waiting behind the entire seeded census. Explicit retained `NOT_FOUND` evidence
+has at least a 15-minute backoff; it never implies deletion or empty membership.
+`review_state_wave` logs actual peak busy workers, worker/provider/database time,
+items, response bytes and reported query points. Private success receipts identify
+review-only work and its fetch/persistence timings.
 
 Hydration workers reuse the watch owner's open store instead of repeating
 full-archive migration checks for each batch. Independent guarded clients overlap

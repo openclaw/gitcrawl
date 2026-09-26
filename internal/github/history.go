@@ -50,6 +50,10 @@ type historySession struct {
 	retrySleep func(context.Context, time.Duration) error
 }
 
+func (h *historySession) quota(ctx context.Context) (map[string]any, error) {
+	return h.request(context.WithValue(ctx, graphQLQuotaProbeKey{}, true), `query { rateLimit {cost remaining limit used resetAt} }`, nil, 1)
+}
+
 func (h *historySession) request(ctx context.Context, query string, variables map[string]any, estimate int) (map[string]any, error) {
 	for attempt := 0; ; attempt++ {
 		data, err := h.requestOnce(ctx, query, variables, estimate)
@@ -251,6 +255,11 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 			return fmt.Errorf("missing provider identity")
 		}
 	}
+	return h.hydrateConnections(ctx, node)
+}
+
+func (h *historySession) hydrateConnections(ctx context.Context, node map[string]any) error {
+	typ := historyString(node["__typename"])
 	for _, key := range []string{"labels", "assignees", "comments", "reviews", "reviewThreads"} {
 		connection, exists := node[key]
 		if !exists {

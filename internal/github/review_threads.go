@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -246,7 +247,18 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 	}
 	defer response.Body.Close()
 	reader := &historyResponseReader{reader: response.Body, hash: sha256.New()}
-	if err := decodeJSON(reader, &envelope); err != nil {
+	var input io.Reader = reader
+	if c.graphQLResponseLimit > 0 {
+		input = io.LimitReader(reader, c.graphQLResponseLimit+1)
+	}
+	decodeErr := decodeJSON(input, &envelope)
+	reporter.Printf("[github] graphql bytes %d", reader.read)
+	if c.graphQLResponseLimit > 0 && reader.read > c.graphQLResponseLimit {
+		failure := reader.failure(fmt.Errorf("review-state response exceeded byte limit"))
+		failure.Stage = "response_size"
+		return failure
+	}
+	if err := decodeErr; err != nil {
 		return reader.failure(fmt.Errorf("decode github response: %w", err))
 	}
 	if len(envelope.Errors) > 0 {

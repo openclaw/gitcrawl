@@ -20,19 +20,23 @@ import (
 type Reporter func(message string)
 
 type Client struct {
-	httpClient    *http.Client
-	baseURL       string
-	graphQLURL    string
-	token         string
-	tokenProvider func(context.Context) (string, error)
-	userAgent     string
-	pageDelay     time.Duration
-	rateLimit     RateLimitObserver
-	reserve       *rateLimitReserve
+	httpClient           *http.Client
+	baseURL              string
+	graphQLURL           string
+	token                string
+	tokenProvider        func(context.Context) (string, error)
+	userAgent            string
+	pageDelay            time.Duration
+	rateLimit            RateLimitObserver
+	reserve              *rateLimitReserve
+	graphQLResponseLimit int64
+	graphQLQuotaGuard    bool
 }
 
 type Options struct {
-	Token string
+	GraphQLResponseLimit int64
+	GraphQLQuotaGuard    bool
+	Token                string
 	// TokenProvider exclusively selects credentials immediately before dispatch.
 	TokenProvider func(context.Context) (string, error)
 	BaseURL       string
@@ -41,7 +45,8 @@ type Options struct {
 	PageDelay     time.Duration
 	RateLimit     RateLimitObserver
 	// RateLimitReserve preserves a best-effort observed floor for the shared
-	// token. Guarded requests refresh /rate_limit before dispatch so other token
+	// token. Unless GraphQLQuotaGuard uses explicit observed GraphQL quota,
+	// guarded requests refresh /rate_limit before dispatch so other token
 	// consumers are observed, but unrelated consumers cannot be locked between
 	// that probe and dispatch.
 	RateLimitReserve  int
@@ -82,6 +87,41 @@ type rateLimitReserve struct {
 	// GraphQL response evidence must survive REST snapshot replacement and
 	// upward provider anomalies until the observed reset boundary has passed.
 	graphqlObserved RateLimitSnapshot
+	graphqlToken    string
+}
+
+type graphQLQuotaProbeKey struct{}
+
+func (r *rateLimitReserve) bindGraphQLToken(token string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.graphqlToken != token {
+		r.graphqlObserved = RateLimitSnapshot{}
+		r.graphqlToken = token
+	}
+}
+
+func (r *rateLimitReserve) beforeObservedGraphQL(token string, cost int) error {
+	if r == nil {
+		return fmt.Errorf("observed GraphQL quota guard required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	q := r.graphqlObserved
+	if token != r.graphqlToken {
+		return fmt.Errorf("GraphQL credential changed; quota probe required")
+	}
+	if q.Resource != "graphql" || !q.ResetAt.After(time.Now()) {
+		return fmt.Errorf("fresh observed GraphQL quota required")
+	}
+	if q.Remaining-cost < r.reserve {
+		return &RateLimitReserveError{RateLimit: q, Reserve: r.reserve}
+	}
+	r.graphqlObserved.Remaining -= cost
+	return nil
 }
 
 type rateLimitRequestLockKey struct{}
@@ -136,14 +176,16 @@ func New(options Options) *Client {
 		userAgent = "gitcrawl"
 	}
 	client := &Client{
-		httpClient:    httpClient,
-		baseURL:       baseURL,
-		graphQLURL:    graphQLURLForBaseURL(baseURL),
-		token:         options.Token,
-		tokenProvider: options.TokenProvider,
-		userAgent:     userAgent,
-		pageDelay:     options.PageDelay,
-		rateLimit:     options.RateLimit,
+		httpClient:           httpClient,
+		baseURL:              baseURL,
+		graphQLURL:           graphQLURLForBaseURL(baseURL),
+		token:                options.Token,
+		tokenProvider:        options.TokenProvider,
+		userAgent:            userAgent,
+		pageDelay:            options.PageDelay,
+		graphQLResponseLimit: options.GraphQLResponseLimit,
+		graphQLQuotaGuard:    options.GraphQLQuotaGuard,
+		rateLimit:            options.RateLimit,
 	}
 	if options.RateLimitReserve > 0 {
 		client.reserve = newRateLimitReserve(options.RateLimitReserve, options.InitialRateLimits)
@@ -563,7 +605,8 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		}
 	}
 	var probeToken string
-	if c.reserve != nil && cost > 0 {
+	observedGraphQL := c.graphQLQuotaGuard && resource == "graphql"
+	if c.reserve != nil && cost > 0 && !observedGraphQL {
 		var err error
 		_, probeToken, err = c.getRateLimits(ctx, reporter, nil)
 		if err != nil {
@@ -580,7 +623,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 			return nil, err
 		}
 	}
-	if c.tokenProvider != nil && c.reserve != nil && cost > 0 && token != probeToken {
+	if c.tokenProvider != nil && c.reserve != nil && cost > 0 && !observedGraphQL && token != probeToken {
 		// A new token cannot spend the previous token's quota. Allow one new
 		// probe, then reject further rotation before the protected request.
 		_, probeToken, err := c.getRateLimits(ctx, reporter, &token)
@@ -595,7 +638,14 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 			return nil, errors.New("GitHub token changed during rate limit reservation")
 		}
 	}
-	if err := c.reserve.beforeRequest(resource, cost); err != nil {
+	if observedGraphQL {
+		probe, _ := ctx.Value(graphQLQuotaProbeKey{}).(bool)
+		if probe {
+			c.reserve.bindGraphQLToken(token)
+		} else if err := c.reserve.beforeObservedGraphQL(token, cost); err != nil {
+			return nil, err
+		}
+	} else if err := c.reserve.beforeRequest(resource, cost); err != nil {
 		var expired *rateLimitStatusExpiredError
 		if c.tokenProvider != nil || !errors.As(err, &expired) {
 			return nil, err
@@ -607,6 +657,9 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		if err := c.reserve.beforeRequest(resource, cost); err != nil {
 			return nil, err
 		}
+	}
+	if resource == "graphql" && !observedGraphQL {
+		c.reserve.bindGraphQLToken(token)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
