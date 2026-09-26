@@ -23,7 +23,16 @@ func TestHistoryFailureEvidenceRetainsStructureWithoutSecretsOrBodies(t *testing
 	}
 	err := historyFailure("validation", 7, data, errors.New("GraphQL history #7: incomplete history comments count"))
 	class, message, stored := HistoryFailureDetails(err)
-	if class != "validation" || !strings.Contains(message, "incomplete history comments count") || string(stored) != string(evidence) {
+	var preserved map[string]json.RawMessage
+	if err := json.Unmarshal(stored, &preserved); err != nil {
+		t.Fatal(err)
+	}
+	if preserved["cause"] == nil {
+		t.Fatal("missing safe cause metadata")
+	}
+	delete(preserved, "cause")
+	originalFields, _ := json.Marshal(preserved)
+	if class != "validation" || !strings.Contains(message, "incomplete history comments count") || string(originalFields) != string(evidence) {
 		t.Fatalf("receipt %s %s", class, message)
 	}
 }

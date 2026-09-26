@@ -106,16 +106,16 @@ func (r *rateLimitReserve) bindGraphQLToken(token string) {
 
 func (r *rateLimitReserve) beforeObservedGraphQL(token string, cost int) error {
 	if r == nil {
-		return fmt.Errorf("observed GraphQL quota guard required")
+		return requestFailureAt("dispatch_guard", "quota_guard_missing", fmt.Errorf("observed GraphQL quota guard required"))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	q := r.graphqlObserved
 	if token != r.graphqlToken {
-		return fmt.Errorf("GraphQL credential changed; quota probe required")
+		return requestFailureAt("dispatch_guard", "credential_changed", fmt.Errorf("GraphQL credential changed; quota probe required"))
 	}
 	if q.Resource != "graphql" || !q.ResetAt.After(time.Now()) {
-		return fmt.Errorf("fresh observed GraphQL quota required")
+		return requestFailureAt("dispatch_guard", "quota_observation_stale", fmt.Errorf("fresh observed GraphQL quota required"))
 	}
 	if q.Remaining-cost < r.reserve {
 		return &RateLimitReserveError{RateLimit: q, Reserve: r.reserve}
@@ -210,7 +210,7 @@ func (r *rateLimitReserve) beforeRequest(resource string, cost int) error {
 	defer r.mu.Unlock()
 	snapshot, ok := r.snapshots[resource]
 	if !ok {
-		return fmt.Errorf("github %s rate limit status unavailable; cannot preserve reserve %d", resource, r.reserve)
+		return requestFailureAt("dispatch_guard", "quota_snapshot_missing", fmt.Errorf("github %s rate limit status unavailable; cannot preserve reserve %d", resource, r.reserve))
 	}
 	if !snapshot.ResetAt.IsZero() && !time.Now().UTC().Before(snapshot.ResetAt) {
 		return &rateLimitStatusExpiredError{RateLimit: snapshot}
@@ -313,7 +313,7 @@ func (c *Client) getRateLimits(ctx context.Context, reporter Reporter, selectedT
 	}
 	defer resp.Body.Close()
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, "", fmt.Errorf("decode github response: %w", err)
+		return nil, "", requestFailureAt("rest_quota_decode", "", fmt.Errorf("decode github response: %w", err))
 	}
 	token := strings.TrimPrefix(resp.Request.Header.Get("Authorization"), "Bearer ")
 	host := rateLimitHostForBaseURL(c.baseURL)
@@ -592,7 +592,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		if targetErr != nil || originErr != nil || target.User != nil || origin.Host == "" ||
 			(target.Scheme != "https" && target.Scheme != "http") ||
 			!strings.EqualFold(target.Scheme, origin.Scheme) || !strings.EqualFold(target.Host, origin.Host) {
-			return nil, errors.New("GitHub token provider requires the configured API origin")
+			return nil, requestFailureAt("dispatch_guard", "origin_mismatch", errors.New("GitHub token provider requires the configured API origin"))
 		}
 	}
 	resource, cost := c.requestRateLimit(method, fullURL)
@@ -610,7 +610,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		var err error
 		_, probeToken, err = c.getRateLimits(ctx, reporter, nil)
 		if err != nil {
-			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", err)
+			return nil, requestFailureAt("rest_preflight", "", fmt.Errorf("refresh GitHub rate limit status: %w", err))
 		}
 	}
 	token := c.token
@@ -628,14 +628,14 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		// probe, then reject further rotation before the protected request.
 		_, probeToken, err := c.getRateLimits(ctx, reporter, &token)
 		if err != nil {
-			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", err)
+			return nil, requestFailureAt("rest_preflight", "", fmt.Errorf("refresh GitHub rate limit status: %w", err))
 		}
 		token, err = c.requestToken(ctx)
 		if err != nil {
 			return nil, err
 		}
 		if token != probeToken {
-			return nil, errors.New("GitHub token changed during rate limit reservation")
+			return nil, requestFailureAt("dispatch_guard", "credential_changed", errors.New("GitHub token changed during rate limit reservation"))
 		}
 	}
 	if observedGraphQL {
@@ -648,11 +648,11 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 	} else if err := c.reserve.beforeRequest(resource, cost); err != nil {
 		var expired *rateLimitStatusExpiredError
 		if c.tokenProvider != nil || !errors.As(err, &expired) {
-			return nil, err
+			return nil, requestFailureAt("dispatch_guard", "", err)
 		}
 		_, refreshErr := c.GetRateLimits(ctx, reporter)
 		if refreshErr != nil {
-			return nil, fmt.Errorf("refresh GitHub rate limit status: %w", refreshErr)
+			return nil, requestFailureAt("rest_preflight", "", fmt.Errorf("refresh GitHub rate limit status: %w", refreshErr))
 		}
 		if err := c.reserve.beforeRequest(resource, cost); err != nil {
 			return nil, err
@@ -677,7 +677,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 	reporter.Printf("[github] request %s %s", method, path)
 	resp, err := c.guardedHTTPClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("github request: %w", err)
+		return nil, requestFailureAt("transport", "", fmt.Errorf("github request: %w", err))
 	}
 	responseResource, responseCost := c.requestRateLimit(resp.Request.Method, resp.Request.URL.String())
 	responseToken := strings.TrimPrefix(resp.Request.Header.Get("Authorization"), "Bearer ")
@@ -727,7 +727,7 @@ func (c *Client) requestToken(ctx context.Context) (string, error) {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", errors.New("GitHub token provider failed")
+		return "", requestFailureAt("credential", "credential_provider_failed", errors.New("GitHub token provider failed"))
 	}
 	return token, nil
 }

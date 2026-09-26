@@ -168,6 +168,14 @@ Operational tables are **not public conversation datasets**:
   allowlisted provider codes and query paths of at most eight components, with
   explicit truncation markers. Unknown codes/path components are null. Messages,
   arbitrary field values and identities are excluded from this error metadata.
+  Every rejection also has private `cause` metadata: allowlisted category/type,
+  guard or validation code, HTTP status when available, up to eight request or
+  pagination stages, and numeric quota/reset evidence for quota guards. The
+  primary error chain is bounded to sixteen links with explicit truncation.
+  Wrapping a transport or guard error as a validation failure retains this cause
+  without changing the existing error class, retry or acceptance behavior. No
+  error messages, URLs, tokens, headers, bodies, identities or certificate subjects
+  are copied into this diagnostic metadata. Unknown types remain `unclassified`.
   Older receipts are not rewritten to infer a cause from later provider reads.
 - `analytics_retries(repository, number, operation, first_seen_at, last_seen_at,
   next_attempt_at, attempts, last_attempt_id, resolved_at)` is keyed by

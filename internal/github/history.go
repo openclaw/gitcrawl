@@ -111,7 +111,7 @@ func sleepHistoryRetry(ctx context.Context, duration time.Duration) error {
 
 func (h *historySession) requestOnce(ctx context.Context, query string, variables map[string]any, estimate int) (map[string]any, error) {
 	if h.calls >= 1000 {
-		return nil, fmt.Errorf("GraphQL history pagination budget exceeded")
+		return nil, requestFailureAt("graphql_response", "pagination_budget", fmt.Errorf("GraphQL history pagination budget exceeded"))
 	}
 	reserve := 500
 	if h.client.reserve != nil {
@@ -135,15 +135,15 @@ func (h *historySession) requestOnce(ctx context.Context, query string, variable
 	rate := historyMap(data["rateLimit"])
 	cost, ok := historyInt(rate["cost"])
 	if !ok || cost < 0 {
-		return nil, fmt.Errorf("GraphQL history missing cost")
+		return nil, requestFailureAt("graphql_response", "quota_cost_missing", fmt.Errorf("GraphQL history missing cost"))
 	}
 	remaining, ok := historyInt(rate["remaining"])
 	if !ok || remaining < 0 {
-		return nil, fmt.Errorf("GraphQL history missing remaining quota")
+		return nil, requestFailureAt("graphql_response", "quota_remaining_missing", fmt.Errorf("GraphQL history missing remaining quota"))
 	}
 	reset, err := time.Parse(time.RFC3339, historyString(rate["resetAt"]))
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL history invalid reset")
+		return nil, requestFailureAt("graphql_response", "quota_reset_invalid", fmt.Errorf("GraphQL history invalid reset"))
 	}
 	effective := h.client.reserve.observeGraphQL(RateLimitSnapshot{Resource: "graphql", Remaining: remaining, ResetAt: reset}, time.Now())
 	h.remaining = min(h.remaining-cost, effective.Remaining)
@@ -267,7 +267,7 @@ func (h *historySession) hydrateConnections(ctx context.Context, node map[string
 		}
 		conn := historyMap(connection)
 		if conn == nil {
-			return fmt.Errorf("missing %s connection", key)
+			return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing %s connection", key))
 		}
 		fields, err := historyFields(typ, key)
 		if err != nil {
@@ -278,50 +278,50 @@ func (h *historySession) hydrateConnections(ctx context.Context, node map[string
 			page := historyMap(conn["pageInfo"])
 			next, ok := page["hasNextPage"].(bool)
 			if !ok {
-				return fmt.Errorf("missing %s pageInfo", key)
+				return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing %s pageInfo", key))
 			}
 			if !next {
 				break
 			}
 			cursor := historyString(page["endCursor"])
 			if cursor == "" || seen[cursor] {
-				return fmt.Errorf("nonadvancing %s cursor", key)
+				return requestFailureAt("pagination_"+key, "connection_cursor", fmt.Errorf("nonadvancing %s cursor", key))
 			}
 			seen[cursor] = true
 			q := `query($id:ID!,$after:String!){node(id:$id){id ... on ` + typ + `{` + historyConnection(key, fields, `,after:$after`) + `}} rateLimit{cost remaining limit used resetAt}}`
 			data, err := h.request(ctx, q, map[string]any{"id": node["id"], "after": cursor}, 2)
 			if err != nil {
-				return err
+				return requestFailureAt("pagination_"+key, "", err)
 			}
 			parent := historyMap(data["node"])
 			if parent["id"] != node["id"] {
-				return fmt.Errorf("history pagination identity mismatch")
+				return requestFailureAt("pagination_"+key, "connection_identity", fmt.Errorf("history pagination identity mismatch"))
 			}
 			nxt := historyMap(parent[key])
 			a, ok := conn["nodes"].([]any)
 			if !ok {
-				return fmt.Errorf("missing history nodes")
+				return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing history nodes"))
 			}
 			b, ok := nxt["nodes"].([]any)
 			if !ok || len(b) == 0 {
-				return fmt.Errorf("empty history continuation")
+				return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("empty history continuation"))
 			}
 			conn["nodes"] = append(a, b...)
 			conn["pageInfo"] = nxt["pageInfo"]
 		}
 		children, ok := conn["nodes"].([]any)
 		if !ok {
-			return fmt.Errorf("missing history nodes")
+			return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing history nodes"))
 		}
 		if total, ok := historyInt(conn["totalCount"]); !ok || total != len(children) {
-			return fmt.Errorf("incomplete history %s count", key)
+			return requestFailureAt("pagination_"+key, "connection_count", fmt.Errorf("incomplete history %s count", key))
 		}
 		ids := map[string]bool{}
 		for _, child := range children {
 			m := historyMap(child)
 			id := historyString(m["id"])
 			if id == "" || ids[id] {
-				return fmt.Errorf("missing or duplicate history child identity")
+				return requestFailureAt("pagination_"+key, "connection_identity", fmt.Errorf("missing or duplicate history child identity"))
 			}
 			ids[id] = true
 			if err := h.hydrate(ctx, m); err != nil {

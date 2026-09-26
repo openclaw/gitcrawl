@@ -243,7 +243,7 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 	var envelope graphqlResponseEnvelope
 	response, err := c.do(ctx, http.MethodPost, c.graphQLURL, bytes.NewReader(payload), reporter)
 	if err != nil {
-		return err
+		return requestFailureAt("graphql_request", "", err)
 	}
 	defer response.Body.Close()
 	reader := &historyResponseReader{reader: response.Body, hash: sha256.New()}

@@ -157,12 +157,13 @@ func SafeHistoryEvidence(data any) json.RawMessage {
 // HistoryFailureDetails is safe to persist or log even if the original error
 // included an HTTP body. It deliberately does not return that body/message.
 func HistoryFailureDetails(err error) (string, string, json.RawMessage) {
+	diagnostic := historyEvidenceWithCause(json.RawMessage(`{}`), err)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return "cancelled", "GraphQL attempt cancelled or timed out", json.RawMessage(`{}`)
+		return "cancelled", "GraphQL attempt cancelled or timed out", diagnostic
 	}
 	var quota *RateLimitReserveError
 	if errors.As(err, &quota) {
-		return "rate_limit", quota.Error(), json.RawMessage(`{}`)
+		return "rate_limit", quota.Error(), diagnostic
 	}
 	var failure *HistoryFailure
 	if errors.As(err, &failure) {
@@ -174,11 +175,11 @@ func HistoryFailureDetails(err error) (string, string, json.RawMessage) {
 				}
 			}
 		}
-		return failure.Stage, message, failure.Evidence
+		return failure.Stage, message, historyEvidenceWithCause(failure.Evidence, err)
 	}
 	var response *RequestError
 	if errors.As(err, &response) {
-		return "http", fmt.Sprintf("GitHub HTTP %d", response.Status), json.RawMessage(`{}`)
+		return "http", fmt.Sprintf("GitHub HTTP %d", response.Status), diagnostic
 	}
-	return "fetch", "GraphQL collection failed", json.RawMessage(`{}`)
+	return "fetch", "GraphQL collection failed", diagnostic
 }
