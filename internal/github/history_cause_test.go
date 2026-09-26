@@ -124,7 +124,10 @@ func TestHistoryCauseDiagnosesNativePreflightWithoutBypassingGuards(t *testing.T
 					return
 				}
 				gql++
-				rate := map[string]any{"cost": 1, "remaining": 19000, "resetAt": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}
+				rate := map[string]any{"cost": 1, "limit": 20000, "remaining": 19000, "resetAt": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}
+				if mode == "expired" {
+					rate["resetAt"] = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+				}
 				if mode == "missing_cost" {
 					delete(rate, "cost")
 				}
@@ -173,7 +176,10 @@ func TestHistoryCauseDiagnosesNativePreflightWithoutBypassingGuards(t *testing.T
 			if strings.Contains(string(evidence), "private-response") || strings.Contains(string(evidence), "test-token") {
 				t.Fatal("private value leaked")
 			}
-			if mode == "expired" || mode == "missing" || mode == "decode" || mode == "rotation" || mode == "http" {
+			if mode == "expired" && gql != 1 {
+				t.Fatal("expected only the authoritative quota refresh")
+			}
+			if mode == "missing" || mode == "decode" || mode == "rotation" || mode == "http" {
 				if gql != 0 {
 					t.Fatal("guard dispatched GraphQL content")
 				}
@@ -201,7 +207,10 @@ func TestHistoryCauseRetainsPaginationGuardAndAllowsNormalRetry(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		data := map[string]any{"rateLimit": map[string]any{"cost": 1, "remaining": 19000, "resetAt": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}}
+		data := map[string]any{"rateLimit": map[string]any{"cost": 1, "limit": 20000, "remaining": 19000, "resetAt": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}}
+		if expired && restCalls == 3 {
+			historyMap(data["rateLimit"])["resetAt"] = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+		}
 		if strings.Contains(req.Query, "issueOrPullRequest") {
 			node := historyTestNode()
 			node["labels"] = map[string]any{"totalCount": 2, "nodes": []any{map[string]any{"id": "L1", "name": "one"}}, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "first"}}
@@ -215,7 +224,7 @@ func TestHistoryCauseRetainsPaginationGuardAndAllowsNormalRetry(t *testing.T) {
 	defer server.Close()
 	c := New(Options{BaseURL: server.URL, RateLimitReserve: 1500, TokenProvider: func(context.Context) (string, error) { return "test-token-placeholder", nil }})
 	batch, err := c.FetchGraphQLHistory(context.Background(), "fixture", "repo", []int{1}, nil)
-	if err == nil || len(batch.Items) != 0 || gqlCalls != 2 {
+	if err == nil || len(batch.Items) != 0 || gqlCalls != 3 {
 		t.Fatal("partial pagination accepted")
 	}
 	class, _, evidence := HistoryFailureDetails(err)

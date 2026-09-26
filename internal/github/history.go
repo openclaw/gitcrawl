@@ -127,7 +127,7 @@ func (h *historySession) requestOnce(ctx context.Context, query string, variable
 	h.reporter.Printf("[github] graphql budget %d %d", h.calls, estimate)
 	var data map[string]any
 	started := time.Now()
-	err := h.client.doGraphQL(ctx, query, variables, h.reporter, &data)
+	err := h.client.doGraphQL(context.WithValue(ctx, graphQLRequestEstimateKey{}, estimate), query, variables, h.reporter, &data)
 	h.reporter.Printf("[github] graphql timing %d %d", h.calls, time.Since(started).Milliseconds())
 	if err != nil {
 		return nil, err

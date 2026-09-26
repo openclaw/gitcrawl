@@ -61,8 +61,15 @@ counters, which can differ. Recovery and its quota probe omit redundant REST
 `/rate_limit` preflights: an explicit GraphQL probe binds actual quota to the
 selected credential, and every content/page request checks that credential and
 unexpired balance against the reserve. Rotation requires a new probe. Ordinary
-core transport retains its existing guards. Each history session also enforces its configured
-floor against observed GraphQL balances before pagination. A
+core transport retains its REST preflight. If that fresh response carries an
+expired GraphQL snapshot (including crossing reset during preflight), it performs
+a bounded quota-only GraphQL refresh under the existing request lock. The refresh
+uses the selected credential and API origin; rotation before content dispatch
+fails closed. A stale, invalid, failed, or below-reserve refresh cannot authorize
+content. The refreshed balance is checked against the pending page's estimate,
+without changing its identity, cursor, or completeness validation. Each history
+session also enforces its configured floor against observed GraphQL balances
+before pagination. A
 client retains the lowest observed GraphQL balance until the reset boundary
 passes. An upward sample or a shifted future reset cannot increase admission;
 REST snapshot refreshes do not overwrite this evidence. Logs distinguish the

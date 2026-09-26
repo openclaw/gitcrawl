@@ -91,6 +91,7 @@ type rateLimitReserve struct {
 }
 
 type graphQLQuotaProbeKey struct{}
+type graphQLRequestEstimateKey struct{}
 
 func (r *rateLimitReserve) bindGraphQLToken(token string) {
 	if r == nil {
@@ -647,15 +648,21 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		}
 	} else if err := c.reserve.beforeRequest(resource, cost); err != nil {
 		var expired *rateLimitStatusExpiredError
-		if c.tokenProvider != nil || !errors.As(err, &expired) {
-			return nil, requestFailureAt("dispatch_guard", "", err)
-		}
-		_, refreshErr := c.GetRateLimits(ctx, reporter)
-		if refreshErr != nil {
-			return nil, requestFailureAt("rest_preflight", "", fmt.Errorf("refresh GitHub rate limit status: %w", refreshErr))
-		}
-		if err := c.reserve.beforeRequest(resource, cost); err != nil {
-			return nil, err
+		if errors.As(err, &expired) && resource == "graphql" {
+			if err := c.refreshExpiredGraphQLQuota(ctx, token, cost); err != nil {
+				return nil, requestFailureAt("graphql_quota_refresh", "", err)
+			}
+		} else {
+			if c.tokenProvider != nil || !errors.As(err, &expired) {
+				return nil, requestFailureAt("dispatch_guard", "", err)
+			}
+			_, refreshErr := c.GetRateLimits(ctx, reporter)
+			if refreshErr != nil {
+				return nil, requestFailureAt("rest_preflight", "", fmt.Errorf("refresh GitHub rate limit status: %w", refreshErr))
+			}
+			if err := c.reserve.beforeRequest(resource, cost); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if resource == "graphql" && !observedGraphQL {
@@ -696,6 +703,33 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		Body:    strings.TrimSpace(string(data)),
 		Headers: resp.Header,
 	}
+}
+
+// refreshExpiredGraphQLQuota runs only after an expired REST GraphQL snapshot,
+// with requestMu already held. A quota-only probe may cross that stale boundary;
+// content may not. Reuse the authoritative probe and conservative same-window
+// accounting, pinning its credential until the protected dispatch is rechecked.
+func (c *Client) refreshExpiredGraphQLQuota(ctx context.Context, token string, cost int) error {
+	quotaClient := *c
+	quotaClient.tokenProvider = func(context.Context) (string, error) { return token, nil }
+	_, observed, err := quotaClient.AnalyticsRateLimit(ctx)
+	if err != nil {
+		return err
+	}
+	if !observed.ResetAt.After(time.Now()) {
+		return &rateLimitStatusExpiredError{RateLimit: observed}
+	}
+	current, err := c.requestToken(ctx)
+	if err != nil {
+		return err
+	}
+	if current != token {
+		return requestFailureAt("dispatch_guard", "credential_changed", errors.New("GitHub token changed during quota refresh"))
+	}
+	// A history session checked its estimate before entering transport, using
+	// the prior observation. Recheck against the newly refreshed balance too.
+	estimate, _ := ctx.Value(graphQLRequestEstimateKey{}).(int)
+	return c.reserve.beforeObservedGraphQL(token, max(cost, estimate))
 }
 
 func (c *Client) guardedHTTPClient() *http.Client {

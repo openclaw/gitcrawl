@@ -33,7 +33,7 @@ func safeHistoryCause(err error) map[string]any {
 	stages := []string{}
 	stage := func(value string) {
 		switch value {
-		case "rest_preflight", "rest_quota_decode", "dispatch_guard", "credential", "transport", "graphql_request", "graphql_response", "validation", "identity", "partial_response", "response_decode", "response_size", "missing_data", "discovery_validation", "pagination_labels", "pagination_assignees", "pagination_comments", "pagination_reviews", "pagination_reviewThreads":
+		case "graphql_quota_refresh", "rest_preflight", "rest_quota_decode", "dispatch_guard", "credential", "transport", "graphql_request", "graphql_response", "validation", "identity", "partial_response", "response_decode", "response_size", "missing_data", "discovery_validation", "pagination_labels", "pagination_assignees", "pagination_comments", "pagination_reviews", "pagination_reviewThreads":
 			if len(stages) < 8 && (len(stages) == 0 || stages[len(stages)-1] != value) {
 				stages = append(stages, value)
 			}
