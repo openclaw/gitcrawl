@@ -64,6 +64,7 @@ Core commands:
   capture              export a stable code-free conversation snapshot
   code index           index tracked text files from a local Git checkout
   cluster              build durable clusters from local thread vectors
+  purge-threads        plan/apply owner-directed removal and durable collection exclusion
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
   close-cluster        locally hide one durable cluster
@@ -249,6 +250,19 @@ Usage:
 
 Usage:
   gitcrawl runs owner/repo [--kind sync|summary|embedding|cluster] [--limit N] [--json]
+`,
+	"purge-threads": `gitcrawl purge-threads plans owner-directed local removal, never a GitHub deletion.
+
+Usage:
+  gitcrawl [--config SOURCE_CONFIG] purge-threads owner/repo --numbers 1,2 [--runtime-mirror] [--apply --request-id OWNER_REQUEST] [--json]
+
+Default is a read-only metadata/count plan. Apply permanently excludes the exact
+repository numbers and removes their native content/history and retry work.
+Requires the native archive and its idle collector lock, or explicit
+--runtime-mirror with its checkout config and existing portable owner lease.
+A purged mirror stays locally preserved across scheduled upstream refresh.
+Blob-backed targets, workflow dependencies and shared cluster state require
+a separate source-owned repair.
 `,
 	"close-thread": `gitcrawl close-thread locally hides one issue or pull request row.
 

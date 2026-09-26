@@ -209,3 +209,63 @@ refreshed before its expected expiry, preserving one credential across quota
 reservation and dispatch. Existing provider-rate protections remain active.
 
 See [sync](/sync/), [configuration](/configuration/) and the [command reference](/commands/).
+
+## Owner-directed removal
+
+Source schema 16 adds local owner exclusions. An exclusion is an operator policy,
+not a provider deletion, an empty review membership, or a successful recovery.
+Plan an exact set of issue/PR numbers before applying it:
+
+```sh
+gitcrawl --config SOURCE_CONFIG purge-threads owner/repo --numbers 123,456 --json
+gitcrawl --config SOURCE_CONFIG purge-threads owner/repo --numbers 123,456 \
+  --apply --request-id owner-request-reference --json
+```
+
+The default is a read-only metadata/count plan. Apply requires the existing
+collector `runner.lock` to be idle, opens the writer only after taking that lock,
+and atomically records exclusions while removing the selected content, revisions,
+review memberships, derived documents/vectors, content-node identity evidence,
+queued retries and per-target receipts. Shared actor profiles, unrelated blobs,
+unrelated conversations and peers' mixed-batch diagnostic receipts stay intact.
+Blob-backed targets and linked workflow reservations require separate owner repair
+and are refused. Repositories with retained workflow-run snapshots are also
+refused: this bounded command cannot establish exclusive ownership of their
+current or historical payloads. Shared cluster relationships are refused.
+Missing/ambiguous targets and deletions that could allow SQLite to
+reuse a removed native integer ID are also refused. There is no automatic tail-ID
+renumbering, backup copy, provider request, or permission change.
+
+`thread_exclusions` has primary key `(repository TEXT, number INTEGER)` and stores
+`kind`, `original_thread_id`, `github_id`, `excluded_at`, fixed
+`reason='owner_requested'`, and `request_id`. `thread_excluded_nodes` has primary
+key `node_id TEXT` and links to the policy's repository/number. These are local
+operational policy tables. They contain no content bodies. The policy follows the
+explicit collector `owner/repo` namespace, which normal sync retains even when
+provider metadata reports a different canonical name. Changing the configured
+target requires reviewing and carrying its exclusion policy; this command does
+not introduce repository rename/transfer migration. Normal discovery,
+explicit sync, retry scheduling and identity enrichment respect the exclusions;
+store guards prevent reinsertion. Existing `analytics_coverage.complete` still
+expresses core collection health. Review coverage has an independent
+`owner_excluded_items INTEGER` count and stays incomplete when this count is
+positive, even when `pending_items=0`.
+
+For an **existing managed portable reader mirror**, use its checkout configuration
+and add `--runtime-mirror` to both commands. This resolves and locks the established
+mirror without downloading, recreating, migrating to the full archive schema, or
+editing publisher Git data. It uses the existing writable-mirror policy: scheduled
+portable refresh preserves local bytes instead of replacing them from upstream.
+Consequently that compact mirror no longer advances with upstream snapshots; the
+independent full-history collector continues normal updates. A direct portable
+DB alias is refused because it cannot bind the publisher's ownership lock. Older
+sparse formats with dangling blob references are refused. Portable publication
+from an archive containing local owner exclusions is refused to avoid dropping
+suppression or publishing local request metadata. Keep the exclusion policy and
+native removal receipt with the archive when moving it.
+
+After applying, verify zero selected content/history/queue rows, retained peer
+hashes, the exact exclusion count, and an advancing ordinary core cycle. Downstream
+consumers must fence capture and permanently suppress the exact removed native
+keys before source removal. Treat this as logical archive removal, not a claim of
+forensic disk erasure or deletion from GitHub.

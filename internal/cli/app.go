@@ -137,6 +137,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runThreads(ctx, rest[1:])
 	case "capture":
 		return a.runCapture(ctx, rest[1:])
+	case "purge-threads":
+		return a.runPurgeThreads(ctx, rest[1:])
 	case "close-thread":
 		return a.runCloseThread(ctx, rest[1:])
 	case "reopen-thread":

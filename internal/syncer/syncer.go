@@ -165,6 +165,14 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		if options.ReviewStateOnly && operation != "review_state" {
 			return Stats{}, fmt.Errorf("review-state-only fetch requires review recovery operation")
 		}
+		allowed, err := s.store.FilterExcludedNumbers(ctx, options.Owner+"/"+options.Repo, uniquePositiveNumbers(options.Numbers))
+		if err != nil {
+			return Stats{}, err
+		}
+		options.Numbers = allowed
+		if len(allowed) == 0 {
+			return Stats{Repository: options.Owner + "/" + options.Repo, StartedAt: started, FinishedAt: s.now().Format(time.RFC3339Nano)}, nil
+		}
 		// Fetch/validation failures happen before conversation transactions and
 		// were previously invisible to durable run tables. Keep a receipt even
 		// when the request is cancelled; accepted content remains untouched.
@@ -202,6 +210,16 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		history = &batch
 		repoRaw = batch.Repository
 	} else {
+		if len(options.Numbers) > 0 {
+			allowed, err := s.store.FilterExcludedNumbers(ctx, options.Owner+"/"+options.Repo, uniquePositiveNumbers(options.Numbers))
+			if err != nil {
+				return Stats{}, err
+			}
+			options.Numbers = allowed
+			if len(allowed) == 0 {
+				return Stats{Repository: options.Owner + "/" + options.Repo, StartedAt: started, FinishedAt: s.now().Format(time.RFC3339Nano)}, nil
+			}
+		}
 		repoRaw, err = s.client.GetRepo(ctx, options.Owner, options.Repo, options.Reporter)
 	}
 	if err != nil {
@@ -309,6 +327,13 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	for _, row := range rows {
 		payload := threadSyncPayload{row: row}
 		number := intValue(row["number"])
+		excluded, err := s.store.ThreadExcluded(ctx, options.Owner+"/"+options.Repo, number)
+		if err != nil {
+			return Stats{}, err
+		}
+		if excluded {
+			continue
+		}
 		kind := issueKind(row)
 		if history != nil {
 			// Keep legacy REST identity stable when revisiting a previously saved

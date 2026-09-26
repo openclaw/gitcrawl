@@ -81,6 +81,13 @@ func (s *Store) UpsertThreadObservation(ctx context.Context, thread Thread, opti
 }
 
 func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, options UpsertThreadOptions) (UpsertThreadResult, error) {
+	var excluded bool
+	if err := s.q().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM thread_exclusions e JOIN repositories r ON lower(r.full_name)=e.repository WHERE r.id=? AND e.number=?)`, thread.RepoID, thread.Number).Scan(&excluded); err != nil {
+		return UpsertThreadResult{}, err
+	}
+	if excluded {
+		return UpsertThreadResult{}, ErrThreadExcluded
+	}
 	if options.ObservationSequence <= 0 {
 		sequence, err := s.NextThreadObservationSequence(ctx, thread.UpdatedAt)
 		if err != nil {
