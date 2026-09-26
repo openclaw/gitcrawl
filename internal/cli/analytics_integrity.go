@@ -260,7 +260,7 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 			}
 			continue
 		}
-		observedQuota, err := c.AnalyticsRateLimit(window)
+		observedQuota, rawQuota, err := c.AnalyticsRateLimit(window)
 		if err != nil {
 			if window.Err() != nil {
 				return yield(err)
@@ -276,7 +276,7 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 			quotaBlocked = true
 			continue
 		}
-		encoded, _ := json.Marshal(map[string]any{"event": "review_state_quota", "at": time.Now().UTC().Format(time.RFC3339Nano), "limit": quota.Limit, "remaining": quota.Remaining, "reset_at": quota.ResetAt, "reserve": analyticsReviewReserve, "wave_items": min(len(due), budget)})
+		encoded, _ := json.Marshal(map[string]any{"event": "review_state_quota", "at": time.Now().UTC().Format(time.RFC3339Nano), "limit": quota.Limit, "remaining": quota.Remaining, "reset_at": quota.ResetAt, "provider_remaining": rawQuota.Remaining, "provider_reset_at": rawQuota.ResetAt, "reserve": analyticsReviewReserve, "wave_items": min(len(due), budget)})
 		fmt.Fprintln(a.Stderr, string(encoded))
 		if budget == 0 {
 			quotaBlocked = true

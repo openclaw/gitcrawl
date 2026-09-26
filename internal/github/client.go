@@ -79,6 +79,9 @@ type rateLimitReserve struct {
 	mu        sync.Mutex
 	reserve   int
 	snapshots map[string]RateLimitSnapshot
+	// GraphQL response evidence must survive REST snapshot replacement and
+	// upward provider anomalies until the observed reset boundary has passed.
+	graphqlObserved RateLimitSnapshot
 }
 
 type rateLimitRequestLockKey struct{}
@@ -185,6 +188,28 @@ func (r *rateLimitReserve) observe(snapshot RateLimitSnapshot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.snapshots[snapshot.Resource] = snapshot
+}
+
+func (r *rateLimitReserve) observeGraphQL(snapshot RateLimitSnapshot, now time.Time) RateLimitSnapshot {
+	if r == nil || snapshot.Remaining < 0 || !snapshot.ResetAt.After(now) {
+		return snapshot
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	previous := r.graphqlObserved
+	nearbyLaterReset := !previous.ResetAt.IsZero() && snapshot.ResetAt.After(previous.ResetAt) && snapshot.ResetAt.Sub(previous.ResetAt) <= time.Minute
+	if previous.ResetAt.After(now) || nearbyLaterReset {
+		snapshot.Remaining = min(snapshot.Remaining, previous.Remaining)
+		// A shifted reset timestamp before the prior boundary is not a new
+		// window. Wait through both boundaries before accepting a refill.
+		// An early sample of the next hourly window must not postpone the
+		// current boundary by another hour. Only nearby reset jitter extends it.
+		if previous.ResetAt.After(snapshot.ResetAt) || snapshot.ResetAt.Sub(previous.ResetAt) > time.Minute {
+			snapshot.ResetAt = previous.ResetAt
+		}
+	}
+	r.graphqlObserved = snapshot
+	return snapshot
 }
 
 func (r *rateLimitReserve) replace(snapshots []RateLimitSnapshot) {

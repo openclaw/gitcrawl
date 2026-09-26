@@ -55,6 +55,10 @@ admits up to sixteen items through the existing eight two-item workers. Admissio
 uses the authoritative GraphQL `rateLimit` response rather than REST resource
 counters, which can differ. Each history session also enforces its configured
 floor against observed GraphQL balances before pagination. A
+client retains the lowest observed GraphQL balance until the reset boundary
+passes. An upward sample or a shifted future reset cannot increase admission;
+REST snapshot refreshes do not overwrite this evidence. Logs distinguish the
+raw provider balance/reset from the conservative effective admission values. A
 32-point-per-item admission margin and per-request native quota checks preserve
 3,000 points for recovery, leaving 1,500 points above ordinary capture's floor.
 Missing or expired quota stops provider recovery; local discovery can continue.

@@ -328,10 +328,17 @@ func (a *App) syncAnalyticsBatch(ctx context.Context, s *store.Store, owner, rep
 	var reporter gh.Reporter
 	if operation == "review_state" {
 		reserve = analyticsReviewReserve
+		// This call owns its client, history session and reporter. Synchronous
+		// callbacks are never shared with the other analyticsNumbers workers.
+		var effectiveRemaining, effectiveReset int
 		reporter = func(message string) {
+			var providerRemaining, providerReset int
+			if _, err := fmt.Sscanf(message, "[github] graphql quota provider_remaining %d provider_reset %d effective_remaining %d effective_reset %d", &providerRemaining, &providerReset, &effectiveRemaining, &effectiveReset); err == nil {
+				return
+			}
 			var call, cost, remaining, reset int
 			if _, err := fmt.Sscanf(message, "[github] graphql cost %d %d remaining %d reset %d", &call, &cost, &remaining, &reset); err == nil {
-				fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_cost\",\"at\":%q,\"points\":%d,\"remaining\":%d,\"reset_unix\":%d}\n", time.Now().UTC().Format(time.RFC3339Nano), cost, remaining, reset)
+				fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_cost\",\"at\":%q,\"points\":%d,\"remaining\":%d,\"reset_unix\":%d,\"provider_remaining\":%d,\"provider_reset_unix\":%d}\n", time.Now().UTC().Format(time.RFC3339Nano), cost, effectiveRemaining, effectiveReset, remaining, reset)
 			}
 		}
 	}

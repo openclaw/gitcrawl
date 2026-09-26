@@ -141,7 +141,9 @@ func (h *historySession) requestOnce(ctx context.Context, query string, variable
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL history invalid reset")
 	}
-	h.remaining = min(h.remaining-cost, remaining)
+	effective := h.client.reserve.observeGraphQL(RateLimitSnapshot{Resource: "graphql", Remaining: remaining, ResetAt: reset}, time.Now())
+	h.remaining = min(h.remaining-cost, effective.Remaining)
+	h.reporter.Printf("[github] graphql quota provider_remaining %d provider_reset %d effective_remaining %d effective_reset %d", remaining, reset.Unix(), h.remaining, effective.ResetAt.Unix())
 	h.reporter.Printf("[github] graphql cost %d %d remaining %d reset %d", h.calls, cost, remaining, reset.Unix())
 	return data, nil
 }
