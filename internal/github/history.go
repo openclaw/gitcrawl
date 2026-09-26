@@ -109,8 +109,14 @@ func (h *historySession) requestOnce(ctx context.Context, query string, variable
 	if h.calls >= 1000 {
 		return nil, fmt.Errorf("GraphQL history pagination budget exceeded")
 	}
-	if h.remaining < 500+estimate {
-		return nil, fmt.Errorf("GraphQL history quota reserve reached")
+	reserve := 500
+	if h.client.reserve != nil {
+		reserve = max(reserve, h.client.reserve.reserve)
+	}
+	// Retain the configured floor against actual GraphQL responses as well as
+	// the existing REST quota guard, including every pagination request.
+	if h.remaining < reserve+estimate {
+		return nil, fmt.Errorf("GraphQL history quota reserve reached: %w", &RateLimitReserveError{RateLimit: RateLimitSnapshot{Resource: "graphql", Remaining: h.remaining}, Reserve: reserve})
 	}
 	h.calls++
 	// An unanswered request is charged conservatively by external supervisors.

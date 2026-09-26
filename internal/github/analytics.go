@@ -66,6 +66,24 @@ type UpdatedPage struct {
 	Oldest  time.Time
 }
 
+// AnalyticsRateLimit reads the same GraphQL balance charged by history queries.
+// REST resource counters can differ and must not admit recovery on that basis.
+func (c *Client) AnalyticsRateLimit(ctx context.Context) (RateLimitSnapshot, error) {
+	h := historySession{client: c, remaining: 20000}
+	data, err := h.request(ctx, `query { rateLimit { cost limit remaining used resetAt } }`, nil, 1)
+	if err != nil {
+		return RateLimitSnapshot{}, err
+	}
+	rate := historyMap(data["rateLimit"])
+	limit, ok := historyInt(rate["limit"])
+	if !ok || limit <= 0 {
+		return RateLimitSnapshot{}, fmt.Errorf("GraphQL quota limit unavailable")
+	}
+	remaining, _ := historyInt(rate["remaining"])
+	reset, _ := time.Parse(time.RFC3339, historyString(rate["resetAt"]))
+	return RateLimitSnapshot{Resource: "graphql", Limit: limit, Remaining: remaining, ResetAt: reset}, nil
+}
+
 func (c *Client) UpdatedNumbers(ctx context.Context, owner, repo, kind, after string, since time.Time) (UpdatedPage, error) {
 	if kind != "issues" && kind != "pullRequests" {
 		return UpdatedPage{}, fmt.Errorf("invalid discovery kind")

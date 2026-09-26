@@ -94,6 +94,9 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 					t.Error(err)
 					return
 				}
+				if coreSeen.Load() && !strings.Contains(req.Query, "orderBy") && !strings.Contains(req.Query, "issueOrPullRequest") {
+					recoveryProbes.Add(1)
+				}
 				data := map[string]any{"rateLimit": map[string]any{"cost": 1, "remaining": quota(), "limit": 20000, "resetAt": "2099-01-01T00:00:00Z"}}
 				if strings.Contains(req.Query, "orderBy") {
 					kind, page := "issues", conn()
@@ -197,7 +200,7 @@ func TestAnalyticsReviewBudgetRejectsMissingAndExpiredQuota(t *testing.T) {
 }
 
 func TestAnalyticsRecoveryScansPastOneChunkWhenQuotaIsReserved(t *testing.T) {
-	for _, quotaJSON := range []string{`{"resources":{"graphql":{"limit":20000,"remaining":3020,"reset":4102444800}}}`, `{"resources":{}}`, `{"resources":{"graphql":{"limit":20000,"remaining":19000,"reset":1}}}`} {
+	for _, quotaJSON := range []string{`{"data":{"rateLimit":{"cost":1,"limit":20000,"remaining":3020,"resetAt":"2099-01-01T00:00:00Z"}}}`, `{"data":{}}`, `{"data":{"rateLimit":{"cost":1,"limit":20000,"remaining":19000,"resetAt":"2000-01-01T00:00:00Z"}}}`} {
 		ctx := context.Background()
 		s, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 		if err != nil {
@@ -214,7 +217,7 @@ func TestAnalyticsRecoveryScansPastOneChunkWhenQuotaIsReserved(t *testing.T) {
 		var requests atomic.Int64
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requests.Add(1)
-			if r.URL.Path != "/rate_limit" {
+			if r.URL.Path != "/graphql" {
 				t.Errorf("provider work admitted inside reserve: %s", r.URL.Path)
 			}
 			fmt.Fprint(w, quotaJSON)
@@ -257,7 +260,15 @@ func TestAnalyticsRecoveryDeadlineYieldsWithDurableReceipt(t *testing.T) {
 			fmt.Fprint(w, `{"resources":{"graphql":{"limit":20000,"remaining":19000,"reset":4102444800}}}`)
 			return
 		}
-		io.Copy(io.Discard, r.Body)
+		var req struct{ Query string }
+		if e := json.NewDecoder(r.Body).Decode(&req); e != nil {
+			t.Error(e)
+			return
+		}
+		if !strings.Contains(req.Query, "issueOrPullRequest") {
+			fmt.Fprint(w, `{"data":{"rateLimit":{"cost":1,"limit":20000,"remaining":19000,"resetAt":"2099-01-01T00:00:00Z"}}}`)
+			return
+		}
 		<-r.Context().Done()
 	}))
 	defer server.Close()

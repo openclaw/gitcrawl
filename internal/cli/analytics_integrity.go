@@ -260,7 +260,7 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 			}
 			continue
 		}
-		limits, err := c.GetRateLimits(window, nil)
+		observedQuota, err := c.AnalyticsRateLimit(window)
 		if err != nil {
 			if window.Err() != nil {
 				return yield(err)
@@ -270,7 +270,7 @@ func (a *App) analyticsReviewRecovery(ctx context.Context, s *store.Store, c *gh
 			quotaBlocked = true
 			continue
 		}
-		budget, quota, err := analyticsReviewBudget(limits, time.Now())
+		budget, quota, err := analyticsReviewBudget([]gh.RateLimitSnapshot{observedQuota}, time.Now())
 		if err != nil {
 			fmt.Fprintf(a.Stderr, "{\"event\":\"review_state_quota_deferred\",\"at\":%q,\"error\":%q}\n", time.Now().UTC().Format(time.RFC3339Nano), err.Error())
 			quotaBlocked = true

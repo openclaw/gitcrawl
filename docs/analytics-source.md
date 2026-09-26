@@ -51,7 +51,10 @@ due items before discovery, with a two-minute request deadline and bounded
 exponential backoff. After persisting core coverage, targeted review recovery
 uses the time until the next nominal two-minute core poll; it does not add a
 two-minute idle wait after recovery. Each wave rechecks actual GraphQL quota and
-admits up to sixteen items through the existing eight two-item workers. A
+admits up to sixteen items through the existing eight two-item workers. Admission
+uses the authoritative GraphQL `rateLimit` response rather than REST resource
+counters, which can differ. Each history session also enforces its configured
+floor against observed GraphQL balances before pagination. A
 32-point-per-item admission margin and per-request native quota checks preserve
 3,000 points for recovery, leaving 1,500 points above ordinary capture's floor.
 Missing or expired quota stops provider recovery; local discovery can continue.

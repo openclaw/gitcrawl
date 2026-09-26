@@ -3,8 +3,10 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,5 +70,36 @@ func TestAnalyticsUnavailableNodesAreNotAuthorizationSuccess(t *testing.T) {
 	typ = "FORBIDDEN"
 	if _, e = c.AnalyticsNodes(context.Background(), []string{"one", "two"}, true); e == nil {
 		t.Fatal("authorization failure became missing-data evidence")
+	}
+}
+
+func TestAnalyticsQuotaAndHistoryReserveUseActualGraphQLBalance(t *testing.T) {
+	var contentRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rate_limit" {
+			fmt.Fprint(w, `{"resources":{"graphql":{"limit":20000,"remaining":19999,"reset":4102444800}}}`)
+			return
+		}
+		var req struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if strings.Contains(req.Query, "issueOrPullRequest") {
+			contentRequests++
+		}
+		fmt.Fprint(w, `{"data":{"rateLimit":{"cost":1,"limit":20000,"remaining":2990,"resetAt":"2099-01-01T00:00:00Z"}}}`)
+	}))
+	defer server.Close()
+	c := New(Options{BaseURL: server.URL, Token: "test-token-placeholder", RateLimitReserve: 3000})
+	quota, err := c.AnalyticsRateLimit(context.Background())
+	if err != nil || quota.Remaining != 2990 || quota.Limit != 20000 {
+		t.Fatalf("REST counter admitted work: %+v %v", quota, err)
+	}
+	if _, err = c.FetchGraphQLHistory(context.Background(), "fixture", "repo", []int{1}, nil); err == nil || !strings.Contains(err.Error(), "quota reserve reached") {
+		t.Fatalf("actual GraphQL reserve ignored: %v", err)
+	}
+	if contentRequests != 0 {
+		t.Fatal("content dispatched inside actual GraphQL reserve")
 	}
 }
