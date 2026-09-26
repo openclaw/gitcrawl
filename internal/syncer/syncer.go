@@ -43,7 +43,11 @@ type Syncer struct {
 }
 
 type Options struct {
-	GraphQLHistory    bool
+	GraphQLHistory  bool
+	ReviewStateOnly bool
+	// ReceiptOperation separates targeted review-state recovery from verified
+	// core traversal; both still fetch and validate complete conversations.
+	ReceiptOperation  string
 	Owner             string
 	Repo              string
 	State             string
@@ -60,6 +64,9 @@ type Options struct {
 }
 
 type Stats struct {
+	ReviewStateOnly      bool   `json:"review_state_only,omitempty"`
+	FetchMillis          int64  `json:"fetch_ms,omitempty"`
+	PersistMillis        int64  `json:"persist_ms,omitempty"`
 	Repository           string `json:"repository"`
 	ThreadsSynced        int    `json:"threads_synced"`
 	IssuesSynced         int    `json:"issues_synced"`
@@ -121,7 +128,12 @@ func New(client GitHubClient, st *store.Store) *Syncer {
 	}
 }
 
-func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
+var errAnalyticsReceipt = errors.New("persist GraphQL attempt")
+
+func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resultErr error) {
+	if options.ReviewStateOnly && !options.GraphQLHistory {
+		return Stats{}, fmt.Errorf("review-state-only requires GraphQL history transport")
+	}
 	startedAt := s.now()
 	started := startedAt.Format(time.RFC3339Nano)
 	if err := reportSyncProgress(options.Progress, SyncProgress{
@@ -142,6 +154,40 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 	if options.GraphQLHistory {
 		if len(options.Numbers) == 0 || !options.IncludeComments || !options.IncludePRMetadata || options.IncludePRDetails || since != "" || options.Limit != 0 || state != "all" {
 			return Stats{}, fmt.Errorf("--graphql-history requires --numbers, --state all, --include-comments and --with pr-metadata; since/limit/pr-details are unsupported")
+		}
+		operation := options.ReceiptOperation
+		if operation == "" {
+			operation = "graphql_history"
+		}
+		if operation != "graphql_history" && operation != "review_state" {
+			return Stats{}, fmt.Errorf("unsupported GraphQL receipt operation")
+		}
+		if options.ReviewStateOnly && operation != "review_state" {
+			return Stats{}, fmt.Errorf("review-state-only fetch requires review recovery operation")
+		}
+		// Fetch/validation failures happen before conversation transactions and
+		// were previously invisible to durable run tables. Keep a receipt even
+		// when the request is cancelled; accepted content remains untouched.
+		defer func() {
+			receiptCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			finished := s.now().Format(time.RFC3339Nano)
+			status, class, message := "success", "", ""
+			evidence, _ := json.Marshal(result)
+			if resultErr != nil {
+				status = "failed"
+				class, message, evidence = gh.HistoryFailureDetails(resultErr)
+			}
+			for _, number := range uniquePositiveNumbers(options.Numbers) {
+				err := s.store.RecordAnalyticsAttempt(receiptCtx, store.AnalyticsAttempt{Repository: options.Owner + "/" + options.Repo, Number: number, Operation: operation, StartedAt: started, FinishedAt: finished, Status: status, ErrorClass: class, ErrorText: message, Evidence: evidence})
+				if err != nil {
+					resultErr = errors.Join(resultErr, fmt.Errorf("%w: %w", errAnalyticsReceipt, err))
+					return
+				}
+			}
+		}()
+		if options.ReviewStateOnly {
+			return s.syncReviewState(ctx, options, started)
 		}
 		client, ok := s.client.(interface {
 			FetchGraphQLHistory(context.Context, string, string, []int, gh.Reporter) (gh.HistoryBatch, error)
@@ -290,6 +336,8 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 				if item.Pull != nil {
 					payload.hasPullDetails = true
 					payload.pullDetails = pullRequestDetailRows{pull: item.Pull, fetchedAt: s.now().Format(time.RFC3339Nano)}
+					payload.reviewThreads = item.ReviewThreads
+					payload.reviewThreadsFetchedAt = payload.pullDetails.fetchedAt
 				}
 			}
 			received.CommentsReceived += len(payload.commentRows)
@@ -515,6 +563,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (Stats, error) {
 			if payload.hasPullDetails {
 				if err := reserveChild(store.ThreadChildPullRequestDetails); err != nil {
 					return err
+				}
+				if history != nil {
+					if err := reserveChild(store.ThreadChildReviewThreads); err != nil {
+						return err
+					}
 				}
 			}
 			if options.IncludePRDetails && thread.Kind == "pull_request" {

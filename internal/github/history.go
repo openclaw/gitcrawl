@@ -16,26 +16,30 @@ import (
 )
 
 type HistoryItem struct {
-	Thread, Pull                      map[string]any
-	Comments, Reviews, ReviewComments []map[string]any
+	Thread, Pull                                     map[string]any
+	Comments, Reviews, ReviewComments, ReviewThreads []map[string]any
 }
 type HistoryBatch struct {
 	Repository map[string]any
 	Items      []HistoryItem
 }
 
-const historyActor = `author { login __typename url }`
+const historyActor = `author { login __typename url ... on Node { id } }`
 const historyComment = `id __typename fullDatabaseId body ` + historyActor + ` authorAssociation createdAt updatedAt publishedAt url isMinimized minimizedReason`
 const historyInline = historyComment + ` path diffHunk line startLine originalLine originalStartLine position originalPosition state subjectType outdated commit { oid } originalCommit { oid } replyTo { id fullDatabaseId } pullRequestReview { id fullDatabaseId }`
 
 var historyReview = historyComment + ` state submittedAt commit { oid } ` + historyConnection("comments", historyInline, "")
-var historyReviewThread = `id __typename ` + historyConnection("comments", historyInline, "")
+var historyReviewThread = `id __typename path line startLine isResolved isOutdated viewerCanResolve viewerCanUnresolve viewerCanReply ` + historyConnection("comments", historyInline, "")
 var historyCommon = `id __typename fullDatabaseId number title body ` + historyActor + ` authorAssociation createdAt updatedAt closedAt url state locked activeLockReason repository { nameWithOwner } milestone { number title state dueOn createdAt updatedAt url } ` + historyConnection("labels", `id name color description`, "") + " " + historyConnection("assignees", `id login __typename url`, "") + " " + historyConnection("comments", historyComment, "")
 var historyIssue = historyCommon + ` stateReason`
 var historyPull = historyCommon + ` isDraft merged mergedAt mergedBy { login __typename url } mergeCommit { oid } mergeable mergeStateStatus maintainerCanModify additions deletions changedFiles headRefName headRefOid baseRefName baseRefOid headRepository { nameWithOwner } baseRepository { nameWithOwner } commits { totalCount } ` + historyConnection("reviews", historyReview, "") + " " + historyConnection("reviewThreads", historyReviewThread, "")
 
 func historyConnection(name, fields, after string) string {
-	return name + `(first:20` + after + `) { totalCount pageInfo { hasNextPage endCursor } nodes { ` + fields + ` } }`
+	size := "20"
+	if after != "" && name != "reviews" && name != "reviewThreads" {
+		size = "100"
+	}
+	return name + `(first:` + size + after + `) { totalCount pageInfo { hasNextPage endCursor } nodes { ` + fields + ` } }`
 }
 
 type historySession struct {
@@ -44,6 +48,10 @@ type historySession struct {
 	calls      int
 	remaining  int
 	retrySleep func(context.Context, time.Duration) error
+}
+
+func (h *historySession) quota(ctx context.Context) (map[string]any, error) {
+	return h.request(context.WithValue(ctx, graphQLQuotaProbeKey{}, true), `query { rateLimit {cost remaining limit used resetAt} }`, nil, 1)
 }
 
 func (h *historySession) request(ctx context.Context, query string, variables map[string]any, estimate int) (map[string]any, error) {
@@ -103,17 +111,23 @@ func sleepHistoryRetry(ctx context.Context, duration time.Duration) error {
 
 func (h *historySession) requestOnce(ctx context.Context, query string, variables map[string]any, estimate int) (map[string]any, error) {
 	if h.calls >= 1000 {
-		return nil, fmt.Errorf("GraphQL history pagination budget exceeded")
+		return nil, requestFailureAt("graphql_response", "pagination_budget", fmt.Errorf("GraphQL history pagination budget exceeded"))
 	}
-	if h.remaining < 500+estimate {
-		return nil, fmt.Errorf("GraphQL history quota reserve reached")
+	reserve := 500
+	if h.client.reserve != nil {
+		reserve = max(reserve, h.client.reserve.reserve)
+	}
+	// Retain the configured floor against actual GraphQL responses as well as
+	// the existing REST quota guard, including every pagination request.
+	if h.remaining < reserve+estimate {
+		return nil, fmt.Errorf("GraphQL history quota reserve reached: %w", &RateLimitReserveError{RateLimit: RateLimitSnapshot{Resource: "graphql", Remaining: h.remaining}, Reserve: reserve})
 	}
 	h.calls++
 	// An unanswered request is charged conservatively by external supervisors.
 	h.reporter.Printf("[github] graphql budget %d %d", h.calls, estimate)
 	var data map[string]any
 	started := time.Now()
-	err := h.client.doGraphQL(ctx, query, variables, h.reporter, &data)
+	err := h.client.doGraphQL(context.WithValue(ctx, graphQLRequestEstimateKey{}, estimate), query, variables, h.reporter, &data)
 	h.reporter.Printf("[github] graphql timing %d %d", h.calls, time.Since(started).Milliseconds())
 	if err != nil {
 		return nil, err
@@ -121,17 +135,19 @@ func (h *historySession) requestOnce(ctx context.Context, query string, variable
 	rate := historyMap(data["rateLimit"])
 	cost, ok := historyInt(rate["cost"])
 	if !ok || cost < 0 {
-		return nil, fmt.Errorf("GraphQL history missing cost")
+		return nil, requestFailureAt("graphql_response", "quota_cost_missing", fmt.Errorf("GraphQL history missing cost"))
 	}
 	remaining, ok := historyInt(rate["remaining"])
 	if !ok || remaining < 0 {
-		return nil, fmt.Errorf("GraphQL history missing remaining quota")
+		return nil, requestFailureAt("graphql_response", "quota_remaining_missing", fmt.Errorf("GraphQL history missing remaining quota"))
 	}
 	reset, err := time.Parse(time.RFC3339, historyString(rate["resetAt"]))
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL history invalid reset")
+		return nil, requestFailureAt("graphql_response", "quota_reset_invalid", fmt.Errorf("GraphQL history invalid reset"))
 	}
-	h.remaining = min(h.remaining-cost, remaining)
+	effective := h.client.reserve.observeGraphQL(RateLimitSnapshot{Resource: "graphql", Remaining: remaining, ResetAt: reset}, time.Now())
+	h.remaining = min(h.remaining-cost, effective.Remaining)
+	h.reporter.Printf("[github] graphql quota provider_remaining %d provider_reset %d effective_remaining %d effective_reset %d", remaining, reset.Unix(), h.remaining, effective.ResetAt.Unix())
 	h.reporter.Printf("[github] graphql cost %d %d remaining %d reset %d", h.calls, cost, remaining, reset.Unix())
 	return data, nil
 }
@@ -178,10 +194,10 @@ func (c *Client) FetchGraphQLHistory(ctx context.Context, owner, repo string, nu
 			node := historyMap(r[fmt.Sprintf("n%d", i)])
 			got, _ := historyInt(node["number"])
 			if got != n || !strings.EqualFold(historyString(historyMap(node["repository"])["nameWithOwner"]), owner+"/"+repo) || historyString(node["id"]) == "" {
-				return result, fmt.Errorf("GraphQL history item #%d unavailable or moved", n)
+				return result, historyFailure("identity", n, node, fmt.Errorf("GraphQL history item #%d unavailable or moved", n))
 			}
 			if err := h.hydrate(ctx, node); err != nil {
-				return result, fmt.Errorf("GraphQL history #%d: %w", n, err)
+				return result, historyFailure("validation", n, node, fmt.Errorf("GraphQL history #%d: %w", n, err))
 			}
 			item, err := historyItem(node)
 			if err != nil {
@@ -213,6 +229,13 @@ func historyFields(typ, key string) (string, error) {
 
 func (h *historySession) hydrate(ctx context.Context, node map[string]any) error {
 	typ := historyString(node["__typename"])
+	if typ == "PullRequestReviewThread" {
+		for _, field := range []string{"isResolved", "isOutdated", "viewerCanResolve", "viewerCanUnresolve", "viewerCanReply"} {
+			if _, ok := node[field].(bool); !ok {
+				return fmt.Errorf("missing or invalid review-thread %s", field)
+			}
+		}
+	}
 	var required []string
 	switch typ {
 	case "Issue":
@@ -232,6 +255,11 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 			return fmt.Errorf("missing provider identity")
 		}
 	}
+	return h.hydrateConnections(ctx, node)
+}
+
+func (h *historySession) hydrateConnections(ctx context.Context, node map[string]any) error {
+	typ := historyString(node["__typename"])
 	for _, key := range []string{"labels", "assignees", "comments", "reviews", "reviewThreads"} {
 		connection, exists := node[key]
 		if !exists {
@@ -239,7 +267,7 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 		}
 		conn := historyMap(connection)
 		if conn == nil {
-			return fmt.Errorf("missing %s connection", key)
+			return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing %s connection", key))
 		}
 		fields, err := historyFields(typ, key)
 		if err != nil {
@@ -250,50 +278,50 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 			page := historyMap(conn["pageInfo"])
 			next, ok := page["hasNextPage"].(bool)
 			if !ok {
-				return fmt.Errorf("missing %s pageInfo", key)
+				return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing %s pageInfo", key))
 			}
 			if !next {
 				break
 			}
 			cursor := historyString(page["endCursor"])
 			if cursor == "" || seen[cursor] {
-				return fmt.Errorf("nonadvancing %s cursor", key)
+				return requestFailureAt("pagination_"+key, "connection_cursor", fmt.Errorf("nonadvancing %s cursor", key))
 			}
 			seen[cursor] = true
 			q := `query($id:ID!,$after:String!){node(id:$id){id ... on ` + typ + `{` + historyConnection(key, fields, `,after:$after`) + `}} rateLimit{cost remaining limit used resetAt}}`
 			data, err := h.request(ctx, q, map[string]any{"id": node["id"], "after": cursor}, 2)
 			if err != nil {
-				return err
+				return requestFailureAt("pagination_"+key, "", err)
 			}
 			parent := historyMap(data["node"])
 			if parent["id"] != node["id"] {
-				return fmt.Errorf("history pagination identity mismatch")
+				return requestFailureAt("pagination_"+key, "connection_identity", fmt.Errorf("history pagination identity mismatch"))
 			}
 			nxt := historyMap(parent[key])
 			a, ok := conn["nodes"].([]any)
 			if !ok {
-				return fmt.Errorf("missing history nodes")
+				return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing history nodes"))
 			}
 			b, ok := nxt["nodes"].([]any)
 			if !ok || len(b) == 0 {
-				return fmt.Errorf("empty history continuation")
+				return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("empty history continuation"))
 			}
 			conn["nodes"] = append(a, b...)
 			conn["pageInfo"] = nxt["pageInfo"]
 		}
 		children, ok := conn["nodes"].([]any)
 		if !ok {
-			return fmt.Errorf("missing history nodes")
+			return requestFailureAt("pagination_"+key, "connection_shape", fmt.Errorf("missing history nodes"))
 		}
 		if total, ok := historyInt(conn["totalCount"]); !ok || total != len(children) {
-			return fmt.Errorf("incomplete history %s count", key)
+			return requestFailureAt("pagination_"+key, "connection_count", fmt.Errorf("incomplete history %s count", key))
 		}
 		ids := map[string]bool{}
 		for _, child := range children {
 			m := historyMap(child)
 			id := historyString(m["id"])
 			if id == "" || ids[id] {
-				return fmt.Errorf("missing or duplicate history child identity")
+				return requestFailureAt("pagination_"+key, "connection_identity", fmt.Errorf("missing or duplicate history child identity"))
 			}
 			ids[id] = true
 			if err := h.hydrate(ctx, m); err != nil {
@@ -374,6 +402,7 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 		// A comment's review association is nullable. Threads independently
 		// supply standalone comments; review bodies and their metadata stay above.
 		for _, thread := range historyNodes(node, "reviewThreads") {
+			item.ReviewThreads = append(item.ReviewThreads, thread)
 			for _, comment := range historyNodes(thread, "comments") {
 				id := historyString(comment["id"])
 				if _, exists := inlineByID[id]; exists {

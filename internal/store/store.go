@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	schemaVersion = 13
+	schemaVersion = 15
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -285,6 +285,30 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	// Version 15 only adds operational receipts and an explicit review-thread
+	// membership column. A converged v14 archive needs no row/history rebuild.
+	if current == 14 {
+		structural, e := inspectStructuralCompatibilityMigrations(ctx, s, current, inspectPRDetailSchema(ctx, s))
+		if e != nil {
+			return e
+		}
+		converged, e := s.observationSchemaConvergenceIsCurrent(ctx)
+		if e != nil {
+			return e
+		}
+		if len(structural) == 1 && structural[0] == "schema_version_14_to_15" && converged {
+			// Some v14 archives predate the optional analytics extension. These
+			// additive tables/columns are cheap to ensure and require no row scan.
+			if e = s.ensureAnalyticsSourceSchema(ctx); e != nil {
+				return e
+			}
+			if e = s.ensureAnalyticsIntegritySchema(ctx); e != nil {
+				return e
+			}
+			_, e = s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", schemaVersion))
+			return e
+		}
+	}
 	if current == schemaVersion {
 		prDetails := inspectPRDetailSchema(ctx, s)
 		structural, err := inspectStructuralCompatibilityMigrations(
@@ -317,6 +341,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureFamilyTombstoneSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureAnalyticsSourceSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureAnalyticsIntegritySchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureCanonicalObservationTables(ctx); err != nil {

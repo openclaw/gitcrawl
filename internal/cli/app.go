@@ -25,11 +25,12 @@ const (
 )
 
 type App struct {
-	githubTokenCommand  *string
-	githubTokenMu       sync.Mutex
-	observedGitHubToken string
-	Stdout              io.Writer
-	Stderr              io.Writer
+	analyticsTokenProvider func(context.Context) (string, error)
+	githubTokenCommand     *string
+	githubTokenMu          sync.Mutex
+	observedGitHubToken    string
+	Stdout                 io.Writer
+	Stderr                 io.Writer
 
 	configPath            string
 	format                OutputFormat
@@ -126,6 +127,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runDoctor(ctx, rest[1:])
 	case "status":
 		return a.runStatus(ctx, rest[1:])
+	case "analytics":
+		return a.runAnalytics(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
 	case "fill-pr-details":
