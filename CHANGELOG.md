@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Disable automatic Git maintenance during portable-refresh fixture setup so temporary repositories do not launch detached cleanup work.
+
 ## 0.12.0 - 2026-09-24
 
 **Highlights:** Batched GraphQL conversation history, including standalone inline review comments.
