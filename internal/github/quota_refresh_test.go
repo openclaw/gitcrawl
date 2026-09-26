@@ -79,6 +79,9 @@ func TestExpiredGraphQLQuotaRefreshFailsClosed(t *testing.T) {
 					return
 				case "cancel":
 					cancel()
+					// Wait until the client closes this request before the handler
+					// can return an empty 200 and race cancellation with EOF.
+					<-r.Context().Done()
 					return
 				}
 				rate := map[string]any{"cost": 1, "limit": 20000, "remaining": 19000, "resetAt": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}
