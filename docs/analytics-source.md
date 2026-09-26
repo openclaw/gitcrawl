@@ -139,6 +139,11 @@ Operational tables are **not public conversation datasets**:
   and rejected GraphQL work. `number=0` identifies a discovery-lane request.
   Rejection evidence is bounded structural metadata, IDs, counts, pagination and
   body lengths/hashes; it contains no credentials, response headers or prose bodies.
+  Partial-response receipts also retain `graphql_errors`: total count, up to eight
+  allowlisted provider codes and query paths of at most eight components, with
+  explicit truncation markers. Unknown codes/path components are null. Messages,
+  arbitrary field values and identities are excluded from this error metadata.
+  Older receipts are not rewritten to infer a cause from later provider reads.
 - `analytics_retries(repository, number, operation, first_seen_at, last_seen_at,
   next_attempt_at, attempts, last_attempt_id, resolved_at)` is keyed by
   `(repository, number, operation)`. Resolved entries and attempt history remain.

@@ -47,6 +47,45 @@ func (r *historyResponseReader) failure(err error) error {
 func (e *HistoryFailure) Error() string { return e.Cause.Error() }
 func (e *HistoryFailure) Unwrap() error { return e.Cause }
 
+// Error messages can contain prose or identities. Retain only bounded provider
+// codes and known query path components, separately from the existing receipt.
+func graphQLRejection(data any, failures []graphqlResponseError, cause error) error {
+	var evidence map[string]json.RawMessage
+	// SafeHistoryEvidence always wraps data in an object, including nil data.
+	_ = json.Unmarshal(SafeHistoryEvidence(data), &evidence)
+	items := make([]map[string]any, 0, min(len(failures), 8))
+	for _, failure := range failures[:min(len(failures), 8)] {
+		var code any
+		switch failure.Type {
+		case "NOT_FOUND", "FORBIDDEN", "UNAUTHORIZED", "UNPROCESSABLE", "RATE_LIMITED", "INTERNAL", "INTERNAL_SERVER_ERROR", "SERVICE_UNAVAILABLE", "MAX_NODE_LIMIT_EXCEEDED", "EXCESSIVE_PAGINATION", "RESOURCE_LIMITS_EXCEEDED":
+			code = failure.Type
+		}
+		path := make([]any, 0, min(len(failure.Path), 8))
+		for _, component := range failure.Path[:min(len(failure.Path), 8)] {
+			var safe any
+			switch value := component.(type) {
+			case string:
+				switch value {
+				case "query", "repository", "node", "nodes", "issue", "pullRequest", "issueOrPullRequest", "issues", "pullRequests", "comments", "reviews", "reviewThreads", "labels", "assignees", "edges", "pageInfo", "totalCount", "hasNextPage", "endCursor", "rateLimit", "id", "__typename", "body", "author", "state", "isResolved", "isOutdated":
+					safe = value
+				}
+				if len(value) >= 2 && len(value) <= 3 && value[0] == 'n' && strings.Trim(value[1:], "0123456789") == "" {
+					safe = value // Native generated aliases, never entity IDs.
+				}
+			case json.Number:
+				if index, err := value.Int64(); err == nil && index >= 0 && index <= 10000 {
+					safe = index
+				}
+			}
+			path = append(path, safe)
+		}
+		items = append(items, map[string]any{"type": code, "path": path, "path_truncated": len(failure.Path) > 8})
+	}
+	evidence["graphql_errors"], _ = json.Marshal(map[string]any{"count": len(failures), "items": items, "truncated": len(failures) > 8})
+	encoded, _ := json.Marshal(evidence)
+	return &HistoryFailure{Cause: cause, Stage: "partial_response", Evidence: encoded}
+}
+
 func historyFailure(stage string, number int, data any, err error) error {
 	evidence := SafeHistoryEvidence(data)
 	var upstream *HistoryFailure

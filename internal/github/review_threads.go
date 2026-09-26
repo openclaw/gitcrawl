@@ -113,10 +113,14 @@ type graphqlEnvelope struct {
 }
 
 type graphqlResponseEnvelope struct {
-	Data   json.RawMessage `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Data   json.RawMessage        `json:"data"`
+	Errors []graphqlResponseError `json:"errors"`
+}
+
+type graphqlResponseError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Path    []any  `json:"path"`
 }
 
 // ListPullReviewThreads fetches GitHub's review-thread graph for a pull request.
@@ -252,7 +256,7 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 		}
 		var rejected any
 		_ = decodeJSON(bytes.NewReader(envelope.Data), &rejected)
-		return historyFailure("partial_response", 0, rejected, fmt.Errorf("github graphql: %s", strings.Join(messages, "; ")))
+		return graphQLRejection(rejected, envelope.Errors, fmt.Errorf("github graphql: %s", strings.Join(messages, "; ")))
 	}
 	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return historyFailure("missing_data", 0, nil, fmt.Errorf("github graphql response missing data"))
