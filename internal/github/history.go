@@ -16,8 +16,8 @@ import (
 )
 
 type HistoryItem struct {
-	Thread, Pull                      map[string]any
-	Comments, Reviews, ReviewComments []map[string]any
+	Thread, Pull                                     map[string]any
+	Comments, Reviews, ReviewComments, ReviewThreads []map[string]any
 }
 type HistoryBatch struct {
 	Repository map[string]any
@@ -29,7 +29,7 @@ const historyComment = `id __typename fullDatabaseId body ` + historyActor + ` a
 const historyInline = historyComment + ` path diffHunk line startLine originalLine originalStartLine position originalPosition state subjectType outdated commit { oid } originalCommit { oid } replyTo { id fullDatabaseId } pullRequestReview { id fullDatabaseId }`
 
 var historyReview = historyComment + ` state submittedAt commit { oid } ` + historyConnection("comments", historyInline, "")
-var historyReviewThread = `id __typename ` + historyConnection("comments", historyInline, "")
+var historyReviewThread = `id __typename path line startLine isResolved isOutdated viewerCanResolve viewerCanUnresolve viewerCanReply ` + historyConnection("comments", historyInline, "")
 var historyCommon = `id __typename fullDatabaseId number title body ` + historyActor + ` authorAssociation createdAt updatedAt closedAt url state locked activeLockReason repository { nameWithOwner } milestone { number title state dueOn createdAt updatedAt url } ` + historyConnection("labels", `id name color description`, "") + " " + historyConnection("assignees", `id login __typename url`, "") + " " + historyConnection("comments", historyComment, "")
 var historyIssue = historyCommon + ` stateReason`
 var historyPull = historyCommon + ` isDraft merged mergedAt mergedBy { login __typename url } mergeCommit { oid } mergeable mergeStateStatus maintainerCanModify additions deletions changedFiles headRefName headRefOid baseRefName baseRefOid headRepository { nameWithOwner } baseRepository { nameWithOwner } commits { totalCount } ` + historyConnection("reviews", historyReview, "") + " " + historyConnection("reviewThreads", historyReviewThread, "")
@@ -182,10 +182,10 @@ func (c *Client) FetchGraphQLHistory(ctx context.Context, owner, repo string, nu
 			node := historyMap(r[fmt.Sprintf("n%d", i)])
 			got, _ := historyInt(node["number"])
 			if got != n || !strings.EqualFold(historyString(historyMap(node["repository"])["nameWithOwner"]), owner+"/"+repo) || historyString(node["id"]) == "" {
-				return result, fmt.Errorf("GraphQL history item #%d unavailable or moved", n)
+				return result, historyFailure("identity", n, node, fmt.Errorf("GraphQL history item #%d unavailable or moved", n))
 			}
 			if err := h.hydrate(ctx, node); err != nil {
-				return result, fmt.Errorf("GraphQL history #%d: %w", n, err)
+				return result, historyFailure("validation", n, node, fmt.Errorf("GraphQL history #%d: %w", n, err))
 			}
 			item, err := historyItem(node)
 			if err != nil {
@@ -217,6 +217,13 @@ func historyFields(typ, key string) (string, error) {
 
 func (h *historySession) hydrate(ctx context.Context, node map[string]any) error {
 	typ := historyString(node["__typename"])
+	if typ == "PullRequestReviewThread" {
+		for _, field := range []string{"isResolved", "isOutdated", "viewerCanResolve", "viewerCanUnresolve", "viewerCanReply"} {
+			if _, ok := node[field].(bool); !ok {
+				return fmt.Errorf("missing or invalid review-thread %s", field)
+			}
+		}
+	}
 	var required []string
 	switch typ {
 	case "Issue":
@@ -378,6 +385,7 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 		// A comment's review association is nullable. Threads independently
 		// supply standalone comments; review bodies and their metadata stay above.
 		for _, thread := range historyNodes(node, "reviewThreads") {
+			item.ReviewThreads = append(item.ReviewThreads, thread)
 			for _, comment := range historyNodes(thread, "comments") {
 				id := historyString(comment["id"])
 				if _, exists := inlineByID[id]; exists {

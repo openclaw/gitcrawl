@@ -3,6 +3,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -235,21 +236,29 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 		return fmt.Errorf("encode graphql request: %w", err)
 	}
 	var envelope graphqlResponseEnvelope
-	if err := c.doJSON(ctx, http.MethodPost, c.graphQLURL, bytes.NewReader(payload), reporter, &envelope); err != nil {
+	response, err := c.do(ctx, http.MethodPost, c.graphQLURL, bytes.NewReader(payload), reporter)
+	if err != nil {
 		return err
+	}
+	defer response.Body.Close()
+	reader := &historyResponseReader{reader: response.Body, hash: sha256.New()}
+	if err := decodeJSON(reader, &envelope); err != nil {
+		return reader.failure(fmt.Errorf("decode github response: %w", err))
 	}
 	if len(envelope.Errors) > 0 {
 		messages := make([]string, 0, len(envelope.Errors))
 		for _, graphqlErr := range envelope.Errors {
 			messages = append(messages, graphqlErr.Message)
 		}
-		return fmt.Errorf("github graphql: %s", strings.Join(messages, "; "))
+		var rejected any
+		_ = decodeJSON(bytes.NewReader(envelope.Data), &rejected)
+		return historyFailure("partial_response", 0, rejected, fmt.Errorf("github graphql: %s", strings.Join(messages, "; ")))
 	}
 	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return fmt.Errorf("github graphql response missing data")
+		return historyFailure("missing_data", 0, nil, fmt.Errorf("github graphql response missing data"))
 	}
 	if err := decodeJSON(bytes.NewReader(envelope.Data), out); err != nil {
-		return fmt.Errorf("decode github graphql data: %w", err)
+		return historyFailure("response_decode", 0, nil, fmt.Errorf("decode github graphql data: %w", err))
 	}
 	return nil
 }

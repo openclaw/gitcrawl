@@ -84,16 +84,23 @@ func (c *Client) UpdatedNumbers(ctx context.Context, owner, repo, kind, after st
 	var valid bool
 	p.Total, valid = historyInt(r["totalCount"])
 	if !valid || p.Total < 0 {
-		return p, fmt.Errorf("missing update-discovery count")
+		return p, historyFailure("discovery_validation", 0, r, fmt.Errorf("missing update-discovery count"))
 	}
 	info := historyMap(r["pageInfo"])
-	p.More, _ = info["hasNextPage"].(bool)
+	var hasPageFlag bool
+	p.More, hasPageFlag = info["hasNextPage"].(bool)
+	nodes, hasNodes := r["nodes"].([]any)
+	// totalCount covers the whole connection. A resumed final page can become
+	// empty after deletion/reordering; it must not pin its cursor forever.
+	if !hasPageFlag || !hasNodes || (len(nodes) == 0 && p.Total > 0 && after == "") || len(nodes) > p.Total {
+		return p, historyFailure("discovery_validation", 0, r, fmt.Errorf("incomplete update-discovery page"))
+	}
 	p.Cursor = historyString(info["endCursor"])
 	for _, n := range historyNodes(historyMap(data["repository"]), kind) {
 		number, ok := historyInt(n["number"])
 		at, e := time.Parse(time.RFC3339Nano, historyString(n["updatedAt"]))
 		if !ok || number < 1 || e != nil {
-			return p, fmt.Errorf("invalid update-discovery evidence")
+			return p, historyFailure("discovery_validation", 0, r, fmt.Errorf("invalid update-discovery evidence"))
 		}
 		if !at.Before(since) {
 			p.Numbers = append(p.Numbers, number)
@@ -103,7 +110,7 @@ func (c *Client) UpdatedNumbers(ctx context.Context, owner, repo, kind, after st
 		}
 	}
 	if p.More && (p.Cursor == "" || p.Cursor == after || p.Oldest.IsZero()) {
-		return p, fmt.Errorf("update cursor did not advance")
+		return p, historyFailure("discovery_validation", 0, r, fmt.Errorf("update cursor did not advance"))
 	}
 	return p, nil
 }

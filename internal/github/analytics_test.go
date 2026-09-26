@@ -28,6 +28,32 @@ func TestAnalyticsDiscoveryFiltersOldRowsAndRejectsBadCursors(t *testing.T) {
 		t.Fatal("non-advancing cursor accepted")
 	}
 }
+func TestAnalyticsDiscoveryEmptyContinuation(t *testing.T) {
+	for _, tc := range []struct {
+		name, after     string
+		more, wantError bool
+	}{
+		{"final continuation", "previous", false, false},
+		{"incomplete initial page", "", false, true},
+		{"empty advancing page", "previous", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"rateLimit": map[string]any{"cost": 1, "remaining": 19000, "resetAt": "2099-01-01T00:00:00Z"}, "repository": map[string]any{"issues": map[string]any{"totalCount": 100, "pageInfo": map[string]any{"hasNextPage": tc.more, "endCursor": "next"}, "nodes": []any{}}}}})
+			}))
+			defer server.Close()
+			c := New(Options{Token: "test-token-placeholder", BaseURL: server.URL})
+			p, err := c.UpdatedNumbers(context.Background(), "fixture", "repo", "issues", tc.after, time.Time{})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("page=%+v error=%v, wantError=%v", p, err, tc.wantError)
+			}
+			if err == nil && (p.More || len(p.Numbers) != 0 || p.Total != 100) {
+				t.Fatalf("incorrect final page: %+v", p)
+			}
+		})
+	}
+}
+
 func TestAnalyticsUnavailableNodesAreNotAuthorizationSuccess(t *testing.T) {
 	typ := "NOT_FOUND"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

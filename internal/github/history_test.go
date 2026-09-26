@@ -179,6 +179,13 @@ func TestGraphQLHistoryReviewThreadCompleteness(t *testing.T) {
 			node["reviews"] = historyTestConnection(review)
 			thread1 := map[string]any{"id": "T1", "__typename": "PullRequestReviewThread", "comments": historyTestConnection(associated)}
 			thread2 := map[string]any{"id": "T2", "__typename": "PullRequestReviewThread", "comments": historyTestConnection()}
+			for _, thread := range []map[string]any{thread1, thread2} {
+				for _, field := range []string{"isResolved", "isOutdated", "viewerCanResolve", "viewerCanUnresolve", "viewerCanReply"} {
+					thread[field] = false
+				}
+			}
+			thread1["isResolved"] = true
+			thread2["isOutdated"] = true
 			thread2["comments"].(map[string]any)["totalCount"] = 1
 			thread2["comments"].(map[string]any)["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "comment-first"}
 			node["reviewThreads"] = historyTestConnection(thread1)
@@ -247,8 +254,11 @@ func TestGraphQLHistoryReviewThreadCompleteness(t *testing.T) {
 				t.Fatal(err)
 			}
 			item := batch.Items[0]
-			if pages != 2 || len(item.ReviewComments) != 2 || len(item.Reviews) != 1 || len(item.Comments) != 1 {
+			if pages != 2 || len(item.ReviewComments) != 2 || len(item.Reviews) != 1 || len(item.Comments) != 1 || len(item.ReviewThreads) != 2 {
 				t.Fatalf("incomplete or duplicate conversation: pages=%d item=%+v", pages, item)
+			}
+			if item.ReviewThreads[0]["isResolved"] != true || item.ReviewThreads[1]["isOutdated"] != true {
+				t.Fatal("review state lost")
 			}
 			if item.Reviews[0]["state"] != "APPROVED" || item.Reviews[0]["body"] != "" || item.Comments[0]["body"] != "discussion" {
 				t.Fatal("review metadata or discussion lost")

@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/store/storedb"
@@ -34,7 +36,12 @@ type PullRequestReviewThread struct {
 }
 
 func (s *Store) UpsertPullRequestReviewThreads(ctx context.Context, threadID int64, fetchedAt string, threads []PullRequestReviewThread) error {
+	seen := map[string]bool{}
 	for _, thread := range threads {
+		if thread.ReviewThreadID == "" || strings.TrimSpace(thread.ReviewThreadID) != thread.ReviewThreadID || seen[thread.ReviewThreadID] {
+			return fmt.Errorf("review-thread membership requires nonempty unique native IDs")
+		}
+		seen[thread.ReviewThreadID] = true
 		if err := validateTombstone(thread.DeletedAt, thread.DeletionReason); err != nil {
 			return fmt.Errorf("upsert pull request review thread %q: %w", thread.ReviewThreadID, err)
 		}
@@ -48,11 +55,42 @@ func (s *Store) UpsertPullRequestReviewThreads(ctx context.Context, threadID int
 }
 
 func (s *Store) upsertPullRequestReviewThreads(ctx context.Context, threadID int64, fetchedAt string, threads []PullRequestReviewThread) error {
+	observed, err := time.Parse(time.RFC3339Nano, fetchedAt)
+	if err != nil {
+		return fmt.Errorf("invalid review-thread observation time: %w", err)
+	}
+	var previous string
+	err = s.q().QueryRowContext(ctx, "SELECT fetched_at FROM pull_request_review_thread_syncs WHERE thread_id=?", threadID).Scan(&previous)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil {
+		prior, parseErr := time.Parse(time.RFC3339Nano, previous)
+		if parseErr != nil {
+			return fmt.Errorf("invalid prior review-thread observation time: %w", parseErr)
+		}
+		// This runs inside the same native transaction as state/history writes.
+		// An older completion must not replace either membership or row state.
+		if observed.Before(prior) {
+			return nil
+		}
+	}
 	if err := s.qsql().UpsertPullRequestReviewThreadSync(ctx, storedb.UpsertPullRequestReviewThreadSyncParams{
 		ThreadID:  threadID,
 		FetchedAt: fetchedAt,
 	}); err != nil {
 		return fmt.Errorf("mark pull request review threads fetched: %w", err)
+	}
+	ids := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		ids = append(ids, thread.ReviewThreadID)
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	if _, err = s.q().ExecContext(ctx, "UPDATE pull_request_review_thread_syncs SET review_thread_ids_json=? WHERE thread_id=? AND fetched_at=?", string(encoded), threadID, fetchedAt); err != nil {
+		return err
 	}
 	for _, thread := range threads {
 		if thread.ReviewThreadID == "" {

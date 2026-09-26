@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/openclaw/gitcrawl/internal/config"
@@ -56,7 +55,7 @@ func (a *App) analyticsClient(ctx context.Context, cfg config.Config) (*gh.Clien
 func (a *App) runAnalytics(ctx context.Context, args []string) error {
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
-			_, err := fmt.Fprintln(a.Stdout, "Usage: gitcrawl [--config SOURCE_CONFIG] [--github-token-command TOKEN_HELPER] analytics owner/repo [--apply] [--enrich] [--watch|--once] [--json]\nWithout action flags: read-only publication audit. --apply repairs retained timestamps; --enrich collects actor evidence; --watch maintains GraphQL updates.")
+			_, err := fmt.Fprintln(a.Stdout, "Usage: gitcrawl [--config SOURCE_CONFIG] [--github-token-command TOKEN_HELPER] analytics owner/repo [--status|--apply|--enrich] [--watch|--once] [--json]\nWithout action flags: read-only publication audit. --status reads bounded failure/recovery status; --apply repairs retained timestamps; --enrich collects actor evidence; --watch maintains GraphQL updates.")
 			return err
 		}
 	}
@@ -67,6 +66,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 	enrich := fs.Bool("enrich", false, "collect missing provider identities and actor profiles")
 	watch := fs.Bool("watch", false, "maintain GraphQL updates every two minutes")
 	once := fs.Bool("once", false, "run one GraphQL update cycle")
+	status := fs.Bool("status", false, "read bounded collection, failure and recovery status")
 	fs.Bool("json", false, "JSON output")
 	if e := fs.Parse(normalizeCommandArgs(args, nil)); e != nil {
 		return e
@@ -82,6 +82,21 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 	cfg, e := config.LoadRuntime(a.configPath)
 	if e != nil {
 		return e
+	}
+	if *status {
+		if *apply || *enrich || *watch || *once {
+			return fmt.Errorf("--status cannot be combined with collection actions")
+		}
+		rt, err := a.openLocalRuntimeReadOnly(ctx)
+		if err != nil {
+			return err
+		}
+		defer rt.Store.Close()
+		result, err := rt.Store.AnalyticsIntegrityStatus(ctx, owner+"/"+repo)
+		if err != nil {
+			return err
+		}
+		return a.writeOutput("analytics_status", result, false)
 	}
 	if !*apply && !*enrich && !*watch && !*once {
 		rt, e := a.openLocalRuntimeReadOnly(ctx)
@@ -186,11 +201,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 			defer close(done)
 			for {
 				pollErr := a.analyticsCycle(pollCtx, rt.Store, client, owner, repo)
-				if pollErr != nil {
-					fmt.Fprintf(a.Stderr, "{\"event\":\"github_update_failed\",\"error\":%q}\n", pollErr.Error())
-				} else {
-					fmt.Fprintln(a.Stderr, "{\"event\":\"github_update_complete\"}")
-				}
+				a.analyticsUpdateLog(pollErr)
 				select {
 				case <-pollCtx.Done():
 					return
@@ -302,130 +313,10 @@ type updateCheckpoint struct {
 	PRs     int    `json:"prs"`
 }
 
-func (a *App) analyticsCycle(ctx context.Context, s *store.Store, c *gh.Client, owner, repo string) error {
-	key := "updates:" + owner + "/" + repo
-	value, e := s.AnalyticsState(ctx, key)
-	if e != nil {
-		return e
-	}
-	var cp updateCheckpoint
-	if value != "" {
-		if e = json.Unmarshal([]byte(value), &cp); e != nil {
-			return e
-		}
-	}
-	if cp.Started == "" {
-		through, e := s.AnalyticsState(ctx, "through:"+owner+"/"+repo)
-		if e != nil {
-			return e
-		}
-		if through == "" { // Conservative baseline: earliest completed historical discovery, not the last row fetched.
-			b, e := os.ReadFile(filepath.Join(filepath.Dir(a.configPath), "status.json"))
-			if e == nil {
-				var st struct {
-					Discovery []struct {
-						Updated string `json:"updated_at"`
-						Done    int    `json:"done"`
-					}
-				}
-				if json.Unmarshal(b, &st) == nil {
-					for _, d := range st.Discovery {
-						if d.Done == 1 && (through == "" || d.Updated < through) {
-							through = d.Updated
-						}
-					}
-				}
-			}
-		}
-		if through == "" {
-			return fmt.Errorf("verified historical discovery watermark required")
-		}
-		at, e := time.Parse(time.RFC3339Nano, through)
-		if e != nil {
-			return e
-		}
-		cp = updateCheckpoint{Started: time.Now().UTC().Format(time.RFC3339Nano), Since: at.Add(-5 * time.Minute).Format(time.RFC3339Nano)}
-	}
-	since, _ := time.Parse(time.RFC3339Nano, cp.Since)
-	for cp.Kind < 2 {
-		kind := []string{"issues", "pullRequests"}[cp.Kind]
-		page, e := c.UpdatedNumbers(ctx, owner, repo, kind, cp.Cursor, since)
-		if e != nil {
-			return e
-		}
-		if cp.Kind == 0 {
-			cp.Issues = page.Total
-		} else {
-			cp.PRs = page.Total
-		}
-		var wg sync.WaitGroup
-		slots := make(chan struct{}, 16)
-		var firstErr error
-		var errMu sync.Mutex
-		for i := 0; i < len(page.Numbers); i += 2 {
-			numbers := append([]int(nil), page.Numbers[i:min(i+2, len(page.Numbers))]...)
-			slots <- struct{}{}
-			wg.Add(1)
-			go func() {
-				defer func() { <-slots }()
-				defer wg.Done()
-				e := a.syncAnalyticsBatch(ctx, s, owner, repo, numbers)
-				if e != nil {
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = e
-					}
-					errMu.Unlock()
-				}
-			}()
-		}
-		wg.Wait()
-		if firstErr != nil {
-			return firstErr
-		}
-		fmt.Fprintf(a.Stderr, "{\"event\":\"github_update_page\",\"kind\":%q,\"threads\":%d}\n", kind, len(page.Numbers))
-
-		if !page.More || (!page.Oldest.IsZero() && page.Oldest.Before(since)) {
-			cp.Kind++
-			cp.Cursor = ""
-		} else {
-			cp.Cursor = page.Cursor
-		}
-		b, _ := json.Marshal(cp)
-		if e = s.SetAnalyticsState(ctx, key, string(b)); e != nil {
-			return e
-		}
-		for batch := 0; batch < 5; batch++ {
-			ids, e := s.AnalyticsProfileNodes(ctx, 100)
-			if e != nil {
-				return e
-			}
-			if len(ids) == 0 {
-				break
-			}
-			nodes, e := c.AnalyticsNodes(ctx, ids, true)
-			if e != nil {
-				return e
-			}
-			if e = s.SaveActorProfiles(ctx, nodes, time.Now().UTC().Format(time.RFC3339Nano)); e != nil {
-				return e
-			}
-		}
-
-	}
-	if e = s.SaveAnalyticsCoverage(ctx, owner+"/"+repo, cp.Started, cp.Issues, cp.PRs); e != nil {
-		return e
-	}
-	if e = s.SetAnalyticsState(ctx, "through:"+owner+"/"+repo, cp.Started); e != nil {
-		return e
-	}
-	return s.SetAnalyticsState(ctx, key, "")
-}
-
 // Smaller requests prevent high-fanout conversation queries exhausting GitHub's
 // execution deadline. Split a persistently failing transient batch without
 // accepting partial conversation evidence or changing transports.
-func (a *App) syncAnalyticsBatch(ctx context.Context, s *store.Store, owner, repo string, numbers []int) error {
+func (a *App) syncAnalyticsBatch(ctx context.Context, s *store.Store, owner, repo string, numbers []int, operation string) error {
 	cfg, err := config.LoadRuntime(a.configPath)
 	if err != nil {
 		return err
@@ -435,15 +326,7 @@ func (a *App) syncAnalyticsBatch(ctx context.Context, s *store.Store, owner, rep
 	// The watch owner has already validated and opened this store. Reopening it
 	// for every two threads repeats full-archive migration audits and serializes
 	// otherwise independent network work. Native transactions still own writes.
-	_, err = syncer.New(client, s).Sync(ctx, syncer.Options{Owner: owner, Repo: repo, GraphQLHistory: true, State: "all", Numbers: numbers, IncludeComments: true, IncludePRMetadata: true})
-	if err == nil || ctx.Err() != nil || len(numbers) < 2 {
-		return err
-	}
-	var response *gh.RequestError
-	if errors.As(err, &response) && (response.Status == 502 || response.Status == 503 || response.Status == 504) {
-		middle := len(numbers) / 2
-		return errors.Join(a.syncAnalyticsBatch(ctx, s, owner, repo, numbers[:middle]), a.syncAnalyticsBatch(ctx, s, owner, repo, numbers[middle:]))
-	}
+	_, err = syncer.New(client, s).Sync(ctx, syncer.Options{Owner: owner, Repo: repo, GraphQLHistory: true, ReceiptOperation: operation, State: "all", Numbers: numbers, IncludeComments: true, IncludePRMetadata: true})
 	return err
 }
 
