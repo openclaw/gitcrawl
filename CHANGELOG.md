@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Prepare vectors once for 2.6× faster cluster scoring and 2.0× faster exact neighbors; enable `GOEXPERIMENT=simd` in release builds for a further 2.6×/1.7× on Apple M3 Ultra (1,024 dimensions).
 - Disable automatic Git maintenance during portable-refresh fixture setup so temporary repositories do not launch detached cleanup work.
 
 ## 0.12.0 - 2026-09-24

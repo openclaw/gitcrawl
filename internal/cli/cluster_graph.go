@@ -81,24 +81,8 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 		}
 		nodes = append(nodes, clusterer.Node{ThreadID: stored.ThreadID, Number: thread.Number, Title: thread.Title})
 	}
-	candidateByPair := map[string]clusterer.Edge{}
-	for left := 0; left < len(nodes); left++ {
-		for right := left + 1; right < len(nodes); right++ {
-			leftID := nodes[left].ThreadID
-			rightID := nodes[right].ThreadID
-			score := vector.Cosine(vectorByThreadID[leftID], vectorByThreadID[rightID])
-			if score < options.Threshold {
-				continue
-			}
-			if score < highConfidenceEdgeScore && titleTokenOverlap(threads[leftID].Title, threads[rightID].Title) < weakEdgeMinTitleOverlap {
-				continue
-			}
-			if threads[leftID].Kind != threads[rightID].Kind && score < options.CrossKindThreshold {
-				continue
-			}
-			upsertClusterEdge(candidateByPair, leftID, rightID, score)
-		}
-	}
+	candidateByPair := scoreClusterEdges(nodes, threads, vectorByThreadID, options)
+
 	repoFullName, err := repositoryFullNameByID(ctx, st, repoID)
 	if err != nil {
 		return nil, 0, err
@@ -153,6 +137,32 @@ func buildDurableClusterInputs(ctx context.Context, st *store.Store, repoID int6
 		inputs = append(inputs, input)
 	}
 	return inputs, len(edges), nil
+}
+
+func scoreClusterEdges(nodes []clusterer.Node, threads map[int64]store.Thread, vectorByThreadID map[int64][]float64, options clusterBuildOptions) map[string]clusterer.Edge {
+	prepared := make([]vector.Prepared, len(nodes))
+	for i, node := range nodes {
+		prepared[i] = vector.Prepare(vectorByThreadID[node.ThreadID])
+	}
+	candidateByPair := map[string]clusterer.Edge{}
+	for left := 0; left < len(nodes); left++ {
+		for right := left + 1; right < len(nodes); right++ {
+			leftID := nodes[left].ThreadID
+			rightID := nodes[right].ThreadID
+			score := prepared[left].Cosine(prepared[right])
+			if score < options.Threshold {
+				continue
+			}
+			if score < highConfidenceEdgeScore && titleTokenOverlap(threads[leftID].Title, threads[rightID].Title) < weakEdgeMinTitleOverlap {
+				continue
+			}
+			if threads[leftID].Kind != threads[rightID].Kind && score < options.CrossKindThreshold {
+				continue
+			}
+			upsertClusterEdge(candidateByPair, leftID, rightID, score)
+		}
+	}
+	return candidateByPair
 }
 
 func upsertClusterEdge(edges map[string]clusterer.Edge, leftID, rightID int64, score float64) {

@@ -56,6 +56,8 @@ func queryExact(ctx context.Context, items []Item, query []float64, limit int, e
 	if err := validateExactQuery(query); err != nil {
 		return nil, err
 	}
+	preparedQuery := Prepare(query)
+	scratch := make([]float64, len(query))
 	scored := make([]crawlvector.Scored[Neighbor], 0, len(items))
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {
@@ -64,7 +66,10 @@ func queryExact(ctx context.Context, items []Item, query []float64, limit int, e
 		if item.ThreadID == excludeThreadID {
 			continue
 		}
-		score := Cosine(query, item.Vector)
+		if len(item.Vector) != len(query) {
+			continue
+		}
+		score := preparedQuery.Cosine(prepareInto(scratch, item.Vector))
 		if math.IsNaN(score) || math.IsInf(score, 0) || score <= 0 {
 			continue
 		}
