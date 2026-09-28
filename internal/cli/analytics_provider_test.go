@@ -45,6 +45,8 @@ func TestAnalyticsCredentialRotationAndFailureAtDispatch(t *testing.T) {
 	defer server.Close()
 	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
 	a := New()
+	dir := t.TempDir()
+	a.configPath = writeDoctorTestConfig(t, dir, filepath.Join(dir, "archive.db"))
 	a.githubTokenCommand = &helper
 	client, err := a.analyticsClient(ctx, config.Config{})
 	if err != nil {

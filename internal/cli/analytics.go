@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/openclaw/gitcrawl/internal/config"
@@ -240,6 +241,9 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 					}
 					group.Wait()
 					if len(failures) > 0 {
+						if !parallelWatch {
+							return safeAnalyticsError{errors.Join(failures...)}
+						}
 						fmt.Fprintf(a.Stderr, "{\"event\":\"actor_enrichment_retry\",\"failed_batches\":%d}\n", len(failures))
 						select {
 						case <-ctx.Done():
