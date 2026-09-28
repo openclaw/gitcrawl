@@ -15,6 +15,19 @@ import (
 
 var errAnalyticsIncomplete = errors.New("analytics coverage remains incomplete")
 
+// Retain errors.Is/As for callers without rendering provider prose at the CLI.
+type safeAnalyticsError struct{ cause error }
+
+func (e safeAnalyticsError) Error() string {
+	if errors.Is(e.cause, errAnalyticsIncomplete) {
+		return errAnalyticsIncomplete.Error()
+	}
+	_, message, _ := gh.HistoryFailureDetails(e.cause)
+	return message
+}
+
+func (e safeAnalyticsError) Unwrap() error { return e.cause }
+
 const (
 	analyticsPollInterval = 2 * time.Minute
 	analyticsCoreReserve  = 1500
@@ -49,7 +62,7 @@ func (a *App) analyticsUpdateLog(err error) {
 		event = "github_update_failed"
 		if errors.Is(err, errAnalyticsIncomplete) {
 			event = "github_coverage_pending"
-			fields["error"] = err.Error()
+			fields["error"] = errAnalyticsIncomplete.Error()
 		} else {
 			class, message, _ := gh.HistoryFailureDetails(err)
 			fields["error_class"] = class

@@ -267,15 +267,11 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 	for *watch || *once {
 		nextPoll := time.Now().Add(analyticsPollInterval)
 		e = a.analyticsCycle(ctx, rt.Store, client, owner, repo)
-		if e != nil {
-			if !*watch {
-				return e
-			}
-			fmt.Fprintf(a.Stderr, "{\"event\":\"github_update_failed\",\"error\":%q}\n", e.Error())
-		} else {
-			fmt.Fprintln(a.Stderr, "{\"event\":\"github_update_complete\"}")
-		}
+		a.analyticsUpdateLog(e)
 		if !*watch {
+			if e != nil {
+				return safeAnalyticsError{e}
+			}
 			return nil
 		}
 		select {
