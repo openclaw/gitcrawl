@@ -132,36 +132,10 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 		if existing == 0 {
 			b, err := os.ReadFile(filepath.Join(filepath.Dir(a.configPath), "status.json"))
 			if err == nil {
-				var status struct {
-					Phase     string `json:"phase"`
-					Discovery []struct {
-						Kind    string `json:"kind"`
-						Done    int    `json:"done"`
-						Total   int    `json:"total"`
-						Updated string `json:"updated_at"`
-					} `json:"discovery"`
-				}
-				if json.Unmarshal(b, &status) == nil && status.Phase == "complete" && len(status.Discovery) == 2 {
-					through := ""
-					issues, prs := 0, 0
-					valid := true
-					for _, d := range status.Discovery {
-						valid = valid && d.Done == 1
-						if through == "" || d.Updated < through {
-							through = d.Updated
-						}
-						if d.Kind == "issues" {
-							issues = d.Total
-						} else if d.Kind == "pullRequests" {
-							prs = d.Total
-						} else {
-							valid = false
-						}
-					}
-					if valid && issues > 0 && prs > 0 {
-						if e = rt.Store.SaveAnalyticsCoverage(ctx, owner+"/"+repo, through, issues, prs); e != nil {
-							return e
-						}
+				through, issues, prs, valid := analyticsBaseline(b)
+				if valid {
+					if e = rt.Store.SaveAnalyticsCoverage(ctx, owner+"/"+repo, through, issues, prs); e != nil {
+						return e
 					}
 				}
 			}
@@ -370,4 +344,42 @@ func maintainAnalyticsEnrichment(ctx context.Context, watch bool, interval time.
 		case <-time.After(interval):
 		}
 	}
+}
+
+// A completed lane may contain no items. Distinguish that evidence from a
+// missing count or a duplicated lane before using the historical watermark.
+func analyticsBaseline(data []byte) (through string, issues, prs int, valid bool) {
+	var status struct {
+		Phase     string `json:"phase"`
+		Discovery []struct {
+			Kind    string `json:"kind"`
+			Done    int    `json:"done"`
+			Total   *int   `json:"total"`
+			Updated string `json:"updated_at"`
+		} `json:"discovery"`
+	}
+	if json.Unmarshal(data, &status) != nil || status.Phase != "complete" || len(status.Discovery) != 2 {
+		return "", 0, 0, false
+	}
+	seen := map[string]bool{}
+	var earliest time.Time
+	for _, lane := range status.Discovery {
+		at, err := time.Parse(time.RFC3339Nano, lane.Updated)
+		if err != nil || lane.Done != 1 || lane.Total == nil || *lane.Total < 0 || seen[lane.Kind] {
+			return "", 0, 0, false
+		}
+		seen[lane.Kind] = true
+		switch lane.Kind {
+		case "issues":
+			issues = *lane.Total
+		case "pullRequests":
+			prs = *lane.Total
+		default:
+			return "", 0, 0, false
+		}
+		if earliest.IsZero() || at.Before(earliest) {
+			earliest = at
+		}
+	}
+	return earliest.UTC().Format(time.RFC3339Nano), issues, prs, true
 }
