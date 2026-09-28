@@ -422,7 +422,7 @@ func (s *Store) sanitizePortableRepositoryCompatibilityColumn(ctx context.Contex
 }
 
 func canonicalPortableDroppedTables() []string {
-	return []string{
+	return append([]string{
 		"code_documents_fts",
 		"code_documents_fts_config",
 		"code_documents_fts_data",
@@ -452,11 +452,11 @@ func canonicalPortableDroppedTables() []string {
 		"similarity_edges",
 		"blobs",
 		"sync_attempt_failures",
-	}
+	}, AnalyticsSourceTables()...)
 }
 
 func canonicalPortableBulkDropOrder() []string {
-	return []string{
+	return append([]string{
 		"code_documents_fts",
 		"code_documents_fts_config",
 		"code_documents_fts_data",
@@ -486,5 +486,5 @@ func canonicalPortableBulkDropOrder() []string {
 		"embedding_runs",
 		"cluster_runs",
 		"blobs",
-	}
+	}, AnalyticsSourceTables()...)
 }

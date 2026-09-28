@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {
@@ -95,6 +97,18 @@ func cloudSQLiteSnapshotPath(
 }
 
 func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
+	// Keep the schema writable on restoration, but never publish collector state.
+	for _, table := range store.AnalyticsSourceTables() {
+		exists, err := sqliteTableExists(ctx, db, table)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if _, err := db.ExecContext(ctx, `delete from `+table); err != nil {
+				return fmt.Errorf("clear local analytics table %s: %w", table, err)
+			}
+		}
+	}
 	for _, column := range []struct {
 		table string
 		name  string

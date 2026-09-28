@@ -15,6 +15,16 @@ type Publication struct {
 	Published string `json:"publication_at_gh,omitempty"`
 }
 
+// AnalyticsSourceTables contains native collector evidence and operational state.
+// Snapshot publishers omit these datasets; they have no portable/cloud contract.
+func AnalyticsSourceTables() []string {
+	return []string{
+		"actor_identity_evidence", "actor_profiles", "analytics_coverage",
+		"analytics_repair_receipts", "analytics_pending_nodes", "analytics_collection_state",
+		"analytics_fetch_attempts", "analytics_retries", "analytics_review_state_coverage",
+	}
+}
+
 func ProviderTime(value any) string {
 	s, ok := value.(string)
 	if !ok || strings.TrimSpace(s) != s {
