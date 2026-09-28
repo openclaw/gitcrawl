@@ -204,8 +204,9 @@ generate embeddings or reinterpret empty review bodies as missing replies.
 The permanent `runner.lock` coordinates ownership with the full-history backfill
 supervisor. Do not unlink it or start a second supervisor against the same archive.
 A finished backfill should be disabled as an automatic startup job when ongoing
-collection takes ownership. The token-command result is held only in memory and
-refreshed before its expected expiry, preserving one credential across quota
-reservation and dispatch. Existing provider-rate protections remain active.
+collection takes ownership. The token command is consulted before every request;
+Gitcrawl does not cache its authority or infer its expiry. Quota reservation and
+dispatch must use the same credential, and helper failure prevents dispatch.
+Existing provider-rate protections remain active.
 
 See [sync](/sync/), [configuration](/configuration/) and the [command reference](/commands/).

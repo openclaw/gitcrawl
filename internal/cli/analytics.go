@@ -26,27 +26,8 @@ func (a *App) analyticsClient(ctx context.Context, cfg config.Config) (*gh.Clien
 			return nil, e
 		}
 	}
-	if provider != nil {
-		fetch := provider
-		var mu sync.Mutex
-		var cached string
-		var expires time.Time
-		provider = func(ctx context.Context) (string, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			if cached != "" && time.Now().Before(expires) {
-				return cached, nil
-			}
-			value, e := fetch(ctx)
-			if e != nil {
-				return "", e
-			}
-			cached = value
-			expires = time.Now().Add(45 * time.Minute)
-			return value, nil
-		}
-		a.analyticsTokenProvider = provider
-	}
+	// The helper owns credential lifetime; each guarded dispatch must consult it.
+	a.analyticsTokenProvider = provider
 	if provider == nil && token.Value == "" {
 		return nil, fmt.Errorf("missing GitHub credential")
 	}
@@ -186,7 +167,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 		}
 	}
 	// Independent guarded clients permit disjoint evidence batches to overlap;
-	// each preserves the normal quota reservation and uses the same cached token.
+	// each preserves the normal quota reservation and consults the same helper.
 	actorClients := make([]*gh.Client, 8)
 	for i := range actorClients {
 		token := a.resolveGitHubToken(ctx, cfg)
