@@ -55,7 +55,11 @@ admits up to 256 items through 32 recovery workers, with up to eight PRs per
 request. Waves are also limited to a 16 MiB estimated response budget, using a
 conservative 64 KiB/item initial estimate that grows with measured bytes. Individual
 recovery responses are capped at 32 MiB; rejected batches are isolated normally.
-Ordinary capture retains its existing eight two-item workers. Admission
+Analytics core collection uses eight two-item workers. Plain `sync` and `refresh`
+do not start these worker pools or make analytics enrichment requests. Opening a
+writable archive upgrades it to schema 15; normal ingestion also stores comment
+publication timestamps and queues native actor IDs for optional enrichment.
+Admission
 uses the authoritative GraphQL `rateLimit` response rather than REST resource
 counters, which can differ. Recovery and its quota probe omit redundant REST
 `/rate_limit` preflights: an explicit GraphQL probe binds actual quota to the
@@ -80,6 +84,11 @@ Missing or expired quota stops provider recovery; local discovery can continue.
 The request window yields before core polling and cancellation retains retry
 receipts and the last committed scan. Quota and numeric per-query cost logs make
 the actual spending observable without credentials or content bodies.
+These are per-client quota guards, not a shared credential scheduler. At most 32
+review requests and eight actor requests can overlap with `--enrich --watch`;
+the wave's point budget may admit fewer review workers. A Retry-After pause affects
+the requesting client, not its peers. This concurrency has not been shown safe
+against GitHub's aggregate secondary limits.
 No partial connection is accepted as complete evidence. Non-nested
 continuation pages use 100 nodes to avoid repeated small round trips. Identity/profile enrichment uses eight disjoint 100-node requests with normal
 quota guards and can run concurrently under
@@ -165,6 +174,14 @@ targeted recovery does not restart historical discovery or enable remote syncing
 missing historical resolution states cannot be reconstructed from old payloads.
 
 Operational tables are **not public conversation datasets**:
+
+Portable exports omit all native analytics and actor tables. Cloud SQLite snapshots
+retain their empty schema but clear every row before compaction. In-place portable
+pruning also scrubs these rows, including with `--no-vacuum`; it forces a rewrite
+to remove old diagnostic bytes. Native source archives retain the complete data.
+Schema 13 binaries reject schema 15 archives for both reads and writes; use a
+pre-upgrade backup to return to an older writer. A failed additive migration can be
+retried, and does not advance the schema version before its DDL completes.
 
 - `analytics_fetch_attempts(id, repository, number, operation, started_at,
   finished_at, status, error_class, error_text, evidence_json)` retains successful
