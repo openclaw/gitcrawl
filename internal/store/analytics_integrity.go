@@ -56,7 +56,12 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 	if err != nil {
 		return err
 	}
-	return s.WithTx(ctx, func(tx *Store) error {
+	return s.WithTx(ctx, func(tx *Store) (resultErr error) {
+		defer func() {
+			if resultErr == nil {
+				resultErr = tx.refreshReviewStateCoverage(ctx, a.Repository)
+			}
+		}()
 		status, class, message := a.Status, a.ErrorClass, a.ErrorText
 		knownReview := true
 		if status == "success" && (a.Operation == "graphql_history" || a.Operation == "review_state") {
@@ -338,6 +343,9 @@ func (s *Store) SeedReviewStateRecovery(ctx context.Context, repository string, 
 		if e := tx.SetAnalyticsState(ctx, key, string(encoded)); e != nil {
 			return e
 		}
+		if e := tx.refreshReviewStateCoverage(ctx, repository); e != nil {
+			return e
+		}
 		committed = next
 		return nil
 	})
@@ -362,11 +370,18 @@ func (s *Store) SetAnalyticsCoverageComplete(ctx context.Context, repository str
 }
 
 func (s *Store) SaveReviewStateCoverage(ctx context.Context, repository string, progress ReviewStateRecovery) error {
-	var pending int
-	if err := s.q().QueryRowContext(ctx, `SELECT count(*) FROM analytics_retries WHERE repository=? AND operation='review_state' AND resolved_at IS NULL`, repository).Scan(&pending); err != nil {
-		return err
-	}
-	_, err := s.q().ExecContext(ctx, `INSERT INTO analytics_review_state_coverage VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repository) DO UPDATE SET cursor=excluded.cursor,ceiling=excluded.ceiling,scanned=excluded.scanned,queued=excluded.queued,pending_items=excluded.pending_items,scan_complete=excluded.scan_complete,complete=excluded.complete,observed_at=excluded.observed_at`, repository, progress.Cursor, progress.Ceiling, progress.Scanned, progress.Queued, pending, boolInt(progress.Done), boolInt(progress.Done && pending == 0), time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := s.q().ExecContext(ctx, `INSERT INTO analytics_review_state_coverage
+ SELECT ?,?,?,?,?,pending,?,(? AND pending=0),? FROM (
+ SELECT count(*) AS pending FROM analytics_retries WHERE repository=? AND operation='review_state' AND resolved_at IS NULL) WHERE true
+ ON CONFLICT(repository) DO UPDATE SET cursor=excluded.cursor,ceiling=excluded.ceiling,scanned=excluded.scanned,queued=excluded.queued,pending_items=excluded.pending_items,scan_complete=excluded.scan_complete,complete=excluded.complete,observed_at=excluded.observed_at`, repository, progress.Cursor, progress.Ceiling, progress.Scanned, progress.Queued, boolInt(progress.Done), boolInt(progress.Done), time.Now().UTC().Format(time.RFC3339Nano), repository)
+	return err
+}
+
+func (s *Store) refreshReviewStateCoverage(ctx context.Context, repository string) error {
+	_, err := s.q().ExecContext(ctx, `UPDATE analytics_review_state_coverage
+ SET pending_items=(SELECT count(*) FROM analytics_retries WHERE repository=? AND operation='review_state' AND resolved_at IS NULL),
+ complete=(scan_complete AND NOT EXISTS(SELECT 1 FROM analytics_retries WHERE repository=? AND operation='review_state' AND resolved_at IS NULL)),
+ observed_at=? WHERE repository=?`, repository, repository, time.Now().UTC().Format(time.RFC3339Nano), repository)
 	return err
 }
 
