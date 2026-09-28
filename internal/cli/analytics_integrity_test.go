@@ -40,7 +40,13 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 			}
 			var broken atomic.Bool
 			broken.Store(true)
-			var revised atomic.Bool
+			var revised atomic.Int64
+			sourceTime := func(number int) string {
+				if at := revised.Load(); number == 2 && at != 0 {
+					return time.Unix(0, at).UTC().Format(time.RFC3339Nano)
+				}
+				return at
+			}
 			conn := func(nodes ...any) map[string]any {
 				if nodes == nil {
 					nodes = []any{}
@@ -69,7 +75,7 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 					if strings.Contains(req.Query, "pullRequests(first:") {
 						kind, n = "pullRequests", 2
 					}
-					page := conn(map[string]any{"number": n, "updatedAt": at})
+					page := conn(map[string]any{"number": n, "updatedAt": sourceTime(n)})
 					if brokenDiscovery && broken.Load() && n == 1 {
 						delete(page, "pageInfo")
 					}
@@ -80,7 +86,8 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 						n, typ = 2, "PullRequest"
 					}
 					node := map[string]any{"id": fmt.Sprint("node-", n), "fullDatabaseId": fmt.Sprint(n), "__typename": typ, "number": n, "title": "fixture", "body": "retained body", "state": "OPEN", "createdAt": "2026-01-01T00:00:00Z", "updatedAt": at, "url": fmt.Sprintf("https://github.com/fixture/repo/issues/%d", n), "repository": map[string]any{"nameWithOwner": "fixture/repo"}, "author": map[string]any{"id": "actor", "login": "fixture", "__typename": "User"}, "labels": conn(), "assignees": conn(), "comments": conn()}
-					if revised.Load() && n == 2 {
+					node["updatedAt"] = sourceTime(n)
+					if revised.Load() != 0 && n == 2 {
 						node["body"] = "fresh core body"
 					}
 					if n == 2 {
@@ -196,7 +203,9 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 			if err = s.RecordAnalyticsAttempt(ctx, reviewRetry); err != nil {
 				t.Fatal(err)
 			}
-			revised.Store(true)
+			// A new edit must advance the provider timestamp as well as its body,
+			// even when setup took longer than the discovery overlap window.
+			revised.Store(time.Now().UnixNano())
 			if err = a.analyticsCycle(ctx, s, client, "fixture", "repo"); err != nil {
 				t.Fatal(err)
 			}
