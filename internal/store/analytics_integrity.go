@@ -323,7 +323,7 @@ func (s *Store) SeedReviewStateRecovery(ctx context.Context, repository string, 
 					continue
 				}
 			}
-			r, e := tx.q().ExecContext(ctx, `INSERT OR IGNORE INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at) VALUES(?,?,'review_state',?,?,?)`, repository, v.number, at, at, at)
+			r, e := tx.queueReviewStateRecovery(ctx, repository, v.number, v.id, at)
 			if e != nil {
 				return e
 			}
@@ -345,6 +345,13 @@ func (s *Store) SeedReviewStateRecovery(ctx context.Context, repository string, 
 		progress = committed
 	}
 	return progress, err
+}
+
+// A live writer can publish membership after the scan snapshot was read.
+func (s *Store) queueReviewStateRecovery(ctx context.Context, repository string, number int, threadID int64, at string) (sql.Result, error) {
+	return s.q().ExecContext(ctx, `INSERT OR IGNORE INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at)
+ SELECT ?,?,'review_state',?,?,? WHERE NOT EXISTS (
+ SELECT 1 FROM pull_request_review_thread_syncs WHERE thread_id=? AND review_thread_ids_json IS NOT NULL)`, repository, number, at, at, at, threadID)
 }
 
 // Core completeness concerns issue/PR/comment traversal. Review-state enrichment
