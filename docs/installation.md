@@ -76,6 +76,12 @@ go build \
 
 Symlink or copy `bin/gitcrawl` somewhere on your `PATH` (`~/bin`, `/usr/local/bin`, `~/.local/bin`).
 
+Source builds use scalar vector scoring by default. Set `GOEXPERIMENT=simd` on
+`go build` to enable Go 1.27's experimental portable SIMD kernels for clustering
+and exact neighbors. The API may change in Go 1.28; unsupported hardware and
+`GODEBUG=simd=0` use the scalar kernels. Release archives and Docker builds enable
+this SIMD path.
+
 ## GitHub CLI shim migration
 
 `gitcrawl gh` moved to Octopool:
