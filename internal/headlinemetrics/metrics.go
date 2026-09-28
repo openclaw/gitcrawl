@@ -169,27 +169,42 @@ func ownedReadOnly(ctx context.Context, path string) (*store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	var owner, version string
-	err = s.DB().QueryRowContext(ctx, "SELECT value FROM metric_meta WHERE key='owner'").Scan(&owner)
-	if err == nil {
-		err = s.DB().QueryRowContext(ctx, "SELECT value FROM metric_meta WHERE key='version'").Scan(&version)
-	}
-	var foreign int
-	if err == nil {
-		err = s.DB().QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT IN ('metric_meta','metric_observations','metric_events','metric_runs','sqlite_sequence') AND name NOT LIKE 'sqlite_%'`).Scan(&foreign)
-	}
-	if err != nil || owner != Owner || version != "1" || foreign != 0 {
+	if err := validateOwnership(ctx, s.DB()); err != nil {
 		s.Close()
-		return nil, errors.New("refusing a database not exclusively owned by gitcrawl metrics schema version 1")
+		return nil, err
 	}
 	return s, nil
 }
+
+type ownershipReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func validateOwnership(ctx context.Context, db ownershipReader) error {
+	var owner, version string
+	err := db.QueryRowContext(ctx, "SELECT value FROM metric_meta WHERE key='owner'").Scan(&owner)
+	if err == nil {
+		err = db.QueryRowContext(ctx, "SELECT value FROM metric_meta WHERE key='version'").Scan(&version)
+	}
+	var foreign int
+	if err == nil {
+		err = db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT IN ('metric_meta','metric_observations','metric_events','metric_runs','sqlite_sequence') AND name NOT LIKE 'sqlite_%'`).Scan(&foreign)
+	}
+	if err != nil || owner != Owner || version != "1" || foreign != 0 {
+		return errors.New("refusing a database not exclusively owned by gitcrawl metrics schema version 1")
+	}
+	return nil
+}
+
+// beforeWritableOpen is nil except in tests that replace a checked path.
+var beforeWritableOpen func()
 
 func Open(ctx context.Context, path string) (_ *store.Store, err error) {
 	if !filepath.IsAbs(path) || strings.TrimSpace(path) != path {
 		return nil, errors.New("metrics database path must be absolute")
 	}
 	info, err := os.Lstat(path)
+	newFile := errors.Is(err, os.ErrNotExist)
 	if err == nil {
 		if !info.Mode().IsRegular() {
 			return nil, errors.New("refusing a non-regular metrics database")
@@ -218,6 +233,7 @@ func Open(ctx context.Context, path string) (_ *store.Store, err error) {
 			_ = f.Close()
 			return nil, statErr
 		}
+		info = created
 		// Remove only our newly created file on failure, never an existing
 		// database or a replacement installed at the same path.
 		defer func() {
@@ -231,16 +247,67 @@ func Open(ctx context.Context, path string) (_ *store.Store, err error) {
 			return nil, err
 		}
 	}
-	s, err := store.Open(ctx, store.Options{Path: path, Schema: Schema, MaxOpenConns: 1, MaxIdleConns: 1})
+	if beforeWritableOpen != nil {
+		beforeWritableOpen()
+	}
+	// Connecting must not apply schema before the opened database is checked.
+	s, err := store.Open(ctx, store.Options{Path: path, MaxOpenConns: 1, MaxIdleConns: 1})
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.DB().ExecContext(ctx, "INSERT OR IGNORE INTO metric_meta VALUES('owner',?),('version','1')", Owner)
-	if err != nil {
-		s.Close()
-		return nil, err
+	if err = initialize(ctx, s.DB(), path, info, newFile); err != nil {
+		return nil, errors.Join(err, s.Close())
 	}
 	return s, nil
+}
+
+func initialize(ctx context.Context, db *sql.DB, path string, expected os.FileInfo, newFile bool) (err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, conn.Close()) }()
+	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, rollbackErr := conn.ExecContext(rollbackCtx, "ROLLBACK")
+			err = errors.Join(err, rollbackErr)
+		}
+	}()
+	// Validate through the pinned connection under the write lock, not through
+	// another pathname lookup that could inspect a different database.
+	if newFile {
+		var objects int
+		if err = conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master").Scan(&objects); err != nil {
+			return err
+		}
+		if objects != 0 {
+			return errors.New("refusing to initialize a nonempty metrics database")
+		}
+	} else if err = validateOwnership(ctx, conn); err != nil {
+		return err
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(expected, current) {
+		return errors.New("metrics database path changed before initialization")
+	}
+	if _, err = conn.ExecContext(ctx, Schema); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, "INSERT OR IGNORE INTO metric_meta VALUES('owner',?),('version','1')", Owner); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	committed = err == nil
+	return err
 }
 
 func Validate(r Row) error {

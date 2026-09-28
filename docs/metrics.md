@@ -254,6 +254,10 @@ with `metric_meta.owner = gitcrawl` and `metric_meta.version = 1`. Databases wit
 foreign tables, another owner/version, database symlinks or hard-link aliases, and
 pre-existing empty files are rejected before a writable open. Existing databases
 are inspected read-only for this check; no archive runtime or config is loaded.
+Before applying the metrics schema or ownership metadata, the writable connection
+rechecks ownership under a write transaction. Newly created databases must still
+be empty, and changed file identities are rejected. Schema and ownership metadata
+commit together on that same connection.
 A failed first initialization removes only the newly created file so it can be
 retried; pre-existing files are never removed. A process killed during that first
 initialization can still leave an unowned file requiring operator inspection. `status` checks identity read-only and

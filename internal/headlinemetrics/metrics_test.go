@@ -462,3 +462,185 @@ func TestConfigRejectsContentBeyondSizeLimit(t *testing.T) {
 		t.Fatal("oversized config with trailing JSON was accepted")
 	}
 }
+
+func TestOpenRejectsReplacedDatabaseBeforeSchemaWrites(t *testing.T) {
+	ctx := context.Background()
+	for _, existing := range []bool{false, true} {
+		for _, parent := range []bool{false, true} {
+			for _, metrics := range []bool{false, true} {
+				t.Run(fmt.Sprintf("existing=%t/parent=%t/metrics=%t", existing, parent, metrics), func(t *testing.T) {
+					root := t.TempDir()
+					active := filepath.Join(root, "active")
+					if err := os.Mkdir(active, 0700); err != nil {
+						t.Fatal(err)
+					}
+					path := filepath.Join(active, "metrics.sqlite")
+					if existing {
+						s, err := Open(ctx, path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := s.Close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					replacementDir := filepath.Join(root, "replacement")
+					replacement := filepath.Join(replacementDir, "metrics.sqlite")
+					schema := "CREATE TABLE threads(id INTEGER PRIMARY KEY,body TEXT); INSERT INTO threads VALUES(1,'archive retained')"
+					if metrics {
+						schema = Schema + "INSERT INTO metric_meta VALUES('owner','gitcrawl'),('version','1'); INSERT INTO metric_runs(ts,status,rows_written) VALUES('retained','ok',7)"
+					}
+					s, err := store.Open(ctx, store.Options{Path: replacement, Schema: schema})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := s.Close(); err != nil {
+						t.Fatal(err)
+					}
+					replacementInfo, err := os.Stat(replacement)
+					if err != nil {
+						t.Fatal(err)
+					}
+					called := false
+					beforeWritableOpen = func() {
+						called = true
+						from, to := replacement, path
+						if parent {
+							from, to = replacementDir, active
+						}
+						if err := os.Rename(to, to+".original"); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Rename(from, to); err != nil {
+							t.Fatal(err)
+						}
+					}
+					t.Cleanup(func() { beforeWritableOpen = nil })
+					opened, err := Open(ctx, path)
+					if opened != nil {
+						opened.Close()
+					}
+					if !called || err == nil || opened != nil {
+						t.Fatalf("replaced database accepted: called=%t store=%v error=%v", called, opened, err)
+					}
+					current, err := os.Stat(path)
+					if err != nil || !os.SameFile(replacementInfo, current) {
+						t.Fatalf("replacement removed or changed: %v", err)
+					}
+					read, err := store.OpenReadOnly(ctx, path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer read.Close()
+					if metrics {
+						var retained int
+						if err := read.DB().QueryRow("SELECT rows_written FROM metric_runs WHERE ts='retained'").Scan(&retained); err != nil || retained != 7 {
+							t.Fatalf("replacement metrics history changed: %d, %v", retained, err)
+						}
+					} else {
+						var objects int
+						if err := read.DB().QueryRow("SELECT count(*) FROM sqlite_master WHERE name GLOB 'metric_*'").Scan(&objects); err != nil || objects != 0 {
+							t.Fatalf("metrics schema landed in archive: %d, %v", objects, err)
+						}
+						var body string
+						if err := read.DB().QueryRow("SELECT body FROM threads WHERE id=1").Scan(&body); err != nil || body != "archive retained" {
+							t.Fatalf("archive contents changed: %q, %v", body, err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestOpenRevalidatesDatabaseChangedInPlace(t *testing.T) {
+	ctx := context.Background()
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			c := testConfig(t)
+			if existing {
+				s := openTestStore(t, c)
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			beforeWritableOpen = func() {
+				schema := "CREATE VIEW unrelated AS SELECT 1"
+				if existing {
+					schema = "UPDATE metric_meta SET value='another-owner' WHERE key='owner'"
+				}
+				s, err := store.Open(ctx, store.Options{Path: c.Database, Schema: schema})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { beforeWritableOpen = nil })
+			s, err := Open(ctx, c.Database)
+			if s != nil {
+				s.Close()
+			}
+			if err == nil || s != nil {
+				t.Fatalf("changed database accepted: %v, %v", s, err)
+			}
+			if existing {
+				read, err := store.OpenReadOnly(ctx, c.Database)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer read.Close()
+				var owner string
+				if err := read.DB().QueryRow("SELECT value FROM metric_meta WHERE key='owner'").Scan(&owner); err != nil || owner != "another-owner" {
+					t.Fatalf("replaced ownership overwritten: %q, %v", owner, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenRollsBackSchemaWhenOwnershipInsertFails(t *testing.T) {
+	ctx := context.Background()
+	c := testConfig(t)
+	s, err := store.Open(ctx, store.Options{Path: c.Database, Schema: `
+CREATE TABLE metric_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+INSERT INTO metric_meta VALUES('owner','gitcrawl'),('version','1');
+CREATE TRIGGER reject_ownership BEFORE INSERT ON metric_meta BEGIN SELECT RAISE(ABORT,'fixture rejection'); END;
+`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(ctx, c.Database); err == nil {
+		s.Close()
+		t.Fatal("ownership insert unexpectedly succeeded")
+	}
+	read, err := store.OpenReadOnly(ctx, c.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables int
+	err = read.DB().QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('metric_observations','metric_events','metric_runs')").Scan(&tables)
+	closeErr := read.Close()
+	if err != nil || closeErr != nil || tables != 0 {
+		t.Fatalf("schema was not rolled back: tables=%d error=%v close=%v", tables, err, closeErr)
+	}
+	// The failed open must release its transaction and connection for a retry.
+	s, err = store.Open(ctx, store.Options{Path: c.Database, Schema: "DROP TRIGGER reject_ownership"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, c.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
