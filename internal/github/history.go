@@ -241,6 +241,10 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 		if conn == nil {
 			return fmt.Errorf("missing %s connection", key)
 		}
+		total, ok := historyInt(conn["totalCount"])
+		if !ok || total < 0 {
+			return fmt.Errorf("invalid history %s count", key)
+		}
 		fields, err := historyFields(typ, key)
 		if err != nil {
 			return err
@@ -270,6 +274,9 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 				return fmt.Errorf("history pagination identity mismatch")
 			}
 			nxt := historyMap(parent[key])
+			if nextTotal, ok := historyInt(nxt["totalCount"]); !ok || nextTotal != total {
+				return fmt.Errorf("changed or missing history %s count", key)
+			}
 			a, ok := conn["nodes"].([]any)
 			if !ok {
 				return fmt.Errorf("missing history nodes")
@@ -285,7 +292,7 @@ func (h *historySession) hydrate(ctx context.Context, node map[string]any) error
 		if !ok {
 			return fmt.Errorf("missing history nodes")
 		}
-		if total, ok := historyInt(conn["totalCount"]); !ok || total != len(children) {
+		if total != len(children) {
 			return fmt.Errorf("incomplete history %s count", key)
 		}
 		ids := map[string]bool{}

@@ -102,7 +102,7 @@ no REST requests or fallback. The regular sync path is unchanged.
 The profile requires the flags above; it rejects `--since`, `--limit` and full
 PR-detail hydration. It does not collect files, commit bodies, checks or Actions
 logs. An incomplete GraphQL response, unavailable parent, missing identity,
-duplicate child within a connection, mismatched count or nonadvancing cursor
+duplicate child within a connection, mismatched or changing count, or nonadvancing cursor
 fails the batch before archive writes.
 Supervisors should retry failed selections in isolation. Empty reviews remain
 retained, including approvals without bodies. Minimized comments and null

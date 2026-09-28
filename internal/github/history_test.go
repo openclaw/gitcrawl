@@ -138,6 +138,43 @@ func TestGraphQLHistoryRejectsShortConnection(t *testing.T) {
 	}
 }
 
+func TestGraphQLHistoryRejectsChangedContinuationCount(t *testing.T) {
+	for _, total := range []any{1, 3, nil} {
+		t.Run(fmt.Sprint(total), func(t *testing.T) {
+			comment := func(id string) map[string]any {
+				return map[string]any{"id": id, "__typename": "IssueComment", "fullDatabaseId": id, "body": id}
+			}
+			node := historyTestNode()
+			first := historyTestConnection(comment("1"))
+			first["totalCount"] = 2
+			first["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "first"}
+			node["comments"] = first
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req graphqlEnvelope
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					return
+				}
+				data := map[string]any{"rateLimit": map[string]any{"cost": 1, "remaining": 19000, "resetAt": "2099-01-01T01:00:00Z"}}
+				if strings.Contains(req.Query, "issueOrPullRequest") {
+					data["repository"] = map[string]any{"databaseId": 42, "nameWithOwner": "fixture/repo", "n0": node}
+				}
+				if strings.Contains(req.Query, "node(id:") {
+					last := historyTestConnection(comment("2"))
+					last["totalCount"] = total
+					data["node"] = map[string]any{"id": node["id"], "comments": last}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+			}))
+			defer server.Close()
+			batch, err := New(Options{BaseURL: server.URL}).FetchGraphQLHistory(context.Background(), "fixture", "repo", []int{1}, nil)
+			if err == nil || len(batch.Items) != 0 {
+				t.Fatalf("accepted inconsistent continuation count %v: items=%d err=%v", total, len(batch.Items), err)
+			}
+		})
+	}
+}
+
 func TestGraphQLHistoryIssueDiscussion(t *testing.T) {
 	node := historyTestNode()
 	node["__typename"] = "Issue"
@@ -212,6 +249,7 @@ func TestGraphQLHistoryReviewThreadCompleteness(t *testing.T) {
 					switch req.Variables["id"] {
 					case "PR_fixture":
 						conn := historyTestConnection(thread2)
+						conn["totalCount"] = 2
 						if mode == "repeated-thread" {
 							conn["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "thread-first"}
 						}
