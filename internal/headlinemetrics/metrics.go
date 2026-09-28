@@ -1,9 +1,10 @@
 // Package headlinemetrics owns a separate, append-only repository metrics store.
-// It never opens Gitcrawl's thread archive or starts embedding/model work.
+// It rejects thread archives before writes and never starts embedding/model work.
 package headlinemetrics
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -23,6 +24,8 @@ import (
 )
 
 const Owner = "gitcrawl"
+
+var ErrPartialCollection = errors.New("one or more GitHub metrics unavailable; successful values and unknown observations were retained")
 
 type Target struct {
 	Entity string `json:"entity"`
@@ -70,7 +73,14 @@ func ReadConfig(path string) (Config, error) {
 		return c, fmt.Errorf("read metrics config: %w", err)
 	}
 	defer f.Close()
-	d := json.NewDecoder(io.LimitReader(f, 1024*1024))
+	data, err := io.ReadAll(io.LimitReader(f, 1024*1024+1))
+	if err != nil {
+		return c, fmt.Errorf("read metrics config: %w", err)
+	}
+	if len(data) > 1024*1024 {
+		return c, errors.New("metrics config exceeds 1 MiB")
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&c); err != nil {
 		return c, errors.New("invalid metrics config JSON")
@@ -146,6 +156,15 @@ func ownedReadOnly(ctx context.Context, path string) (*store.Store, error) {
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return nil, errors.New("metrics database must be a nonempty regular file")
 	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	err = checkSingleLink(f)
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
+		return nil, errors.Join(err, closeErr)
+	}
 	s, err := store.OpenReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
@@ -166,7 +185,7 @@ func ownedReadOnly(ctx context.Context, path string) (*store.Store, error) {
 	return s, nil
 }
 
-func Open(ctx context.Context, path string) (*store.Store, error) {
+func Open(ctx context.Context, path string) (_ *store.Store, err error) {
 	if !filepath.IsAbs(path) || strings.TrimSpace(path) != path {
 		return nil, errors.New("metrics database path must be absolute")
 	}
@@ -189,10 +208,25 @@ func Open(ctx context.Context, path string) (*store.Store, error) {
 			return nil, err
 		}
 		// Never initialize an existing empty archive or follow a database symlink.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		var f *os.File
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
 			return nil, err
 		}
+		created, statErr := f.Stat()
+		if statErr != nil {
+			_ = f.Close()
+			return nil, statErr
+		}
+		// Remove only our newly created file on failure, never an existing
+		// database or a replacement installed at the same path.
+		defer func() {
+			if err != nil {
+				if current, e := os.Lstat(path); e == nil && os.SameFile(created, current) {
+					err = errors.Join(err, os.Remove(path))
+				}
+			}
+		}()
 		if err = f.Close(); err != nil {
 			return nil, err
 		}
@@ -245,9 +279,7 @@ func insert(ctx context.Context, tx *sql.Tx, r Row) (int, error) {
 	// Imported IDs preserve their exact history. Only freshly collected daily
 	// values suppress unchanged re-reads; later corrections append a new sequence.
 	if r.ID == "" && r.Type == "metric" && r.Kind == "daily" {
-		var previous sql.NullFloat64
-		var provenance string
-		err := tx.QueryRowContext(ctx, `SELECT value,provenance FROM metric_observations WHERE entity=? AND target=? AND metric=? AND kind='daily' AND ts=? ORDER BY sequence DESC LIMIT 1`, r.Entity, r.Target, r.Metric, r.TS).Scan(&previous, &provenance)
+		previous, provenance, err := latestDaily(ctx, tx, r)
 		if err == nil && provenance == r.Provenance && ((r.Value == nil && !previous.Valid) || (r.Value != nil && previous.Valid && previous.Float64 == *r.Value)) {
 			return 0, nil
 		}
@@ -272,6 +304,36 @@ func insert(ctx context.Context, tx *sql.Tx, r Row) (int, error) {
 	}
 	n, err := result.RowsAffected()
 	return int(n), err
+}
+
+// A daily import can spell the same UTC day with another offset or time of day.
+// Compare parsed days without rewriting imported timestamps or delivery IDs.
+func latestDaily(ctx context.Context, tx *sql.Tx, r Row) (sql.NullFloat64, string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT ts,value,provenance FROM metric_observations WHERE entity=? AND target=? AND metric=? AND kind='daily' ORDER BY sequence DESC`, r.Entity, r.Target, r.Metric)
+	if err != nil {
+		return sql.NullFloat64{}, "", err
+	}
+	defer rows.Close()
+	at, _ := time.Parse(time.RFC3339Nano, r.TS)
+	day := at.UTC().Truncate(24 * time.Hour)
+	for rows.Next() {
+		var raw, provenance string
+		var value sql.NullFloat64
+		if err := rows.Scan(&raw, &value, &provenance); err != nil {
+			return value, "", err
+		}
+		previous, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return value, "", errors.New("invalid stored daily observation time")
+		}
+		if previous.UTC().Truncate(24 * time.Hour).Equal(day) {
+			return value, provenance, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return sql.NullFloat64{}, "", err
+	}
+	return sql.NullFloat64{}, "", sql.ErrNoRows
 }
 
 func Write(ctx context.Context, s *store.Store, rows []Row) (int, error) {
@@ -348,13 +410,32 @@ func Execute(ctx context.Context, command string, c Config, collect Collector, i
 			return result, err
 		}
 		defer s.Close()
-		var last sql.NullString
-		err = s.DB().QueryRowContext(ctx, "SELECT count(*),max(observed_at) FROM metric_observations").Scan(&result.Observations, &last)
+		rows, err := s.DB().QueryContext(ctx, "SELECT observed_at FROM metric_observations")
+		if err != nil {
+			return result, err
+		}
+		var latest time.Time
+		for rows.Next() {
+			var raw string
+			if err = rows.Scan(&raw); err != nil {
+				break
+			}
+			var at time.Time
+			at, err = time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				err = errors.New("invalid stored observation time")
+				break
+			}
+			result.Observations++
+			// Imported timestamps retain their original offsets and precision.
+			if result.LastObserved == nil || at.After(latest) {
+				latest = at
+				result.LastObserved = &raw
+			}
+		}
+		err = errors.Join(err, rows.Err(), rows.Close())
 		if err == nil {
 			err = s.DB().QueryRowContext(ctx, "SELECT count(*) FROM metric_events").Scan(&result.Events)
-		}
-		if err == nil && last.Valid {
-			result.LastObserved = &last.String
 		}
 		result.OK = err == nil
 		return result, err
@@ -408,7 +489,7 @@ func Execute(ctx context.Context, command string, c Config, collect Collector, i
 	}
 	result.OK = collectionErr == nil
 	if collectionErr != nil {
-		return result, errors.New("one or more GitHub metrics unavailable; successful values and unknown observations were retained")
+		return result, ErrPartialCollection
 	}
 	return result, nil
 }

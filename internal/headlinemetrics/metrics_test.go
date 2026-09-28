@@ -348,3 +348,117 @@ func TestCollectRetainsPartialAndCancelledResultsAtomically(t *testing.T) {
 		t.Fatalf("write rollback=%d %v", n, err)
 	}
 }
+
+func TestStatusOrdersExistingTimestampsChronologically(t *testing.T) {
+	for _, times := range [][]string{
+		{"2026-09-15T01:00:00+02:00", "2026-09-15T00:00:00Z"},
+		{"2026-09-15T00:00:00Z", "2026-09-15T00:00:00.000000001Z"},
+	} {
+		c := testConfig(t)
+		s := openTestStore(t, c)
+		for i, at := range times {
+			r := testRow()
+			r.ID = fmt.Sprint(i)
+			r.ObservedAt = at
+			if _, err := Import(context.Background(), s, c, strings.NewReader(ndjson(t, r))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := Execute(context.Background(), "status", c, nil, nil)
+		if err != nil || result.LastObserved == nil || *result.LastObserved != times[1] {
+			t.Fatalf("status = %+v, %v; latest instant = %s", result, err, times[1])
+		}
+	}
+}
+
+func TestFailedInitializationCanRetryWithoutAdoptingForeignFiles(t *testing.T) {
+	c := testConfig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if s, err := Open(ctx, c.Database); err == nil {
+		s.Close()
+		t.Fatal("canceled initialization succeeded")
+	}
+	if _, err := os.Stat(c.Database); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed initialization stranded a file: %v", err)
+	}
+	s := openTestStore(t, c)
+	if _, err := Write(context.Background(), s, []Row{testRow()}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err := Open(ctx, c.Database); err == nil {
+		s.Close()
+		t.Fatal("canceled reopen succeeded")
+	}
+	result, err := Execute(context.Background(), "status", c, nil, nil)
+	if err != nil || result.Observations != 1 {
+		t.Fatalf("existing history lost after failed reopen: %+v, %v", result, err)
+	}
+}
+
+func TestRefuseMetricsDatabaseHardlinkAliases(t *testing.T) {
+	c := testConfig(t)
+	s := openTestStore(t, c)
+	s.Close()
+	alias := filepath.Join(t.TempDir(), "alias.sqlite")
+	if err := os.Link(c.Database, alias); err != nil {
+		t.Skip(err)
+	}
+	before, err := os.ReadFile(c.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{c.Database, alias} {
+		cfg := c
+		cfg.Database = path
+		if _, err := Execute(context.Background(), "import", cfg, nil, strings.NewReader("")); err == nil {
+			t.Fatal("hardlinked database bypasses writer serialization")
+		}
+	}
+	after, err := os.ReadFile(c.Database)
+	if err != nil || string(after) != string(before) {
+		t.Fatal("hardlinked database changed")
+	}
+}
+
+func TestDailyCollectionUsesLatestImportedUTCDay(t *testing.T) {
+	c := testConfig(t)
+	s := openTestStore(t, c)
+	ctx := context.Background()
+	r := testRow()
+	r.ID, r.Kind, r.Metric = "imported-day", "daily", "clones"
+	r.TS, r.Provenance = "2026-09-15T01:00:00+02:00", "github_traffic"
+	if _, err := Import(ctx, s, c, strings.NewReader(ndjson(t, r))); err != nil {
+		t.Fatal(err)
+	}
+	r.ID, r.TS = "", "2026-09-14T23:59:59.999Z"
+	for i, value := range []*float64{Value(12), nil, nil, Value(0), Value(12)} {
+		r.Value = value
+		r.ObservedAt = fmt.Sprintf("2026-09-15T%02d:00:00Z", i+2)
+		n, err := Write(ctx, s, []Row{r})
+		want := 1
+		if i == 0 || i == 2 {
+			want = 0
+		}
+		if err != nil || n != want {
+			t.Fatalf("daily revision %d = %d, %v; want %d", i, n, err, want)
+		}
+	}
+}
+
+func TestConfigRejectsContentBeyondSizeLimit(t *testing.T) {
+	c := testConfig(t)
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	data = append(data, []byte(strings.Repeat(" ", 1024*1024)+`{"ignored":true}`)...)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadConfig(path); err == nil {
+		t.Fatal("oversized config with trailing JSON was accepted")
+	}
+}
