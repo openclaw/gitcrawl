@@ -65,6 +65,9 @@ The view auto-refreshes from the local store every 15 seconds. There is no GitHu
 
 The action menu opened with `a` mirrors the right-click menu, so every mouse action has a keyboard equivalent.
 
+Neighbor loading can use the saved embedding of a selected closed thread as
+well as an open thread. Results contain open, locally active neighbors.
+
 Jump input accepts the same thread references as the CLI: bare numbers, `#123`,
 `issues/123`, `pull/123`, `owner/repo#123`, and full GitHub issue or pull
 request URLs.

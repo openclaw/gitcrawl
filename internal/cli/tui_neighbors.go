@@ -104,13 +104,14 @@ func loadThreadNeighbors(ctx context.Context, st *store.Store, repoID int64, pay
 		threshold = 0.2
 	}
 	targetThread, targetVector, err := st.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{
-		RepoID: repoID,
-		Model:  payload.EmbedModel,
-		Basis:  payload.EmbeddingBasis,
+		RepoID:        repoID,
+		Model:         payload.EmbedModel,
+		Basis:         payload.EmbeddingBasis,
+		IncludeClosed: true,
 	}, number)
 	if err != nil {
 		var fallbackErr error
-		targetThread, targetVector, fallbackErr = st.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{RepoID: repoID}, number)
+		targetThread, targetVector, fallbackErr = st.ThreadVectorByNumber(ctx, store.ThreadVectorQuery{RepoID: repoID, IncludeClosed: true}, number)
 		if fallbackErr != nil {
 			return 0, 0, nil, err
 		}

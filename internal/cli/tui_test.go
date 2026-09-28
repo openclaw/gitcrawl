@@ -2712,6 +2712,49 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 	}
 }
 
+func TestTUILoadNeighborsForClosedSelection(t *testing.T) {
+	for _, modelName := range []string{"test", "missing-configured-model"} {
+		t.Run(modelName, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			repoID, err := st.UpsertRepository(ctx, store.Repository{Owner: "fixture", Name: "repo", FullName: "fixture/repo", RawJSON: "{}"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			targetID, err := seedTUIThreadVector(ctx, st, repoID, 1, "Closed target", []float64{1, 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			neighborID, err := seedTUIThreadVector(ctx, st, repoID, 2, "Open neighbor", []float64{0.9, 0.1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.DB().ExecContext(ctx, `update threads set state = 'closed' where id = ?`, targetID); err != nil {
+				t.Fatal(err)
+			}
+			model := newClusterBrowserModel(ctx, st, repoID, clusterBrowserPayload{Repository: "fixture/repo", EmbedModel: modelName, EmbeddingBasis: "title_original"})
+			model.memberIndex = 0
+			model.memberRows = []memberRow{{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{
+				ID: targetID, Number: 1, State: "closed", HTMLURL: "https://github.com/fixture/repo/issues/1",
+			}}}}
+			cmd := model.requestSelectedThreadNeighbors(10, 0.2)
+			if cmd == nil {
+				t.Fatal("neighbor command missing")
+			}
+			updated, _ := model.Update(cmd())
+			model = updated.(clusterBrowserModel)
+			neighbors := model.neighborCache[targetID]
+			if len(neighbors) != 1 || neighbors[0].Thread.ID != neighborID {
+				t.Fatalf("neighbors=%+v status=%q; want open neighbor %d", neighbors, model.status, neighborID)
+			}
+		})
+	}
+}
+
 func TestTUILoadNeighborsUsesConfiguredBackend(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
