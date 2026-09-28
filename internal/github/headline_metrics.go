@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -53,11 +54,17 @@ func (c *Client) OpenPullCount(ctx context.Context, repository string) (PullCoun
 func (c *Client) CloneTraffic(ctx context.Context, repository string) (CloneTraffic, error) {
 	var out CloneTraffic
 	err := c.doJSON(ctx, http.MethodGet, "/repos/"+repository+"/traffic/clones?per=day", nil, nil, &out)
+	if err == nil && out.Clones == nil {
+		err = errors.New("missing GitHub clone traffic list")
+	}
 	return out, err
 }
 
 func (c *Client) ReleasePage(ctx context.Context, repository string, page int) ([]Release, error) {
 	var out []Release
 	err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/releases?per_page=100&page=%d", repository, page), nil, nil, &out)
+	if err == nil && out == nil {
+		err = errors.New("missing GitHub release list")
+	}
 	return out, err
 }

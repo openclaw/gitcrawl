@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,6 +139,9 @@ func TestOptionalCloneTrafficAndOtherPartialFailures(t *testing.T) {
 		{"missing clone count", func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/traffic/clones") }, `{"clones":[{"timestamp":"2026-09-14T00:00:00Z"}]}`, "clones"},
 		{"invalid stable release", func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/releases") }, `[{"id":9,"published_at":"bad","name":"v1"}]`, ""},
 		{"malformed releases", func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/releases") }, `{`, ""},
+		{"null releases", func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/releases") }, `null`, ""},
+		{"missing traffic", func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/traffic/clones") }, `{}`, ""},
+		{"null traffic", func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/traffic/clones") }, `{"clones":null}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -210,5 +214,97 @@ func TestReleasePaginationBeyondFivePagesAndNoUnauthenticatedTraffic(t *testing.
 	cancel()
 	if _, err := collect(ctx, c, "2026-09-15T01:00:00Z"); err == nil {
 		t.Fatal("cancellation accepted")
+	}
+}
+
+func TestQuotaFailureStopsCollectionAndRetainsCompletedReads(t *testing.T) {
+	for _, endpoint := range []string{"/repos/openclaw/openclaw", "/search/issues", "/repos/openclaw/openclaw/traffic/clones", "/repos/openclaw/openclaw/releases"} {
+		t.Run(endpoint, func(t *testing.T) {
+			limited := false
+			requestsAfter := 0
+			collect := fixtureCollector(t, func(w http.ResponseWriter, r *http.Request) bool {
+				if limited {
+					requestsAfter++
+				}
+				if r.URL.Path == endpoint {
+					limited = true
+					w.Header().Set("X-RateLimit-Remaining", "0")
+					w.WriteHeader(http.StatusForbidden)
+					return true
+				}
+				return false
+			}, true)
+			c := testConfig(t)
+			result, err := Execute(context.Background(), "collect", c, func(ctx context.Context, cfg Config, _ string) ([]Row, error) {
+				return collect(ctx, cfg, "2026-09-15T01:00:00Z")
+			}, nil)
+			if err == nil || result.OK || requestsAfter != 0 {
+				t.Fatalf("quota stop = %+v, %v; extra requests = %d", result, err, requestsAfter)
+			}
+			want := 5
+			if endpoint == "/repos/openclaw/openclaw" {
+				want = 0
+			} else if strings.HasSuffix(endpoint, "/releases") {
+				want = 6
+			}
+			if result.RowsWritten != want {
+				t.Fatalf("retained %d rows; want %d", result.RowsWritten, want)
+			}
+		})
+	}
+}
+
+type metricsRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f metricsRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type cancelMetricsBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancelMetricsBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
+func TestCancellationRetainsTheResponseJustRead(t *testing.T) {
+	for _, endpoint := range []string{"/repos/openclaw/openclaw", "/repos/openclaw/openclaw/traffic/clones", "/repos/openclaw/openclaw/releases"} {
+		t.Run(endpoint, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client := github.New(github.Options{BaseURL: "https://example.test", HTTPClient: &http.Client{Transport: metricsRoundTripper(func(r *http.Request) (*http.Response, error) {
+				if err := r.Context().Err(); err != nil {
+					return nil, err
+				}
+				payload := `{"stargazers_count":4,"forks_count":0,"subscribers_count":2,"open_issues_count":1}`
+				switch r.URL.Path {
+				case "/search/issues":
+					payload = `{"total_count":0}`
+				case "/repos/openclaw/openclaw/traffic/clones":
+					payload = `{"clones":[{"timestamp":"2026-09-14T00:00:00Z","count":3}]}`
+				case "/repos/openclaw/openclaw/releases":
+					payload = `[{"id":1,"published_at":"2026-09-14T00:00:00Z","tag_name":"v1"}]`
+				}
+				var body io.ReadCloser = io.NopCloser(strings.NewReader(payload))
+				if r.URL.Path == endpoint {
+					body = cancelMetricsBody{body, cancel}
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: body, Request: r}, nil
+			})}})
+			c := testConfig(t)
+			c.Targets = c.Targets[:1]
+			rows, err := GitHubCollector(client, true)(ctx, c, "2026-09-15T01:00:00Z")
+			want := 5
+			if strings.HasSuffix(endpoint, "/clones") {
+				want = 6
+			} else if strings.HasSuffix(endpoint, "/releases") {
+				want = 7
+			}
+			if err == nil || len(rows) != want || rows[0].Value == nil || *rows[0].Value != 4 {
+				t.Fatalf("completed reads = %+v, %v; want %d rows", rows, err, want)
+			}
+		})
 	}
 }

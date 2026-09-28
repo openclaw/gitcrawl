@@ -67,8 +67,16 @@ func (a *App) runMetrics(ctx context.Context, args []string) error {
 	result, err := headlinemetrics.Execute(ctx, command, c, collect, in)
 	// Partial collection is still a useful structured result; diagnostics stay
 	// on stderr and a nonzero exit communicates unavailable required metrics.
-	if err == nil || result.RowsWritten > 0 {
-		if writeErr := a.writeOutput("metrics "+command, result, false); writeErr != nil {
+	if err == nil || errors.Is(err, headlinemetrics.ErrPartialCollection) {
+		var output any = result
+		if command == "status" {
+			output = struct {
+				headlinemetrics.Result
+				Observations int `json:"observations"`
+				Events       int `json:"events"`
+			}{result, result.Observations, result.Events}
+		}
+		if writeErr := a.writeOutput("metrics "+command, output, false); writeErr != nil {
 			return writeErr
 		}
 	}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/github"
@@ -24,7 +26,13 @@ func GitHubCollector(client *github.Client, trafficEnabled bool) Collector {
 		rows := []Row{}
 		failed := false
 		for _, t := range c.Targets {
+			if err := ctx.Err(); err != nil {
+				return rows, err
+			}
 			repo, err := client.RepositoryHeadline(ctx, t.Target)
+			if stopCollection(ctx, err) {
+				return rows, errors.Join(err, ctx.Err())
+			}
 			if err != nil {
 				failed = true
 				repo = github.RepositoryHeadline{}
@@ -50,8 +58,14 @@ func GitHubCollector(client *github.Client, trafficEnabled bool) Collector {
 				}
 				rows = append(rows, Counter(t, m.Name, value, ts, "github_rest"))
 			}
+			if stopCollection(ctx, err) {
+				return rows, errors.Join(err, ctx.Err())
+			}
 			if trafficEnabled {
 				traffic, err := client.CloneTraffic(ctx, t.Target)
+				if stopCollection(ctx, err) {
+					return rows, errors.Join(err, ctx.Err())
+				}
 				var requestErr *github.RequestError
 				optional := errors.As(err, &requestErr) && (requestErr.Status == 403 || requestErr.Status == 404)
 				if err != nil && !optional {
@@ -82,6 +96,9 @@ func GitHubCollector(client *github.Client, trafficEnabled bool) Collector {
 			// Follow all release pages. Do not silently truncate stable release history.
 			for page := 1; ; page++ {
 				releases, err := client.ReleasePage(ctx, t.Target, page)
+				if stopCollection(ctx, err) {
+					return rows, errors.Join(err, ctx.Err())
+				}
 				if err != nil {
 					failed = true
 					break
@@ -110,6 +127,9 @@ func GitHubCollector(client *github.Client, trafficEnabled bool) Collector {
 				}
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return rows, err
+		}
 		if failed {
 			return rows, errors.New("one or more GitHub metrics unavailable")
 		}
@@ -122,4 +142,30 @@ func validCount(value *float64) *float64 {
 		return nil
 	}
 	return Value(*value)
+}
+
+// Permission-denied traffic is optional; exhausted quota and cancellation stop
+// all acquisition after the shared HTTP client's bounded retry.
+func stopCollection(ctx context.Context, err error) bool {
+	// Retain a successfully decoded response even if cancellation arrived as
+	// it finished; the next request uses the canceled context.
+	if err == nil {
+		return false
+	}
+	if ctx.Err() != nil {
+		return true
+	}
+	var reserve *github.RateLimitReserveError
+	if errors.As(err, &reserve) {
+		return true
+	}
+	var response *github.RequestError
+	if !errors.As(err, &response) {
+		return false
+	}
+	return response.Status == http.StatusTooManyRequests ||
+		(response.Status == http.StatusForbidden &&
+			(response.Headers.Get("X-RateLimit-Remaining") == "0" ||
+				response.Headers.Get("Retry-After") != "" ||
+				strings.Contains(strings.ToLower(response.Body), "rate limit")))
 }

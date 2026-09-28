@@ -33,7 +33,7 @@ gitcrawl metrics status --config /private/metrics/github.json --json
 gitcrawl help metrics
 ```
 
-The config is independent of `config.toml` and `GITCRAWL_DB`. For these commands,
+The config is independent of `config.toml`, `GITCRAWL_CONFIG`, and `GITCRAWL_DB_PATH`. For these commands,
 `--config` selects the metrics JSON file; it can appear before `metrics` or after
 the subcommand. Global output flags and command-local `--json` work normally.
 
@@ -224,23 +224,39 @@ become zero. If the PR count is unavailable or exceeds the combined count,
 `open_issues` remains unknown. Real zeroes and decreases are retained. Individual
 fork creation events are not crawled.
 
-Clone traffic requires suitable repository access. HTTP 403/404 means optional
-unavailability and does not fail otherwise healthy collection. Only completed UTC
+Clone traffic requires repository push access (or a fine-grained token with repository
+administration read permission). Permission-denied HTTP 403/404 means optional
+unavailability and does not fail otherwise healthy collection. A rate-limit
+response is a collection failure, including on the traffic endpoint. Only completed UTC
 days are recorded: `ts` is that day's final millisecond and `observed_at` is the
 actual read time. Unchanged daily values are not re-appended; corrected values
-receive a new sequence. Sum only the latest observation for each day, never all
+receive a new sequence. Imported daily timestamps retain their original spelling;
+group them by UTC day. Sum only the latest observation for each day, never all
 revisions. GitHub's traffic window limits how far a missed day can be backfilled.
 
 Stable releases exclude drafts and prereleases. All release pages are read;
 events use stable GitHub release IDs so repeated collection is idempotent.
 `published_at` is preferred, with `created_at` as the fallback for older records.
 
+Each target costs one repository request, one search request for the open-PR
+count, optionally one traffic request, and one request per 100-release page
+(including a final empty page when the total is a multiple of 100). Every
+collection rereads the release history. Search has its own GitHub quota; there
+is no metrics-specific quota reserve or incremental release checkpoint. The
+shared client retries a rate-limited request once with a wait capped at five
+minutes. An exhausted rate limit stops collection, retaining completed reads and
+leaving later targets unattempted. Choose the schedule and target count accordingly.
+
 ## Storage, imports, and failures
 
 New database files are private (`0600`). Existing files must identify themselves
 with `metric_meta.owner = gitcrawl` and `metric_meta.version = 1`. Databases with
-foreign tables, another owner/version, database symlinks, and pre-existing empty
-files are rejected before a writable open. `status` checks identity read-only and
+foreign tables, another owner/version, database symlinks or hard-link aliases, and
+pre-existing empty files are rejected before a writable open. Existing databases
+are inspected read-only for this check; no archive runtime or config is loaded.
+A failed first initialization removes only the newly created file so it can be
+retried; pre-existing files are never removed. A process killed during that first
+initialization can still leave an unowned file requiring operator inspection. `status` checks identity read-only and
 does not create a missing database. Never point this config at the thread archive.
 
 The delivery tables are:
@@ -250,6 +266,10 @@ The delivery tables are:
 - `metric_events(sequence, id, entity, target, kind, ts, label, url, observed_at,
   provenance)` — release history.
 - `metric_runs(sequence, ts, status, rows_written)` — completed collection attempts.
+
+`status` reports total observations and events. Its `last_observed` is the latest
+observation instant, comparing parsed timestamps even when imported offsets or
+fractional precision differ; it is absent until an observation exists.
 
 Observation and event sequences advance independently. Read each table using its
 own delivery cursor. Daily revisions supersede by latest sequence. Counter values
@@ -264,7 +284,7 @@ Import accepts one JSON object per line on stdin:
 
 IDs are required and idempotent within each destination table. Imported explicit
 IDs preserve distinct observations even when values match. `entity` and `target`
-must match a configured pair. Import validates every row and commits the whole
+must match a configured pair. Config files are limited to 1 MiB. Import validates every row and commits the whole
 input atomically; a malformed or out-of-scope late row rolls everything back.
 Daily imports must identify a day completed before `observed_at`'s UTC day.
 

@@ -77,7 +77,7 @@ func TestMetricsImportStatusNativeJSONAndArchiveIsolation(t *testing.T) {
 	if err := os.WriteFile(archive, []byte("untouched archive"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GITCRAWL_DB", archive)
+	t.Setenv("GITCRAWL_DB_PATH", archive)
 	t.Setenv("GITCRAWL_CONFIG", filepath.Join(t.TempDir(), "does-not-exist.toml"))
 	row := `{"type":"metric","id":"history:1","entity":"OpenClaw","target":"openclaw/openclaw","metric":"watchers","kind":"counter","ts":"2026-09-14T00:00:00Z","value":null,"observed_at":"2026-09-15T00:00:00Z","provenance":"claw-track"}`
 	for i, args := range [][]string{{"--json", "metrics", "import", "--config", path}, {"metrics", "import", "--config", path, "--json"}} {
@@ -119,7 +119,7 @@ func TestMetricsImportStatusNativeJSONAndArchiveIsolation(t *testing.T) {
 }
 
 func TestMetricsCollectUsesNativeCredentialsAndKeepsPartialOutput(t *testing.T) {
-	for _, mode := range []string{"environment", "gh-fallback", "managed", "partial"} {
+	for _, mode := range []string{"environment", "gh-fallback", "managed", "partial", "quota"} {
 		t.Run(mode, func(t *testing.T) {
 			if mode == "managed" && runtime.GOOS == "windows" {
 				t.Skip("managed helper is Unix-only")
@@ -133,7 +133,7 @@ func TestMetricsCollectUsesNativeCredentialsAndKeepsPartialOutput(t *testing.T) 
 			t.Setenv("GITHUB_TOKEN", "ambient-must-not-win")
 			t.Setenv(c.TokenEnv, "")
 			token := "fixture-token"
-			if mode == "environment" || mode == "partial" {
+			if mode == "environment" || mode == "partial" || mode == "quota" {
 				t.Setenv(c.TokenEnv, token)
 			}
 			requests := 0
@@ -144,6 +144,10 @@ func TestMetricsCollectUsesNativeCredentialsAndKeepsPartialOutput(t *testing.T) 
 				}
 				switch r.URL.Path {
 				case "/repos/openclaw/openclaw":
+					if mode == "quota" {
+						w.WriteHeader(http.StatusTooManyRequests)
+						return
+					}
 					fmt.Fprint(w, `{"stargazers_count":4,"forks_count":2,"subscribers_count":1,"open_issues_count":8}`)
 				case "/search/issues":
 					if mode == "partial" {
@@ -176,19 +180,45 @@ func TestMetricsCollectUsesNativeCredentialsAndKeepsPartialOutput(t *testing.T) 
 				args = append([]string{"--github-token-command", helper}, args...)
 			}
 			err := app.Run(context.Background(), args)
-			if (err != nil) != (mode == "partial") {
+			if (err != nil) != (mode == "partial" || mode == "quota") {
 				t.Fatalf("error=%v", err)
 			}
 			var result headlinemetrics.Result
 			if e := json.Unmarshal(out.Bytes(), &result); e != nil {
 				t.Fatal(e)
 			}
-			if result.RowsWritten != 5 || result.OK == (mode == "partial") || requests != 4 {
+			wantRows, wantRequests := 5, 4
+			if mode == "quota" {
+				wantRows, wantRequests = 0, 1
+			}
+			if result.RowsWritten != wantRows || result.OK == (mode == "partial" || mode == "quota") || requests != wantRequests {
 				t.Fatalf("result=%+v requests=%d", result, requests)
 			}
 			if strings.Contains(out.String(), token) {
 				t.Fatal("token printed")
 			}
 		})
+	}
+}
+
+func TestMetricsEmptyStatusReportsZeroTotals(t *testing.T) {
+	path, _ := metricsConfigFixture(t)
+	app, _ := metricsApp(t)
+	app.Stdin = strings.NewReader("")
+	if err := app.Run(context.Background(), []string{"metrics", "import", "--config", path, "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	app, out := metricsApp(t)
+	if err := app.Run(context.Background(), []string{"metrics", "status", "--config", path, "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"observations", "events"} {
+		if value, present := result[key]; !present || value != float64(0) {
+			t.Fatalf("status must report %s=0: %s", key, out)
+		}
 	}
 }
