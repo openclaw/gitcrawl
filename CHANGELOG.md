@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.13.0 - 2026-09-28
 
 **Highlights:** New `gitcrawl metrics` commands for repository headline history, and much faster clustering and exact neighbors.
