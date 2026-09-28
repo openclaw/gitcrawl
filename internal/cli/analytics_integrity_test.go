@@ -150,6 +150,11 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 				t.Fatal("poison item hidden by complete=true")
 			}
 			if !brokenDiscovery {
+				// Keep the retry in backoff independently of fixture runtime. A
+				// loaded host may take longer than the normal 30-second delay.
+				if _, err = s.DB().Exec("UPDATE analytics_retries SET next_attempt_at='2099-01-01T00:00:00Z' WHERE number=1 AND operation='graphql_history'"); err != nil {
+					t.Fatal(err)
+				}
 				var before, after int
 				s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=1 AND operation='graphql_history'").Scan(&before)
 				if err = a.analyticsCycle(ctx, s, client, "fixture", "repo"); !errors.Is(err, errAnalyticsIncomplete) {
