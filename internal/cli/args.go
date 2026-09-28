@@ -5,6 +5,11 @@ func normalizeCommandArgs(args []string, stringFlags map[string]bool) []string {
 	var positionals []string
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
+		if arg == "--" {
+			flags = append(flags, "--")
+			positionals = append(positionals, args[index+1:]...)
+			break
+		}
 		name, ok := flagName(arg)
 		if !ok {
 			positionals = append(positionals, arg)

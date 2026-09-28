@@ -42,6 +42,32 @@ func TestParseGHSearchDuration(t *testing.T) {
 	}
 }
 
+func TestGHSearchLiteralFlagQuery(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	seedPortableThread(t, dbPath, 42, "Broken --verbose flag")
+	seedPortableThread(t, dbPath, 43, "Unrelated issue")
+	app := New()
+	var stdout, stderr bytes.Buffer
+	app.Stdout, app.Stderr = &stdout, &stderr
+	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := app.Run(ctx, []string{"--config", configPath, "search", "issues", "-R", "openclaw/openclaw", "--json", "number", "--", "--verbose"}); err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct{ Number int }
+	if err := json.Unmarshal(stdout.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Number != 42 {
+		t.Fatalf("search returned %s; want only issue #42", stdout.String())
+	}
+}
+
 func TestGHSearchCacheStaleUsesRepoSyncRuns(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

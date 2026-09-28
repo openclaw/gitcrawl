@@ -71,6 +71,9 @@ gitcrawl search prs "manifest cache" \
   --limit 20
 ```
 
+Put `--` before query terms that begin with a dash, with options before it:
+`gitcrawl search issues -R owner/repo --json number,title -- --verbose`.
+
 Recognized flags in this mode:
 
 | Flag | Description |
