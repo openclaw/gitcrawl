@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Prepare vectors once for 2.6× faster cluster scoring and 2.0× faster exact neighbors; enable `GOEXPERIMENT=simd` in release builds for a further 2.6×/1.7× on Apple M3 Ultra (1,024 dimensions).
+- Disable automatic Git maintenance during portable-refresh fixture setup so temporary repositories do not launch detached cleanup work.
+
+## 0.12.0 - 2026-09-24
+
+**Highlights:** Batched GraphQL conversation history, including standalone inline review comments.
+
+- Add opt-in `sync --graphql-history` for batched issue and PR conversations with complete nested pagination, standalone review-thread comments, exact provider IDs, bounded retries, and GraphQL point receipts. Thanks @hannesrudolph.
+
+## 0.11.0 - 2026-09-22
+
+**Highlights:** Lower-disk portable exports, preserved body-length metadata, and fewer redundant GitHub comment downloads.
+
+- Add `portable export --consume-source` for exclusively owned, backed-up databases on the same filesystem, avoiding the initial full-size copy while preserving validation and atomic publication. Thanks @obviyus.
+- Preserve original thread and comment body lengths when exporting an already pruned portable archive again. Thanks @obviyus.
 - Reject mismatched repositories in pasted thread references before reads, syncs, enrichment, local overrides, or TUI jumps, and reject empty selections or list entries that could turn a targeted sync into an unrestricted one.
 - Skip unchanged issue-comment downloads on issues and PRs using parent timestamps, comment counts, and completed saved observations; keep PR review and detail data live, and add `sync`/`refresh --force` for a full selected refresh. Thanks @vlsi for the report.
 - Order captured comments chronologically when source timestamps have different fractional-second precision, preserving deterministic ties by kind and stable ID.

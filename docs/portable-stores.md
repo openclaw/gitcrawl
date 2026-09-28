@@ -299,7 +299,7 @@ After pruning, commit and push both the database and its `.manifest.json` from t
 ## Derived generations: `gitcrawl portable export`
 
 `portable export` creates a new, validated database-and-manifest generation from
-the configured active database without changing that database. It is generic
+the configured active database, preserving the source by default. It is generic
 artifact production: Gitcrawl owns the consistent SQLite snapshot, semantic
 shaping, validation, size budget, digest, and manifest. Promotion into a
 repository, replacement of an older generation, Git commits, and publication
@@ -312,6 +312,20 @@ The private working copy disables journaling, synchronous writes, and secure
 deletion because it is never exposed and is deleted on any error. Privacy and
 durability come from the separate compact generation, full validation, hashing,
 fsync, and atomic directory commit.
+
+For a disposable batch-job database with a verified external recovery copy,
+`--consume-source` moves the source into export staging instead of creating the
+initial full-size copy. Close all database users, checkpoint SQLite, and set
+`PRAGMA journal_mode=DELETE` before saving and verifying the recovery copy.
+The source must be a regular file with one hard link, no SQLite sidecars, and
+on the same filesystem as the output. An exclusive SQLite lock rejects active
+readers and writers. This mode is supported on Unix systems.
+
+Once the source moves, its original path is gone. Export errors discard the
+consumed staging file; recover from the verified backup. Do not save the pruned
+file over the full-runtime backup. All shaping, privacy checks, compaction,
+validation, and artifact publication remain the same as ordinary export.
+Compaction still needs space for the reduced database and compressed artifact.
 
 ```bash
 gitcrawl --config /path/to/config.toml portable export \
@@ -448,6 +462,7 @@ the private staging directory.
 | `--repository <owner/repo>` | _(unset)_ | Semantically restrict the artifact to exactly one repository |
 | `--body-chars <n>` | `256` | Maximum body characters retained in compact excerpts |
 | `--max-bytes <n>` | _(unset)_ | Inclusive maximum finalized database size |
+| `--consume-source` | _(off)_ | Move an exclusively owned, backed-up source into staging; errors after handoff discard it |
 | `--json` | _(off)_ | Stable structured result, including local source and output paths |
 
 ## A typical publishing flow

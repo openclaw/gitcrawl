@@ -11,6 +11,7 @@ builds:
     binary: gitcrawl
     env:
       - CGO_ENABLED=0
+      - GOEXPERIMENT=simd
     ldflags:
       - -s -w -X github.com/openclaw/gitcrawl/internal/cli.version={{ .Version }}
     targets:
@@ -23,6 +24,7 @@ builds:
     binary: gitcrawl
     env:
       - CGO_ENABLED=0
+      - GOEXPERIMENT=simd
     ldflags:
       - -s -w -X github.com/openclaw/gitcrawl/internal/cli.version={{ .Version }}
     targets:

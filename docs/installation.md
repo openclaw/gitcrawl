@@ -20,7 +20,7 @@ permalink: /installation/
 
 gitcrawl runs on macOS 13 Ventura or newer and Linux. Windows is not actively tested.
 
-CrawlKit v0.16.1 requires Go 1.27, so source and Docker builds use Go 1.27.1
+CrawlKit v0.16.5 requires Go 1.27, so source and Docker builds use Go 1.27.1
 or newer. Go 1.27 also raises the minimum macOS version for newly built binaries
 to macOS 13; the previous Go 1.26 build baseline no longer applies.
 
@@ -80,6 +80,12 @@ For a metrics-only source deployment alongside an existing portable subscriber,
 use an [isolated versioned metrics runtime](/metrics/#isolated-source-built-installation)
 and verify it with `metrics status` and its separate config. Keep the subscriber's
 binary selection and refresh job unchanged.
+
+Source builds use scalar vector scoring by default. Set `GOEXPERIMENT=simd` on
+`go build` to enable Go 1.27's experimental portable SIMD kernels for clustering
+and exact neighbors. The API may change in Go 1.28; unsupported hardware and
+`GODEBUG=simd=0` use the scalar kernels. Release archives and Docker builds enable
+this SIMD path.
 
 ## GitHub CLI shim migration
 

@@ -84,6 +84,80 @@ The same rule applies to `threads --numbers` and to `embed` or `summarize
 
 ## Hydration depth
 
+### Batched GraphQL history
+
+```bash
+gitcrawl sync owner/repo --numbers 123,456 --state all --include-comments --with pr-metadata --graphql-history
+```
+
+This opt-in profile fetches exact selections in GraphQL batches of at most 25
+parents. It fully paginates labels, assignees, discussion comments, reviews,
+review threads and both sources' nested inline comments. Review threads include
+standalone comments with no review association; comments found through both
+paths are deduplicated by provider identity while review bodies and metadata
+remain separate. It then uses the existing per-thread transactions,
+observation ordering, failure resolution and document persistence. It performs
+no REST requests or fallback. The regular sync path is unchanged.
+
+The profile requires the flags above; it rejects `--since`, `--limit` and full
+PR-detail hydration. It does not collect files, commit bodies, checks or Actions
+logs. An incomplete GraphQL response, unavailable parent, missing identity,
+duplicate child within a connection, mismatched count or nonadvancing cursor
+fails the batch before archive writes.
+Supervisors should retry failed selections in isolation. Empty reviews remain
+retained, including approvals without bodies. Minimized comments and null
+(deleted) authors are retained as returned by GitHub; deleted comments that
+GitHub no longer returns cannot be reconstructed. The ordinary empty-comment
+filtering contract is unchanged.
+
+Stored raw maps are explicitly labelled projections: `_gitcrawl_source` is
+`graphql`, and `_graphql` retains the hydrated provider object. Existing thread
+database IDs and legacy `github_id` values are preserved. New threads use the
+opaque GraphQL node ID because a PR's GraphQL database ID is different from its
+REST issue ID. Comments/reviews use exact `fullDatabaseId` strings; PR metadata
+uses its PR database ID. Bot logins receive REST-compatible `[bot]` suffixes in
+normalized fields while raw actor names remain intact. GraphQL review creation,
+update and submission timestamps are retained.
+
+GitHub sometimes names the same bot differently between transports: Copilot
+inline comments can use `Copilot` in REST and `copilot-pull-request-reviewer`
+in GraphQL. This profile keeps the latter as `copilot-pull-request-reviewer[bot]`,
+consistent with its review bodies, and preserves the original provider actor.
+
+Provider differences remain visible: for example GraphQL can return a null head
+repository when REST previously named one. No missing value is invented from
+that earlier observation. Keep a consistent archive backup when migrating
+transports; this mode does not claim every REST-only field is available through
+GraphQL or reconstruct uncaptured historical edits.
+
+Each command probes GraphQL's own quota and preserves a 500-point floor.
+Sanitized `graphql budget` and `graphql cost` log records expose request sequence,
+conservative unanswered-request charge and actual response cost. External
+multi-process supervisors must additionally preserve a shared point budget
+across token renewals and restarts. REST request counts are not GraphQL costs.
+`graphql timing <sequence> <milliseconds>` records elapsed time for each history
+request, including failed requests. Supervisors can use the sum across parallel
+workers to pace work against GitHub's separate compute-time secondary limit.
+Response time is an estimate, not a measurement of GitHub CPU usage; explicit
+provider cooldowns always take precedence. Internal retry waits are included in
+the timing, so consumers should avoid adding another pacing delay after a known
+provider cooldown.
+
+History reads retry transient HTTP 500/502/503/504 responses, transport timeouts
+and truncated/empty response bodies up to two times in place. The same query and
+variables are retained, so a gateway failure does not immediately discard a
+whole selection and force individual-record retries. Delays are one and two
+seconds; an explicit longer `Retry-After` takes precedence, and cancellation
+stops the wait. Authentication, permission, missing-record and GraphQL semantic
+errors do not get this additional retry policy. Existing rate-limit handling is
+unchanged. Exhausted retries still fail acquisition and leave normal isolated
+recovery available to the supervisor.
+
+Each transient attempt has a separate budget/timing identity. Unanswered attempts
+retain their conservative charge even if a later quota receipt looks higher.
+Transient backoff occurs outside the per-attempt timing; the underlying HTTP
+client's rate-limit retry wait can still be included as described above.
+
 | Flag | What it adds |
 | --- | --- |
 | `--include-comments` | Issue comments, PR review comments, reviews |

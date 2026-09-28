@@ -25,6 +25,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	numbersRaw := fs.String("numbers", "", "comma-separated issue or pull request numbers")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
+	graphqlHistory := fs.Bool("graphql-history", false, "batch exact conversation and PR metadata collection through GraphQL")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	force := fs.Bool("force", false, "download selected data even when issue comments are unchanged")
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, and workflow runs")
@@ -71,6 +72,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	}
 
 	stats, target, err := a.syncRepository(ctx, owner, repo, syncOptions{
+		GraphQLHistory:    *graphqlHistory,
 		Since:             strings.TrimSpace(*since),
 		State:             strings.TrimSpace(*state),
 		Limit:             limit,
@@ -97,6 +99,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 }
 
 type syncOptions struct {
+	GraphQLHistory    bool
 	Since             string
 	State             string
 	Limit             int
@@ -428,6 +431,7 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	})
 	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
+		GraphQLHistory:    options.GraphQLHistory,
 		Owner:             owner,
 		Repo:              repo,
 		State:             strings.TrimSpace(options.State),
