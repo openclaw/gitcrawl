@@ -643,8 +643,11 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		probe, _ := ctx.Value(graphQLQuotaProbeKey{}).(bool)
 		if probe {
 			c.reserve.bindGraphQLToken(token)
-		} else if err := c.reserve.beforeObservedGraphQL(token, cost); err != nil {
-			return nil, err
+		} else {
+			estimate, _ := ctx.Value(graphQLRequestEstimateKey{}).(int)
+			if err := c.reserve.beforeObservedGraphQL(token, max(cost, estimate)); err != nil {
+				return nil, err
+			}
 		}
 	} else if err := c.reserve.beforeRequest(resource, cost); err != nil {
 		var expired *rateLimitStatusExpiredError
