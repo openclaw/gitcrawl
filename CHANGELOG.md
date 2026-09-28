@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - 2026-09-28
 
+**Highlights:** New `gitcrawl metrics` commands for repository headline history, and much faster clustering and exact neighbors.
+
+- Add `gitcrawl metrics collect|import|status --config metrics.json` to keep stars, forks, subscribers, open issue/PR counts, completed-day clones, and stable releases in a separate private SQLite store, with atomic imports, preserved unknown values, daily corrections, partial-result reporting when quota runs out, and JSON output. Thanks @hannesrudolph.
 - Prepare vectors once for 2.6× faster cluster scoring and 2.0× faster exact neighbors; enable `GOEXPERIMENT=simd` in release builds for a further 2.6×/1.7× on Apple M3 Ultra (1,024 dimensions).
+- Reject GraphQL history pages whose continuation reports a different total count, so a comment deleted mid-pagination can no longer leave a stale conversation marked complete.
+- Keep arguments after `--` literal (for example `gitcrawl search -- --flag-like-text`) instead of treating them as options.
+- Load TUI neighbors for a selected closed thread that has a stored embedding instead of reporting it missing.
 - Disable automatic Git maintenance during portable-refresh fixture setup so temporary repositories do not launch detached cleanup work.
 
 ## 0.12.0 - 2026-09-24
