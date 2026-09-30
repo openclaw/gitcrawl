@@ -400,6 +400,9 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 			return command(ctx)
 		}
 	}
+	if a.analyticsTokenProvider != nil {
+		provider = a.analyticsTokenProvider
+	}
 	if provider == nil && token.Value == "" {
 		return syncer.Stats{}, dbTargetInfo{}, fmt.Errorf("missing GitHub token: set %s or authenticate gh", cfg.GitHub.TokenEnv)
 	}

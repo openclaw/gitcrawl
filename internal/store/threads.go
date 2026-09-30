@@ -254,6 +254,9 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 	if err != nil {
 		return UpsertThreadResult{}, fmt.Errorf("upsert thread: %w", err)
 	}
+	if err := s.queueAnalyticsActor(ctx, thread.RawJSON); err != nil {
+		return UpsertThreadResult{}, err
+	}
 	if s.portableThreadBodyMetadata {
 		if _, err := s.q().ExecContext(ctx, `
 			update threads

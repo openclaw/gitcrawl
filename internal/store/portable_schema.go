@@ -79,7 +79,7 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, options Portable
 	}
 	capabilities := "body_excerpts,comment_excerpts,author_association,thread_revisions,thread_fingerprints,thread_key_summaries,pr_details,pr_files,pr_commits,pr_checks,pr_review_threads,workflow_runs,family_tombstones,comment_revisions,pr_review_thread_revisions,raw_json_stripped"
 	includes := "repositories,threads,comments,comment_revisions,thread_revisions,thread_fingerprints,thread_key_summaries,pull_request_details,pull_request_files,pull_request_commits,pull_request_checks,pull_request_review_threads,pull_request_review_thread_revisions,pull_request_review_thread_syncs,github_workflow_runs"
-	excluded := "raw_json,pull_request_file_patches,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs,sync_attempt_failures"
+	excluded := "analytics,actor_evidence,raw_json,pull_request_file_patches,documents,fts,vectors,code_snapshots,code_documents,cluster_events,run_history,similarity_edges,blobs,sync_attempt_failures"
 	if stats.SyncFailuresIncluded {
 		capabilities += ",sync_failure_ledger_redacted"
 		includes += ",sync_attempt_failures"
@@ -422,7 +422,7 @@ func (s *Store) sanitizePortableRepositoryCompatibilityColumn(ctx context.Contex
 }
 
 func canonicalPortableDroppedTables() []string {
-	return []string{
+	return append([]string{
 		"code_documents_fts",
 		"code_documents_fts_config",
 		"code_documents_fts_data",
@@ -452,11 +452,11 @@ func canonicalPortableDroppedTables() []string {
 		"similarity_edges",
 		"blobs",
 		"sync_attempt_failures",
-	}
+	}, portableAnalyticsTables()...)
 }
 
 func canonicalPortableBulkDropOrder() []string {
-	return []string{
+	return append([]string{
 		"code_documents_fts",
 		"code_documents_fts_config",
 		"code_documents_fts_data",
@@ -486,5 +486,15 @@ func canonicalPortableBulkDropOrder() []string {
 		"embedding_runs",
 		"cluster_runs",
 		"blobs",
+	}, portableAnalyticsTables()...)
+}
+
+// Analytics source datasets have no repository-scoped portable contract.
+func portableAnalyticsTables() []string {
+	return []string{
+		"analytics_fetch_attempts", "analytics_retries", "analytics_pending_nodes",
+		"analytics_collection_state", "analytics_repair_receipts",
+		"analytics_coverage", "analytics_review_state_coverage",
+		"actor_identity_evidence", "actor_profiles",
 	}
 }

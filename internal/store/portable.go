@@ -283,11 +283,17 @@ func (s *Store) vacuumPortableDatabase(ctx context.Context) error {
 
 func (s *Store) scrubPortableSyncFailures(ctx context.Context, include bool, stats *PortablePruneStats) (bool, error) {
 	ledgerExists := s.tableExists(ctx, "sync_attempt_failures")
+	var analyticsTables []string
+	for _, table := range portableAnalyticsTables() {
+		if s.tableExists(ctx, table) {
+			analyticsTables = append(analyticsTables, table)
+		}
+	}
 	pending, err := s.portableSyncFailureScrubPending(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !ledgerExists && !pending {
+	if !ledgerExists && len(analyticsTables) == 0 && !pending {
 		return false, nil
 	}
 	if !pending {
@@ -302,14 +308,24 @@ func (s *Store) scrubPortableSyncFailures(ctx context.Context, include bool, sta
 			return false, fmt.Errorf("mark portable sync failure scrub pending: %w", err)
 		}
 	}
-	if !ledgerExists {
-		return true, nil
-	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return false, fmt.Errorf("open portable sync failure scrub connection: %w", err)
 	}
 	defer conn.Close()
+	if len(analyticsTables) > 0 {
+		if _, err := conn.ExecContext(ctx, `pragma secure_delete = on`); err != nil {
+			return false, err
+		}
+		for _, table := range analyticsTables {
+			if _, err := conn.ExecContext(ctx, `delete from `+sqliteIdentifier(table)); err != nil {
+				return false, fmt.Errorf("scrub portable analytics table %s: %w", table, err)
+			}
+		}
+	}
+	if !ledgerExists {
+		return true, nil
+	}
 	var hasRows bool
 	if err := conn.QueryRowContext(ctx, `select exists(select 1 from sync_attempt_failures limit 1)`).Scan(&hasRows); err != nil {
 		return false, fmt.Errorf("inspect portable sync failures: %w", err)

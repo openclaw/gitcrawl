@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `gitcrawl analytics` for publication repair, actor evidence, continuous collection, and durable review-state recovery with separate core/enrichment coverage and private failure receipts. Thanks @hannesrudolph.
+
 - Update CrawlKit to v0.16.6 for faster vector validation in the TurboVec search backend.
 
 ## 0.13.0 - 2026-09-28

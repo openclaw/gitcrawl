@@ -369,3 +369,10 @@ gitcrawl sync owner/repo --numbers "$NUMS" --with pr-details
 - [Refresh and embed](/refresh-and-embed/) — the wrapper that runs sync, embed, and cluster end to end
 - [gh shim migration](/gh-shim/) — Octopool owns pooled `gh` reads now
 - [Portable stores](/portable-stores/) — sharing the synced cache across machines
+
+## Analytics source preparation
+
+The [analytics source command](/analytics-source/) repairs retained review publication
+timestamps without rewriting raw evidence and maintains a full-history archive
+through incremental GraphQL collection. Its actor IDs and coverage receipts are
+source evidence for downstream analytics; account classifications remain derived.

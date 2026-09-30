@@ -99,6 +99,8 @@ func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
 		table string
 		name  string
 	}{
+		{table: "actor_identity_evidence", name: "raw_json"},
+		{table: "actor_profiles", name: "raw_json"},
 		{table: "repositories", name: "raw_json"},
 		{table: "threads", name: "raw_json"},
 		{table: "comments", name: "raw_json"},
@@ -158,6 +160,8 @@ func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	for _, table := range []string{
+		"analytics_fetch_attempts", "analytics_retries", "analytics_pending_nodes",
+		"analytics_collection_state", "analytics_repair_receipts",
 		"thread_changed_files",
 		"thread_hunk_signatures",
 		"thread_code_snapshots",

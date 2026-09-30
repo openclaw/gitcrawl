@@ -12,15 +12,16 @@ import (
 )
 
 type Comment struct {
-	ID              int64  `json:"id"`
-	ThreadID        int64  `json:"thread_id"`
-	GitHubID        string `json:"github_id"`
-	CommentType     string `json:"comment_type"`
-	AuthorLogin     string `json:"author_login,omitempty"`
-	AuthorType      string `json:"author_type,omitempty"`
-	Body            string `json:"body"`
-	IsBot           bool   `json:"is_bot"`
-	ReviewState     string `json:"review_state,omitempty"`
+	ID          int64  `json:"id"`
+	ThreadID    int64  `json:"thread_id"`
+	GitHubID    string `json:"github_id"`
+	CommentType string `json:"comment_type"`
+	AuthorLogin string `json:"author_login,omitempty"`
+	AuthorType  string `json:"author_type,omitempty"`
+	Body        string `json:"body"`
+	IsBot       bool   `json:"is_bot"`
+	ReviewState string `json:"review_state,omitempty"`
+	Publication
 	RawJSON         string `json:"-"`
 	CreatedAtGitHub string `json:"created_at_gh,omitempty"`
 	UpdatedAtGitHub string `json:"updated_at_gh,omitempty"`
@@ -70,6 +71,9 @@ func (s *Store) upsertComment(ctx context.Context, comment Comment) (int64, erro
 	})
 	if err != nil {
 		return 0, fmt.Errorf("upsert comment: %w", err)
+	}
+	if err := s.upsertCommentPublication(ctx, id, comment.CommentType, comment.RawJSON); err != nil {
+		return 0, err
 	}
 	if s.portableCommentBodyMetadata {
 		if _, err := s.q().ExecContext(ctx, `
@@ -131,10 +135,10 @@ func (s *Store) recordCommentRevision(ctx context.Context, commentID int64, reco
 	if _, err := s.q().ExecContext(ctx, `
 		insert into comment_revisions(
 			comment_id, author_login, author_type, body, is_bot, raw_json,
-			created_at_gh, updated_at_gh, deleted_at, deletion_reason, recorded_at
+			created_at_gh, updated_at_gh, deleted_at, deletion_reason, recorded_at,submitted_at_gh,publication_at_gh
 		)
 		select c.id, c.author_login, c.author_type, c.body, c.is_bot, c.raw_json,
-			c.created_at_gh, c.updated_at_gh, c.deleted_at, c.deletion_reason, ?
+			c.created_at_gh, c.updated_at_gh, c.deleted_at, c.deletion_reason, ?,c.submitted_at_gh,c.publication_at_gh
 		from comments c
 		where c.id = ?
 			and not exists (
@@ -180,6 +184,7 @@ func (s *Store) ListComments(ctx context.Context, threadID int64) ([]Comment, er
 			Body:            row.Body,
 			IsBot:           int64Bool(row.IsBot),
 			ReviewState:     reviewStateFromRawJSON(row.RawJson),
+			Publication:     CommentPublication(row.CommentType, row.RawJson),
 			RawJSON:         row.RawJson,
 			CreatedAtGitHub: stringValue(row.CreatedAtGh),
 			UpdatedAtGitHub: stringValue(row.UpdatedAtGh),
