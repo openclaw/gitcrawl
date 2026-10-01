@@ -93,6 +93,11 @@ func (s *Store) queueAnalyticsActor(ctx context.Context, raw string) error {
 	if id == "" {
 		return nil
 	}
+	if excluded, err := s.NodeExcluded(ctx, id); err != nil {
+		return err
+	} else if excluded {
+		return nil
+	}
 	_, err := s.q().ExecContext(ctx, "INSERT OR IGNORE INTO analytics_pending_nodes(node_id,kind) VALUES(?,?)", id, kind)
 	return err
 }
@@ -234,6 +239,11 @@ func (s *Store) SaveActorEvidence(ctx context.Context, nodes []map[string]any, a
 		for _, n := range nodes {
 			id, _ := n["id"].(string)
 			if id == "" {
+				continue
+			}
+			if excluded, err := tx.NodeExcluded(ctx, id); err != nil {
+				return err
+			} else if excluded {
 				continue
 			}
 			a, _ := n["author"].(map[string]any)

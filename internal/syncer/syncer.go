@@ -64,6 +64,7 @@ type Options struct {
 }
 
 type Stats struct {
+	OwnerExcluded        int    `json:"owner_excluded,omitempty"`
 	ReviewStateOnly      bool   `json:"review_state_only,omitempty"`
 	FetchMillis          int64  `json:"fetch_ms,omitempty"`
 	PersistMillis        int64  `json:"persist_ms,omitempty"`
@@ -149,15 +150,14 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	if err != nil {
 		return Stats{}, err
 	}
-	var history *gh.HistoryBatch
-	var repoRaw map[string]any
+	operation := options.ReceiptOperation
+	if operation == "" {
+		operation = "graphql_history"
+	}
+
 	if options.GraphQLHistory {
 		if len(options.Numbers) == 0 || !options.IncludeComments || !options.IncludePRMetadata || options.IncludePRDetails || since != "" || options.Limit != 0 || state != "all" {
 			return Stats{}, fmt.Errorf("--graphql-history requires --numbers, --state all, --include-comments and --with pr-metadata; since/limit/pr-details are unsupported")
-		}
-		operation := options.ReceiptOperation
-		if operation == "" {
-			operation = "graphql_history"
 		}
 		if operation != "graphql_history" && operation != "review_state" {
 			return Stats{}, fmt.Errorf("unsupported GraphQL receipt operation")
@@ -165,6 +165,23 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		if options.ReviewStateOnly && operation != "review_state" {
 			return Stats{}, fmt.Errorf("review-state-only fetch requires review recovery operation")
 		}
+	}
+	excludedCount := 0
+	defer func() { result.OwnerExcluded = excludedCount }()
+	if len(options.Numbers) > 0 {
+		selected := uniquePositiveNumbers(options.Numbers)
+		options.Numbers, err = s.store.FilterExcludedNumbers(ctx, options.Owner+"/"+options.Repo, selected)
+		if err != nil {
+			return Stats{}, err
+		}
+		excludedCount = len(selected) - len(options.Numbers)
+		if len(options.Numbers) == 0 {
+			return Stats{Repository: options.Owner + "/" + options.Repo, StartedAt: started, FinishedAt: s.now().Format(time.RFC3339Nano)}, nil
+		}
+	}
+	var history *gh.HistoryBatch
+	var repoRaw map[string]any
+	if options.GraphQLHistory {
 		// Fetch/validation failures happen before conversation transactions and
 		// were previously invisible to durable run tables. Keep a receipt even
 		// when the request is cancelled; accepted content remains untouched.
@@ -309,6 +326,14 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	for _, row := range rows {
 		payload := threadSyncPayload{row: row}
 		number := intValue(row["number"])
+		excluded, err := s.store.ThreadExcluded(ctx, options.Owner+"/"+options.Repo, number)
+		if err != nil {
+			return Stats{}, err
+		}
+		if excluded {
+			excludedCount++
+			continue
+		}
 		kind := issueKind(row)
 		if history != nil {
 			// Keep legacy REST identity stable when revisiting a previously saved

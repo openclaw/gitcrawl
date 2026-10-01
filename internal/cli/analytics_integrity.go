@@ -379,6 +379,11 @@ func analyticsReviewBudget(limits []gh.RateLimitSnapshot, now time.Time) (int, g
 }
 
 func (a *App) analyticsNumbers(ctx context.Context, s *store.Store, owner, repo string, numbers []int, discovery bool, operation string) (resultErr error) {
+	var err error
+	numbers, err = s.FilterExcludedNumbers(ctx, owner+"/"+repo, numbers)
+	if err != nil {
+		return err
+	}
 	var wg sync.WaitGroup
 	var failures []error
 	// Every return, including cancelled admission, waits for durable receipts.

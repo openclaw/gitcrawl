@@ -94,6 +94,17 @@ type PortablePruneStats struct {
 }
 
 func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePruneOptions) (PortablePruneStats, error) {
+	// Owner exclusions belong to this local archive. Do not silently drop their
+	// policy or publish owner-request metadata through a portable export.
+	if s.hasTable(ctx, "thread_exclusions") {
+		var n int
+		if err := s.q().QueryRowContext(ctx, "SELECT count(*) FROM thread_exclusions").Scan(&n); err != nil {
+			return PortablePruneStats{}, err
+		}
+		if n > 0 {
+			return PortablePruneStats{}, fmt.Errorf("portable publication is unavailable for an archive with local owner exclusions")
+		}
+	}
 	if options.BodyChars <= 0 {
 		options.BodyChars = 256
 	}

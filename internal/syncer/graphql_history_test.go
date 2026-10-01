@@ -14,11 +14,15 @@ import (
 
 type historyFixtureClient struct {
 	*gh.Client
-	batch gh.HistoryBatch
-	err   error
+	batch       gh.HistoryBatch
+	err         error
+	beforeFetch func()
 }
 
 func (f historyFixtureClient) FetchGraphQLHistory(context.Context, string, string, []int, gh.Reporter) (gh.HistoryBatch, error) {
+	if f.beforeFetch != nil {
+		f.beforeFetch()
+	}
 	return f.batch, f.err
 }
 func TestGraphQLHistoryUsesNativeTransactionsAndPreservesLegacyIdentity(t *testing.T) {
@@ -109,8 +113,9 @@ func TestGraphQLCancellationDoesNotHideReceiptPersistenceFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
-	client := historyFixtureClient{err: context.DeadlineExceeded}
+	// Close during the fetch, after the owner-exclusion preflight. This tests
+	// a cancelled provider request whose durable receipt cannot be persisted.
+	client := historyFixtureClient{err: context.DeadlineExceeded, beforeFetch: func() { st.Close() }}
 	_, err = New(client, st).Sync(ctx, Options{Owner: "fixture", Repo: "repo", Numbers: []int{1}, State: "all", GraphQLHistory: true, IncludeComments: true, IncludePRMetadata: true, ReceiptOperation: "review_state"})
 	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, errAnalyticsReceipt) {
 		t.Fatalf("missing distinguishable receipt failure: %v", err)

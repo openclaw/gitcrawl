@@ -57,6 +57,13 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 		return err
 	}
 	return s.WithTx(ctx, func(tx *Store) error {
+		excluded, err := tx.ThreadExcluded(ctx, a.Repository, a.Number)
+		if err != nil {
+			return err
+		}
+		if excluded {
+			return nil
+		}
 		status, class, message := a.Status, a.ErrorClass, a.ErrorText
 		knownReview := true
 		if status == "success" && (a.Operation == "graphql_history" || a.Operation == "review_state") {
@@ -359,12 +366,23 @@ func (s *Store) SaveReviewStateCoverage(ctx context.Context, repository string, 
 	if err := s.q().QueryRowContext(ctx, `SELECT count(*) FROM analytics_retries WHERE repository=? AND operation='review_state' AND resolved_at IS NULL`, repository).Scan(&pending); err != nil {
 		return err
 	}
-	_, err := s.q().ExecContext(ctx, `INSERT INTO analytics_review_state_coverage VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repository) DO UPDATE SET cursor=excluded.cursor,ceiling=excluded.ceiling,scanned=excluded.scanned,queued=excluded.queued,pending_items=excluded.pending_items,scan_complete=excluded.scan_complete,complete=excluded.complete,observed_at=excluded.observed_at`, repository, progress.Cursor, progress.Ceiling, progress.Scanned, progress.Queued, pending, boolInt(progress.Done), boolInt(progress.Done && pending == 0), time.Now().UTC().Format(time.RFC3339Nano))
+	excluded, err := s.OwnerExcludedCount(ctx, repository, true)
+	if err != nil {
+		return err
+	}
+	_, err = s.q().ExecContext(ctx, `INSERT INTO analytics_review_state_coverage(repository,cursor,ceiling,scanned,queued,pending_items,scan_complete,complete,observed_at,owner_excluded_items) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(repository) DO UPDATE SET cursor=excluded.cursor,ceiling=excluded.ceiling,scanned=excluded.scanned,queued=excluded.queued,pending_items=excluded.pending_items,scan_complete=excluded.scan_complete,complete=excluded.complete,observed_at=excluded.observed_at,owner_excluded_items=excluded.owner_excluded_items`, repository, progress.Cursor, progress.Ceiling, progress.Scanned, progress.Queued, pending, boolInt(progress.Done), boolInt(progress.Done && pending == 0 && excluded == 0), time.Now().UTC().Format(time.RFC3339Nano), excluded)
 	return err
 }
 
 func (s *Store) AnalyticsIntegrityStatus(ctx context.Context, repository string) (map[string]any, error) {
 	out := map[string]any{"repository": repository, "checked_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	if s.hasTable(ctx, "thread_exclusions") {
+		excluded, err := s.OwnerExcludedCount(ctx, repository, false)
+		if err != nil {
+			return nil, err
+		}
+		out["owner_excluded_items"] = excluded
+	}
 	var through, observed string
 	var issues, prs, complete int
 	coverageErr := s.q().QueryRowContext(ctx, "SELECT through,issues,pull_requests,complete,observed_at FROM analytics_coverage WHERE repository=?", repository).Scan(&through, &issues, &prs, &complete, &observed)

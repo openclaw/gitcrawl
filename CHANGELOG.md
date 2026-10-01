@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.0 - 2026-10-01
+
+**Highlights:** Exact owner-directed archive removal with durable collection exclusions.
+
+- Add `purge-threads` with exact owner-selected plans, atomic local removal, and durable collection exclusions. Thanks @hannesrudolph.
+- Update CrawlKit to v0.16.7. Thanks @vincentkoc.
+
 ## 0.14.0 - 2026-09-30
 
 **Highlights:** New `gitcrawl analytics` commands for publication repair, actor evidence, and continuous collection with durable review-state recovery.

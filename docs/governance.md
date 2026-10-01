@@ -137,3 +137,28 @@ The thread stays open on GitHub; only your local triage view hides it.
 - It does not edit, label, comment on, or close GitHub issues. Use `gh` for that.
 - It does not retrain embeddings or reshape the underlying graph — it overlays decisions on top of the algorithm output.
 - It does not propagate to other gitcrawl installations unless you publish your database via a [portable store](/portable-stores/).
+
+## Permanent owner removal
+
+For a native local archive, preview an exact selection, then apply its `plan_id`:
+
+```sh
+gitcrawl purge-threads owner/repo --numbers 123,456 --json
+gitcrawl purge-threads owner/repo --numbers 123,456 --apply PLAN_ID --json
+```
+
+The read-only plan lists thread identities and affected row counts. Apply rechecks
+its content hash in one transaction, removes selected bodies, history, derived
+records and retry work, and installs permanent collection exclusions. Changed
+plans require a new preview. Shared actor profiles and unrelated threads stay
+intact. Owner exclusions are reported separately from provider deletion or
+successful recovery; core collection coverage remains independent.
+
+Selections must contain 1–100 distinct existing numbers in one unambiguous local
+repository. The analytics collector must be stopped. Portable/cloud archives,
+blob-backed targets, shared cluster state, retained repository workflow snapshots,
+linked workflow reservations, and deletions allowing native integer ID reuse are
+refused. Exclusions follow the explicit `owner/repo` collection namespace; carry
+that policy when changing targets. Portable publication is refused while local
+exclusions exist. This removes logical archive data, not GitHub content, backups,
+or forensic disk remnants. There is no undo or automatic backup.

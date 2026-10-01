@@ -152,7 +152,7 @@ func TestAnalyticsV14MigrationPreservesReceiptsAndCoverageWatermark(t *testing.T
 	s.DB().QueryRow("PRAGMA user_version").Scan(&version)
 	s.DB().QueryRow("SELECT through,complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&through, &complete)
 	cp, err := s.AnalyticsState(ctx, "updates:fixture/repo")
-	if err != nil || version != 15 || through != "2026-01-01T00:00:00Z" || complete != 1 || cp != `{"kind":1,"cursor":"provider-cursor"}` {
+	if err != nil || version != schemaVersion || through != "2026-01-01T00:00:00Z" || complete != 1 || cp != `{"kind":1,"cursor":"provider-cursor"}` {
 		t.Fatalf("migration changed evidence: %d %s %d %s %v", version, through, complete, cp, err)
 	}
 }

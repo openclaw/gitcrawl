@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	schemaVersion = 15
+	schemaVersion = 16
 	timeLayout    = time.RFC3339Nano
 )
 
@@ -285,9 +285,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
-	// Version 15 only adds operational receipts and an explicit review-thread
-	// membership column. A converged v14 archive needs no row/history rebuild.
-	if current == 14 {
+	// Additive analytics/policy upgrades need no row/history rebuild on a
+	// converged archive; exclusion changes never rewrite source observations.
+	if current == 14 || current == 15 {
 		structural, e := inspectStructuralCompatibilityMigrations(ctx, s, current, inspectPRDetailSchema(ctx, s))
 		if e != nil {
 			return e
@@ -296,13 +296,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		if len(structural) == 1 && structural[0] == "schema_version_14_to_15" && converged {
+		if len(structural) == 1 && structural[0] == fmt.Sprintf("schema_version_%d_to_%d", current, schemaVersion) && converged {
 			// Some v14 archives predate the optional analytics extension. These
 			// additive tables/columns are cheap to ensure and require no row scan.
 			if e = s.ensureAnalyticsSourceSchema(ctx); e != nil {
 				return e
 			}
 			if e = s.ensureAnalyticsIntegritySchema(ctx); e != nil {
+				return e
+			}
+			if e = s.ensureThreadExclusionsSchema(ctx); e != nil {
 				return e
 			}
 			_, e = s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", schemaVersion))
@@ -347,6 +350,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAnalyticsIntegritySchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureThreadExclusionsSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureCanonicalObservationTables(ctx); err != nil {

@@ -65,6 +65,7 @@ Core commands:
   capture              export a stable code-free conversation snapshot
   code index           index tracked text files from a local Git checkout
   cluster              build durable clusters from local thread vectors
+  purge-threads        permanently remove selected local threads and exclude collection
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
   close-cluster        locally hide one durable cluster
@@ -264,6 +265,17 @@ Usage:
 Usage:
   gitcrawl runs owner/repo [--kind sync|summary|embedding|cluster] [--limit N] [--json]
 `,
+	"purge-threads": `gitcrawl purge-threads plans owner-directed local removal, never a GitHub deletion.
+
+Usage:
+  gitcrawl purge-threads owner/repo --numbers 1,2 [--apply PLAN_ID] [--json]
+
+Preview the exact selection, then pass its plan_id to --apply. Changed plans
+are refused. Requires a native local archive and an idle analytics collector.
+Blob-backed targets, workflow dependencies, shared clusters and reusable native
+IDs are refused. Exclusions are permanent; portable publication is unavailable.
+`,
+
 	"close-thread": `gitcrawl close-thread locally hides one issue or pull request row.
 
 Usage:

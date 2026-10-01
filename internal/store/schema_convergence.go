@@ -150,6 +150,9 @@ func inspectCompatibilityMigrationsMode(
 	if current > 0 && !st.observationSchemaConvergenceHasCurrentShape(ctx) {
 		add(migrationObservationSchemaConvergence)
 	}
+	if current >= 16 && (!st.hasTable(ctx, "thread_exclusions") || !st.hasTable(ctx, "thread_excluded_nodes") || !st.hasColumn(ctx, "analytics_review_state_coverage", "owner_excluded_items")) {
+		add("thread_exclusions_schema")
+	}
 	if !includeSemantic {
 		return pending, nil
 	}
