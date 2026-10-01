@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- Update the transitive golden-test helper to its v0.1.0 release.
+## 0.14.0 - 2026-09-30
+
+**Highlights:** New `gitcrawl analytics` commands for publication repair, actor evidence, and continuous collection with durable review-state recovery.
 
 - Add `gitcrawl analytics` for publication repair, actor evidence, continuous collection, and durable review-state recovery with separate core/enrichment coverage and private failure receipts. Thanks @hannesrudolph.
-
 - Update CrawlKit to v0.16.6 for faster vector validation in the TurboVec search backend.
+- Update the transitive golden-test helper to its v0.1.0 release.
 
 ## 0.13.0 - 2026-09-28
 
