@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites.
+
 ## 0.15.0 - 2026-10-01
 
 **Highlights:** Exact owner-directed archive removal with durable collection exclusions.
