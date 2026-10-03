@@ -13,7 +13,7 @@ require (
 	github.com/openclaw/crawlkit v0.16.7
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.48.0
-	modernc.org/sqlite v1.60.0
+	modernc.org/sqlite v1.60.1
 )
 
 require (
