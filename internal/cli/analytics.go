@@ -150,7 +150,7 @@ func (a *App) runAnalytics(ctx context.Context, args []string) error {
 			return e
 		}
 		if existing == 0 {
-			b, err := os.ReadFile(filepath.Join(filepath.Dir(a.configPath), "status.json"))
+			b, err := os.ReadFile(filepath.Join(filepath.Dir(config.ResolvePath(a.configPath)), "status.json"))
 			if err == nil {
 				var status struct {
 					Repository string `json:"repository"`

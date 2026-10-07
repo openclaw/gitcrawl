@@ -43,6 +43,8 @@ Direct search supports keyword, semantic, and hybrid modes over one local reposi
 
 `gitcrawl embed owner/repo --include-closed` includes historical threads. Candidate collection uses an ordering index added automatically when the archive opens for writing, so large archives do not need a full sort for every page.
 
+For `analytics --once` and `analytics --watch`, keep the historical discovery receipt (`status.json`) beside the selected config file, including when selecting it through `GITCRAWL_CONFIG`. Analytics uses that location regardless of the working directory.
+
 Commands support structured output with `--json`. Gitcrawl reserves stdout for results and sends diagnostics to stderr, so its output can feed `jq` or another process directly. See [Search](docs/search.md) and [Automation](docs/automation.md) for the supported shapes.
 
 ## Cluster and review
