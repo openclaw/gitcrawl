@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.
+
 - Load the analytics discovery receipt beside the resolved config, including `GITCRAWL_CONFIG`, instead of the working directory. Thanks @SebTardif.
 
 - Speed up `embed --include-closed` on large archives with indexed candidate pagination, preserving ordering and limits and adding the index automatically without a schema version bump. Thanks @masatohoshino.
