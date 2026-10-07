@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Speed up `embed --include-closed` on large archives with indexed candidate pagination, preserving ordering and limits and adding the index automatically without a schema version bump. Thanks @masatohoshino.
+
 - Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites.
 
 ## 0.15.0 - 2026-10-01

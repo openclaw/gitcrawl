@@ -41,6 +41,8 @@ The [quickstart](docs/quickstart.md) continues through embeddings, clusters, and
 
 Direct search supports keyword, semantic, and hybrid modes over one local repository. The `gh search`-shaped form used above lets existing scripts query the SQLite mirror without spending GitHub search quota. Add `--sync-if-stale 5m` when an agent should refresh an old mirror before searching.
 
+`gitcrawl embed owner/repo --include-closed` includes historical threads. Candidate collection uses an ordering index added automatically when the archive opens for writing, so large archives do not need a full sort for every page.
+
 Commands support structured output with `--json`. Gitcrawl reserves stdout for results and sends diagnostics to stderr, so its output can feed `jq` or another process directly. See [Search](docs/search.md) and [Automation](docs/automation.md) for the supported shapes.
 
 ## Cluster and review

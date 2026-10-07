@@ -84,6 +84,13 @@ func (s *Store) listEmbeddingTaskPage(ctx context.Context, options EmbeddingTask
 	revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 	summaryFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
 	eligibleSummaryFresh := s.threadRevisionFreshnessPredicate(ctx, "eligible_revision", "t")
+	// Later pages seek idx_threads_repo_embed_order through the scalar bound;
+	// SQLite does not use the row-value comparison alone as an index range.
+	after := ""
+	if cursor.id != 0 {
+		after = `and coalesce(t.updated_at_gh, t.updated_at) <= ?8
+			and (coalesce(t.updated_at_gh, t.updated_at), t.number, t.id) < (?8, ?9, ?7)`
+	}
 	rows, err := s.q().QueryContext(ctx, `
 		select t.id, t.number, t.kind, t.title,
 			coalesce(d.body, t.body, '') as body,
@@ -114,7 +121,7 @@ func (s *Store) listEmbeddingTaskPage(ctx context.Context, options EmbeddingTask
 		where t.repo_id = ?3
 			and (?4 != 0 or (t.state = 'open' and t.closed_at_local is null))
 			and (?5 is null or t.number = ?5)
-			and (?7 = 0 or (coalesce(t.updated_at_gh, t.updated_at), t.number, t.id) < (?8, ?9, ?7))
+			`+after+`
 			and (
 				?1 != 'llm_key_summary'
 				or exists (

@@ -677,6 +677,7 @@ create table if not exists cluster_closures (
 create index if not exists idx_threads_repo_number on threads(repo_id, number);
 create index if not exists idx_threads_repo_state_closed on threads(repo_id, state, closed_at_local);
 create index if not exists idx_threads_repo_updated on threads(repo_id, updated_at);
+create index if not exists idx_threads_repo_embed_order on threads(repo_id, coalesce(updated_at_gh, updated_at) desc, number desc, id desc);
 create index if not exists idx_comments_thread_type on comments(thread_id, comment_type);
 create index if not exists idx_comment_revisions_comment on comment_revisions(comment_id, id);
 create index if not exists idx_thread_revisions_thread_created on thread_revisions(thread_id, created_at);

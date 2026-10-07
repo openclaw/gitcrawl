@@ -112,6 +112,9 @@ const (
 	createRevisionObservationIndexSQL = `create index if not exists idx_thread_revisions_thread_observation
 		on thread_revisions(thread_id, observation_sequence desc)
 	`
+	// Serves embedding candidate pages. The schema creates it on every open, so it
+	// is not part of the canonical threads shape and never forces a rebuild.
+	createThreadsRepoEmbedOrderSQL = `create index if not exists idx_threads_repo_embed_order on threads(repo_id, coalesce(updated_at_gh, updated_at) desc, number desc, id desc)`
 )
 
 type observationConvergenceTrigger struct {
@@ -345,6 +348,7 @@ func (s *Store) ensureCanonicalObservationTables(ctx context.Context) error {
 			createThreadsRepoNumberIndexSQL,
 			createThreadsRepoStateIndexSQL,
 			createThreadsRepoUpdatedSQL,
+			createThreadsRepoEmbedOrderSQL,
 			createRevisionCreatedIndexSQL,
 			createRevisionObservationIndexSQL,
 		}
