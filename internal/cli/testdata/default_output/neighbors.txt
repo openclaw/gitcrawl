@@ -1,0 +1,55 @@
+neighbors
+{
+  "neighbors": [
+    {
+      "author_association": "CONTRIBUTOR",
+      "author_login": "bob",
+      "created_at_gh": "2026-03-02T10:00:00Z",
+      "html_url": "https://github.com/openclaw/openclaw/pull/302",
+      "is_draft": true,
+      "kind": "pull_request",
+      "number": 302,
+      "score": 0.994937189022498,
+      "state": "open",
+      "thread_id": 2,
+      "title": "Fix gateway websocket reconnect stall"
+    },
+    {
+      "author_login": "erin",
+      "created_at_gh": "2026-03-10T10:00:00Z",
+      "html_url": "https://github.com/openclaw/openclaw/issues/305",
+      "is_draft": false,
+      "kind": "issue",
+      "number": 305,
+      "score": 0.9628445935334788,
+      "state": "open",
+      "thread_id": 5,
+      "title": "Gateway websocket timeout after sleep"
+    }
+  ],
+  "repository": "openclaw/openclaw",
+  "state_as_of": "2026-03-20T09:00:00Z",
+  "thread": {
+    "id": 1,
+    "repo_id": 1,
+    "github_id": "gh-301",
+    "number": 301,
+    "kind": "issue",
+    "state": "open",
+    "title": "Gateway websocket stalls on reconnect",
+    "body": "Gateway websocket stalls on reconnect in the default output fixture.",
+    "author_login": "alice",
+    "author_type": "User",
+    "author_association": "NONE",
+    "html_url": "https://github.com/openclaw/openclaw/issues/301",
+    "labels_json": "[]",
+    "assignees_json": "[]",
+    "content_hash": "thread-301",
+    "is_draft": false,
+    "created_at_gh": "2026-03-01T10:00:00Z",
+    "updated_at_gh": "2026-03-01T10:00:00Z",
+    "first_pulled_at": "<local clock>",
+    "last_pulled_at": "<local clock>",
+    "updated_at": "<local clock>"
+  }
+}

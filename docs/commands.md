@@ -83,7 +83,7 @@ For an end-to-end first-run sequence that combines `status --json`, `doctor --js
 | `gitcrawl threads owner/repo [--include-closed --numbers --limit --json]` | List threads from local cache | — |
 | `gitcrawl search owner/repo --query <text> [--scope threads\|code\|all --mode keyword\|semantic\|hybrid --limit --json]` | Local thread/source search (direct mode) | [Search](/search/) |
 | `gitcrawl search issues\|prs <query> -R owner/repo [--state --json --limit --sync-if-stale]` | Local search (`gh search` shape) | [Search](/search/#gh-search-compatibility-mode) |
-| `gitcrawl neighbors owner/repo --number <ref> [--limit --threshold --json]` | Vector-similar threads to a specific issue/PR | [Clustering](/clustering/#find-similar-threads-neighbors) |
+| `gitcrawl neighbors owner/repo --number <ref> [--limit --threshold --include-closed --open-at --created-after --merged-after --json]` | Vector-similar threads to a specific issue/PR | [Clustering](/clustering/#find-similar-threads-neighbors) |
 
 ## Thread References
 

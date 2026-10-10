@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `neighbors --open-at`, `--created-after`, and `--merged-after` to filter similar rows by time before the limit (`--created-after` also takes an issue or pull request reference), and include each row's state, URL, author, and created/closed/merged times plus the archive's `state_as_of` in `neighbors` output. Thanks @masatohoshino.
+
 - Update the TruffleHog secret-scanning action to v3.98.0. Thanks @dependabot.
 
 - Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.

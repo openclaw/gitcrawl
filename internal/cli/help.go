@@ -258,7 +258,11 @@ Usage:
 	"neighbors": `gitcrawl neighbors lists vector-nearest local issue and pull request rows.
 
 Usage:
-  gitcrawl neighbors owner/repo --number ref [--limit N] [--include-closed] [--json]
+  gitcrawl neighbors owner/repo --number ref [--limit N] [--threshold N] [--include-closed] [--open-at time] [--created-after time|ref] [--merged-after time] [--json]
+
+Time filters take RFC 3339 times or YYYY-MM-DD dates (UTC); --created-after
+also takes an issue or pull request reference. --open-at and --merged-after
+imply --include-closed. state_as_of is when row states were last fully synced.
 `,
 	"runs": `gitcrawl runs lists local pipeline run history.
 
