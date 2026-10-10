@@ -124,12 +124,16 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 		}
 	}
 	if remoteEndpointValue == "" && portableStoreURL == "" {
-		st, err := store.Open(ctx, cfg.DBPath)
-		if err != nil {
-			return fmt.Errorf("initialize local database: %w", err)
-		}
-		if err := st.Close(); err != nil {
-			return fmt.Errorf("close initialized local database: %w", err)
+		if _, portable, err := portableStoreRoot(ctx, cfg.DBPath); err != nil {
+			return err
+		} else if !portable {
+			st, err := store.Open(ctx, cfg.DBPath)
+			if err != nil {
+				return fmt.Errorf("initialize local database: %w", err)
+			}
+			if err := st.Close(); err != nil {
+				return fmt.Errorf("close initialized local database: %w", err)
+			}
 		}
 	}
 	result := initResult{
