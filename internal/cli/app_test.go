@@ -60,7 +60,7 @@ func TestInitWritesConfig(t *testing.T) {
 	}
 }
 
-func TestInitRelativeDBPathIsAbsoluteAndWritable(t *testing.T) {
+func TestInitRelativeDBPathIsAbsoluteAndReadable(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	workDir := filepath.Join(dir, "work")
@@ -84,9 +84,12 @@ func TestInitRelativeDBPathIsAbsoluteAndWritable(t *testing.T) {
 	if cfg.VectorDir != filepath.Join(workDir, "vectors") {
 		t.Fatalf("vector dir = %q, want sibling of resolved db", cfg.VectorDir)
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath)
 	if err != nil {
 		t.Fatalf("open resolved db: %v", err)
+	}
+	if _, err := st.Status(ctx); err != nil {
+		t.Fatalf("read initialized db status: %v", err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close resolved db: %v", err)
