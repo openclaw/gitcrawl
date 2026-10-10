@@ -79,7 +79,11 @@ to any command.
 
 ## `config.toml`
 
-`gitcrawl init` writes a minimal config. You can edit it by hand or with `gitcrawl configure`:
+`gitcrawl init` writes a minimal config and initializes the local SQLite database
+with the current schema. Sync a repository to populate it. Cloud initialization
+does not create a local database, and portable initialization validates the
+existing source database without migrating it. You can edit the config by hand
+or with `gitcrawl configure`:
 
 ```toml
 summary_model = "gpt-5.4"
