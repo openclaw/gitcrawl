@@ -49,37 +49,6 @@ func TestThreadVectorWhereWithoutTimeFiltersIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestThreadVectorWhereAppendsOnlySetFilters(t *testing.T) {
-	base := ThreadVectorQuery{RepoID: 7, Model: "m", IncludeClosed: true}
-	baseWhere, baseArgs := threadVectorWhere(base)
-	at := time.Date(2026, 9, 12, 8, 0, 0, 0, time.FixedZone("JST", 9*60*60))
-	for _, tc := range []struct {
-		name   string
-		set    func(*ThreadVectorQuery)
-		suffix string
-		args   []any
-	}{
-		{"open at", func(q *ThreadVectorQuery) { q.OpenAt = at },
-			` and julianday(t.created_at_gh) <= julianday(?) and (coalesce(t.closed_at_gh, '') = '' or julianday(t.closed_at_gh) > julianday(?))`,
-			[]any{"2026-09-11T23:00:00Z", "2026-09-11T23:00:00Z"}},
-		{"created after", func(q *ThreadVectorQuery) { q.CreatedAfter = at },
-			` and julianday(t.created_at_gh) > julianday(?)`, []any{"2026-09-11T23:00:00Z"}},
-		{"created after number", func(q *ThreadVectorQuery) { q.CreatedAfterNumber = 160462 },
-			` and t.number > ?`, []any{160462}},
-		{"merged after", func(q *ThreadVectorQuery) { q.MergedAfter = at },
-			` and julianday(t.merged_at_gh) > julianday(?)`, []any{"2026-09-11T23:00:00Z"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			query := base
-			tc.set(&query)
-			gotWhere, gotArgs := threadVectorWhere(query)
-			if gotWhere != baseWhere+tc.suffix || !reflect.DeepEqual(gotArgs, append(append([]any{}, baseArgs...), tc.args...)) {
-				t.Fatalf("threadVectorWhere = %q %v, want %q + %q, %v + %v", gotWhere, gotArgs, baseWhere, tc.suffix, baseArgs, tc.args)
-			}
-		})
-	}
-}
-
 func TestStateAsOfUsesNewestCompleteListSync(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))

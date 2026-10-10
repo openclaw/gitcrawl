@@ -62,13 +62,23 @@ func TestNeighborsTimeFilters(t *testing.T) {
 		{name: "open at includes rows closed since", args: []string{"--open-at", "2026-09-10T12:00:00Z"}, want: []int{201, 204}},
 		// 2026-09-11T23:00Z: #204 closes an hour later, #203 is already open.
 		{name: "open at compares instants across offsets", args: []string{"--open-at", "2026-09-12T08:00:00+09:00"}, want: []int{201, 204, 203}},
+		{name: "open at includes a row created at T", args: []string{"--open-at", "2026-09-15"}, want: []int{201, 205, 203}},
+		{name: "open at excludes a row closed at T", args: []string{"--open-at", "2026-09-12"}, want: []int{201, 203}},
+		// Half a second after #205 was created and #204 closed; as text, "…00Z" sorts after "…00.5Z".
+		{name: "open at compares creation instants, not text", args: []string{"--open-at", "2026-09-15T00:00:00.5Z"}, want: []int{201, 205, 203}},
+		{name: "open at compares closure instants, not text", args: []string{"--open-at", "2026-09-12T00:00:00.5Z"}, want: []int{201, 203}},
 		{name: "created after open rows", args: []string{"--created-after", "2026-09-10"}, want: []int{205}},
 		{name: "created after with closed rows", args: []string{"--created-after", "2026-09-10", "--include-closed"}, want: []int{205, 203}},
+		{name: "created after excludes a row created at T", args: []string{"--created-after", "2026-09-11", "--include-closed"}, want: []int{205}},
+		{name: "created after compares instants, not text", args: []string{"--created-after", "2026-09-11T00:00:00.5Z", "--include-closed"}, want: []int{205}},
 		{name: "created after number", args: []string{"--created-after", "202"}, want: []int{205}},
 		// Numbers, not clocks: #203 and #204 rank after #202 whatever their created_at.
 		{name: "created after number with closed rows", args: []string{"--created-after", "#202", "--include-closed"}, want: []int{204, 205, 203}},
 		{name: "created after thread url", args: []string{"--created-after", "https://github.com/openclaw/openclaw/pull/202", "--include-closed"}, want: []int{204, 205, 203}},
 		{name: "merged after", args: []string{"--merged-after", "2026-09-10"}, want: []int{203}},
+		{name: "merged after excludes a merge at T", args: []string{"--merged-after", "2026-09-05"}, want: []int{203}},
+		// Half a second after #202 merged; as text, "…00Z" sorts after "…00.5Z".
+		{name: "merged after compares instants across offsets", args: []string{"--merged-after", "2026-09-05T09:00:00.5+09:00"}, want: []int{203}},
 		{name: "filters apply before limit", args: []string{"--merged-after", "2026-09-10", "--limit", "1"}, want: []int{203}},
 		{name: "closed source with open at", number: 204, args: []string{"--open-at", "2026-09-01T12:00:00Z"}, want: []int{202, 201}},
 		{name: "closed source with merged after", number: 202, args: []string{"--merged-after", "2026-09-10"}, want: []int{203}},
