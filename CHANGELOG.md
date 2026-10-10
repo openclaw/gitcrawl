@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the TruffleHog secret-scanning action to v3.98.0. Thanks @dependabot.
+
 - Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.
 
 - Load the analytics discovery receipt beside the resolved config, including `GITCRAWL_CONFIG`, instead of the working directory. Thanks @SebTardif.
