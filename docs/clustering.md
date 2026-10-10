@@ -127,6 +127,33 @@ gitcrawl neighbors owner/repo --number 123 --limit 10
 | `--limit <n>` | `10` | Maximum neighbors |
 | `--threshold <float>` | `0.2` | Minimum cosine score |
 | `--include-closed` | _(off)_ | Include closed issue and pull request vectors |
+| `--open-at <time>` | _(off)_ | Only rows created by the time and not closed by then; implies `--include-closed` |
+| `--created-after <time\|ref>` | _(off)_ | Only rows created after the time, or numbered after the issue/PR reference |
+| `--merged-after <time>` | _(off)_ | Only pull requests merged after the time; implies `--include-closed` |
+
+Time filters take an RFC 3339 time or a `YYYY-MM-DD` date (UTC) and apply before `--limit`. `--created-after` also takes an issue or pull request reference (`456`, `#456`, or its URL) and keeps rows numbered after it.
+
+Each neighbor row carries the thread's `state`, `html_url`, `is_draft`, and, when known, `author_login`, `author_association`, `created_at_gh`, `closed_at_gh`, `merged_at_gh`, and `closed_at_local`, so a closed row can be told apart from a merged one without a second lookup. The output's `state_as_of` is the start of the newest complete open (or all) sync, one without `--numbers`, `--limit`, or `--since`; it is omitted when none is recorded.
+
+### How far row state and time filters can be trusted
+
+The archive keeps each thread's current GitHub values, not its history. What follows from that:
+
+- **Each row is current as of `state_as_of` or later.** A complete sync lists every open thread and sweeps closed threads updated since the previous complete sync started, and `state_as_of` is the start of the newest one, so it is no later than the time any row's `state`, `closed_at_gh`, and `merged_at_gh` were read: the listing runs after the start, and `sync --numbers` can refresh a row afterwards. Changes after a row was read are not in the archive. This holds once sweeps cover the time since each row was stored. The first sweep of an archive reaches back only to the earliest pull of a row that is still open (or 24 hours when there is none), so a closed row stored earlier keeps an older `closed_at_gh` if it was reopened and closed again before that; `sync --state all` refreshes every row.
+- **A merge is final.** `merged_at_gh` never changes once set, so `--merged-after` is exact up to `state_as_of`.
+- **Creation is fixed, and numbers follow it.** `created_at_gh` and the number never change, and GitHub numbers issues and pull requests together in creation order, so `--created-after <ref>` needs no clock.
+- **`--open-at` errs only by including rows.** It reads the current `created_at` and `closed_at`, and reopening clears `closed_at`, so a row with a reopen in its history counts as open from creation to its latest close. It can list a row that was closed at that moment, but never drops one that was open, apart from the stale closed rows described above.
+
+Similarity and these filters find candidates; confirm the current state with `gh` before acting on one.
+
+```bash
+# Pull requests that were open when issue 123 was filed.
+gitcrawl neighbors owner/repo --number 123 --open-at 2026-09-01T10:00:00Z --json \
+  | jq '.neighbors[] | select(.kind == "pull_request")'
+
+# Similar pull requests merged after my pull request was opened.
+gitcrawl neighbors owner/repo --number 456 --merged-after 2026-09-15 --json
+```
 
 Useful for "what else looks like this?" without committing to a cluster. If the source row is present but lacks a current embedding, the CLI command backfills that one row when an OpenAI key is configured; otherwise it prints the exact `gitcrawl embed --number ... --limit 1` command to run. The TUI's `n` shortcut and "Enter on a member" also load vector neighbors for the selected row.
 

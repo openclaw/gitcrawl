@@ -198,6 +198,41 @@ func (s *Store) ClosedSweepWatermark(ctx context.Context, repoID int64) (time.Ti
 	return value, nil
 }
 
+// StateAsOf returns the start of the newest successful complete open or all
+// list sync. Every row's state, closed time, and merged time is current as of
+// then, provided closed sweeps cover the time since the row was stored (an
+// archive's first sweep reaches back only to its legacy watermark); targeted,
+// limited, or since-bounded syncs record no sweep and do not move it. It is
+// zero when no such sync is recorded.
+func (s *Store) StateAsOf(ctx context.Context, repoID int64) (time.Time, error) {
+	if !s.hasColumns(ctx, "sync_runs", "repo_id", "scope", "status", "stats_json") {
+		return time.Time{}, nil
+	}
+	var raw string
+	err := s.q().QueryRowContext(ctx, `
+		select json_extract(stats_json, '$.closed_sweep_through')
+		from sync_runs
+		where repo_id = ? and status in ('success', 'completed')
+		  and scope in ('open', 'all')
+		  and json_valid(stats_json)
+		  and json_type(case when json_valid(stats_json) then stats_json else '{}' end,
+		                '$.closed_sweep_through') = 'text'
+		order by julianday(json_extract(stats_json, '$.closed_sweep_through')) desc, id desc
+		limit 1
+	`, repoID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read state as of: %w", err)
+	}
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse state as of %q: %w", raw, err)
+	}
+	return value, nil
+}
+
 func (s *Store) LastSuccessfulListSyncAt(ctx context.Context, repoID int64, state string) (time.Time, error) {
 	state = normalizedListSyncState(state)
 	if state == "" || !s.hasColumns(ctx, "sync_runs", "repo_id", "scope", "status", "finished_at") {

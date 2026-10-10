@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -30,6 +31,15 @@ type ThreadVectorQuery struct {
 	Basis         string
 	Dimensions    int
 	IncludeClosed bool
+	// OpenAt keeps rows created at or before the time and not closed by then.
+	OpenAt time.Time
+	// CreatedAfter keeps rows created after the time.
+	CreatedAfter time.Time
+	// CreatedAfterNumber keeps rows numbered above it. GitHub numbers issues
+	// and pull requests in creation order, so no clock is involved.
+	CreatedAfterNumber int
+	// MergedAfter keeps pull requests merged after the time.
+	MergedAfter time.Time
 }
 
 func (s *Store) UpsertThreadVector(ctx context.Context, vector ThreadVector) error {
@@ -185,6 +195,24 @@ func threadVectorWhere(query ThreadVectorQuery) (string, []any) {
 	if query.Dimensions > 0 {
 		where += ` and tv.dimensions = ?`
 		args = append(args, query.Dimensions)
+	}
+	if !query.OpenAt.IsZero() {
+		at := query.OpenAt.UTC().Format(time.RFC3339Nano)
+		where += ` and julianday(t.created_at_gh) <= julianday(?)` +
+			` and (coalesce(t.closed_at_gh, '') = '' or julianday(t.closed_at_gh) > julianday(?))`
+		args = append(args, at, at)
+	}
+	if !query.CreatedAfter.IsZero() {
+		where += ` and julianday(t.created_at_gh) > julianday(?)`
+		args = append(args, query.CreatedAfter.UTC().Format(time.RFC3339Nano))
+	}
+	if !query.MergedAfter.IsZero() {
+		where += ` and julianday(t.merged_at_gh) > julianday(?)`
+		args = append(args, query.MergedAfter.UTC().Format(time.RFC3339Nano))
+	}
+	if query.CreatedAfterNumber > 0 {
+		where += ` and t.number > ?`
+		args = append(args, query.CreatedAfterNumber)
 	}
 	return where, args
 }
