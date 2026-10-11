@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"runtime"
 
 	"modernc.org/sqlite"
 )
@@ -27,11 +28,19 @@ func init() {
 		if closeErr != nil {
 			return fmt.Errorf("close SQLite commit durability row: %w", closeErr)
 		}
-		if level, ok := values[0].(int64); ok && level >= 2 {
-			return nil
+		if level, ok := values[0].(int64); !ok || level < 2 {
+			if _, err := conn.ExecContext(context.Background(), "PRAGMA synchronous=FULL", nil); err != nil {
+				return fmt.Errorf("configure SQLite commit durability: %w", err)
+			}
 		}
-		if _, err := conn.ExecContext(context.Background(), "PRAGMA synchronous=FULL", nil); err != nil {
-			return fmt.Errorf("configure SQLite commit durability: %w", err)
+		// Darwin's VFS uses F_FULLFSYNC for these flags. Apply them even when
+		// the DSN already requests FULL or EXTRA; they are independent settings.
+		if runtime.GOOS == "darwin" {
+			for _, pragma := range []string{"PRAGMA fullfsync=ON", "PRAGMA checkpoint_fullfsync=ON"} {
+				if _, err := conn.ExecContext(context.Background(), pragma, nil); err != nil {
+					return fmt.Errorf("configure SQLite Darwin flush policy (%s): %w", pragma, err)
+				}
+			}
 		}
 		return nil
 	})

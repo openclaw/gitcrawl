@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -20,6 +21,7 @@ func TestWriterDurabilitySurvivesConnectionReplacement(t *testing.T) {
 		if err := st.DB().QueryRowContext(ctx, "PRAGMA synchronous").Scan(&sync); err != nil || sync != 2 {
 			t.Fatalf("writer synchronous=%d, err=%v; want FULL", sync, err)
 		}
+		checkDarwinFlushPolicy(t, st.DB())
 	}
 	check()
 	// Closing idle connections forces a new connection through the original
@@ -80,6 +82,7 @@ func TestDurabilityAcceptsSQLiteDSNsAndPreservesAccess(t *testing.T) {
 			if err = db.QueryRow("PRAGMA synchronous").Scan(&level); err != nil || level != tc.want {
 				t.Fatalf("level=%d err=%v", level, err)
 			}
+			checkDarwinFlushPolicy(t, db)
 			if _, err = db.Exec("CREATE TABLE writable(id INTEGER)"); err != nil {
 				t.Fatal(err)
 			}
@@ -105,8 +108,57 @@ func TestDurabilityAcceptsSQLiteDSNsAndPreservesAccess(t *testing.T) {
 			if err = db.Ping(); err != nil {
 				t.Fatal(err)
 			}
+			checkDarwinFlushPolicy(t, db)
 			if _, err = db.Exec("INSERT INTO keep VALUES(1)"); err == nil {
 				t.Fatal("read-only access weakened")
+			}
+		})
+	}
+}
+
+func checkDarwinFlushPolicy(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	for _, pragma := range []string{"fullfsync", "checkpoint_fullfsync"} {
+		var value int
+		if err := db.QueryRow("PRAGMA " + pragma).Scan(&value); err != nil || value != 1 {
+			t.Fatalf("%s=%d err=%v; want ON", pragma, value, err)
+		}
+	}
+}
+
+func TestDarwinFlushPolicyOverridesDSNOnReplacement(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin flush policy")
+	}
+	for _, sync := range []string{"NORMAL", "FULL", "EXTRA"} {
+		t.Run(sync, func(t *testing.T) {
+			db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "writer.db")+
+				"?_pragma=journal_mode(WAL)&_pragma=synchronous("+sync+")&_pragma=fullfsync(OFF)&_pragma=checkpoint_fullfsync(OFF)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			for i := 0; i < 2; i++ {
+				checkDarwinFlushPolicy(t, db)
+				var got int
+				want := 2
+				if sync == "EXTRA" {
+					want = 3
+				}
+				if err := db.QueryRow("PRAGMA synchronous").Scan(&got); err != nil || got != want {
+					t.Fatalf("synchronous=%d err=%v; want %d", got, err, want)
+				}
+				if _, err := db.Exec("CREATE TABLE IF NOT EXISTS retained(id INTEGER); INSERT INTO retained VALUES(1)"); err != nil {
+					t.Fatal(err)
+				}
+				var busy, frames, checkpointed int
+				if err := db.QueryRow("PRAGMA wal_checkpoint(FULL)").Scan(&busy, &frames, &checkpointed); err != nil || busy != 0 {
+					t.Fatalf("checkpoint busy=%d err=%v", busy, err)
+				}
+				db.SetMaxIdleConns(0)
 			}
 		})
 	}

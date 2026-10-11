@@ -11,6 +11,14 @@ strengthens commit retention during operating-system crashes compared with
 `NORMAL`, which may lose recent acknowledged transactions. It does not make a
 hardware power-loss guarantee independent of filesystem/device flush behavior.
 
+On Darwin, every connection also requests `fullfsync=ON` and
+`checkpoint_fullfsync=ON`, including connections already configured for `FULL`
+or `EXTRA`. The bundled Unix VFS then requests `F_FULLFSYNC` for commits and
+checkpoints; SQLite falls back to `fsync` if the filesystem rejects it. These
+connection-local flags preserve read-only/immutable access restrictions. Their
+presence and successful disposable writes do not prove physical power-loss
+durability.
+
 Validate writer settings on the writer connection, not on a separate read-only
 connection. Disposable SIGKILL tests should check both sides of commit: preserve
 acknowledged multi-table updates and receipts, and roll back interrupted updates
