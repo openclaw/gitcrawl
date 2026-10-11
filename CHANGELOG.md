@@ -2,16 +2,18 @@
 
 ## Unreleased
 
-- Update `golang.org/x/sys` to v0.49.0 and `go-runewidth` to v0.0.31, retaining the Go 1.27.2 source-build minimum.
+## 0.15.1 - 2026-10-11
 
-- Update the TruffleHog secret-scanning action to v3.98.0. Thanks @dependabot.
-
-- Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.
-
-- Load the analytics discovery receipt beside the resolved config, including `GITCRAWL_CONFIG`, instead of the working directory. Thanks @SebTardif.
+**Highlights:** Faster embedding on large archives, reliable local database setup, and Go security fixes.
 
 - Speed up `embed --include-closed` on large archives with indexed candidate pagination, preserving ordering and limits and adding the index automatically without a schema version bump. Thanks @masatohoshino.
+- Initialize the local database during `init` so fresh installations are ready to use, while preserving remote and portable sources. Thanks @RomneyDa.
+- Update the Go source and Docker build minimum to 1.27.2 to resolve vulnerability scan failures. Thanks @RomneyDa.
 
+- Load the analytics discovery receipt beside the resolved config, including `GITCRAWL_CONFIG`, instead of the working directory. Thanks @SebTardif.
+- Update `golang.org/x/sys` to v0.49.0 and `go-runewidth` to v0.0.31, retaining the Go 1.27.2 source-build minimum.
+- Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.
+- Update the TruffleHog secret-scanning action to v3.98.0. Thanks @dependabot.
 - Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites.
 
 ## 0.15.0 - 2026-10-01
