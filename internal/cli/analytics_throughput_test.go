@@ -110,6 +110,11 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 				}
 				var req struct{ Query string }
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					// Cancelling one recovery request can interrupt a sibling's body upload.
+					if mode == "cancel" && errors.Is(r.Context().Err(), context.Canceled) &&
+						(errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+						return
+					}
 					t.Error(err)
 					return
 				}

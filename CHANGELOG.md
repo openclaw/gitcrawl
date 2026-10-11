@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update `golang.org/x/sys` to v0.49.0 and `go-runewidth` to v0.0.31, retaining the Go 1.27.2 source-build minimum.
+
 - Update the TruffleHog secret-scanning action to v3.98.0. Thanks @dependabot.
 
 - Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.
