@@ -15,6 +15,7 @@
 - Update the indirect `go-strftime` dependency to v1.1.0, retaining the existing Go runtime floor.
 - Update the TruffleHog secret-scanning action to v3.98.0. Thanks @dependabot.
 - Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites.
+- Verify every macOS release binary's deployment target before signing and publication to preserve macOS 13 compatibility.
 
 ## 0.15.0 - 2026-10-01
 

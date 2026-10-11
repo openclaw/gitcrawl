@@ -17,6 +17,8 @@ The public compatibility contract remains:
 
 The shared pipeline also publishes verifier control assets (`ASSET-INVENTORY.json`, `SIGNING-MANIFEST.json`, and `RELEASE-NOTES.md`).
 
+Official builds run on macOS. A GoReleaser post-build hook checks `LC_BUILD_VERSION` with `otool` for every Darwin slice before signing or publishing, rejecting deployment targets newer than the documented macOS 13.0 minimum. Linux CI snapshots skip this platform-specific check.
+
 ## Release
 
 Prepare a dated changelog section, land it on protected `main`, and dispatch the workflow:

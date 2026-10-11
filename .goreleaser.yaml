@@ -22,6 +22,8 @@ builds:
   - id: gitcrawl_darwin
     main: ./cmd/gitcrawl
     binary: gitcrawl
+    hooks:
+      post: ./scripts/check-macos-minimum.sh "{{ .Path }}" "{{ .IsSnapshot }}"
     env:
       - CGO_ENABLED=0
       - GOEXPERIMENT=simd

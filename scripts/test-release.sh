@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 EXPECTED_AUTHORITY='Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)'
 
-for script in codesign-macos.sh package-release.sh verify-release.sh; do
+for script in codesign-macos.sh package-release.sh verify-release.sh check-macos-minimum.sh; do
   bash -n "$ROOT/scripts/$script"
 done
 
@@ -73,6 +73,11 @@ case "${2:-}" in
 esac
 EOF
 
+cat > "$FAKE_BIN/otool" <<'EOF'
+#!/usr/bin/env bash
+printf '      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos %s\n' "${MOCK_MACOS_MINIMUM:-13.0}"
+EOF
+
 chmod 0755 "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
 export MOCK_CODESIGN_LOG="$WORK_DIR/codesign.log"
@@ -85,6 +90,16 @@ cat > "$test_binary" <<'EOF'
 echo 0.7.1
 EOF
 chmod 0755 "$test_binary"
+
+"$ROOT/scripts/check-macos-minimum.sh" "$test_binary"
+if MOCK_MACOS_MINIMUM=14.0 "$ROOT/scripts/check-macos-minimum.sh" "$test_binary" >/dev/null 2>&1; then
+  echo "unsupported macOS deployment target was accepted" >&2
+  exit 1
+fi
+if MOCK_MACOS_MINIMUM=missing "$ROOT/scripts/check-macos-minimum.sh" "$test_binary" >/dev/null 2>&1; then
+  echo "missing macOS deployment target was accepted" >&2
+  exit 1
+fi
 
 GITCRAWL_REQUIRE_CODESIGN=0 "$ROOT/scripts/codesign-macos.sh" "$test_binary"
 if package_output=$("$ROOT/scripts/package-release.sh" 2>&1); then

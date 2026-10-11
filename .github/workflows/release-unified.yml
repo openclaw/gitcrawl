@@ -27,6 +27,7 @@ jobs:
       archive-files: '["CHANGELOG.md","LICENSE","README.md"]'
       checksum-filename: checksums.txt
       nfpm: auto
+      build-runner: macos
       stable-identifier: org.openclaw.gitcrawl
       darwin-universal: disabled
       ci-check-events: '["push","pull_request"]'
