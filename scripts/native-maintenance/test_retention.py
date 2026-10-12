@@ -265,6 +265,33 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(retention.retire_zero_scope(c, before, native, zero)['retired'], [])
         self.assertEqual(calls, [])
 
+    def test_old_policy_entry_does_not_strand_scope_retirement(self):
+        c, entry, native, zero, calls = self.zero_fixture()
+        old = copy.deepcopy(entry)
+        old.update(request='old-policy-request.json', invalidated='consumer_policy_changed')
+        old.pop('result'); old.pop('result_sha256')
+        request = json.loads((c.base / entry['request']).read_bytes())
+        request['source_binding']['consumer_exclusions_sha256'] = 'earlier-same-set-binding'
+        raw = retention.encoded(request)
+        (c.base / old['request']).write_bytes(raw)
+        old['sha256'] = retention.digest(raw)
+        c.state['retained'].insert(0, old)
+        before = retention.capture_scope(c)
+        self.assertIn(old['sha256'], before['entries'])
+        c.state['scope_retirement_pending'] = {'before': before, 'publication': native}
+        c.checkpoint()
+        resumed = maintain.Cycle(c.c, c.call)
+        resumed.zero_export = lambda: zero
+        resumed.finish_scope_retirement()
+        self.assertNotIn('scope_retirement_pending', resumed.state)
+        self.assertEqual(resumed.state['retained'], [old])
+        self.assertEqual((c.base / old['request']).read_bytes(), raw)
+        self.assertEqual([call[-1] for call in calls], [entry['sha256']])
+        again = maintain.Cycle(c.c, c.call)
+        again.finish_scope_retirement()
+        self.assertEqual(again.state['retained'], [old])
+        self.assertEqual(len(calls), 1)
+
     def test_changed_input_cycles_do_not_grow_retained_cap(self):
         c, entry, native, zero, calls = self.zero_fixture()
         original_request = json.loads((c.base / entry['request']).read_bytes())

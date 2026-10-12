@@ -39,8 +39,19 @@ class RecoveryTests(Tests):
   x.update({'result':'result.json','result_sha256':m.sha(result),'native_receipt':str(native),'native_receipt_sha256':m.sha(native.read_bytes()),'matched':1});c.checkpoint();released=[]
   def die(argv,data=None,timeout=90):released.append(argv);raise KeyboardInterrupt('crash after remote release')
   c.call=die;self.assertRaises(KeyboardInterrupt,c.finish,x);disk=json.loads(c.statepath.read_bytes());self.assertEqual(disk['pending']['stage'],'release_intent')
-  def again(argv,data=None,timeout=90):self.assertEqual(argv[-2],'release');released.append(argv);return b'{"status":"released","removed":0}'
+  def again(argv,data=None,timeout=90):self.assertEqual(argv[-2],'release');released.append(argv);return json.dumps({'status':'released','request_sha256':argv[-1],'removed':0}).encode()
   resumed=m.Cycle(c.c,again);self.assertEqual(resumed.run()['status'],'recovered_release');self.assertEqual(len(released),2);self.assertNotIn('pending',resumed.state)
+ def test_unbound_release_keeps_intent_and_local_proof_for_restart(self):
+  for response in [{'status':'pending'}, {'status':'released','request_sha256':'wrong'}, {}]:
+   with self.subTest(response=response):
+    c,p,calls=self.make();self.pending(c,p);x=c.state['pending'];result=b'{"results":[]}';(p/'result.json').write_bytes(result);native=p/'native.json';m.save(native,{'request_sha256':x['sha256'],'response_sha256':m.sha(result),'imported':1,'unchanged':0,'committed_at':'t'})
+    x.update(result='result.json',result_sha256=m.sha(result),native_receipt=str(native),native_receipt_sha256=m.sha(native.read_bytes()),matched=1);c.checkpoint()
+    c.call=lambda argv,data=None,timeout=90:json.dumps(response).encode()
+    with self.assertRaisesRegex(RuntimeError,'release response binding invalid'):c.finish(x)
+    disk=json.loads(c.statepath.read_bytes());self.assertEqual(disk['pending']['stage'],'release_intent');self.assertTrue((p/'request.json').exists());self.assertTrue((p/'result.json').exists());self.assertFalse((p/(x['sha256']+'-receipt.json')).exists())
+    def released(argv,data=None,timeout=90):
+     self.assertEqual(argv[-2:],[ 'release',x['sha256']]);calls.append(argv);return json.dumps({'status':'released','request_sha256':x['sha256'],'removed':0}).encode()
+    resumed=m.Cycle(c.c,released);self.assertEqual(resumed.run()['status'],'recovered_release');self.assertNotIn('pending',resumed.state);self.assertEqual(len(calls),1)
  def test_new_exclusion_drops_old_bytes_and_exports_clean(self):
   c,p,calls=self.make();self.pending(c,p);old=c.state['pending']['sha256'];policy={'format':'gitcrawl.embedding.exclusions.v1','dataset':'gitcrawl/history/threads','excluded_thread_ids':['1']};m.save(c.policy,policy);c.policy_refresh=lambda:'new-policy';exports=[]
   def new():

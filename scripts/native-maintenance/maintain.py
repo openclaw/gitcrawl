@@ -117,7 +117,9 @@ class Cycle:
     pending['request_header']={k:v for k,v in req.items() if k!='tasks'};pending['stage']='release_intent';self.checkpoint()
    # A killed process here resumes from durable local import proof, bypassing
    # broker result. Release is idempotent, including an already released request.
-   released=json.loads(self.call(self.c['broker']+['release',pending['sha256']],b''));pending['release']=released;pending['finished_at']=now();pending['stage']='released';self.checkpoint()
+   released=json.loads(self.call(self.c['broker']+['release',pending['sha256']],b''))
+   if released.get('status')!='released' or released.get('request_sha256')!=pending['sha256']:raise RuntimeError('completion release response binding invalid')
+   pending['release']=released;pending['finished_at']=now();pending['stage']='released';self.checkpoint()
   save(self.base/(pending['sha256']+'-receipt.json'),pending)
   # Keep released completion ownership until retirement intent is durable.
   # Restart re-enters finish without fetching/resubmitting the broker result.

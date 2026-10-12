@@ -328,6 +328,10 @@ def retire_zero_scope(cycle, before, native, zero):
         if not left or left != right:
             continue
         header = right['header']
+        # Old policy requests remain owned, but cannot obstruct compatible
+        # entries or strand replay of the completed scope-retirement operation.
+        if header['source_binding'].get('consumer_exclusions_sha256') != before['policy_sha256']:
+            continue
         if header['source_binding'].get('source_commit') != '6c9c1bea7d094397dcdfecfb50e693460592a5aa':
             continue
         if (header.get('repository'), header.get('model'), header.get('dimensions'), header.get('basis'), header.get('native_hash_version')) != ('openclaw/openclaw', 'text-embedding-3-small', 1536, 'title_original', 'embedding:v5'):

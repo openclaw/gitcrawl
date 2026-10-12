@@ -39,6 +39,12 @@ records release before checksum-checked removal of the exclusive temporary
 request/result files. Original completion/native receipts and every archive row
 remain intact. Incomplete proof and changed files stay retained.
 
+Requests with an older consumer-policy binding are ineligible for the current
+zero-scope proof and remain retained without blocking other eligible retirements.
+Every completion release must return the expected released status and request
+digest before the controller discards pending ownership; an invalid response
+keeps its durable release intent and local proof for restart.
+
 Existing receipts lacking the new header have an explicit, single-envelope
 recovery path. Under the existing orchestrator lock, invoke the installed script
 with its usual config/hash plus:
