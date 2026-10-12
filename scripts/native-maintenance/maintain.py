@@ -87,7 +87,9 @@ class Cycle:
    for t in req['tasks']:
     v=outputs[t['task_id']];row=con.execute('select content_hash,dimensions,vector_json from thread_vectors where thread_id=? and basis=? and model=?',(t['thread_binding']['thread_id'],req['basis'],req['model'])).fetchone()
     if v['input_sha256']!=t['input_sha256'] or not row or row[0]!=t['native_content_hash'] or row[1]!=1536 or json.loads(row[2])!=v['vector']:raise RuntimeError('durable import no longer matches current native vector; owner review required')
-  pending['native_receipt']=str(path);pending['native_receipt_sha256']=sha(path.read_bytes());pending['matched']=len(req['tasks']);self.checkpoint();return True
+  pending['native_receipt']=str(path);pending['native_receipt_sha256']=sha(path.read_bytes());pending['matched']=len(req['tasks'])
+  if receipt.get('format')=='gitcrawl.combined-producer.v1':pending['native_publication']=receipt
+  self.checkpoint();return True
  def release_proof(self,p):
   request=(self.base/p['request']).read_bytes();result=(self.base/p['result']).read_bytes();receipt=pathlib.Path(p['native_receipt']).read_bytes();r=json.loads(receipt)
   if sha(request)!=p['sha256'] or sha(result)!=p['result_sha256'] or sha(receipt)!=p['native_receipt_sha256']:raise RuntimeError('release-intent local proof checksum mismatch')
@@ -102,10 +104,15 @@ class Cycle:
    # broker result. Release is idempotent, including an already released request.
    released=json.loads(self.call(self.c['broker']+['release',pending['sha256']],b''));pending['release']=released;pending['finished_at']=now();pending['stage']='released';self.checkpoint()
   save(self.base/(pending['sha256']+'-receipt.json'),pending)
+  # Keep released completion ownership until retirement intent is durable.
+  # Restart re-enters finish without fetching/resubmitting the broker result.
+  if pending.get('request_header') and pending.get('native_publication',{}).get('format')=='gitcrawl.combined-producer.v1':
+   retention.retire_completed(self,self.base/(pending['sha256']+'-receipt.json'))
+   if pending.get('retirement_scope_before') and self.state['retained']:
+    retention.retire_zero_scope(self,pending['retirement_scope_before'],pending['native_publication'],self.zero_export())
   for name in [pending['request'],pending.get('result')]:
    if name and pathlib.Path(name).name==name:(self.base/name).unlink(missing_ok=True)
   self.state.pop('pending',None);self.state['last_success']=now();self.checkpoint()
-  if pending.get('request_header') and pending.get('native_publication',{}).get('format')=='gitcrawl.combined-producer.v1':retention.retire_completed(self,self.base/(pending['sha256']+'-receipt.json'))
  def policy_changed(self,p):
   current=self.policy_refresh();raw=(self.base/p['request']).read_bytes();request=json.loads(raw)
   return current!=request.get('source_binding',{}).get('consumer_exclusions_sha256')
@@ -113,14 +120,21 @@ class Cycle:
   if len(self.state['retained'])>=16:raise RuntimeError('retained replacement cap reached; operator review')
   request=json.loads((self.base/p['request']).read_bytes());policy=json.loads(self.policy.read_bytes());blocked=set(policy['excluded_thread_ids'])
   p['invalidated']='consumer_policy_changed';p['native_bindings']=[{k:v for k,v in t.items() if k!='input'} for t in request['tasks']]
+  p.pop('retirement_scope_before',None)
   self.state['retained'].append(p);self.state.pop('pending');self.checkpoint()
   # Newly removed input is never relabelled or sent again. Drop only exclusive
   # local copies; retain request digest so still-allowed broker jobs can be reused.
   if any(t.get('thread_binding',{}).get('thread_id') in blocked for t in request['tasks']):
    for name in [p.get('request'),p.get('result')]:
     if name and pathlib.Path(name).name==name:(self.base/name).unlink(missing_ok=True)
+ def finish_scope_retirement(self):
+  work=self.state.get('scope_retirement_pending')
+  if work:
+   if self.state['retained']:retention.retire_zero_scope(self,work['before'],work['publication'],self.zero_export())
+   self.state.pop('scope_retirement_pending');self.checkpoint()
  def run(self):
   retention.resume(self)
+  self.finish_scope_retirement()
   # At most one successful handoff. Stale preview gets one fresh replacement;
   # pending provider work always resumes before a new export.
   for refresh in range(2):
@@ -132,8 +146,9 @@ class Cycle:
      if not self.source_ready():self.checkpoint();return {'status':'waiting_core'}
      before=self.retirement_scope() if self.state['retained'] else None
      raw=self.call(self.c['cluster_invocation'],timeout=420)
-     self.state['cluster']=json.loads(raw) if raw.strip() else {'status':'controller_busy'};self.checkpoint()
-     if before and self.state['cluster'].get('phase') in ('committed','unchanged'):retention.retire_zero_scope(self,before,self.state['cluster'],self.zero_export())
+     self.state['cluster']=json.loads(raw) if raw.strip() else {'status':'controller_busy'}
+     if before and self.state['cluster'].get('phase') in ('committed','unchanged'):self.state['scope_retirement_pending']={'before':before,'publication':self.state['cluster']}
+     self.checkpoint();self.finish_scope_retirement()
      return {'status':'vectors_current','cluster':self.state['cluster']}
     p=self.state['pending']
    if self.policy_changed(p):self.invalidate_policy(p);continue
@@ -169,6 +184,7 @@ class Cycle:
    mode='embedding-import' if catchup else 'combined'
    argv=command+['--mode',mode,'--request',str(self.base/p['request']),'--response',str(self.base/resultName),'--consumer-exclusions',str(self.policy)]
    before=self.retirement_scope() if mode=='combined' and self.state['retained'] else None
+   if before:p['retirement_scope_before']=before;self.checkpoint()
    try:
     data=self.call(argv,timeout=420 if mode=='combined' else 150);atomic(log,data)
    except RuntimeError as e:
@@ -180,13 +196,13 @@ class Cycle:
     if (failure.get('phase')=='prepare' or 'consumer-excluded task' in str(e)) and self.policy_changed(p):self.invalidate_policy(p);continue
     if failure.get('phase')=='prepare' and any(reason in str(e) for reason in ['stale native identity/clock task','native combined input/curation changed during compute','native cluster coverage incomplete']):
      if len(self.state['retained'])>=16:raise RuntimeError('retained replacement cap reached; operator review')
+     p.pop('retirement_scope_before',None)
      self.state['retained'].append(p);self.state.pop('pending');self.checkpoint();continue
     raise
    if not data.strip():return {'status':'controller_busy'}
    summary=json.loads(data.splitlines()[-1]);p['native_receipt']=summary.get('receipt');p['native_publication']=summary;self.checkpoint()
    if not self.verify_import(p,result):raise RuntimeError('native durable receipt missing; broker retained')
    self.finish(p)
-   if before and self.state['retained']:retention.retire_zero_scope(self,before,summary,self.zero_export())
    return {'status':'catchup_imported' if catchup else 'combined_published','tasks':p['matched'],'native':summary}
   return {'status':'replacement_pending'}
 

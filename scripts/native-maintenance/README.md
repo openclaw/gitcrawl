@@ -31,7 +31,9 @@ branch, so successful work frees slots without waiting another cadence or
 growing the cap.
 
 An immutable proof records the original retained entry before any release. The
-controller checkpoints release intent, respects `native_request_inflight`, and
+controller keeps ownership of a completed pending request until retirement intent
+is checkpointed, including the zero-scope gate. Restart resumes this completion
+without fetching or resubmitting broker results. The controller respects `native_request_inflight`, and
 replays only idempotent release after interruption. A separate immutable receipt
 records release before checksum-checked removal of the exclusive temporary
 request/result files. Original completion/native receipts and every archive row

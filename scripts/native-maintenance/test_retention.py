@@ -301,6 +301,61 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(retention.retire_zero_scope(c, before, native, zero)['retired'], [])
         self.assertEqual(calls, [])
 
+    def test_completion_ownership_survives_pre_intent_checkpoint_crash(self):
+        c, entry, done, path, calls = self.fixture()
+        done.update(request='already-cleaned.json', native_publication=json.loads(Path(done['native_receipt']).read_bytes()))
+        c.state['pending'] = done
+        c.checkpoint()
+        original = c.checkpoint
+        def crash_before_intent_checkpoint():
+            if any(e.get('retirement') for e in c.state['retained']):
+                raise KeyboardInterrupt('before retained retirement intent checkpoint')
+            original()
+        c.checkpoint = crash_before_intent_checkpoint
+        with self.assertRaises(KeyboardInterrupt):
+            c.finish(done)
+        disk = json.loads(c.statepath.read_bytes())
+        self.assertIn('pending', disk)
+        self.assertEqual(disk['pending']['sha256'], done['sha256'])
+        self.assertEqual(calls, [])
+        resumed = maintain.Cycle(c.c, c.call)
+        self.assertEqual(resumed.run()['status'], 'recovered_release')
+        self.assertNotIn('pending', resumed.state)
+        self.assertEqual(resumed.state['retained'], [])
+        self.assertEqual(len(calls), 1)
+
+    def test_zero_scope_completion_keeps_pending_until_intent_checkpoint(self):
+        c, entry, native, zero, calls = self.zero_fixture()
+        before = retention.capture_scope(c)
+        done_path = c.base / 'completed-receipt.json'
+        done = json.loads(done_path.read_bytes())
+        done['request_header']['source_binding']['consumer_exclusions_sha256'] = zero['consumer_exclusions_sha256']
+        native_path = Path(done['native_receipt'])
+        native_path.write_bytes(retention.encoded(native))
+        done['native_receipt_sha256'] = retention.digest(native_path.read_bytes())
+        done.update(request='already-cleaned.json', native_publication=native, retirement_scope_before=before)
+        c.state['pending'] = done
+        c.checkpoint()
+        c.zero_export = lambda: zero
+        # This specifically exercises the zero-scope gate, after the exact-input
+        # gate cannot prove a replacement for legitimately changed old input.
+        with patch.object(retention, 'retire_completed', return_value={'retired': []}):
+            original = c.checkpoint
+            def crash():
+                if any(e.get('retirement') for e in c.state['retained']):
+                    raise KeyboardInterrupt('zero-scope pre-intent checkpoint')
+                original()
+            c.checkpoint = crash
+            with self.assertRaises(KeyboardInterrupt):
+                c.finish(done)
+        self.assertIn('pending', json.loads(c.statepath.read_bytes()))
+        resumed = maintain.Cycle(c.c, c.call)
+        resumed.zero_export = lambda: zero
+        with patch.object(retention, 'retire_completed', return_value={'retired': []}):
+            self.assertEqual(resumed.run()['status'], 'recovered_release')
+        self.assertEqual(resumed.state['retained'], [])
+        self.assertNotIn('pending', resumed.state)
+
 
 if __name__ == '__main__':
     unittest.main()
