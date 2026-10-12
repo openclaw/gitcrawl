@@ -195,6 +195,7 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(len(c.state['retained']), 15)
         c.source_ready = lambda: True
         c.retirement_scope = lambda: None
+        c.archive_superseded = lambda: {'archived': []}
         c.policy_refresh = lambda: 'policy'
         c.verify_import = lambda *a: False
         c.c['combined_invocation'] = ['fixture-combined']

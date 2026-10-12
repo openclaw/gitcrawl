@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Native-owned pending-first embedding/cluster maintenance. No model credentials."""
 import argparse,datetime,fcntl,hashlib,json,os,pathlib,sqlite3,subprocess,time,uuid
+from contextlib import closing
 import retention
+import archive_handoff
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -18,6 +20,8 @@ def invoke(argv,data=None,timeout=90):
  if r.returncode:raise RuntimeError('command failed: '+r.stderr.decode(errors='replace')[-1200:])
  return r.stdout
 
+class CoreBoundaryPending(RuntimeError):pass
+
 class Cycle:
  def __init__(self,config,call=invoke):
   self.c=config;self.call=call;self.base=pathlib.Path(config['state_dir']);self.base.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -33,13 +37,24 @@ class Cycle:
   atomic(self.policy,raw);return sha(raw)
  def source_ready(self):
   db=self.c['db'];handoff=pathlib.Path(self.c['handoff_state'])/'last-handoff.json';last=json.loads(handoff.read_bytes()).get('restored_at',0) if handoff.exists() else 0
-  with sqlite3.connect('file:'+db+'?mode=ro',uri=True,timeout=5) as con:
+  with closing(sqlite3.connect('file:'+db+'?mode=ro',uri=True,timeout=5)) as con:
    row=con.execute("select through,observed_at,complete from analytics_coverage where repository='openclaw/openclaw'").fetchone()
   if not row:return False
   at=datetime.datetime.fromisoformat(row[1].replace('Z','+00:00')).timestamp()
   self.state['core']={'through':row[0],'observed_at':row[1],'complete':row[2]}
   return row[2]==1 and at>last and time.time()-at<=300
+ def await_core_boundary(self):
+  # Align with a real ordinary receipt, not a fixed sleep or a forced core run.
+  until=time.monotonic()+120
+  while True:
+   if self.source_ready():
+    observed=datetime.datetime.fromisoformat(self.state['core']['observed_at'].replace('Z','+00:00')).timestamp()
+    if 0<=time.time()-observed<=5:return dict(self.state['core'])
+   if time.monotonic()>=until:raise CoreBoundaryPending('ordinary core completion not observed within120s')
+   time.sleep(1)
+ def archive_superseded(self):return archive_handoff.archive_superseded(self)
  def new_packet(self):
+  boundary=self.await_core_boundary()
   self.policy_refresh();token=uuid.uuid4().hex;request=self.base/(token+'-request.json')
   if sha(pathlib.Path(self.c['binary']).read_bytes())!=self.c['binary_sha256']:raise RuntimeError('native exporter binary changed')
   limit=2000
@@ -49,7 +64,7 @@ class Cycle:
    except RuntimeError as e:
     if 'request exceeds16MiB' not in str(e) or limit==1:raise
     limit=max(1,limit//2)
-  export['task_cap']=limit
+  export['task_cap']=limit;export['core_boundary']=boundary
   if export['tasks']==0:
    self.state['last_empty_export']=export;self.checkpoint();request.unlink(missing_ok=True);return False
   raw=request.read_bytes()
@@ -133,6 +148,7 @@ class Cycle:
    if self.state['retained']:retention.retire_zero_scope(self,work['before'],work['publication'],self.zero_export())
    self.state.pop('scope_retirement_pending');self.checkpoint()
  def run(self):
+  archive_handoff.resume(self)
   retention.resume(self)
   self.finish_scope_retirement()
   # At most one successful handoff. Stale preview gets one fresh replacement;
@@ -162,6 +178,8 @@ class Cycle:
     result=self.checked_broker(p,'submit',raw)
     if result is None:continue
     p['submit']=result;self.checkpoint()
+   archived=self.archive_superseded()
+   if archived.get('archived'):self.state['last_archive_handoff']=archived;self.checkpoint()
    until=time.monotonic()+120
    while True:
     result=self.checked_broker(p,'result',raw)
@@ -218,5 +236,7 @@ def main():
  try:
   if a.retire_completed:result=retention.retire_completed(c,a.retire_completed,target=a.retained_digest,legacy=True);print(json.dumps(result));return
   result=c.run();save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
+ except CoreBoundaryPending:
+  result={'status':'waiting_core_boundary'};save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
  except BaseException as e:save(c.base/'last-failure.json',{'at':now(),'error':str(e)});raise
 if __name__=='__main__':main()

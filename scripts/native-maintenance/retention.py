@@ -17,7 +17,10 @@ def encoded(value):
 
 
 def immutable(path, value):
-    raw = encoded(value)
+    return immutable_bytes(path, encoded(value))
+
+
+def immutable_bytes(path, raw):
     path = Path(path)
     if path.is_symlink():
         raise RuntimeError('retirement receipt symlink refused')

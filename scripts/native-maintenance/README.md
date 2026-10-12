@@ -59,3 +59,29 @@ Run disposable regressions with:
 ```
 python3 -m unittest discover -s scripts/native-maintenance -p 'test_*.py' -v
 ```
+
+## Completed disposable work at the retained cap
+
+A completed superseded broker envelope can also finish through a private archive
+handoff. The exact request/result bytes and bindings are hash-verified, fsynced,
+and read back beneath `completed-broker-archive/<request-sha256>/`, with 0700
+directories and 0600 files. The manifest explicitly records derived-work
+retirement, not native publication. The original entry and a separate retirement
+receipt remain immutable recovery evidence; native archive rows are not changed.
+Current native/consumer exclusions refuse new copies for excluded tasks. Include
+these task-indexed private archives in any later owner-directed evidence purge.
+
+A successor must be durably submitted before older references are released, so
+its identical native-input jobs remain reusable. Incomplete results remain queued;
+active leases defer release. The retained entry is removed only after archive
+verification, a checkpointed release intent, lease-guarded idempotent release,
+and a durable receipt. Interrupted copy, pre-intent checkpoint, post-release, and
+partial working-file cleanup all resume without losing pending ownership.
+
+Fresh exports align with an actual ordinary core completion receipt (at most
+120 seconds of bounded read-only waiting, then explicit deferral). This avoids
+exporting partway through the core update. Analytics continues during model work;
+the existing controller settles it only at the final prepared native write.
+No stale-clock acceptance, cap increase, quota bypass, or repeated identical
+failed import is introduced. Packet/compute/write limits and 900-second cadence
+stay unchanged.
