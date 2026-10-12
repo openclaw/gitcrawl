@@ -4,7 +4,7 @@ class Tests(unittest.TestCase):
  def make(self):
   t=tempfile.TemporaryDirectory();self.addCleanup(t.cleanup);p=pathlib.Path(t.name);calls=[]
   def call(argv,data=None,timeout=90):calls.append(argv);return b'{}'
-  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);return c,p,calls
+  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.retirement_scope=lambda:None;return c,p,calls
  def pending(self,c,p):
   raw=b'{"scope":{"max_tasks":2000},"source_binding":{"consumer_exclusions_sha256":"policy"},"tasks":[{"task_id":"t","input":"native","thread_binding":{"thread_id":"1"}}]}';(p/'request.json').write_bytes(raw);c.state['pending']={'request':'request.json','sha256':m.sha(raw),'export':{'tasks':1},'inspect':{'tasks':1},'submit':{'status':'submitted'}};c.checkpoint();c.policy_refresh=lambda:'policy'
  def test_pending_resumed_before_export_or_submit(self):
@@ -16,10 +16,10 @@ class Tests(unittest.TestCase):
  def test_crash_after_release_resumes_cleanup_without_provider(self):
   c,p,calls=self.make();c.state['pending']={'stage':'released','sha256':'frozen','request':'already-cleaned.json','result':'already-cleaned-result.json','native_bindings':[{'input_sha256':'hash'}]};c.checkpoint()
   self.assertEqual(c.run()['status'],'recovered_release');self.assertNotIn('pending',c.state);self.assertEqual(calls,[]);self.assertTrue((p/'frozen-receipt.json').exists())
- def test_zero_scope_releases_retained_then_native_noop(self):
+ def test_zero_scope_keeps_unproven_retained_then_native_noop(self):
   c,p,calls=self.make();c.state['retained']=[{'sha256':'old','request':'old.json'}];(p/'old.json').write_text('{}');c.new_packet=lambda:False;c.source_ready=lambda:True
   def call(argv,data=None,timeout=90):calls.append(argv);return b'{"phase":"unchanged"}' if argv==['fixture-cluster'] else b'{"status":"released"}'
-  c.call=call;self.assertEqual(c.run()['status'],'vectors_current');self.assertEqual(calls,[['fixture-broker','release','old'],['fixture-cluster']]);self.assertFalse((p/'old.json').exists())
+  c.call=call;self.assertEqual(c.run()['status'],'vectors_current');self.assertEqual(calls,[['fixture-cluster']]);self.assertTrue((p/'old.json').exists());self.assertEqual(len(c.state['retained']),1)
  def test_live_policy_bytes_are_stable_and_exact(self):
   c,p,calls=self.make();raw=b'{"format":"gitcrawl.embedding.exclusions.v1","dataset":"gitcrawl/history/threads","excluded_thread_ids":["12"],"revision":"stable"}\n';c.call=lambda argv,data=None,timeout=90:raw
   self.assertEqual(c.policy_refresh(),m.sha(raw));self.assertEqual(c.policy.read_bytes(),raw);self.assertEqual(c.policy_refresh(),m.sha(raw))

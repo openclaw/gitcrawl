@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native-owned pending-first embedding/cluster maintenance. No model credentials."""
 import argparse,datetime,fcntl,hashlib,json,os,pathlib,sqlite3,subprocess,time,uuid
+import retention
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -55,6 +56,17 @@ class Cycle:
   if json.loads(raw).get('scope',{}).get('max_tasks')!=limit:raise RuntimeError('native task cap binding mismatch')
   if sha(raw)!=export['request_sha256'] or len(raw)>16<<20:raise RuntimeError('native export digest/bound mismatch')
   self.state['pending']={'request':request.name,'sha256':sha(raw),'export':export,'created_at':now()};self.checkpoint();return True
+ def retirement_scope(self):return retention.capture_scope(self)
+ def zero_export(self):
+  # One bounded read-only eligibility check after publication, never model work.
+  policy=self.policy_refresh();before=retention.archive_identity(self);path=self.base/(uuid.uuid4().hex+'-zero-request.json')
+  if sha(pathlib.Path(self.c['binary']).read_bytes())!=self.c['binary_sha256']:raise RuntimeError('native exporter binary changed')
+  try:
+   result=json.loads(self.call([self.c['binary'],'embedding-export','--db',self.c['db'],'--consumer-exclusions',str(self.policy),'--limit','1','--output',str(path)],timeout=45))
+   after=retention.archive_identity(self)
+   if before!=after:raise RuntimeError('zero-export source identity changed')
+   result.update(source_identity=after,consumer_exclusions_sha256=policy,exporter_sha256=self.c['binary_sha256']);return result
+  finally:path.unlink(missing_ok=True)
  def checked_broker(self,p,mode,raw):
   try:return self.broker(mode,raw)
   except RuntimeError:
@@ -85,7 +97,7 @@ class Cycle:
    self.release_proof(pending)
    if pending.get('stage')!='release_intent':
     req=json.loads((self.base/pending['request']).read_bytes());pending['native_bindings']=[{k:v for k,v in t.items() if k!='input'} for t in req['tasks']]
-    pending['stage']='release_intent';self.checkpoint()
+    pending['request_header']={k:v for k,v in req.items() if k!='tasks'};pending['stage']='release_intent';self.checkpoint()
    # A killed process here resumes from durable local import proof, bypassing
    # broker result. Release is idempotent, including an already released request.
    released=json.loads(self.call(self.c['broker']+['release',pending['sha256']],b''));pending['release']=released;pending['finished_at']=now();pending['stage']='released';self.checkpoint()
@@ -93,6 +105,7 @@ class Cycle:
   for name in [pending['request'],pending.get('result')]:
    if name and pathlib.Path(name).name==name:(self.base/name).unlink(missing_ok=True)
   self.state.pop('pending',None);self.state['last_success']=now();self.checkpoint()
+  if pending.get('request_header') and pending.get('native_publication',{}).get('format')=='gitcrawl.combined-producer.v1':retention.retire_completed(self,self.base/(pending['sha256']+'-receipt.json'))
  def policy_changed(self,p):
   current=self.policy_refresh();raw=(self.base/p['request']).read_bytes();request=json.loads(raw)
   return current!=request.get('source_binding',{}).get('consumer_exclusions_sha256')
@@ -106,14 +119,8 @@ class Cycle:
   if any(t.get('thread_binding',{}).get('thread_id') in blocked for t in request['tasks']):
    for name in [p.get('request'),p.get('result')]:
     if name and pathlib.Path(name).name==name:(self.base/name).unlink(missing_ok=True)
- def retire_all(self):
-  for p in self.state['retained']:
-   if p.get('released'):continue
-   p['release']=json.loads(self.call(self.c['broker']+['release',p['sha256']],b''));p['released']=True;self.checkpoint()
-   for name in [p.get('request'),p.get('result')]:
-    if name and pathlib.Path(name).name==name:(self.base/name).unlink(missing_ok=True)
-  save(self.base/'retained-receipts.json',self.state['retained']);self.state['retained']=[];self.checkpoint()
  def run(self):
+  retention.resume(self)
   # At most one successful handoff. Stale preview gets one fresh replacement;
   # pending provider work always resumes before a new export.
   for refresh in range(2):
@@ -121,10 +128,13 @@ class Cycle:
    if p and p.get('stage') in ('released','release_intent'):self.finish(p);return {'status':'recovered_release'}
    if not p:
     if not self.new_packet():
-     self.retire_all()
+     retention.resume(self)
      if not self.source_ready():self.checkpoint();return {'status':'waiting_core'}
+     before=self.retirement_scope() if self.state['retained'] else None
      raw=self.call(self.c['cluster_invocation'],timeout=420)
-     self.state['cluster']=json.loads(raw) if raw.strip() else {'status':'controller_busy'};self.checkpoint();return {'status':'vectors_current','cluster':self.state['cluster']}
+     self.state['cluster']=json.loads(raw) if raw.strip() else {'status':'controller_busy'};self.checkpoint()
+     if before and self.state['cluster'].get('phase') in ('committed','unchanged'):retention.retire_zero_scope(self,before,self.state['cluster'],self.zero_export())
+     return {'status':'vectors_current','cluster':self.state['cluster']}
     p=self.state['pending']
    if self.policy_changed(p):self.invalidate_policy(p);continue
    raw=(self.base/p['request']).read_bytes()
@@ -158,6 +168,7 @@ class Cycle:
    command=self.c['import_invocation'] if catchup else self.c['combined_invocation']
    mode='embedding-import' if catchup else 'combined'
    argv=command+['--mode',mode,'--request',str(self.base/p['request']),'--response',str(self.base/resultName),'--consumer-exclusions',str(self.policy)]
+   before=self.retirement_scope() if mode=='combined' and self.state['retained'] else None
    try:
     data=self.call(argv,timeout=420 if mode=='combined' else 150);atomic(log,data)
    except RuntimeError as e:
@@ -174,16 +185,22 @@ class Cycle:
    if not data.strip():return {'status':'controller_busy'}
    summary=json.loads(data.splitlines()[-1]);p['native_receipt']=summary.get('receipt');p['native_publication']=summary;self.checkpoint()
    if not self.verify_import(p,result):raise RuntimeError('native durable receipt missing; broker retained')
-   self.finish(p);return {'status':'catchup_imported' if catchup else 'combined_published','tasks':p['matched'],'native':summary}
+   self.finish(p)
+   if before and self.state['retained']:retention.retire_zero_scope(self,before,summary,self.zero_export())
+   return {'status':'catchup_imported' if catchup else 'combined_published','tasks':p['matched'],'native':summary}
   return {'status':'replacement_pending'}
 
 def main():
- os.umask(0o077);p=argparse.ArgumentParser();p.add_argument('--config',required=True);p.add_argument('--config-sha256',required=True);a=p.parse_args();raw=pathlib.Path(a.config).read_bytes()
+ os.umask(0o077);p=argparse.ArgumentParser();p.add_argument('--config',required=True);p.add_argument('--config-sha256',required=True);p.add_argument('--retire-completed');p.add_argument('--retained-digest');a=p.parse_args();
+ if bool(a.retire_completed)!=bool(a.retained_digest):raise SystemExit('retirement requires completion receipt and exact retained digest')
+ raw=pathlib.Path(a.config).read_bytes()
  if sha(raw)!=a.config_sha256:raise SystemExit('installed config checksum mismatch')
  c=Cycle(json.loads(raw));lock=open(c.base/'orchestrator.lock','a')
  try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
  except BlockingIOError:return
  c.state=json.loads(c.statepath.read_bytes()) if c.statepath.exists() else {'retained':[]}
- try:result=c.run();save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
+ try:
+  if a.retire_completed:result=retention.retire_completed(c,a.retire_completed,target=a.retained_digest,legacy=True);print(json.dumps(result));return
+  result=c.run();save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
  except BaseException as e:save(c.base/'last-failure.json',{'at':now(),'error':str(e)});raise
 if __name__=='__main__':main()
