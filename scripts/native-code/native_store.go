@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 func NativeSHA256(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -94,6 +95,11 @@ func OpenNativeProducerWriter(ctx context.Context, path string) (*Store, error) 
 	q.Set("mode", "rw")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "synchronous(FULL)")
+	if runtime.GOOS == "darwin" {
+		q.Add("_pragma", "fullfsync(1)")
+		q.Add("_pragma", "checkpoint_fullfsync(1)")
+	}
 	u.RawQuery = q.Encode()
 	db, e := sql.Open("sqlite", u.String())
 	if e != nil {

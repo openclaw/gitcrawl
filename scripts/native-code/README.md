@@ -60,6 +60,7 @@ Focused checks use synthetic repositories and databases:
 go test ./internal/codeindex -run TestScanCommit
 python3 -m unittest discover -s scripts/native-code -p 'test_*.py'
 go test -overlay DELIVERY_OVERLAY -tags native_code_overlay ./internal/store -run 'TestNativeProducerCodeNoopAndRollback|TestNativeProducerExistingWriterNeverMigrates|TestNativeCodeWriterFlushAndObsoleteReplacement'
+go test -overlay DELIVERY_OVERLAY -tags native_code_overlay ./scripts/native-code/cmd -run TestCodeCommitGate
 ```
 
 Before live publication, verify the exact reviewed bundle and source receipt,
