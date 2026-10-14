@@ -77,6 +77,11 @@ The [command reference](docs/commands.md) lists the complete CLI surface and fla
 
 ## Development
 
+Use one canonical development checkout and branches by default. Additional
+worktrees require an explicit user request, a named owner and end-of-task cleanup.
+Keep deployment artifacts and evidence outside Projects; preserve live dependencies
+and held work before retiring a checkout. See [workspace rules](AGENTS.md).
+
 ```sh
 make build
 make test
