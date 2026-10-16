@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"unicode"
 )
 
@@ -138,17 +137,13 @@ func (s *Store) ThreadsByIDs(ctx context.Context, repoID int64, ids []int64) (ma
 	if len(ids) == 0 {
 		return map[int64]Thread{}, nil
 	}
-	placeholders := make([]string, 0, len(ids))
-	args := []any{repoID}
-	for _, id := range ids {
-		placeholders = append(placeholders, "?")
-		args = append(args, id)
-	}
+	// Integer slices always marshal successfully; one JSON parameter avoids SQLite's bind limit.
+	idJSON, _ := json.Marshal(ids)
 	rows, err := s.db.QueryContext(ctx, `
 		select `+s.threadSelectColumns(ctx, "")+`
 		from threads
-		where repo_id = ? and id in (`+strings.Join(placeholders, ",")+`)
-	`, args...)
+		where repo_id = ? and id in (select value from json_each(?))
+	`, repoID, string(idJSON))
 	if err != nil {
 		return nil, fmt.Errorf("select threads by id: %w", err)
 	}

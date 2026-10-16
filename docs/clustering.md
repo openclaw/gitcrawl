@@ -130,6 +130,8 @@ gitcrawl neighbors owner/repo --number 123 --limit 10
 
 Useful for "what else looks like this?" without committing to a cluster. If the source row is present but lacks a current embedding, the CLI command backfills that one row when an OpenAI key is configured; otherwise it prints the exact `gitcrawl embed --number ... --limit 1` command to run. The TUI's `n` shortcut and "Enter on a member" also load vector neighbors for the selected row.
 
+Large `--limit` values are supported without hitting SQLite's SQL variable limit when loading result metadata. Neighbor search still scores all eligible stored vectors, so larger archives can take longer even with a small result limit.
+
 ## Tuning recipes
 
 ### My clusters are too greedy

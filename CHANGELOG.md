@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix large neighbor and search result lookups failing with SQLite's SQL variable limit. Thanks @masatohoshino for reporting.
+
 ## 0.15.2 - 2026-10-16
 
 **Highlights:** Reliable local database initialization inside Git worktrees and refreshed dependencies.
