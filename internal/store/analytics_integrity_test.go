@@ -7,6 +7,45 @@ import (
 	"testing"
 )
 
+func TestAnalyticsRetriesCompareFractionalDeadlines(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	deadlines := []string{"2026-10-16T06:42:22.348Z", "2026-10-16T06:42:22.3489Z", "2026-10-16T06:42:22.348723Z", "2026-10-16T06:42:22Z"}
+	for index, deadline := range deadlines {
+		if _, err := s.DB().Exec("INSERT INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at) VALUES('fixture/repo',?,'review_state',?,?,?)", index+1, deadline, deadline, deadline); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readers := map[string]func(string) ([]int, error){
+		"review": func(at string) ([]int, error) { return s.DueReviewStateWork(ctx, "fixture/repo", at, 10) },
+		"core": func(at string) ([]int, error) {
+			return s.DueAnalyticsRetries(ctx, "fixture/repo", at, 10, "review_state")
+		},
+	}
+	for name, read := range readers {
+		t.Run(name, func(t *testing.T) {
+			for _, at := range []string{"2026-10-16T06:42:22.348723Z", "2026-10-16T08:42:22.348723+02:00"} {
+				due, err := read(at)
+				seen := make(map[int]bool)
+				for _, number := range due {
+					seen[number] = true
+				}
+				if err != nil || len(due) != 3 || !seen[1] || !seen[3] || !seen[4] {
+					t.Fatalf("due at %s: %v, %v", at, due, err)
+				}
+			}
+			due, err := read("2026-10-16T06:42:22Z")
+			if err != nil || len(due) != 1 || due[0] != 4 {
+				t.Fatalf("whole-second deadline: %v, %v", due, err)
+			}
+		})
+	}
+}
+
 func TestAnalyticsFailureRecoveryRetainsReceiptsAndFairRetryTimes(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "archive.db")

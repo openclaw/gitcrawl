@@ -132,13 +132,17 @@ func (s *Store) DueReviewStateWork(ctx context.Context, repository, at string, l
 	if limit <= 0 {
 		return nil, nil
 	}
-	const eligible = `repository=? AND operation='review_state' AND resolved_at IS NULL AND number>0 AND next_attempt_at<=? AND NOT EXISTS(SELECT 1 FROM analytics_retries core WHERE core.repository=analytics_retries.repository AND core.number=analytics_retries.number AND core.operation='graphql_history' AND core.resolved_at IS NULL)`
+	before, through, err := analyticsRetryDeadline(at)
+	if err != nil {
+		return nil, err
+	}
+	const eligible = `repository=? AND operation='review_state' AND resolved_at IS NULL AND number>0 AND next_attempt_at<? AND rtrim(next_attempt_at,'Z')<=? AND NOT EXISTS(SELECT 1 FROM analytics_retries core WHERE core.repository=analytics_retries.repository AND core.number=analytics_retries.number AND core.operation='graphql_history' AND core.resolved_at IS NULL)`
 	read := func(attempted bool, n int) ([]int, error) {
 		predicate := "attempts=0"
 		if attempted {
 			predicate = "attempts>0"
 		}
-		rows, err := s.q().QueryContext(ctx, "SELECT number FROM analytics_retries WHERE "+eligible+" AND "+predicate+" ORDER BY next_attempt_at,number LIMIT ?", repository, at, n)
+		rows, err := s.q().QueryContext(ctx, "SELECT number FROM analytics_retries WHERE "+eligible+" AND "+predicate+" ORDER BY next_attempt_at,number LIMIT ?", repository, before, through, n)
 		if err != nil {
 			return nil, err
 		}
@@ -191,13 +195,17 @@ func (s *Store) ReviewStateParent(ctx context.Context, repository string, number
 }
 
 func (s *Store) DueAnalyticsRetries(ctx context.Context, repository, at string, limit int, operations ...string) ([]int, error) {
+	before, through, err := analyticsRetryDeadline(at)
+	if err != nil {
+		return nil, err
+	}
 	operation := ""
 	if len(operations) > 0 {
 		operation = operations[0]
 	}
-	rows, err := s.q().QueryContext(ctx, `SELECT r.number FROM analytics_retries r WHERE r.repository=? AND r.resolved_at IS NULL AND r.number>0 AND r.next_attempt_at<=? AND (?='' OR r.operation=?)
+	rows, err := s.q().QueryContext(ctx, `SELECT r.number FROM analytics_retries r WHERE r.repository=? AND r.resolved_at IS NULL AND r.number>0 AND r.next_attempt_at<? AND rtrim(r.next_attempt_at,'Z')<=? AND (?='' OR r.operation=?)
  AND (r.operation<>'review_state' OR NOT EXISTS(SELECT 1 FROM analytics_retries core WHERE core.repository=r.repository AND core.number=r.number AND core.operation='graphql_history' AND core.resolved_at IS NULL))
- GROUP BY r.number ORDER BY min(r.next_attempt_at),r.number LIMIT ?`, repository, at, operation, operation, limit)
+ GROUP BY r.number ORDER BY min(r.next_attempt_at),r.number LIMIT ?`, repository, before, through, operation, operation, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +219,16 @@ func (s *Store) DueAnalyticsRetries(ctx context.Context, repository, at string, 
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+func analyticsRetryDeadline(at string) (before, through string, err error) {
+	deadline, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return "", "", err
+	}
+	deadline = deadline.UTC()
+	// Keep the indexed range bound; omit Z for exact fractional-second comparisons.
+	return deadline.Truncate(time.Second).Add(time.Second).Format(time.RFC3339Nano), strings.TrimSuffix(deadline.Format(time.RFC3339Nano), "Z"), nil
 }
 
 func (s *Store) AnalyticsOutstanding(ctx context.Context, repository string) (int, error) {

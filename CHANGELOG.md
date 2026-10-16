@@ -7,6 +7,7 @@
 **Highlights:** Reliable local database initialization inside Git worktrees and refreshed dependencies.
 
 - Create a missing local database during `init` when the path is inside a Git worktree. Leave an existing database unchanged, and leave a gzip portable source without a raw database file unchanged. Thanks @SebTardif.
+- Compare analytics retry deadlines correctly when fractional-second precision differs, so already-due recovery work is not briefly deferred.
 - Update CrawlKit to v0.17.0 and the ANSI helpers to v0.11.9, retaining the Go 1.27.2 minimum; refresh the Node setup, GoReleaser, app-token, and secret-scanning actions. Thanks @dependabot.
 - Add an explicit release workflow dry run that builds, signs, and verifies artifacts without publishing.
 
