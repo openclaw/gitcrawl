@@ -62,6 +62,9 @@ func TestDefaultClosedSweepPreservesOfflineCoverageAndFailureCheckpoint(t *testi
 		t.Fatal(err)
 	}
 	started := now
+	if got, err := st.StateAsOf(ctx, repo.ID); err != nil || !got.Equal(started) {
+		t.Fatalf("complete sync state_as_of=%v err=%v", got, err)
+	}
 	now = now.Add(40 * 24 * time.Hour)
 	client.closed, client.fail = true, errors.New("denied after partial page")
 	if _, err := s.Sync(ctx, opts); !errors.Is(err, client.fail) {
@@ -70,6 +73,9 @@ func TestDefaultClosedSweepPreservesOfflineCoverageAndFailureCheckpoint(t *testi
 	watermark, err := st.ClosedSweepWatermark(ctx, repo.ID)
 	if err != nil || !watermark.Equal(started) {
 		t.Fatalf("failed sweep advanced watermark=%v err=%v", watermark, err)
+	}
+	if got, err := st.StateAsOf(ctx, repo.ID); err != nil || !got.Equal(started) {
+		t.Fatalf("failed sweep advanced state_as_of=%v err=%v", got, err)
 	}
 	threads, err := st.ListThreads(ctx, repo.ID, true)
 	if err != nil || len(threads) != 1 || threads[0].State != "open" {
@@ -97,6 +103,9 @@ func TestDefaultClosedSweepPreservesOfflineCoverageAndFailureCheckpoint(t *testi
 	}
 	if stats.ClosedSweepThrough != now.Format(time.RFC3339Nano) {
 		t.Fatalf("completed watermark=%q", stats.ClosedSweepThrough)
+	}
+	if got, err := st.StateAsOf(ctx, repo.ID); err != nil || !got.Equal(now) {
+		t.Fatalf("complete retry state_as_of=%v err=%v", got, err)
 	}
 	if client.requests[0].State != "open" || client.requests[0].Since != "" ||
 		client.requests[2].State != "open" || client.requests[2].Since != "" {
@@ -193,6 +202,14 @@ func TestClosedSweepPreservesExplicitScopeContracts(t *testing.T) {
 			}
 			if tc.name != "all" && stats.ClosedSweepThrough != "" {
 				t.Fatalf("restricted run advanced default coverage=%q", stats.ClosedSweepThrough)
+			}
+			repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := st.StateAsOf(ctx, repo.ID)
+			if err != nil || (tc.name == "all" && !got.Equal(now)) || (tc.name != "all" && !got.IsZero()) {
+				t.Fatalf("%s sync state_as_of=%v err=%v", tc.name, got, err)
 			}
 			switch tc.name {
 			case "since":

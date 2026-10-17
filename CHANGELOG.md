@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `neighbors --open-at`, `--created-after`, and `--merged-after` to filter similar rows by time before ranking, with thread metadata and a complete-sync watermark in the output. Thanks @masatohoshino.
 - Fix large neighbor and search result lookups failing with SQLite's SQL variable limit. Thanks @masatohoshino for reporting.
 - Update the D-Bus dependency used by Linux credential storage to v5.2.4, retaining the Go 1.27.2 minimum.
 
