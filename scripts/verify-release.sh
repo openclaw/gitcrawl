@@ -82,5 +82,10 @@ for goarch in "${architectures[@]}"; do
   expected_arch=$goarch
   [[ "$goarch" == amd64 ]] && expected_arch=x86_64
   lipo -archs "$binary" | tr ' ' '\n' | grep -Fx "$expected_arch" >/dev/null
-  [[ "$("$binary" --version)" == "$release_version" ]]
+  "$ROOT/scripts/check-macos-minimum.sh" "$binary"
+  if [[ "$expected_arch" == x86_64 ]] && ! arch -x86_64 /usr/bin/true; then
+    sudo softwareupdate --install-rosetta --agree-to-license
+    arch -x86_64 /usr/bin/true
+  fi
+  [[ "$(arch "-$expected_arch" "$binary" --version)" == "$release_version" ]]
 done

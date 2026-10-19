@@ -27,6 +27,7 @@ builds:
     env:
       - CGO_ENABLED=0
       - GOEXPERIMENT=simd
+      - MACOSX_DEPLOYMENT_TARGET=13.0
     ldflags:
       - -s -w -X github.com/openclaw/gitcrawl/internal/cli.version={{ .Version }}
     targets:

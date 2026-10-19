@@ -78,9 +78,44 @@ cat > "$FAKE_BIN/otool" <<'EOF'
 printf '      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos %s\n' "${MOCK_MACOS_MINIMUM:-13.0}"
 EOF
 
+cat > "$FAKE_BIN/arch" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+requested=$1
+shift
+printf '%s %s\n' "$requested" "$*" >> "${MOCK_ARCH_LOG:?}"
+if [[ "$requested" == -x86_64 && "${MOCK_ROSETTA_MISSING:-0}" == 1 && ! -f "${MOCK_ROSETTA_READY:?}" ]]; then
+  exit 1
+fi
+if [[ "$1" == /usr/bin/true ]]; then
+  exit 0
+fi
+case "$1" in
+  */amd64/gitcrawl) [[ "$requested" == -x86_64 ]] ;;
+  */arm64/gitcrawl) [[ "$requested" == -arm64 ]] ;;
+  *) exit 2 ;;
+esac
+exec "$@"
+EOF
+
+cat > "$FAKE_BIN/sudo" <<'EOF'
+#!/usr/bin/env bash
+exec "$@"
+EOF
+
+cat > "$FAKE_BIN/softwareupdate" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == '--install-rosetta --agree-to-license' ]] || exit 2
+printf '%s\n' "$*" >> "${MOCK_ROSETTA_LOG:?}"
+touch "${MOCK_ROSETTA_READY:?}"
+EOF
+
 chmod 0755 "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
 export MOCK_CODESIGN_LOG="$WORK_DIR/codesign.log"
+export MOCK_ARCH_LOG="$WORK_DIR/arch.log"
+export MOCK_ROSETTA_LOG="$WORK_DIR/rosetta.log"
+export MOCK_ROSETTA_READY="$WORK_DIR/rosetta-ready"
 unset NOTARYTOOL_KEYCHAIN_PROFILE
 
 test_binary="$WORK_DIR/gitcrawl"
@@ -160,6 +195,19 @@ done
 : > "$MOCK_CODESIGN_LOG"
 "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS"
 [[ "$(grep -F -c -- '--verify --strict --check-notarization -R=notarized' "$MOCK_CODESIGN_LOG")" == 2 ]]
+if [[ ! -f "$MOCK_ARCH_LOG" ]] ||
+  ! grep -E '^-x86_64 .*/amd64/gitcrawl --version$' "$MOCK_ARCH_LOG" >/dev/null ||
+  ! grep -E '^-arm64 .*/arm64/gitcrawl --version$' "$MOCK_ARCH_LOG" >/dev/null; then
+  echo "release verifier did not explicitly execute both architectures" >&2
+  exit 1
+fi
+MOCK_ROSETTA_MISSING=1 "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" amd64
+grep -Fx -- '--install-rosetta --agree-to-license' "$MOCK_ROSETTA_LOG" >/dev/null
+[[ -f "$MOCK_ROSETTA_READY" ]]
+if MOCK_MACOS_MINIMUM=14.0 "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" >/dev/null 2>&1; then
+  echo "release verifier accepted a raised macOS deployment target" >&2
+  exit 1
+fi
 if MOCK_NOTARIZATION_REJECT=1 \
   "$ROOT/scripts/verify-release.sh" v0.7.1 "$ARTIFACTS" >/dev/null 2>&1; then
   echo "release verifier accepted a missing notarization ticket" >&2
