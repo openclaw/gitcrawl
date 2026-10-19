@@ -85,6 +85,8 @@ make check
 
 `make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.10.0 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.18.2 for snapshot builds.
 
+macOS CI runs on the Apple Silicon `xcode-27` image with an explicit macOS 13.0 deployment target. Release verification executes Intel binaries under Rosetta, installing it if needed, and rejects binaries that raise the macOS 13 minimum.
+
 Maintainers can validate the signed release pipeline on `main` without publishing:
 
 ```sh

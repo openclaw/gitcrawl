@@ -19,12 +19,14 @@ jobs:
     name: Go / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     strategy:
       fail-fast: false
       matrix:
         os:
           - ubuntu-latest
-          - macos-15
+          - xcode-27
 
     steps:
       - name: Check out
@@ -85,6 +87,10 @@ jobs:
 
       - name: Build
         run: go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=${GITHUB_SHA:0:7}" -o bin/gitcrawl ./cmd/gitcrawl
+
+      - name: Verify macOS deployment target
+        if: runner.os == 'macOS'
+        run: ./scripts/check-macos-minimum.sh bin/gitcrawl
 
       - name: Smoke test TUI help
         run: |
