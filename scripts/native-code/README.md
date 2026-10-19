@@ -31,6 +31,18 @@ of the same analytics job. Its existing journal-only recovery helper remains
 compatible. The native SQLite writer opens an existing archive without migration
 or creation and retains the delivered FULL/Darwin full-flush policy.
 
+Code readiness is independent of issue/PR provider completeness. It requires the
+verified native core baseline and valid `analytics_coverage.through` and
+`observed_at` clocks within five minutes, with frontier <= observation <= now.
+The same checks run under `runner.lock` after settlement, rejecting either clock
+regressing since preparation. Missing, stale, future or invalid progress refuses
+publication. Unresolved provider items may keep `complete=0`: code publication
+never clears their retries, changes backoff, removes source evidence or claims
+complete coverage. Receipts retain `core_progress_at_prepare` and, for a commit,
+`core_progress_at_commit`, including the actual `coverage_complete` value.
+The unchanged code no-op still avoids settlement. Cluster/vector admission is
+unchanged and continues to require its separate complete/current-input contract.
+
 The original `ReplaceCodeSnapshot` transaction publishes snapshot metadata and all
 documents together, removing obsolete derived code rows atomically. An interrupted
 write leaves the prior generation. The no-op check includes commit, source root,
