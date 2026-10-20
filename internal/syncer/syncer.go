@@ -193,7 +193,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			evidence, _ := json.Marshal(result)
 			if resultErr != nil {
 				status = "failed"
-				class, message, evidence = gh.HistoryFailureDetails(resultErr)
+				class, message, evidence = gh.HistoryFailureDetailsForContext(ctx, resultErr)
 			}
 			for _, number := range uniquePositiveNumbers(options.Numbers) {
 				err := s.store.RecordAnalyticsAttempt(receiptCtx, store.AnalyticsAttempt{Repository: options.Owner + "/" + options.Repo, Number: number, Operation: operation, StartedAt: started, FinishedAt: finished, Status: status, ErrorClass: class, ErrorText: message, Evidence: evidence})

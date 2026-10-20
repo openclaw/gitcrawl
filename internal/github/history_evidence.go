@@ -154,8 +154,53 @@ func SafeHistoryEvidence(data any) json.RawMessage {
 	return out
 }
 
-// HistoryFailureDetails is safe to persist or log even if the original error
-// included an HTTP body. It deliberately does not return that body/message.
+// HistoryFailureDetailsForContext additionally binds local cancellation to the
+// caller context. Mixed provider errors never receive that exemption.
+func HistoryFailureDetailsForContext(ctx context.Context, err error) (string, string, json.RawMessage) {
+	class, message, raw := HistoryFailureDetails(err)
+	if ctx.Err() != context.Canceled || !onlyContextCancellation(err, 0) {
+		return class, message, raw
+	}
+	var evidence map[string]json.RawMessage
+	if json.Unmarshal(raw, &evidence) != nil {
+		return class, message, raw
+	}
+	evidence["parent_context_cancelled"] = json.RawMessage("true")
+	raw, _ = json.Marshal(evidence)
+	return class, message, raw
+}
+
+func onlyContextCancellation(err error, depth int) bool {
+	if err == nil || depth > 16 {
+		return false
+	}
+	if err == context.Canceled {
+		return true
+	}
+	// A rejected provider response cannot become an owner interruption just
+	// because the owner also stopped while the response was being handled.
+	if _, ok := err.(*HistoryFailure); ok {
+		return false
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := e.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !onlyContextCancellation(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return onlyContextCancellation(e.Unwrap(), depth+1)
+	}
+	return false
+}
+
+// HistoryFailureDetails returns safe diagnostics without provider prose.
 func HistoryFailureDetails(err error) (string, string, json.RawMessage) {
 	diagnostic := historyEvidenceWithCause(json.RawMessage(`{}`), err)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

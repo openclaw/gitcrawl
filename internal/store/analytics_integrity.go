@@ -121,7 +121,8 @@ func analyticsLocalCancellation(a AnalyticsAttempt) bool {
 		return false
 	}
 	var evidence struct {
-		Cause struct {
+		ParentContextCancelled bool `json:"parent_context_cancelled"`
+		Cause                  struct {
 			Category, Type, Code string
 			Timeout              bool
 			ChainTruncated       bool `json:"chain_truncated"`
@@ -131,7 +132,7 @@ func analyticsLocalCancellation(a AnalyticsAttempt) bool {
 		return false
 	}
 	c := evidence.Cause
-	return c.Category == "cancelled" && c.Type == "context" && c.Code == "cancelled" && !c.Timeout && !c.ChainTruncated
+	return evidence.ParentContextCancelled && c.Category == "cancelled" && c.Type == "context" && c.Code == "cancelled" && !c.Timeout && !c.ChainTruncated
 }
 
 func providerUnavailableEvidence(evidence json.RawMessage) bool {

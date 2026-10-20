@@ -30,7 +30,7 @@ func TestAnalyticsOwnerCancellationPreservesRetryDeadline(t *testing.T) {
 	// A repeated 15-minute owner handoff must not perpetually extend a
 	// 16-minute provider deadline. All unsuccessful attempts stay recorded.
 	a.ErrorClass = "cancelled"
-	a.Evidence = json.RawMessage(`{"cause":{"category":"cancelled","type":"context","code":"cancelled"}}`)
+	a.Evidence = json.RawMessage(`{"parent_context_cancelled":true,"cause":{"category":"cancelled","type":"context","code":"cancelled"}}`)
 	for i := 1; i <= 3; i++ {
 		a.FinishedAt = base.Add(time.Duration(i) * 15 * time.Minute).Format(time.RFC3339Nano)
 		if err = s.RecordAnalyticsAttempt(ctx, a); err != nil {
@@ -78,12 +78,13 @@ func TestAnalyticsCancellationClassificationAndNewObligation(t *testing.T) {
 		name, evidence string
 		interrupted    bool
 	}{
-		{"owner", `{"cause":{"category":"cancelled","type":"context","code":"cancelled"}}`, true},
-		{"deadline", `{"cause":{"category":"cancelled","type":"context","code":"deadline"}}`, false},
+		{"owner", `{"parent_context_cancelled":true,"cause":{"category":"cancelled","type":"context","code":"cancelled"}}`, true},
+		{"deadline", `{"parent_context_cancelled":true,"cause":{"category":"cancelled","type":"context","code":"deadline"}}`, false},
 		{"unqualified", `{}`, false},
-		{"different_type", `{"cause":{"category":"cancelled","type":"transport","code":"cancelled"}}`, false},
-		{"timeout", `{"cause":{"category":"cancelled","type":"context","code":"cancelled","timeout":true}}`, false},
-		{"truncated", `{"cause":{"category":"cancelled","type":"context","code":"cancelled","chain_truncated":true}}`, false},
+		{"no_parent_binding", `{"cause":{"category":"cancelled","type":"context","code":"cancelled"}}`, false},
+		{"different_type", `{"parent_context_cancelled":true,"cause":{"category":"cancelled","type":"transport","code":"cancelled"}}`, false},
+		{"timeout", `{"parent_context_cancelled":true,"cause":{"category":"cancelled","type":"context","code":"cancelled","timeout":true}}`, false},
+		{"truncated", `{"parent_context_cancelled":true,"cause":{"category":"cancelled","type":"context","code":"cancelled","chain_truncated":true}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
