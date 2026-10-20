@@ -4,7 +4,7 @@ class Tests(unittest.TestCase):
  def make(self):
   t=tempfile.TemporaryDirectory();self.addCleanup(t.cleanup);p=pathlib.Path(t.name);calls=[]
   def call(argv,data=None,timeout=90):calls.append(argv);return b'{}'
-  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.archive_superseded=lambda:{'archived':[]};return c,p,calls
+  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.validate_pending=lambda p:None;c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.archive_superseded=lambda:{'archived':[]};return c,p,calls
  def pending(self,c,p):
   raw=b'{"scope":{"max_tasks":2000},"source_binding":{"consumer_exclusions_sha256":"policy"},"tasks":[{"task_id":"t","input":"native","thread_binding":{"thread_id":"1"}}]}';(p/'request.json').write_bytes(raw);c.state['pending']={'request':'request.json','sha256':m.sha(raw),'export':{'tasks':1},'inspect':{'tasks':1},'submit':{'status':'submitted'}};c.checkpoint();c.policy_refresh=lambda:'policy'
  def test_pending_resumed_before_export_or_submit(self):
@@ -81,3 +81,33 @@ class CapTests(Tests):
   c.broker=lambda mode,raw:{'status':'complete','results':[]};c.source_ready=lambda:True;verified=iter([False,True]);c.verify_import=lambda pending,result:(pending.update({'matched':1000}) or next(verified));c.finish=lambda p:None
   self.assertEqual(c.run()['status'],'catchup_imported')
 if __name__=='__main__':unittest.main()
+
+class AvailabilityTests(Tests):
+ def test_changed_availability_replaces_before_broker(self):
+  c,p,calls=self.make();self.pending(c,p);digest=c.state['pending']['sha256']
+  c.validate_pending=lambda pending:(_ for _ in ()).throw(RuntimeError('native availability changed'))
+  c.broker=lambda *args:self.fail('provider admission with stale availability')
+  c.new_packet=lambda:False;c.source_ready=lambda:False
+  self.assertEqual(c.run()['status'],'waiting_core');self.assertNotIn('pending',c.state);self.assertEqual(c.state['retained'][0]['sha256'],digest)
+ def test_unqualified_scope_retains_pending_without_broker(self):
+  c,p,calls=self.make();self.pending(c,p)
+  c.validate_pending=lambda pending:(_ for _ in ()).throw(RuntimeError('cluster availability blocked: auth'))
+  c.broker=lambda *args:self.fail('provider admission with unqualified failure')
+  self.assertEqual(c.run()['status'],'waiting_scope');self.assertIn('pending',c.state);self.assertEqual(c.state['retained'],[])
+
+class IdentityQuarantineTests(Tests):
+ def test_retained_only_noop_is_not_publication_or_full_retirement(self):
+  c,p,calls=self.make();c.state['retained']=[{'sha256':'old','request':'old.json'}];(p/'old.json').write_text('{}');c.new_packet=lambda:False;c.source_ready=lambda:True
+  def call(argv,data=None,timeout=90):
+   calls.append(argv);self.assertEqual(argv,['fixture-cluster']);return b'{"phase":"unchanged","cluster_scope":{"mode":"available-subset","publication_status":"retained_only"}}'
+  c.call=call;result=c.run();self.assertEqual(result['status'],'identity_quarantined');self.assertTrue((p/'old.json').exists());self.assertEqual(len(c.state['retained']),1)
+ def test_combined_retained_only_reports_identity_wait(self):
+  c,p,calls=self.make();self.pending(c,p);c.source_ready=lambda:True;c.broker=lambda mode,raw:{'status':'complete','results':[]};verified=iter([False,True]);c.verify_import=lambda pending,result:(pending.update({'matched':1}) or next(verified));c.finish=lambda p:None
+  c.call=lambda argv,data=None,timeout=90:b'{"phase":"committed","receipt":"native","cluster_scope":{"mode":"available-subset","publication_status":"retained_only"}}'
+  self.assertEqual(c.run()['status'],'identity_quarantined')
+ def test_partial_core_receipt_is_ready_without_complete_fiction(self):
+  import sqlite3,datetime,time
+  c,p,calls=self.make();db=p/'source.db';c.c['db']=str(db)
+  with sqlite3.connect(db) as con:
+   con.execute('create table analytics_coverage(repository,through,observed_at,complete)');now=datetime.datetime.now(datetime.timezone.utc);con.execute('insert into analytics_coverage values(?,?,?,0)',('openclaw/openclaw',(now-datetime.timedelta(seconds=2)).isoformat(),(now-datetime.timedelta(seconds=1)).isoformat()))
+  self.assertTrue(c.source_ready());self.assertEqual(c.state['core']['complete'],0)

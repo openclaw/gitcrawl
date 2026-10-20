@@ -21,6 +21,7 @@ func (a *App) runDurableClusters(ctx context.Context, args []string) error {
 }
 
 type clustersReport struct {
+	store.ClusterReadContext
 	Repository  string                `json:"repository"`
 	GeneratedAt string                `json:"generated_at"`
 	Sort        string                `json:"sort"`
@@ -98,18 +99,21 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 		Limit:         limit,
 		Sort:          sort,
 	}
-	var clusters []store.ClusterSummary
+	source := ""
 	if durable {
-		clusters, err = rt.Store.ListClusterSummaries(ctx, options)
-	} else {
-		clusters, err = rt.Store.ListDisplayClusterSummaries(ctx, options)
+		source = store.ClusterSourceDurable
 	}
+	clusters, read, err := rt.Store.QualifiedClusterSummaries(ctx, options, source)
 	if err != nil {
 		return err
 	}
 	return a.writeOutput(command, map[string]any{
-		"repository": repo.FullName,
-		"clusters":   clusters,
+		"repository":    repo.FullName,
+		"clusters":      clusters,
+		"selection":     read.Selection,
+		"scope_status":  read.ScopeStatus,
+		"cluster_scope": read.ClusterScope,
+		"analysis":      read.Analysis,
 	}, true)
 }
 
@@ -165,47 +169,55 @@ func (a *App) runClustersReport(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	summaries, err := rt.Store.ListDisplayClusterSummaries(ctx, store.ClusterSummaryOptions{
-		RepoID:        repo.ID,
-		IncludeClosed: clusterListIncludesClosed(false, *includeClosed, *hideClosed),
-		MinSize:       minSize,
-		Limit:         limit,
-		Sort:          sort,
+	var report clustersReport
+	err = rt.Store.WithTx(ctx, func(tx *store.Store) error {
+		summaries, read, err := tx.QualifiedClusterSummaries(ctx, store.ClusterSummaryOptions{
+			RepoID:        repo.ID,
+			IncludeClosed: clusterListIncludesClosed(false, *includeClosed, *hideClosed),
+			MinSize:       minSize,
+			Limit:         limit,
+			Sort:          sort,
+		}, "")
+		if err != nil {
+			return err
+		}
+		report = clustersReport{
+			ClusterReadContext: read,
+			Repository:         repo.FullName,
+			GeneratedAt:        time.Now().UTC().Format(time.RFC3339),
+			Sort:               sort,
+			MinSize:            minSize,
+			Limit:              limit,
+			MemberLimit:        memberLimit,
+			HideClosed:         *hideClosed,
+			Clusters:           make([]store.ClusterDetail, 0, len(summaries)),
+		}
+		for _, summary := range summaries {
+			detail, err := tx.ClusterDetail(ctx, store.ClusterDetailOptions{
+				RepoID:        repo.ID,
+				ClusterID:     summary.ID,
+				Source:        summary.Source,
+				IncludeClosed: clusterListIncludesClosed(false, *includeClosed, *hideClosed),
+				MemberLimit:   memberLimit,
+				BodyChars:     bodyChars,
+			})
+			if err != nil {
+				return err
+			}
+			report.Clusters = append(report.Clusters, detail)
+			report.Totals.MemberCount += detail.Cluster.MemberCount
+			if detail.Cluster.Status == "closed" || detail.Cluster.ClosedAt != "" {
+				report.Totals.ClosedCount++
+			} else {
+				report.Totals.OpenCount++
+			}
+		}
+		report.Totals.ClusterCount = len(report.Clusters)
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	report := clustersReport{
-		Repository:  repo.FullName,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Sort:        sort,
-		MinSize:     minSize,
-		Limit:       limit,
-		MemberLimit: memberLimit,
-		HideClosed:  *hideClosed,
-		Clusters:    make([]store.ClusterDetail, 0, len(summaries)),
-	}
-	for _, summary := range summaries {
-		detail, err := rt.Store.ClusterDetail(ctx, store.ClusterDetailOptions{
-			RepoID:        repo.ID,
-			ClusterID:     summary.ID,
-			Source:        summary.Source,
-			IncludeClosed: clusterListIncludesClosed(false, *includeClosed, *hideClosed),
-			MemberLimit:   memberLimit,
-			BodyChars:     bodyChars,
-		})
-		if err != nil {
-			return err
-		}
-		report.Clusters = append(report.Clusters, detail)
-		report.Totals.MemberCount += detail.Cluster.MemberCount
-		if detail.Cluster.Status == "closed" || detail.Cluster.ClosedAt != "" {
-			report.Totals.ClosedCount++
-		} else {
-			report.Totals.OpenCount++
-		}
-	}
-	report.Totals.ClusterCount = len(report.Clusters)
 	return a.writeClustersReport(report)
 }
 
@@ -318,9 +330,13 @@ func (a *App) runClusterDetail(ctx context.Context, args []string) error {
 		return err
 	}
 	return a.writeOutput("cluster-detail", map[string]any{
-		"repository": repo.FullName,
-		"cluster":    detail.Cluster,
-		"members":    detail.Members,
+		"repository":    repo.FullName,
+		"cluster":       detail.Cluster,
+		"selection":     detail.Selection,
+		"scope_status":  detail.ScopeStatus,
+		"cluster_scope": detail.ClusterScope,
+		"analysis":      detail.Analysis,
+		"members":       detail.Members,
 	}, true)
 }
 

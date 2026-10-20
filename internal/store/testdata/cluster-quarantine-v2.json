@@ -1,0 +1,1309 @@
+{
+  "format": "gitcrawl.identity-quarantine-oracle.v1",
+  "cases": [
+    {
+      "name": "independent_new_components",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "merge_is_quarantined_unrelated_publishes",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2",
+          "3"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "30",
+            "key": "1099dca8d45f723d13f7753a02ce16bdb988383ac10c7e8ffceb611fcd832ce2",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "3"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+            "members": [
+              "1",
+              "2"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+            "members": [
+              "3"
+            ],
+            "representative": "3"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "3"
+        ],
+        "quarantined_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_group_ids": [
+          "10",
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "transitive_candidate_group_closure",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1",
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "3"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "1e0bbd6c686ba050b8eb03ffeedc64fdc9d80947fce821abbe5d6dc8d252c5ac",
+            "members": [
+              "2",
+              "3"
+            ],
+            "representative": "2"
+          },
+          {
+            "key": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+            "members": [
+              "4"
+            ],
+            "representative": "4"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "4"
+        ],
+        "quarantined_ids": [
+          "1",
+          "2",
+          "3"
+        ],
+        "quarantined_group_ids": [
+          "10",
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "split_of_one_identity_quarantined",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1",
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [],
+        "quarantined_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_group_ids": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "removed_history_does_not_connect",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [
+              "2"
+            ],
+            "retained_membership_count": 2
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [
+              "1"
+            ],
+            "retained_membership_count": 2
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "protected_current_group_retained",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": true,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "2"
+        ],
+        "quarantined_ids": [
+          "1"
+        ],
+        "quarantined_group_ids": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "unavailable_active_member_closes_component",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": false,
+        "selected": [
+          "1",
+          "2",
+          "3"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1",
+              "9"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2",
+              "9"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          },
+          {
+            "key": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+            "members": [
+              "3"
+            ],
+            "representative": "3"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "3"
+        ],
+        "quarantined_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_group_ids": [
+          "10",
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "inactive_history_does_not_connect",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": false,
+            "protected": false,
+            "active_members": [],
+            "history_members": [
+              "1",
+              "2"
+            ],
+            "retained_membership_count": 2
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "inactive_stable_key_target_is_reserved",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": false,
+            "protected": false,
+            "active_members": [],
+            "history_members": [
+              "1"
+            ],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "2"
+        ],
+        "quarantined_ids": [
+          "1"
+        ],
+        "quarantined_group_ids": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "partial_identity_retains_omitted_member",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": false,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1",
+              "9"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "all_quarantined_records_retained_only",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1",
+              "2"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [],
+        "quarantined_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_group_ids": [
+          "10",
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "complete_provider_not_complete_identity",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2",
+          "3"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1",
+              "2"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "3"
+            ],
+            "representative": "3"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "3"
+        ],
+        "quarantined_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_group_ids": [
+          "10",
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "partial_provider_no_identity_conflict",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": false,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "fully_recovered_unambiguous",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "duplicate_member_refuses",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "error": "duplicate"
+      }
+    },
+    {
+      "name": "missing_selected_refuses",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "error": "incomplete"
+      }
+    },
+    {
+      "name": "duplicate_candidate_key_refuses",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "error": "duplicate"
+      }
+    },
+    {
+      "name": "nonfresh_vectors_refuse",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": false,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "error": "nonfresh"
+      }
+    },
+    {
+      "name": "unadmitted_scope_refuses",
+      "synthetic": true,
+      "input": {
+        "admitted": false,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "error": "unadmitted"
+      }
+    },
+    {
+      "name": "unknown_curation_state_refuses",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": null,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "error": "unqualified"
+      }
+    },
+    {
+      "name": "unrelated_untouched_identity_not_counted",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "9"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "protected_removed_member_not_topology_edge",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": true,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [
+              "2"
+            ],
+            "retained_membership_count": 2
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "2"
+        ],
+        "quarantined_ids": [
+          "1"
+        ],
+        "quarantined_group_ids": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "actual_write_target_overrides_raw_key_collision",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          },
+          {
+            "id": "20",
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "bbbb138d2dcf5785a27ab9a9e0900fa2c510b5875f3fcd511a1af40abc872c7f",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "protected_empty_target_quarantined",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": false,
+            "protected": true,
+            "active_members": [],
+            "history_members": [
+              "1"
+            ],
+            "retained_membership_count": 1
+          }
+        ],
+        "candidates": [
+          {
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [],
+        "quarantined_ids": [
+          "1"
+        ],
+        "quarantined_group_ids": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "legacy_similarity_is_not_current_identity",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1",
+          "2"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1",
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2,
+            "kind": "similarity"
+          }
+        ],
+        "candidates": [
+          {
+            "key": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          },
+          {
+            "key": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+            "members": [
+              "2"
+            ],
+            "representative": "2"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [
+          "1",
+          "2"
+        ],
+        "quarantined_ids": [],
+        "quarantined_group_ids": []
+      }
+    },
+    {
+      "name": "legacy_exact_write_target_reserved",
+      "synthetic": true,
+      "input": {
+        "admitted": true,
+        "fresh_vectors": true,
+        "provider_complete": true,
+        "selected": [
+          "1"
+        ],
+        "groups": [
+          {
+            "id": "10",
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "active": true,
+            "protected": false,
+            "active_members": [
+              "1",
+              "2"
+            ],
+            "history_members": [],
+            "retained_membership_count": 2,
+            "kind": "similarity"
+          }
+        ],
+        "candidates": [
+          {
+            "key": "57c744aad12f4754fd28727e35a88c8df4b271372a04db412a93defe3e55fbb4",
+            "members": [
+              "1"
+            ],
+            "representative": "1"
+          }
+        ]
+      },
+      "expected": {
+        "published_ids": [],
+        "quarantined_ids": [
+          "1"
+        ],
+        "quarantined_group_ids": [
+          "10"
+        ]
+      }
+    }
+  ]
+}

@@ -290,6 +290,8 @@ def capture_scope(cycle):
 
 def zero_publication(cycle, proof):
     zero, native = proof['zero_export'], proof['native_publication']
+    if native.get('cluster_scope',{}).get('mode')=='available-subset':
+        raise RuntimeError('partial eligibility cannot prove full-scope retirement')
     if (zero.get('tasks') != 0 or zero.get('database_writes') is not False or zero.get('provider_calls') is not False
             or native.get('format') not in ('gitcrawl.cluster-producer.v1', 'gitcrawl.combined-producer.v1')
             or native.get('phase') not in ('committed', 'unchanged')
@@ -316,6 +318,8 @@ def zero_publication(cycle, proof):
 
 def retire_zero_scope(cycle, before, native, zero):
     """Full fresh native eligibility closes changed-input requests after publication."""
+    if native.get("cluster_scope",{}).get("mode")=="available-subset":
+        return {"retired": [], "active_lease_wait": []}
     if zero.get('tasks') != 0 or zero.get('source_identity') != before['identity'] or zero.get('consumer_exclusions_sha256') != before['policy_sha256']:
         return {'retired': [], 'active_lease_wait': []}
     after = capture_scope(cycle)

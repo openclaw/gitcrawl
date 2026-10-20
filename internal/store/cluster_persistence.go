@@ -30,24 +30,24 @@ type SaveDurableClustersResult struct {
 }
 
 func (s *Store) SaveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, true, false)
+	return s.saveDurableClusters(ctx, repoID, inputs, true, false, false)
 }
 
 func (s *Store) SavePartialDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, false, false)
+	return s.saveDurableClusters(ctx, repoID, inputs, false, false, false)
 }
 
 func (s *Store) SaveCompleteDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, true, true)
+	return s.saveDurableClusters(ctx, repoID, inputs, true, true, false)
 }
 
-func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, pruneMissingMembers, retireMissing bool) (SaveDurableClustersResult, error) {
+func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, pruneMissingMembers, retireMissing, preserveLegacy bool, protectedIDs ...int64) (SaveDurableClustersResult, error) {
 	if repoID <= 0 {
 		return SaveDurableClustersResult{}, fmt.Errorf("repo id must be positive")
 	}
 	now := time.Now().UTC().Format(timeLayout)
 	result := SaveDurableClustersResult{ClusterCount: len(inputs)}
-	err := s.WithTx(ctx, func(tx *Store) error {
+	work := func(tx *Store) error {
 		runID, err := tx.insertClusterRun(ctx, repoID, now)
 		if err != nil {
 			return err
@@ -109,17 +109,19 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 			}
 		}
 		if retireMissing {
-			if err := tx.markMissingDurableClustersRetired(ctx, repoID, runID, seenClusterIDs, now); err != nil {
+			if err := tx.markMissingDurableClustersRetired(ctx, repoID, runID, append(append([]int64{}, seenClusterIDs...), protectedIDs...), now); err != nil {
 				return err
 			}
 		}
 		if len(inputs) > 0 {
-			if _, err := tx.q().ExecContext(ctx, `
+			if !preserveLegacy {
+				if _, err := tx.q().ExecContext(ctx, `
 					delete from cluster_groups
 				where repo_id = ?
 				  and cluster_type = 'similarity'
 			`, repoID); err != nil {
-				return fmt.Errorf("delete legacy similarity clusters: %w", err)
+					return fmt.Errorf("delete legacy similarity clusters: %w", err)
+				}
 			}
 			for _, clusterID := range seenClusterIDs {
 				if err := tx.ensureActiveClusterRepresentative(ctx, repoID, clusterID, now); err != nil {
@@ -135,7 +137,15 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 			return fmt.Errorf("finish cluster run: %w", err)
 		}
 		return nil
-	})
+	}
+	// Preserve an outer native publication transaction. In particular, do not
+	// wait for a second connection when the writer deliberately owns only one.
+	var err error
+	if s.queries != nil {
+		err = work(s)
+	} else {
+		err = s.WithTx(ctx, work)
+	}
 	if err != nil {
 		return SaveDurableClustersResult{}, err
 	}
@@ -382,4 +392,15 @@ func nullableFloat(value *float64) sql.NullFloat64 {
 		return sql.NullFloat64{}
 	}
 	return sql.NullFloat64{Float64: *value, Valid: true}
+}
+
+// SaveAvailableSubsetClusters retains all omitted and legacy rows.
+func (s *Store) SaveAvailableSubsetClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
+	return s.saveDurableClusters(ctx, repoID, inputs, false, false, true)
+}
+
+// SaveCompleteScopedClusters keeps historical similarity identities referenced by
+// versioned scopes. Ordinary complete callers retain their previous contract.
+func (s *Store) SaveCompleteScopedClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, protectedIDs ...int64) (SaveDurableClustersResult, error) {
+	return s.saveDurableClusters(ctx, repoID, inputs, true, true, true, protectedIDs...)
 }

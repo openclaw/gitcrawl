@@ -91,3 +91,40 @@ the existing controller settles it only at the final prepared native write.
 No stale-clock acceptance, cap increase, quota bypass, or repeated identical
 failed import is introduced. Packet/compute/write limits and 900-second cadence
 stay unchanged.
+
+
+## Available-subset admission
+
+The scoped native exporter/combined producer now owns the availability proof.
+The controller waits for a recent ordinary progress boundary even when provider
+coverage is incomplete; it never changes that coverage flag. Native admission
+then requires qualified item-level NOT_FOUND evidence and healthy discovery,
+and omits unavailable inputs. Before broker admission or pending work resumes,
+`embedding-validate` rechecks the availability binding and exact source clocks.
+Unqualified scope retains pending work and waits; changed availability obtains a
+new request without relabelling the original or resetting its proof.
+
+A partial publication's zero-task export is not full-scope retirement evidence.
+The controller and retirement verifier both refuse that shortcut. Exact completed
+replacement proof and private completed-envelope archival remain available.
+A partial durable identity conflict is explicit operator attention. Its exact
+input/curation fingerprint prevents another unchanged graph pass; neither
+KeepAlive nor a faster retry cadence is added. The original900s schedule remains.
+
+The consumer must be installed and accepted before activating the new producer.
+See `scripts/native-cluster/README.md` for persistence, reader and scope contracts.
+
+## Identity quarantine v2
+
+A fresh partial provider receipt remains eligible; complete=1 is not required for
+an isolated unavailable-item scope. The native planner now quarantines closed
+current-identity components and can publish unrelated candidates. Retained-only
+analysis is reported as identity_quarantined, not combined_published or full
+coverage. It never qualifies a full-scope zero-task cleanup. Pending-first broker
+reuse, exact source-clock checks, release intent, private archive recovery and the
+16-envelope cap are unchanged. Only the native producer can decide admission.
+
+The maintenance job retains its 900-second cadence. Native no-op signatures cover
+current graph/curation/quarantine state; no timer resolves an identity conflict.
+The v2 wrapper uses a separate cache directory so previous failed-attempt and
+complete-cache evidence stays intact through deployment.

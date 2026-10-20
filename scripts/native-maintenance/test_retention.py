@@ -49,6 +49,7 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(argv[-2], 'release')
             return retention.encoded({'status': 'released', 'request_sha256': argv[-1], 'removed': 1})
         cycle = maintain.Cycle({'state_dir': str(base), 'handoff_state': str(handoff), 'db': str(db), 'broker': ['fixture-broker']}, broker)
+        cycle.validate_pending = lambda pending: None
         cycle.state = {'retained': [entry], 'pending': {'sentinel': 'preserve exactly'}}
         cycle.checkpoint()
         return cycle, entry, done, done_path, calls
@@ -228,7 +229,7 @@ class RetentionTests(unittest.TestCase):
         entry['sha256'] = retention.digest(raw)
         c.checkpoint()
         native = json.loads(Path(done['native_receipt']).read_bytes())
-        native.update(consumer_exclusions_sha256=policy, eligible=1, members=1)
+        native.update(consumer_exclusions_sha256=policy, eligible=1, members=1, cluster_scope={"mode":"full-native"})
         # A changed input does not need to reappear: the native full publication
         # plus a fresh zero-task eligibility result supersedes the old task.
         zero = {'tasks': 0, 'database_writes': False, 'provider_calls': False,
@@ -383,6 +384,16 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(resumed.run()['status'], 'recovered_release')
         self.assertEqual(resumed.state['retained'], [])
         self.assertNotIn('pending', resumed.state)
+
+
+    def test_partial_zero_scope_never_retires_full_work(self):
+        c, entry, native, zero, calls = self.zero_fixture()
+        native['cluster_scope'] = {'mode': 'available-subset'}
+        before = retention.capture_scope(c)
+        result = retention.retire_zero_scope(c, before, native, zero)
+        self.assertEqual(result['retired'], [])
+        self.assertEqual(calls, [])
+        self.assertEqual(len(c.state['retained']), 1)
 
 
 if __name__ == '__main__':
