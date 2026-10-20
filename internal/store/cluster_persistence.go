@@ -41,7 +41,7 @@ func (s *Store) SaveCompleteDurableClusters(ctx context.Context, repoID int64, i
 	return s.saveDurableClusters(ctx, repoID, inputs, true, true, false)
 }
 
-func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, pruneMissingMembers, retireMissing, preserveLegacy bool) (SaveDurableClustersResult, error) {
+func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, pruneMissingMembers, retireMissing, preserveLegacy bool, protectedIDs ...int64) (SaveDurableClustersResult, error) {
 	if repoID <= 0 {
 		return SaveDurableClustersResult{}, fmt.Errorf("repo id must be positive")
 	}
@@ -109,7 +109,7 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 			}
 		}
 		if retireMissing {
-			if err := tx.markMissingDurableClustersRetired(ctx, repoID, runID, seenClusterIDs, now); err != nil {
+			if err := tx.markMissingDurableClustersRetired(ctx, repoID, runID, append(append([]int64{}, seenClusterIDs...), protectedIDs...), now); err != nil {
 				return err
 			}
 		}
@@ -389,4 +389,10 @@ func nullableFloat(value *float64) sql.NullFloat64 {
 // SaveAvailableSubsetClusters retains all omitted and legacy rows.
 func (s *Store) SaveAvailableSubsetClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
 	return s.saveDurableClusters(ctx, repoID, inputs, false, false, true)
+}
+
+// SaveCompleteScopedClusters keeps historical similarity identities referenced by
+// versioned scopes. Ordinary complete callers retain their previous contract.
+func (s *Store) SaveCompleteScopedClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, protectedIDs ...int64) (SaveDurableClustersResult, error) {
+	return s.saveDurableClusters(ctx, repoID, inputs, true, true, true, protectedIDs...)
 }

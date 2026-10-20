@@ -89,7 +89,9 @@ func TestNativeClusterSnapshotAndPublish(t *testing.T) {
 	if _, e = s.NativeClusterSnapshot(ctx, excluded); e == nil {
 		t.Fatal("consumer excluded input accepted")
 	}
-	s.DB().Exec("insert into cluster_overrides(repo_id,cluster_id,thread_id,action,created_at) values(?,1,2,'exclude','t')", repo)
+	if _, e = s.ExcludeClusterMemberLocally(ctx, repo, 1, 2, "synthetic protected override"); e != nil {
+		t.Fatal(e)
+	}
 	if _, _, e = s.NativePublishClusters(ctx, after, policy, inputs); e == nil {
 		t.Fatal("changed curation accepted")
 	}
@@ -103,7 +105,7 @@ func TestNativeClusterSnapshotAndPublish(t *testing.T) {
 	var stateText string
 	s.DB().QueryRow("select state from cluster_memberships where thread_id=2").Scan(&stateText)
 	if stateText != "excluded" {
-		t.Fatal("native override lost")
+		t.Fatal("protected native override lost")
 	}
 }
 func TestNativeClusterMeasuredCommit(t *testing.T) {
@@ -284,7 +286,9 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 	if _, _, _, e = s.NativeCombinedPublish(ctx, again, excluded, req, res, inputs); e == nil {
 		t.Fatal("policy exclusion accepted")
 	}
-	s.DB().Exec("insert into cluster_overrides(repo_id,cluster_id,thread_id,action,created_at) values(?,1,2,'exclude','t')", repo)
+	if _, e = s.ExcludeClusterMemberLocally(ctx, repo, 1, 2, "synthetic protected override"); e != nil {
+		t.Fatal(e)
+	}
 	if _, _, _, e = s.NativeCombinedPublish(ctx, again, policy, req, res, inputs); e == nil {
 		t.Fatal("stale curation accepted")
 	}

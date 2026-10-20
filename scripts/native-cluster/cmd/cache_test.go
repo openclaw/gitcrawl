@@ -109,3 +109,54 @@ func TestPairCacheRejectsShapeAndInvalidatesIdentity(t *testing.T) {
 		t.Fatal("exclusive old cache capability retained")
 	}
 }
+
+func TestReviewedParentCacheReusePreservesProvenance(t *testing.T) {
+	s := cacheFixture()
+	dir := t.TempDir()
+	c := &similarityCache{}
+	opts := clusterBuildOptions{Threshold: .8, MinSize: 1, MaxClusterSize: 40, Fanout: 16, CrossKindThreshold: .93}
+	want, _, e := buildWithCache(context.Background(), 1, s.Vectors, s.Threads, "openclaw/openclaw", opts, c)
+	if e != nil {
+		t.Fatal(e)
+	}
+	id, e := savePairs(dir, s, c, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, id+".json"))
+	var f pairCacheFile
+	json.Unmarshal(raw, &f)
+	f.Producer = reviewedSubsetCacheProducer
+	raw, _ = json.Marshal(f)
+	parent := store.NativeSHA256(raw)
+	os.WriteFile(filepath.Join(dir, parent+".json"), raw, 0600)
+	pointer, _ := json.Marshal(parent)
+	os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600)
+	loaded, bound, e := loadPairs(dir, s)
+	if e != nil || bound != parent {
+		t.Fatal(e)
+	}
+	got, _, e := buildWithCache(context.Background(), 1, s.Vectors, s.Threads, "openclaw/openclaw", opts, loaded)
+	if e != nil || !reflect.DeepEqual(got, want) || loaded.recomputed != 0 || loaded.reused != 3 {
+		t.Fatal("reviewed parent changed graph/recomputed", e)
+	}
+	if _, e = savePairs(dir, s, loaded, parent); e != nil {
+		t.Fatal(e)
+	}
+	still, _ := os.ReadFile(filepath.Join(dir, parent+".json"))
+	if string(still) != string(raw) {
+		t.Fatal("parent provenance changed")
+	}
+	f.Producer = store.NativeSHA256([]byte("unreviewed"))
+	bad, _ := json.Marshal(f)
+	badID := store.NativeSHA256(bad)
+	os.WriteFile(filepath.Join(dir, badID+".json"), bad, 0600)
+	pointer, _ = json.Marshal(badID)
+	os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600)
+	if _, _, e = loadPairs(dir, s); e == nil {
+		t.Fatal("unreviewed parent admitted")
+	}
+	if _, e = os.Stat(filepath.Join(dir, badID+".json")); e != nil {
+		t.Fatal("failed proof deleted")
+	}
+}

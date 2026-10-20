@@ -14,33 +14,39 @@ import (
 const ClusterScopeFormat = "gitcrawl.cluster-scope.v1"
 
 type ClusterScopePopulation struct {
-	NativeEligible            int `json:"native_eligible"`
-	Selected                  int `json:"selected"`
-	Unavailable               int `json:"unavailable"`
-	UnavailableInScope        int `json:"unavailable_in_scope"`
-	UnmaterializedUnavailable int `json:"unmaterialized_unavailable"`
-	MissingVectors            int `json:"missing_vectors"`
-	StaleVectors              int `json:"stale_vectors"`
+	NativeEligible            int  `json:"native_eligible"`
+	Selected                  int  `json:"selected"`
+	Unavailable               int  `json:"unavailable"`
+	UnavailableInScope        int  `json:"unavailable_in_scope"`
+	UnmaterializedUnavailable int  `json:"unmaterialized_unavailable"`
+	MissingVectors            int  `json:"missing_vectors"`
+	StaleVectors              int  `json:"stale_vectors"`
+	Published                 *int `json:"published,omitempty"`
+	IdentityQuarantined       *int `json:"identity_quarantined,omitempty"`
 }
 type ClusterScopeClock struct {
 	Through    string `json:"through"`
 	ObservedAt string `json:"observed_at"`
 }
 type ClusterScope struct {
-	Format                   string                 `json:"format"`
-	Mode                     string                 `json:"mode"`
-	RunID                    string                 `json:"run_id"`
-	Repository               string                 `json:"repository"`
-	PolicyVersion            int                    `json:"policy_version"`
-	PolicyDigest             string                 `json:"policy_digest"`
-	SourceAsOf               ClusterScopeClock      `json:"source_as_of"`
-	ProviderComplete         bool                   `json:"provider_complete"`
-	FullNativeScopeComplete  bool                   `json:"full_native_scope_complete"`
-	SelectedInputComplete    bool                   `json:"selected_input_complete"`
-	Population               ClusterScopePopulation `json:"population"`
-	RefreshedMemberships     int                    `json:"refreshed_memberships"`
-	RetainedPriorMemberships int                    `json:"retained_prior_memberships"`
-	LastFullRunID            *string                `json:"last_full_run_id"`
+	Format                         string                  `json:"format"`
+	Mode                           string                  `json:"mode"`
+	RunID                          string                  `json:"run_id"`
+	Repository                     string                  `json:"repository"`
+	PolicyVersion                  int                     `json:"policy_version"`
+	PolicyDigest                   string                  `json:"policy_digest"`
+	SourceAsOf                     ClusterScopeClock       `json:"source_as_of"`
+	ProviderComplete               bool                    `json:"provider_complete"`
+	FullNativeScopeComplete        bool                    `json:"full_native_scope_complete"`
+	SelectedInputComplete          bool                    `json:"selected_input_complete"`
+	Population                     ClusterScopePopulation  `json:"population"`
+	RefreshedMemberships           int                     `json:"refreshed_memberships"`
+	RetainedPriorMemberships       int                     `json:"retained_prior_memberships"`
+	LastFullRunID                  *string                 `json:"last_full_run_id"`
+	IdentityReconciliationComplete *bool                   `json:"identity_reconciliation_complete,omitempty"`
+	PublicationStatus              string                  `json:"publication_status,omitempty"`
+	PartialReasons                 *[]string               `json:"partial_reasons,omitempty"`
+	Quarantine                     *ClusterQuarantineScope `json:"quarantine,omitempty"`
 }
 type ClusterSelection struct {
 	Source string  `json:"source"`
@@ -50,6 +56,7 @@ type ClusterReadContext struct {
 	Selection    ClusterSelection `json:"selection"`
 	ScopeStatus  string           `json:"scope_status"`
 	ClusterScope *ClusterScope    `json:"cluster_scope"`
+	Analysis     *ClusterAnalysis `json:"analysis"`
 }
 
 func clusterRunKey(id int64) *string { v := strconv.FormatInt(id, 10); return &v }
@@ -64,11 +71,11 @@ func positiveClusterKey(s string) (int64, error) {
 // ValidateClusterScope validates historical metadata, not current readiness.
 // Admission freshness is checked by the producer; old pinned runs remain readable.
 func ValidateClusterScope(s ClusterScope, runID int64, repository string) error {
-	if s.Format != ClusterScopeFormat {
+	if s.Format != ClusterScopeFormat && s.Format != ClusterScopeFormatV2 {
 		return fmt.Errorf("cluster scope version unsupported")
 	}
 	id, e := positiveClusterKey(s.RunID)
-	if e != nil || id != runID || s.Repository != repository || s.Format != ClusterScopeFormat || s.PolicyVersion != 1 {
+	if e != nil || id != runID || s.Repository != repository || (s.Format == ClusterScopeFormat && s.PolicyVersion != 1) || (s.Format == ClusterScopeFormatV2 && s.PolicyVersion != 2) {
 		return fmt.Errorf("cluster scope binding mismatch")
 	}
 	if len(s.PolicyDigest) != 64 {
@@ -102,6 +109,12 @@ func ValidateClusterScope(s ClusterScope, runID int64, repository string) error 
 		if e != nil || last > id {
 			return fmt.Errorf("cluster scope full run invalid")
 		}
+	}
+	if s.Format == ClusterScopeFormatV2 {
+		return validateClusterScopeV2(s, id, last)
+	}
+	if s.IdentityReconciliationComplete != nil || s.PublicationStatus != "" || s.PartialReasons != nil || s.Quarantine != nil || p.Published != nil || p.IdentityQuarantined != nil {
+		return fmt.Errorf("v1 scope contains v2 fields")
 	}
 	switch s.Mode {
 	case "available-subset":
@@ -145,31 +158,8 @@ func decodeClusterScope(raw []byte, runID int64, repo string) (*ClusterScope, er
 	if e := json.Unmarshal(v, &required); e != nil {
 		return nil, e
 	}
-	for _, k := range []string{"format", "mode", "run_id", "repository", "policy_version", "policy_digest", "source_as_of", "provider_complete", "full_native_scope_complete", "selected_input_complete", "population", "refreshed_memberships", "retained_prior_memberships", "last_full_run_id"} {
-		if _, ok = required[k]; !ok {
-			return nil, fmt.Errorf("cluster scope missing %s", k)
-		}
-	}
-	for key, fields := range map[string][]string{"source_as_of": {"through", "observed_at"}, "population": {"native_eligible", "selected", "unavailable", "unavailable_in_scope", "unmaterialized_unavailable", "missing_vectors", "stale_vectors"}} {
-		var obj map[string]json.RawMessage
-		if e := json.Unmarshal(required[key], &obj); e != nil {
-			return nil, e
-		}
-		for _, k := range fields {
-			if value, present := obj[k]; !present || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-				return nil, fmt.Errorf("cluster scope missing %s.%s", key, k)
-			}
-		}
-	}
-	for key, value := range required {
-		if key != "last_full_run_id" && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return nil, fmt.Errorf("cluster scope null %s", key)
-		}
-	}
-	for key, value := range required {
-		if key != "last_full_run_id" && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return nil, fmt.Errorf("cluster scope null %s", key)
-		}
+	if e := requireClusterScopeShape(v); e != nil {
+		return nil, e
 	}
 	var scope ClusterScope
 	d := json.NewDecoder(bytes.NewReader(v))
@@ -190,32 +180,26 @@ func decodeClusterScope(raw []byte, runID int64, repo string) (*ClusterScope, er
 // marker. A corrupt only marker cannot silently restore legacy raw-first reads.
 func (s *Store) ClusterReadSelection(ctx context.Context, repoID int64, source string) (ClusterReadContext, error) {
 	out := ClusterReadContext{ScopeStatus: "legacy_unknown", Selection: ClusterSelection{Source: "legacy_display"}}
-	if source == ClusterSourceRun {
-		out.Selection.Source = source
-		id, ok, e := s.latestRawClusterRunID(ctx, repoID)
-		if ok {
-			out.Selection.RunID = clusterRunKey(id)
-		}
-		return out, e
-	}
+
 	if !s.hasTable(ctx, "cluster_runs") {
 		if source == ClusterSourceDurable {
 			out.Selection.Source = source
 		}
 		return out, nil
 	}
-	rows, e := s.q().QueryContext(ctx, `SELECT cr.id,cr.stats_json,r.full_name,cr.started_at FROM cluster_runs cr JOIN repositories r ON r.id=cr.repo_id WHERE cr.repo_id=? AND cr.scope='durable' AND cr.status IN ('success','completed') ORDER BY cr.id DESC`, repoID)
+	rows, e := s.q().QueryContext(ctx, `SELECT cr.id,cr.stats_json,r.full_name,cr.started_at,cr.finished_at,cr.status FROM cluster_runs cr JOIN repositories r ON r.id=cr.repo_id WHERE cr.repo_id=? AND cr.scope='durable' AND cr.status IN ('success','completed','blocked_identity') ORDER BY cr.id DESC`, repoID)
 	if e != nil {
 		return out, e
 	}
-	scopes := map[int64]*ClusterScope{}
+	anchors := map[int64]*ClusterScope{}
+	all := []*ClusterScope{}
 	authority := false
 	first := true
 	for rows.Next() {
 		var id int64
-		var raw sql.NullString
-		var repo, started string
-		if e = rows.Scan(&id, &raw, &repo, &started); e != nil {
+		var raw, finished sql.NullString
+		var repo, started, status string
+		if e = rows.Scan(&id, &raw, &repo, &started, &finished, &status); e != nil {
 			rows.Close()
 			return out, e
 		}
@@ -224,6 +208,7 @@ func (s *Store) ClusterReadSelection(ctx context.Context, repoID int64, source s
 			rows.Close()
 			return out, err
 		}
+		success := status == "success" || status == "completed"
 		if scope != nil {
 			at, err := time.Parse(time.RFC3339Nano, started)
 			observed, _ := time.Parse(time.RFC3339Nano, scope.SourceAsOf.ObservedAt)
@@ -232,10 +217,29 @@ func (s *Store) ClusterReadSelection(ctx context.Context, repoID int64, source s
 				rows.Close()
 				return out, fmt.Errorf("cluster scope admission clock invalid")
 			}
-			scopes[id] = scope
-			authority = true
+			if scope.Format == ClusterScopeFormatV2 {
+				end, err := time.Parse(time.RFC3339Nano, finished.String)
+				if err != nil || end.Before(at) || (success && scope.PublicationStatus != "published") || (!success && scope.PublicationStatus != "retained_only") {
+					rows.Close()
+					return out, fmt.Errorf("v2 analysis status/admission mismatch")
+				}
+				if out.Analysis == nil {
+					out.Analysis = &ClusterAnalysis{Status: scope.PublicationStatus, RunID: scope.RunID, ScopeStatus: "native_v2", ClusterScope: scope}
+				}
+			} else if !success {
+				rows.Close()
+				return out, fmt.Errorf("blocked analysis requires v2")
+			}
+			all = append(all, scope)
+			if success {
+				anchors[id] = scope
+				authority = true
+			}
+		} else if !success {
+			rows.Close()
+			return out, fmt.Errorf("blocked analysis missing scope")
 		}
-		if first {
+		if first && success {
 			out.Selection.RunID = clusterRunKey(id)
 			out.ClusterScope = scope
 			first = false
@@ -246,19 +250,42 @@ func (s *Store) ClusterReadSelection(ctx context.Context, repoID int64, source s
 	if e != nil {
 		return out, e
 	}
-	for _, scope := range scopes {
+	for _, scope := range all {
 		if scope.LastFullRunID != nil {
 			id, _ := positiveClusterKey(*scope.LastFullRunID)
-			anchor := scopes[id]
+			anchor := anchors[id]
 			if anchor == nil || anchor.Mode != "full-native" {
 				return out, fmt.Errorf("cluster scope full anchor missing or invalid")
 			}
 		}
 	}
+	if out.Analysis != nil && out.Selection.RunID != nil {
+		a, _ := positiveClusterKey(out.Analysis.RunID)
+		b, _ := positiveClusterKey(*out.Selection.RunID)
+		if a < b {
+			out.Analysis = nil
+		}
+	}
+	if len(all) > 0 {
+		if e = s.validateQuarantineGroupReferences(ctx, repoID, all); e != nil {
+			return out, e
+		}
+	}
+	if source == ClusterSourceRun {
+		rawRead := ClusterReadContext{ScopeStatus: "legacy_unknown", Selection: ClusterSelection{Source: ClusterSourceRun}}
+		id, ok, err := s.latestRawClusterRunID(ctx, repoID)
+		if ok {
+			rawRead.Selection.RunID = clusterRunKey(id)
+		}
+		return rawRead, err
+	}
 	if authority || source == ClusterSourceDurable {
 		out.Selection.Source = ClusterSourceDurable
 		if out.ClusterScope != nil {
 			out.ScopeStatus = "native_v1"
+			if out.ClusterScope.Format == ClusterScopeFormatV2 {
+				out.ScopeStatus = "native_v2"
+			}
 		}
 		return out, nil
 	}
@@ -309,13 +336,14 @@ func (s *Store) QualifiedClusterSummaries(ctx context.Context, o ClusterSummaryO
 			rows, e = tx.ListClusterSummaries(ctx, o)
 		default:
 			rows, e = tx.ListDisplayClusterSummaries(ctx, o)
-			if e == nil && read.Selection.Source == "legacy_display" {
-				raw, err := tx.ListRunClusterSummaries(ctx, o)
-				if err != nil {
-					return err
-				}
-				if len(raw) == 0 {
-					read, e = tx.ClusterReadSelection(ctx, o.RepoID, ClusterSourceDurable)
+
+		}
+		if e == nil {
+			for i := range rows {
+				if rows[i].Source == ClusterSourceRun {
+					rows[i].ClusterIdentityContext = ClusterIdentityContext{IdentityQuarantineStatus: "not_recorded"}
+				} else {
+					rows[i].ClusterIdentityContext = clusterIdentityContext(rows[i].ID, read)
 				}
 			}
 		}

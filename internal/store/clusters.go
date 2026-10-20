@@ -10,6 +10,7 @@ import (
 )
 
 type ClusterSummary struct {
+	ClusterIdentityContext
 	ID                     int64  `json:"id"`
 	Source                 string `json:"source,omitempty"`
 	StableSlug             string `json:"stable_slug"`
@@ -55,6 +56,8 @@ type ClusterMemberDetail struct {
 	Summaries             map[string]string `json:"summaries,omitempty"`
 	LastSeenRunID         *string           `json:"last_seen_run_id"`
 	GenerationStatus      string            `json:"generation_status"`
+	RetentionReason       *string           `json:"retention_reason"`
+	RetentionAsOfRunID    *string           `json:"retention_as_of_run_id"`
 }
 
 type ClusterDetail struct {
@@ -554,9 +557,14 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 	if err != nil {
 		return ClusterDetail{}, err
 	}
+	summary.ClusterIdentityContext = clusterIdentityContext(summary.ID, read)
 	for i := range members {
 		run := byID[members[i].Thread.ID]
 		members[i].LastSeenRunID, members[i].GenerationStatus, err = clusterMemberGeneration(run, read)
+		if err != nil {
+			return ClusterDetail{}, err
+		}
+		members[i].RetentionReason, members[i].RetentionAsOfRunID, err = clusterMemberRetention(members[i].LastSeenRunID, summary.ClusterIdentityContext, members[i].GenerationStatus)
 		if err != nil {
 			return ClusterDetail{}, err
 		}
@@ -626,6 +634,7 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 	if err != nil {
 		return ClusterDetail{}, err
 	}
+	summary.ClusterIdentityContext = ClusterIdentityContext{IdentityQuarantineStatus: "not_recorded"}
 	for i := range members {
 		members[i].GenerationStatus = "legacy_unknown"
 	}

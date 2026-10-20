@@ -3,11 +3,14 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/openclaw/gitcrawl/internal/store"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,9 +103,6 @@ func run() error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
-	if e = checkIdentityConflict(*cache, snap); e != nil {
-		return e
-	}
 	pairCache, parentHash, e := loadPairs(*cache, snap)
 	if e != nil {
 		return e
@@ -129,19 +129,28 @@ func run() error {
 	}
 	planCtx, planDone := context.WithTimeout(context.Background(), 15*time.Second)
 	planStore, planErr := store.OpenReadOnly(planCtx, *db)
+	var plan store.ClusterQuarantinePlan
 	if planErr == nil {
-		planErr = planStore.NativeCheckClusterPlan(planCtx, snap, inputs)
+		plan, planErr = planStore.NativePlanClusters(planCtx, snap, inputs)
 		planStore.Close()
 	}
 	planDone()
 	if planErr != nil {
-		if strings.Contains(planErr.Error(), "partial_identity_conflict") {
-			if save := durable(filepath.Join(*cache, "identity-conflict.json"), cacheReceipt{InputSHA256: snap.InputSHA256, StateSHA256: snap.StateSHA256}, true); save != nil {
-				return fmt.Errorf("%v; retain conflict proof: %w", planErr, save)
-			}
-		}
 		return planErr
 	}
+	planRaw, planHash, e := plan.Proof()
+	if e != nil {
+		return e
+	}
+	planPath := filepath.Join(filepath.Dir(*receipt), planHash+"-quarantine-plan.json.gz")
+	if e = retainPlan(planPath, planRaw); e != nil {
+		return e
+	}
+	snap.QuarantinePlanSHA256 = planHash
+	out["quarantine_proof_sha256"] = planHash
+	out["quarantine_proof_path"] = planPath
+	out["computed_clusters"] = len(inputs)
+	out["quarantined_candidate_clusters"] = len(inputs) - len(plan.Published)
 	out["pair_cache_sha256"] = cacheHash
 	out["previous_cached_nodes"] = cachedNodes
 	out["pair_dot_products"] = pairCache.recomputed
@@ -150,13 +159,13 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	digest := store.NativeSHA256(append(append(append(append([]byte(snap.InputSHA256+snap.StateSHA256), raw...), req...), res...), p...))
+	digest := store.NativeSHA256(append(append(append(append([]byte(snap.InputSHA256+snap.StateSHA256+snap.QuarantinePlanSHA256), raw...), req...), res...), p...))
 	delete(out, "cluster_scope")
 	out["admission"] = map[string]any{"mode": snap.Availability.Scope.Mode, "provider_complete": snap.Availability.Scope.ProviderComplete, "source_as_of": snap.Availability.Scope.SourceAsOf}
 	out["phase"] = "prepared"
 	out["content_digest"] = digest
 	out["edges"] = edges
-	out["clusters"] = len(inputs)
+	out["clusters"] = len(plan.Published)
 	out["compute_seconds"] = time.Since(started).Seconds()
 	if e = json.NewEncoder(os.Stdout).Encode(out); e != nil {
 		return e
@@ -216,7 +225,7 @@ func run() error {
 		}
 		return e
 	}
-	scope, e := s.NativePublishedClusterScope(ctx, snap.RepoID)
+	scope, e := s.NativeCurrentClusterAnalysisScope(ctx, snap.RepoID)
 	if e != nil {
 		return e
 	}
@@ -225,6 +234,12 @@ func run() error {
 	out["run_id"] = result.RunID
 	out["cluster_unchanged"] = result.RunID == snap.LastRun
 	out["members"] = result.MemberCount
+	out["clusters"] = result.ClusterCount
+	out["publication_status"] = scope.PublicationStatus
+	out["run_status"] = "success"
+	if scope.PublicationStatus == "retained_only" {
+		out["run_status"] = "blocked_identity"
+	}
 	out["state_sha256"] = state
 	out["write_seconds"] = time.Since(writeStart).Seconds()
 	out["finished_at"] = time.Now().UTC()
@@ -297,4 +312,79 @@ func checkIdentityConflict(dir string, snap store.NativeClusterSnapshot) error {
 		return fmt.Errorf("partial_identity_conflict: unchanged input/curation; operator resolution required")
 	}
 	return nil
+}
+
+func readRetainedPlan(path string) ([]byte, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	gz, e := gzip.NewReader(f)
+	if e != nil {
+		return nil, e
+	}
+	defer gz.Close()
+	raw, e := io.ReadAll(io.LimitReader(gz, (32<<20)+1))
+	if e != nil {
+		return nil, e
+	}
+	if len(raw) > 32<<20 {
+		return nil, fmt.Errorf("quarantine proof logical size exceeds bound")
+	}
+	return raw, nil
+}
+func retainPlan(path string, raw []byte) error {
+	if len(raw) > 32<<20 {
+		return fmt.Errorf("quarantine proof exceeds bound")
+	}
+	if old, e := readRetainedPlan(path); e == nil {
+		if !bytes.Equal(old, raw) {
+			return fmt.Errorf("retained quarantine proof changed")
+		}
+		return nil
+	} else if !os.IsNotExist(e) {
+		return e
+	}
+	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+	f, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if e != nil {
+		return e
+	}
+	gz := gzip.NewWriter(f)
+	if _, e = gz.Write(raw); e == nil {
+		e = gz.Close()
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	ce := f.Close()
+	if e != nil {
+		return e
+	}
+	if ce != nil {
+		return ce
+	}
+	// Link publishes a complete fsynced file without replacing any old evidence.
+	if e = os.Link(tmp, path); e != nil {
+		if !os.IsExist(e) {
+			return e
+		}
+		old, err := readRetainedPlan(path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(old, raw) {
+			return fmt.Errorf("concurrent quarantine proof differs")
+		}
+	}
+	if e = os.Remove(tmp); e != nil {
+		return e
+	}
+	dir, e := os.Open(filepath.Dir(path))
+	if e != nil {
+		return e
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

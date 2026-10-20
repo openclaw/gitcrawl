@@ -171,7 +171,7 @@ class Cycle:
      self.state['cluster']=json.loads(raw) if raw.strip() else {'status':'controller_busy'}
      if before and self.state['cluster'].get('phase') in ('committed','unchanged') and self.state['cluster'].get('cluster_scope',{}).get('mode')=='full-native':self.state['scope_retirement_pending']={'before':before,'publication':self.state['cluster']}
      self.checkpoint();self.finish_scope_retirement()
-     return {'status':'vectors_current','cluster':self.state['cluster']}
+     return {'status':'identity_quarantined' if self.state['cluster'].get('cluster_scope',{}).get('publication_status')=='retained_only' else 'vectors_current','cluster':self.state['cluster']}
     p=self.state['pending']
    if self.policy_changed(p):self.invalidate_policy(p);continue
    # Validate current native availability/input before any new broker work.
@@ -237,7 +237,7 @@ class Cycle:
    summary=json.loads(data.splitlines()[-1]);p['native_receipt']=summary.get('receipt');p['native_publication']=summary;self.checkpoint()
    if not self.verify_import(p,result):raise RuntimeError('native durable receipt missing; broker retained')
    self.finish(p)
-   return {'status':'catchup_imported' if catchup else 'combined_published','tasks':p['matched'],'native':summary}
+   return {'status':'catchup_imported' if catchup else ('identity_quarantined' if summary.get('cluster_scope',{}).get('publication_status')=='retained_only' else 'combined_published'),'tasks':p['matched'],'native':summary}
   return {'status':'replacement_pending'}
 
 def main():

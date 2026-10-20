@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gitcrawl scope v2: available inputs and identity quarantine (paired proposal)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "mode",
+    "run_id",
+    "repository",
+    "policy_version",
+    "policy_digest",
+    "source_as_of",
+    "provider_complete",
+    "full_native_scope_complete",
+    "selected_input_complete",
+    "population",
+    "refreshed_memberships",
+    "retained_prior_memberships",
+    "last_full_run_id",
+    "identity_reconciliation_complete",
+    "publication_status",
+    "partial_reasons",
+    "quarantine"
+  ],
+  "properties": {
+    "format": {
+      "const": "gitcrawl.cluster-scope.v2"
+    },
+    "mode": {
+      "enum": [
+        "full-native",
+        "available-subset"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3
+    },
+    "policy_version": {
+      "const": 2
+    },
+    "policy_digest": {
+      "const": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a"
+    },
+    "source_as_of": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "through",
+        "observed_at"
+      ],
+      "properties": {
+        "through": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "provider_complete": {
+      "type": "boolean"
+    },
+    "full_native_scope_complete": {
+      "type": "boolean"
+    },
+    "selected_input_complete": {
+      "const": true
+    },
+    "population": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "native_eligible",
+        "selected",
+        "unavailable",
+        "unavailable_in_scope",
+        "unmaterialized_unavailable",
+        "missing_vectors",
+        "stale_vectors",
+        "published",
+        "identity_quarantined"
+      ],
+      "properties": {
+        "native_eligible": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "selected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unavailable": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unavailable_in_scope": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unmaterialized_unavailable": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "missing_vectors": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "stale_vectors": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "published": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "identity_quarantined": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "refreshed_memberships": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "retained_prior_memberships": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "last_full_run_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "identity_reconciliation_complete": {
+      "type": "boolean"
+    },
+    "publication_status": {
+      "enum": [
+        "published",
+        "retained_only"
+      ]
+    },
+    "partial_reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 2,
+      "items": {
+        "enum": [
+          "provider_unavailable",
+          "identity_quarantine"
+        ]
+      }
+    },
+    "quarantine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proof_sha256",
+        "components"
+      ],
+      "properties": {
+        "proof_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "component_id",
+              "reasons",
+              "cluster_ids",
+              "candidate_count",
+              "selected_count",
+              "retained_membership_count"
+            ],
+            "properties": {
+              "component_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "reasons": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "multiple_existing_identities",
+                    "existing_identity_split",
+                    "protected_curation",
+                    "retained_identity_target"
+                  ]
+                }
+              },
+              "cluster_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*$"
+                }
+              },
+              "candidate_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "selected_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "retained_membership_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "full-native"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "provider_complete": {
+            "const": true
+          },
+          "identity_reconciliation_complete": {
+            "const": true
+          },
+          "full_native_scope_complete": {
+            "const": true
+          },
+          "publication_status": {
+            "const": "published"
+          },
+          "partial_reasons": {
+            "maxItems": 0
+          },
+          "quarantine": {
+            "properties": {
+              "components": {
+                "maxItems": 0
+              }
+            }
+          },
+          "population": {
+            "properties": {
+              "unavailable": {
+                "const": 0
+              },
+              "unavailable_in_scope": {
+                "const": 0
+              },
+              "unmaterialized_unavailable": {
+                "const": 0
+              },
+              "identity_quarantined": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "full_native_scope_complete": {
+            "const": false
+          },
+          "partial_reasons": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "population": {
+          "properties": {
+            "missing_vectors": {
+              "const": 0
+            },
+            "stale_vectors": {
+              "const": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "publication_status": {
+            "const": "retained_only"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "identity_reconciliation_complete": {
+            "const": false
+          },
+          "mode": {
+            "const": "available-subset"
+          },
+          "refreshed_memberships": {
+            "const": 0
+          },
+          "population": {
+            "properties": {
+              "published": {
+                "const": 0
+              },
+              "selected": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "identity_quarantined": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "population": {
+            "properties": {
+              "published": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "provider_complete": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "population": {
+            "properties": {
+              "unavailable": {
+                "const": 0
+              },
+              "unavailable_in_scope": {
+                "const": 0
+              },
+              "unmaterialized_unavailable": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "population": {
+            "properties": {
+              "unavailable": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

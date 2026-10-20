@@ -113,3 +113,18 @@ KeepAlive nor a faster retry cadence is added. The original900s schedule remains
 
 The consumer must be installed and accepted before activating the new producer.
 See `scripts/native-cluster/README.md` for persistence, reader and scope contracts.
+
+## Identity quarantine v2
+
+A fresh partial provider receipt remains eligible; complete=1 is not required for
+an isolated unavailable-item scope. The native planner now quarantines closed
+current-identity components and can publish unrelated candidates. Retained-only
+analysis is reported as identity_quarantined, not combined_published or full
+coverage. It never qualifies a full-scope zero-task cleanup. Pending-first broker
+reuse, exact source-clock checks, release intent, private archive recovery and the
+16-envelope cap are unchanged. Only the native producer can decide admission.
+
+The maintenance job retains its 900-second cadence. Native no-op signatures cover
+current graph/curation/quarantine state; no timer resolves an identity conflict.
+The v2 wrapper uses a separate cache directory so previous failed-attempt and
+complete-cache evidence stays intact through deployment.

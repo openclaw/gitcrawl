@@ -145,3 +145,25 @@ func TestIdentityConflictProofSkipsUnchangedGraph(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestRetainedPlanAtomicCompressedProof(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proof.json.gz")
+	raw := []byte(`{"format":"synthetic","groups":["1","2"]}`)
+	if e := retainPlan(path, raw); e != nil {
+		t.Fatal(e)
+	}
+	got, e := readRetainedPlan(path)
+	if e != nil || string(got) != string(raw) {
+		t.Fatal("proof lost exact bytes", e)
+	}
+	if e = retainPlan(path, raw); e != nil {
+		t.Fatal("idempotent proof", e)
+	}
+	if e = retainPlan(path, []byte(`{"changed":true}`)); e == nil {
+		t.Fatal("existing proof overwritten")
+	}
+	got, e = readRetainedPlan(path)
+	if e != nil || string(got) != string(raw) {
+		t.Fatal("failed overwrite damaged proof")
+	}
+}

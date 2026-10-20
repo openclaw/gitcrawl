@@ -113,6 +113,7 @@ func (a *App) runClusterList(ctx context.Context, command string, args []string,
 		"selection":     read.Selection,
 		"scope_status":  read.ScopeStatus,
 		"cluster_scope": read.ClusterScope,
+		"analysis":      read.Analysis,
 	}, true)
 }
 
@@ -334,6 +335,7 @@ func (a *App) runClusterDetail(ctx context.Context, args []string) error {
 		"selection":     detail.Selection,
 		"scope_status":  detail.ScopeStatus,
 		"cluster_scope": detail.ClusterScope,
+		"analysis":      detail.Analysis,
 		"members":       detail.Members,
 	}, true)
 }

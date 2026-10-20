@@ -13,7 +13,24 @@ func renderClustersReportMarkdown(report clustersReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Cluster Report: %s\n\n", report.Repository)
 	fmt.Fprintf(&b, "Generated: %s UTC\n", report.GeneratedAt)
-	if scope := report.ClusterScope; scope != nil {
+	scopeForCoverage := report.ClusterScope
+	if report.Analysis != nil {
+		scopeForCoverage = report.Analysis.ClusterScope
+	}
+	if scope := scopeForCoverage; scope != nil && scope.Format == store.ClusterScopeFormatV2 {
+		provider := "incomplete"
+		if scope.ProviderComplete {
+			provider = "complete"
+		}
+		fmt.Fprintf(&b, "Analysis %s: %d selected inputs; %d published; %d held by identity quarantine. Provider coverage: %s (%d unavailable).\n", scope.RunID, scope.Population.Selected, *scope.Population.Published, *scope.Population.IdentityQuarantined, provider, scope.Population.Unavailable)
+		if scope.PublicationStatus == "retained_only" {
+			b.WriteString("No cluster memberships refreshed; the last successful generation remains selected.\n")
+		}
+		if !scope.FullNativeScopeComplete {
+			b.WriteString("Full native scope remains incomplete.\n")
+		}
+		fmt.Fprintf(&b, "Source observed: %s.\n", scope.SourceAsOf.ObservedAt)
+	} else if scope := report.ClusterScope; scope != nil {
 		if scope.Mode == "available-subset" {
 			fmt.Fprintf(&b, "Coverage: partial; %d selected inputs, %d unavailable items, %d retained prior memberships. Provider and full-scope coverage remain incomplete.\n", scope.Population.Selected, scope.Population.Unavailable, scope.RetainedPriorMemberships)
 		} else {
@@ -51,6 +68,9 @@ func renderClustersReportMarkdown(report clustersReport) string {
 		fmt.Fprintf(&b, "\n## %d. %s\n\n", index+1, markdownHeadingText(title))
 		fmt.Fprintf(&b, "- Cluster: `%s` (`%d`)\n", firstNonEmpty(cluster.StableSlug, fmt.Sprintf("cluster-%d", cluster.ID)), cluster.ID)
 		fmt.Fprintf(&b, "- Status: %s\n", firstNonEmpty(cluster.Status, "unknown"))
+		if q := cluster.IdentityQuarantine; q != nil {
+			fmt.Fprintf(&b, "- Identity update held at analysis %s: %s. Retained memberships are unchanged.\n", q.AnalysisRunID, strings.Join(q.Reasons, ", "))
+		}
 		fmt.Fprintf(&b, "- Members: %d total, %d shown\n", cluster.MemberCount, len(detail.Members))
 		fmt.Fprintf(&b, "- Representative: %s\n", clusterRepresentativeMarkdown(cluster))
 		if cluster.UpdatedAt != "" {

@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -19,19 +20,20 @@ import (
 const NativeClusterAlgorithm = "gitcrawl:6c9c1bea:threshold=.80,cross=.93,k=16,max=40,min=1;prepared-exact-cosine:v1"
 
 type NativeClusterSnapshot struct {
-	Availability   ClusterAvailability `json:"-"`
-	Scope          *ClusterScope       `json:"cluster_scope,omitempty"`
-	Source         NativeSourceBinding `json:"source"`
-	RepoID         int64               `json:"repo_id"`
-	Threads        map[int64]Thread    `json:"-"`
-	Vectors        []ThreadVector      `json:"-"`
-	InputSHA256    string              `json:"input_sha256"`
-	StateSHA256    string              `json:"state_sha256"`
-	Eligible       int                 `json:"eligible"`
-	CommittedInput string              `json:"committed_input"`
-	CommittedState string              `json:"committed_state"`
-	LastRun        int64               `json:"last_run"`
-	PreviewReceipt NativeImportReceipt `json:"-"`
+	Availability         ClusterAvailability `json:"-"`
+	Scope                *ClusterScope       `json:"cluster_scope,omitempty"`
+	Source               NativeSourceBinding `json:"source"`
+	RepoID               int64               `json:"repo_id"`
+	Threads              map[int64]Thread    `json:"-"`
+	Vectors              []ThreadVector      `json:"-"`
+	InputSHA256          string              `json:"input_sha256"`
+	StateSHA256          string              `json:"state_sha256"`
+	Eligible             int                 `json:"eligible"`
+	CommittedInput       string              `json:"committed_input"`
+	CommittedState       string              `json:"committed_state"`
+	LastRun              int64               `json:"last_run"`
+	PreviewReceipt       NativeImportReceipt `json:"-"`
+	QuarantinePlanSHA256 string              `json:"quarantine_plan_sha256,omitempty"`
 }
 
 func (s *Store) NativeClusterSnapshot(ctx context.Context, policy []byte) (NativeClusterSnapshot, error) {
@@ -93,6 +95,7 @@ func (s *Store) nativeClusterSnapshotOverlay(ctx context.Context, policy []byte,
 	encoder.Encode(NativeClusterAlgorithm)
 	encoder.Encode(out.Source)
 	encoder.Encode(out.Availability.SemanticDigest)
+	encoder.Encode(ClusterQuarantinePolicyDigest)
 	out.Threads = map[int64]Thread{}
 	missing := 0
 	stale := 0
@@ -211,7 +214,7 @@ func (s *Store) nativeClusterSnapshotOverlay(ctx context.Context, policy []byte,
 		out.CommittedInput = meta.Native.Input
 		out.CommittedState = meta.Native.State
 	}
-	out.Scope, e = s.NativePublishedClusterScope(ctx, out.RepoID)
+	out.Scope, e = s.NativeCurrentClusterAnalysisScope(ctx, out.RepoID)
 	if e != nil {
 		return out, e
 	}
@@ -266,7 +269,9 @@ func (s *Store) nativeClusterState(ctx context.Context, repo int64) (string, err
 						rows.Close()
 						return "", fmt.Errorf("invalid stats type")
 					}
-					if e = json.Unmarshal(raw, &obj); e != nil {
+					decoder := json.NewDecoder(bytes.NewReader(raw))
+					decoder.UseNumber()
+					if e = decoder.Decode(&obj); e != nil {
 						rows.Close()
 						return "", e
 					}
@@ -313,20 +318,74 @@ func (s *Store) NativePublishClusters(ctx context.Context, want NativeClusterSna
 		if len(seen) != len(got.Threads) {
 			return fmt.Errorf("cluster membership incomplete")
 		}
-		// The original persistence body receives this same transaction. Its only
-		// adapter is nativeClusterWithTx, avoiding an independent nested transaction.
-		if got.Availability.Scope.Mode == "available-subset" {
-			result, e = tx.SaveAvailableSubsetClusters(ctx, want.RepoID, inputs)
-		} else {
-			result, e = tx.SaveCompleteDurableClusters(ctx, want.RepoID, inputs)
-		}
-		if e != nil {
-			if strings.Contains(e.Error(), "overlaps multiple active identities") {
-				return fmt.Errorf("partial_identity_conflict: %w", e)
+		if got.CommittedInput == got.InputSHA256 && got.CommittedState == got.StateSHA256 {
+			result.RunID = got.LastRun
+			state = got.StateSHA256
+			if got.Scope != nil && got.Scope.Population.Published != nil {
+				result.MemberCount = *got.Scope.Population.Published
 			}
+			return nil
+		}
+		plan, e := tx.NativePlanClusters(ctx, want, inputs)
+		if e != nil {
 			return e
 		}
-		scope := got.Availability.Scope
+		_, proofHash, e := plan.Proof()
+		if e != nil {
+			return e
+		}
+		if want.QuarantinePlanSHA256 != "" && want.QuarantinePlanSHA256 != proofHash {
+			return fmt.Errorf("native quarantine plan changed")
+		}
+		if len(plan.SelectedIDs) == 0 {
+			return fmt.Errorf("no_publishable_input")
+		}
+		// Exact target pinning preserves the existing ID even if automatic
+		// representative selection changes its candidate-derived key.
+		publish := append([]DurableClusterInput(nil), plan.Published...)
+		for i := range publish {
+			target := plan.Targets[i]
+			if target.CandidateKey != publish[i].StableKey {
+				return fmt.Errorf("publication target ordering mismatch")
+			}
+			if target.ClusterID != 0 {
+				resolved, e := tx.reconcilePartialDurableClusterInput(ctx, want.RepoID, publish[i])
+				if e != nil {
+					return e
+				}
+				var actual int64
+				if e = tx.q().QueryRowContext(ctx, "select id from cluster_groups where repo_id=? and stable_key=?", want.RepoID, resolved.StableKey).Scan(&actual); e != nil {
+					return e
+				}
+				if actual != target.ClusterID {
+					return fmt.Errorf("resolved publication identity changed")
+				}
+				publish[i].StableKey = resolved.StableKey
+				publish[i].StableSlug = resolved.StableSlug
+				publish[i].Title = resolved.Title
+			}
+		}
+		scope := plan.Scope(got.Availability.Scope, 0, proofHash)
+		if len(publish) == 0 {
+			result.RunID, e = tx.insertClusterRun(ctx, want.RepoID, time.Now().UTC().Format(time.RFC3339Nano))
+			if e == nil {
+				_, e = tx.q().ExecContext(ctx, "update cluster_runs set status='blocked_identity',stats_json='{}' where id=?", result.RunID)
+			}
+		} else if scope.Mode == "full-native" {
+			result, e = tx.SaveCompleteScopedClusters(ctx, want.RepoID, publish, plan.PreservedGroupIDs...)
+		} else {
+			result, e = tx.SaveAvailableSubsetClusters(ctx, want.RepoID, publish)
+		}
+		if e != nil {
+			return e
+		}
+		after, e := tx.ClusterQuarantineRowHash(ctx, want.RepoID, plan.PreservedGroupIDs)
+		if e != nil {
+			return e
+		}
+		if after != plan.ProtectedPreimageSHA256 {
+			return fmt.Errorf("quarantined identity postimage changed; rollback")
+		}
 		scope.RunID = strconv.FormatInt(result.RunID, 10)
 		if scope.Mode == "full-native" {
 			scope.LastFullRunID = &scope.RunID
@@ -381,7 +440,7 @@ func (s *Store) NativePublishClusters(ctx context.Context, want NativeClusterSna
 		if e = json.Unmarshal([]byte(statsRaw), &stats); e != nil {
 			return e
 		}
-		stats["native_producer"] = map[string]any{"input_sha256": want.InputSHA256, "state_sha256": "", "algorithm": NativeClusterAlgorithm, "scope": scope, "availability_evidence": got.Availability.Unavailable}
+		stats["native_producer"] = map[string]any{"input_sha256": want.InputSHA256, "state_sha256": "", "algorithm": NativeClusterAlgorithm, "scope": scope, "availability_evidence": got.Availability.Unavailable, "quarantine_plan_sha256": proofHash}
 		encoded, e := json.Marshal(stats)
 		if e != nil {
 			return e
@@ -519,4 +578,56 @@ func (s *Store) NativeCheckClusterPlan(ctx context.Context, want NativeClusterSn
 		}
 		return nil
 	})
+}
+
+// NativePlanClusters constructs complete current relation closure without source
+// writes. The exact same proof is recomputed inside the final transaction.
+func (s *Store) NativePlanClusters(ctx context.Context, want NativeClusterSnapshot, inputs []DurableClusterInput) (ClusterQuarantinePlan, error) {
+	var plan ClusterQuarantinePlan
+	e := s.nativeClusterWithTx(ctx, func(tx *Store) error {
+		state, e := tx.nativeClusterState(ctx, want.RepoID)
+		if e != nil {
+			return e
+		}
+		if state != want.StateSHA256 {
+			return fmt.Errorf("native combined input/curation changed during compute")
+		}
+		ids := make([]int64, 0, len(want.Threads))
+		for id := range want.Threads {
+			ids = append(ids, id)
+		}
+		groups, e := tx.ClusterIdentityMetadata(ctx, want.RepoID)
+		if e != nil {
+			return e
+		}
+		plan, e = PlanClusterQuarantine(want.RepoID, inputs, ids, groups)
+		if e != nil {
+			return e
+		}
+		plan.InputSHA256 = want.InputSHA256
+		plan.StateSHA256 = state
+		raw, e := json.Marshal(want.Source)
+		if e != nil {
+			return e
+		}
+		plan.SourceIdentitySHA256 = NativeSHA256(raw)
+		plan.AvailabilitySHA256 = want.Availability.SemanticDigest
+		plan.ProtectedPreimageSHA256, e = tx.ClusterQuarantineRowHash(ctx, want.RepoID, plan.PreservedGroupIDs)
+		if e != nil {
+			return e
+		}
+		_, _, e = plan.Proof()
+		return e
+	})
+	return plan, e
+}
+func (s *Store) NativeCurrentClusterAnalysisScope(ctx context.Context, repoID int64) (*ClusterScope, error) {
+	r, e := s.ClusterReadSelection(ctx, repoID, ClusterSourceDurable)
+	if e != nil {
+		return nil, e
+	}
+	if r.Analysis != nil {
+		return r.Analysis.ClusterScope, nil
+	}
+	return r.ClusterScope, nil
 }

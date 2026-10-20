@@ -16,6 +16,10 @@ import (
 
 const cacheFormat = "gitcrawl.native-pair-cache.v1"
 
+// Exact previously reviewed producer; its pair algorithm/encoding is unchanged.
+// A copied parent keeps this provenance, never relabels it as the new binary.
+const reviewedSubsetCacheProducer = "db85fc43e9b05a709501e458b682da7b86c097c7e915985c6b3eda354851a36f"
+
 type pairCacheFile struct {
 	Producer     string                    `json:"producer_sha256"`
 	Format       string                    `json:"format"`
@@ -85,7 +89,13 @@ func loadPairs(dir string, snap store.NativeClusterSnapshot) (*similarityCache, 
 	if e != nil {
 		return nil, "", e
 	}
-	if c.Producer != producer || c.Format != cacheFormat || c.Algorithm != store.NativeClusterAlgorithm || c.Source != snap.Source || c.Model != "text-embedding-3-small" || c.Basis != "title_original" || c.Dimensions != 1536 {
+	if c.Producer != producer && c.Producer != reviewedSubsetCacheProducer {
+		return nil, "", fmt.Errorf("unrecognized complete-cache producer; evidence retained")
+	}
+	if c.Format != cacheFormat || c.Algorithm != store.NativeClusterAlgorithm || c.Model != "text-embedding-3-small" || c.Basis != "title_original" || c.Dimensions != 1536 {
+		return nil, "", fmt.Errorf("complete-cache lineage mismatch; evidence retained")
+	}
+	if c.Source != snap.Source {
 		// These are exclusively this native producer's derived candidate files, no
 		// source history. A new exclusion/identity invalidates every old capability.
 		if e = clearPairs(dir); e != nil {

@@ -94,3 +94,20 @@ class AvailabilityTests(Tests):
   c.validate_pending=lambda pending:(_ for _ in ()).throw(RuntimeError('cluster availability blocked: auth'))
   c.broker=lambda *args:self.fail('provider admission with unqualified failure')
   self.assertEqual(c.run()['status'],'waiting_scope');self.assertIn('pending',c.state);self.assertEqual(c.state['retained'],[])
+
+class IdentityQuarantineTests(Tests):
+ def test_retained_only_noop_is_not_publication_or_full_retirement(self):
+  c,p,calls=self.make();c.state['retained']=[{'sha256':'old','request':'old.json'}];(p/'old.json').write_text('{}');c.new_packet=lambda:False;c.source_ready=lambda:True
+  def call(argv,data=None,timeout=90):
+   calls.append(argv);self.assertEqual(argv,['fixture-cluster']);return b'{"phase":"unchanged","cluster_scope":{"mode":"available-subset","publication_status":"retained_only"}}'
+  c.call=call;result=c.run();self.assertEqual(result['status'],'identity_quarantined');self.assertTrue((p/'old.json').exists());self.assertEqual(len(c.state['retained']),1)
+ def test_combined_retained_only_reports_identity_wait(self):
+  c,p,calls=self.make();self.pending(c,p);c.source_ready=lambda:True;c.broker=lambda mode,raw:{'status':'complete','results':[]};verified=iter([False,True]);c.verify_import=lambda pending,result:(pending.update({'matched':1}) or next(verified));c.finish=lambda p:None
+  c.call=lambda argv,data=None,timeout=90:b'{"phase":"committed","receipt":"native","cluster_scope":{"mode":"available-subset","publication_status":"retained_only"}}'
+  self.assertEqual(c.run()['status'],'identity_quarantined')
+ def test_partial_core_receipt_is_ready_without_complete_fiction(self):
+  import sqlite3,datetime,time
+  c,p,calls=self.make();db=p/'source.db';c.c['db']=str(db)
+  with sqlite3.connect(db) as con:
+   con.execute('create table analytics_coverage(repository,through,observed_at,complete)');now=datetime.datetime.now(datetime.timezone.utc);con.execute('insert into analytics_coverage values(?,?,?,0)',('openclaw/openclaw',(now-datetime.timedelta(seconds=2)).isoformat(),(now-datetime.timedelta(seconds=1)).isoformat()))
+  self.assertTrue(c.source_ready());self.assertEqual(c.state['core']['complete'],0)

@@ -1,7 +1,7 @@
 # Native available-subset cluster producer
 
 This is the source-owned implementation of the approved
-`gitcrawl.cluster-scope.v1` / final-v2 selection contract. Core collection and the
+`gitcrawl.cluster-scope.v2` identity-quarantine contract, with unchanged v1 parsing. Core collection and the
 independent official-main code producer retain their existing jobs and binaries.
 Installation does not enable the held observation-capture schema.
 
@@ -29,7 +29,7 @@ direct model credentials enter this producer.
 
 The original exact native graph algorithm, thresholds, node bounds and completed
 pair-cache validation remain. The new producer uses its own
-`available-subset-pair-cache` beneath the existing controller state; it does not
+`identity-quarantine-pair-cache` beneath the existing controller state; it does not
 delete the previous producer's cache. Observation-only retry changes do not
 change the semantic graph signature.
 
@@ -41,10 +41,14 @@ The gate file is fully written/fsynced before atomic rename makes it visible.
 The final transaction validates current inputs/curation/availability, imports
 only validated selected vectors, and uses `SaveAvailableSubsetClusters` when
 coverage is partial. This branch does not prune missing memberships, retire
-missing groups or delete legacy similarity groups. Existing partial identity
-reconciliation preserves old representatives and refuses ambiguous overlaps.
-Unchanged ambiguity fingerprints skip another graph pass and require changed
-inputs/curation or operator resolution; no automatic merge is authorized.
+missing groups or delete legacy similarity groups. Current active identity relations form closed components with the complete
+computed candidate partition. Ambiguous merges, splits and protected targets
+quarantine their entire component. Removed historical memberships do not connect
+components. The original partial reconciler still refuses ambiguity for every
+published target; there is no automatic merge. Complete quarantined row images
+are compared before/after tentative writes, including indirect writes and history.
+Protected identities outside the computed cohort are also reserved against full
+retirement. Full v2 publication preserves legacy similarity rows.
 
 Scope metadata and private evidence bindings commit in
 `cluster_runs.stats_json.native_producer`. `started_at` records final admission
@@ -52,8 +56,13 @@ after settlement in RFC3339Nano, with through <= observed_at <= started_at and
 five-minute admission freshness. `finished_at` follows it. The state signature
 includes scope/evidence metadata, excluding only its self-referential hash.
 
-Available-subset runs explicitly record false provider/full-scope completeness,
-true selected-input completeness, cohort counts and retained membership counts.
+Provider completeness and identity completeness are independent. Scope v2 keeps
+selected as the exact fresh-vector computed cohort and splits it into published
+and identity_quarantined. An available-subset run can have complete provider
+coverage but still incomplete identity publication. Counts and retained markers
+remain explicit. With no publishable candidates, status=blocked_identity records
+retained_only analysis without replacing the latest successful generation;
+unchanged semantic input/state is a no-op, including repeated blocked analysis.
 Only normal provider recovery and original fresh-vector/full-scope gates enable
 a full-native run. Partial zero-task exports never authorize full-scope broker
 retirement. Existing exact completion/archive/lease guards still apply.
@@ -85,3 +94,26 @@ bad scopes/anchors, native graph/cache equivalence, and controller lease/crash/
 retention behavior. All providers in tests are synthetic. Initial live acceptance
 must demonstrate an ordinary committed run and resumed core collection before
 claiming the fleet is caught up.
+
+## Quarantine proof and reader status
+
+A complete metadata-only candidate partition, active relation graph, exact write
+map and quarantined preimage digest are retained before settlement in an atomic,
+compressed content-addressed proof file. The logical UTF8 SHA256 is bound by the
+scope and native receipt; the archive stores that hash and scope, not a duplicate
+full partition on every run. The prior reviewed subset producer cache can be
+copied byte-for-byte into the new cache namespace and accepted only with its
+explicit producer hash and unchanged algorithm/model/source/exclusion lineage.
+Original cache/evidence remains untouched; parent provenance is never relabelled.
+
+Readers keep successful selection separate from latest v2 analysis. Explicit raw
+reads have analysis=null and no durable quarantine labels. In a mixed legacy
+view, analysis is durable-context only; raw ID collisions cannot inherit it. The
+latest successful durable row is the analysis floor even when raw selection is
+null. Group identity_quarantine_status and member retention_reason expose holds
+without claiming a refreshed generation. Claw adds its owner-removal withholding.
+
+The strict wire schema is in docs/native-cluster-scope-v2.schema.json. Synthetic
+writer fixtures cover partial publication, provider-complete identity quarantine,
+blocked analysis/no-op, indirect-write rollback and full recovery. Native model
+work remains exclusively in the authorized processor broker.
