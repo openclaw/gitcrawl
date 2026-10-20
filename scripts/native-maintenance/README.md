@@ -128,3 +128,14 @@ The maintenance job retains its 900-second cadence. Native no-op signatures cove
 current graph/curation/quarantine state; no timer resolves an identity conflict.
 The v2 wrapper uses a separate cache directory so previous failed-attempt and
 complete-cache evidence stays intact through deployment.
+
+When code and maintenance become due together, maintenance probes the existing
+controller lock and handoff journal before reading the core boundary. It can
+wait up to 120 seconds for one ongoing controller handoff, then up to 120 seconds
+for the ordinary core receipt, with a 240-second total ceiling. Without a
+handoff, the original 120-second wait applies. A second handoff or expired wait
+returns a dated `waiting_core_boundary` reason and uses normal cadence. This does
+not restore, stop, or force the core, and holds no controller lock while waiting.
+The five-minute source freshness limit and five-second receipt alignment remain
+unchanged, as do provider/graph/write budgets. Pending broker work remains first;
+this coordination applies only when a fresh native request is needed.

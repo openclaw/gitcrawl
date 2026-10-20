@@ -44,14 +44,34 @@ class Cycle:
   self.state['core']={'through':row[0],'observed_at':row[1],'complete':row[2]}
   through=datetime.datetime.fromisoformat(row[0].replace('Z','+00:00')).timestamp()
   return row[2] in (0,1) and at>last and through<=at<=time.time() and time.time()-through<=300 and time.time()-at<=300
+ def controller_idle(self):
+  # Probe only: never create a lock, hold it while waiting, or restore an owner.
+  base=pathlib.Path(self.c['handoff_state'])
+  with open(base/'controller.lock','rb') as lock:
+   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   except BlockingIOError:return False
+   fcntl.flock(lock,fcntl.LOCK_UN)
+  return not (base/'handoff.json').exists()
  def await_core_boundary(self):
-  # Align with a real ordinary receipt, not a fixed sleep or a forced core run.
-  until=time.monotonic()+120
+  # A co-scheduled code write can consume the whole core wait while the owner
+  # is stopped. Allow one bounded predecessor handoff, then the same120s core
+  # wait. Neither repeated handoffs nor a missing receipt can extend this forever.
+  started=time.monotonic();until=started+120;ceiling=started+240
+  seen_handoff=False;in_handoff=False;handoff_until=0
   while True:
-   if self.source_ready():
-    observed=datetime.datetime.fromisoformat(self.state['core']['observed_at'].replace('Z','+00:00')).timestamp()
-    if 0<=time.time()-observed<=5:return dict(self.state['core'])
-   if time.monotonic()>=until:raise CoreBoundaryPending('ordinary core completion not observed within120s')
+   at=time.monotonic()
+   if at>=ceiling:raise CoreBoundaryPending('controller/core boundary not observed within240s total')
+   if not self.controller_idle():
+    if not in_handoff:
+     if seen_handoff:raise CoreBoundaryPending('second controller handoff while awaiting core')
+     seen_handoff=True;in_handoff=True;handoff_until=min(at+120,ceiling)
+    if at>=handoff_until:raise CoreBoundaryPending('controller handoff did not finish within120s')
+   else:
+    if in_handoff:until=min(at+120,ceiling);in_handoff=False
+    if self.source_ready():
+     observed=datetime.datetime.fromisoformat(self.state['core']['observed_at'].replace('Z','+00:00')).timestamp()
+     if 0<=time.time()-observed<=5:return dict(self.state['core'])
+    if at>=until:raise CoreBoundaryPending('ordinary core completion not observed within120s')
    time.sleep(1)
  def archive_superseded(self):return archive_handoff.archive_superseded(self)
  def new_packet(self):
@@ -252,8 +272,8 @@ def main():
  try:
   if a.retire_completed:result=retention.retire_completed(c,a.retire_completed,target=a.retained_digest,legacy=True);print(json.dumps(result));return
   result=c.run();save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
- except CoreBoundaryPending:
-  result={'status':'waiting_core_boundary'};save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
+ except CoreBoundaryPending as e:
+  result={'status':'waiting_core_boundary','reason':str(e)};save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
  except RuntimeError as e:
   if 'cluster availability blocked' not in str(e):save(c.base/'last-failure.json',{'at':now(),'error':str(e)});raise
   result={'status':'waiting_scope','reason':str(e)[-300:]};save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))

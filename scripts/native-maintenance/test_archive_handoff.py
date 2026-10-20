@@ -175,6 +175,7 @@ class ArchiveTests(unittest.TestCase):
 
     def test_core_boundary_waits_for_an_actual_new_receipt(self):
         c, entries, calls = self.fixture(); count = []
+        c.controller_idle = lambda: True
         def ready():
             count.append(1)
             at = 1000 if len(count) == 1 else 1010
@@ -188,6 +189,7 @@ class ArchiveTests(unittest.TestCase):
 
     def test_core_boundary_budget_defers_without_any_provider_or_settlement(self):
         c, entries, calls = self.fixture(); c.source_ready = lambda: False
+        c.controller_idle = lambda: True
         with patch.object(maintain.time, 'monotonic', side_effect=[0, 121]):
             with self.assertRaises(maintain.CoreBoundaryPending): c.await_core_boundary()
         self.assertEqual(calls, [])
