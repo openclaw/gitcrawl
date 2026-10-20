@@ -137,5 +137,6 @@ handoff, the original 120-second wait applies. A second handoff or expired wait
 returns a dated `waiting_core_boundary` reason and uses normal cadence. This does
 not restore, stop, or force the core, and holds no controller lock while waiting.
 The five-minute source freshness limit and five-second receipt alignment remain
-unchanged, as do provider/graph/write budgets. Pending broker work remains first;
-this coordination applies only when a fresh native request is needed.
+unchanged, as do provider/graph/write budgets. Pending broker work remains first.
+A completed pending result waits for the same boundary only when a controller
+handoff is actually active; an idle controller keeps the existing fast path.

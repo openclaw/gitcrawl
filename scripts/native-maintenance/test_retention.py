@@ -19,6 +19,7 @@ class RetentionTests(unittest.TestCase):
         base = Path(tmp.name).resolve()
         handoff = base / 'handoff'
         handoff.mkdir()
+        (handoff / 'controller.lock').touch()
         db = base / 'archive.db'
         with closing(sqlite3.connect(db)) as con, con:
             con.executescript('PRAGMA user_version=16; CREATE TABLE repositories(id INTEGER PRIMARY KEY,full_name TEXT,github_repo_id TEXT); CREATE TABLE cluster_runs(id INTEGER PRIMARY KEY,repo_id INTEGER,status TEXT,stats_json TEXT);')

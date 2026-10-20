@@ -227,6 +227,9 @@ class Cycle:
    if self.state.get('pending') is not p:continue
    resultName=p['sha256']+'-result.json';save(self.base/resultName,result);p['result']=resultName;p['result_sha256']=sha((self.base/resultName).read_bytes());self.checkpoint()
    if self.verify_import(p,result):self.finish(p);return {'status':'recovered_import','tasks':p['matched']}
+   # A ready pending packet can meet the same scheduled code handoff as a new
+   # export. Wait only on actual contention; otherwise retain its fast path.
+   if not self.controller_idle():self.await_core_boundary()
    if not self.source_ready():self.checkpoint();return {'status':'waiting_core','request_sha256':p['sha256']}
    self.policy_refresh();log=self.base/(p['sha256']+'-import.log');p['import_log']=log.name;self.checkpoint()
    cap=json.loads(raw)['scope']['max_tasks']

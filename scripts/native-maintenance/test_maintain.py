@@ -4,7 +4,7 @@ class Tests(unittest.TestCase):
  def make(self):
   t=tempfile.TemporaryDirectory();self.addCleanup(t.cleanup);p=pathlib.Path(t.name);calls=[]
   def call(argv,data=None,timeout=90):calls.append(argv);return b'{}'
-  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.validate_pending=lambda p:None;c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.archive_superseded=lambda:{'archived':[]};return c,p,calls
+  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.validate_pending=lambda p:None;c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.controller_idle=lambda:True;c.archive_superseded=lambda:{'archived':[]};return c,p,calls
  def pending(self,c,p):
   raw=b'{"scope":{"max_tasks":2000},"source_binding":{"consumer_exclusions_sha256":"policy"},"tasks":[{"task_id":"t","input":"native","thread_binding":{"thread_id":"1"}}]}';(p/'request.json').write_bytes(raw);c.state['pending']={'request':'request.json','sha256':m.sha(raw),'export':{'tasks':1},'inspect':{'tasks':1},'submit':{'status':'submitted'}};c.checkpoint();c.policy_refresh=lambda:'policy'
  def test_pending_resumed_before_export_or_submit(self):
@@ -13,6 +13,12 @@ class Tests(unittest.TestCase):
  def test_ready_waits_for_core_without_settlement(self):
   c,p,calls=self.make();self.pending(c,p);c.broker=lambda mode,raw:{'status':'complete','results':[]};c.source_ready=lambda:False
   self.assertEqual(c.run()['status'],'waiting_core');self.assertTrue((p/c.state['pending']['result']).exists());self.assertEqual(calls,[])
+ def test_ready_pending_waits_for_overlapping_controller_before_import(self):
+  c,p,calls=self.make();self.pending(c,p);waits=[]
+  c.broker=lambda mode,raw:{'status':'complete','results':[]};c.controller_idle=lambda:False;c.await_core_boundary=lambda:waits.append(True);c.source_ready=lambda:True
+  verified=iter([False,True]);c.verify_import=lambda pending,result:(pending.update({'matched':1}) or next(verified));c.finish=lambda p:None
+  c.call=lambda argv,data=None,timeout=90:b'{"phase":"committed","receipt":"native"}'
+  self.assertEqual(c.run()['status'],'combined_published');self.assertEqual(waits,[True])
  def test_crash_after_release_resumes_cleanup_without_provider(self):
   c,p,calls=self.make();c.state['pending']={'stage':'released','sha256':'frozen','request':'already-cleaned.json','result':'already-cleaned-result.json','native_bindings':[{'input_sha256':'hash'}]};c.checkpoint()
   self.assertEqual(c.run()['status'],'recovered_release');self.assertNotIn('pending',c.state);self.assertEqual(calls,[]);self.assertTrue((p/'frozen-receipt.json').exists())
