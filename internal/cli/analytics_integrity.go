@@ -511,7 +511,7 @@ func (a *App) analyticsLane(ctx context.Context, s *store.Store, c *gh.Client, o
 		attempt := store.AnalyticsAttempt{Repository: repository, Operation: "discover_" + kind, StartedAt: started, FinishedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: "success", Evidence: json.RawMessage(`{}`)}
 		if e != nil {
 			attempt.Status = "failed"
-			attempt.ErrorClass, attempt.ErrorText, attempt.Evidence = gh.HistoryFailureDetails(e)
+			attempt.ErrorClass, attempt.ErrorText, attempt.Evidence = gh.HistoryFailureDetailsForContext(ctx, e)
 		}
 		receiptCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		writeErr := s.RecordAnalyticsAttempt(receiptCtx, attempt)
