@@ -93,6 +93,15 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 				return err
 			}
 		}
+		if analyticsLocalCancellation(a) {
+			// Owner shutdown is an incomplete attempt, not another provider
+			// failure. Preserve an outstanding deadline exactly (even if due),
+			// and never grow its failure exponent. A new obligation still waits
+			// the normal minimum interval and requires a successful native read.
+			next := finished.Add(30 * time.Second).Format(time.RFC3339Nano)
+			_, err = tx.q().ExecContext(ctx, `INSERT INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at,attempts,last_attempt_id) VALUES(?,?,?,?,?,?,0,?) ON CONFLICT(repository,number,operation) DO UPDATE SET last_seen_at=excluded.last_seen_at,next_attempt_at=CASE WHEN analytics_retries.resolved_at IS NULL THEN analytics_retries.next_attempt_at ELSE excluded.next_attempt_at END,last_attempt_id=excluded.last_attempt_id,resolved_at=NULL`, a.Repository, a.Number, a.Operation, a.FinishedAt, a.FinishedAt, next, id)
+			return err
+		}
 		var attempts int
 		if err = tx.q().QueryRowContext(ctx, `SELECT coalesce((SELECT attempts FROM analytics_retries WHERE repository=? AND number=? AND operation=?),0)`, a.Repository, a.Number, a.Operation).Scan(&attempts); err != nil {
 			return err
@@ -105,6 +114,24 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 		_, err = tx.q().ExecContext(ctx, `INSERT INTO analytics_retries(repository,number,operation,first_seen_at,last_seen_at,next_attempt_at,attempts,last_attempt_id) VALUES(?,?,?,?,?,?,1,?) ON CONFLICT(repository,number,operation) DO UPDATE SET last_seen_at=excluded.last_seen_at,next_attempt_at=excluded.next_attempt_at,attempts=analytics_retries.attempts+1,last_attempt_id=excluded.last_attempt_id,resolved_at=NULL`, a.Repository, a.Number, a.Operation, a.FinishedAt, a.FinishedAt, next, id)
 		return err
 	})
+}
+
+func analyticsLocalCancellation(a AnalyticsAttempt) bool {
+	if a.ErrorClass != "cancelled" {
+		return false
+	}
+	var evidence struct {
+		Cause struct {
+			Category, Type, Code string
+			Timeout              bool
+			ChainTruncated       bool `json:"chain_truncated"`
+		} `json:"cause"`
+	}
+	if json.Unmarshal(a.Evidence, &evidence) != nil {
+		return false
+	}
+	c := evidence.Cause
+	return c.Category == "cancelled" && c.Type == "context" && c.Code == "cancelled" && !c.Timeout && !c.ChainTruncated
 }
 
 func providerUnavailableEvidence(evidence json.RawMessage) bool {
