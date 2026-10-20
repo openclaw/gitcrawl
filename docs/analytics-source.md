@@ -89,6 +89,15 @@ Missing or expired quota stops provider recovery; local discovery can continue.
 The request window yields before core polling and cancellation retains retry
 receipts and the last committed scan. Quota and numeric per-query cost logs make
 the actual spending observable without credentials or content bodies.
+An explicit local context cancellation retains its failed attempt and unresolved
+retry, but does not increment the provider-failure backoff exponent. An existing
+unresolved retry keeps its exact deadline, including an already-due deadline;
+a newly interrupted obligation waits the normal 30-second minimum. This prevents
+planned owner handoffs from repeatedly extending a 16-minute retry on a
+15-minute maintenance schedule. Actual timeouts, provider failures, and
+unqualified cancellation evidence retain exponential backoff. No existing
+receipt or deadline is rewritten by installing this policy, and cancelled reads
+remain unavailable until ordinary collection succeeds.
 No partial connection is accepted as complete evidence. Non-nested
 continuation pages use 100 nodes to avoid repeated small round trips. Identity/profile enrichment uses eight disjoint 100-node requests with normal
 quota guards and can run concurrently under
