@@ -53,9 +53,12 @@ type ClusterMemberDetail struct {
 	ScoreToRepresentative *float64          `json:"score_to_representative,omitempty"`
 	BodySnippet           string            `json:"body_snippet,omitempty"`
 	Summaries             map[string]string `json:"summaries,omitempty"`
+	LastSeenRunID         *string           `json:"last_seen_run_id"`
+	GenerationStatus      string            `json:"generation_status"`
 }
 
 type ClusterDetail struct {
+	ClusterReadContext
 	Cluster ClusterSummary        `json:"cluster"`
 	Members []ClusterMemberDetail `json:"members"`
 }
@@ -65,6 +68,13 @@ func (s *Store) ListClusterSummaries(ctx context.Context, options ClusterSummary
 }
 
 func (s *Store) ListDisplayClusterSummaries(ctx context.Context, options ClusterSummaryOptions) ([]ClusterSummary, error) {
+	read, err := s.ClusterReadSelection(ctx, options.RepoID, "")
+	if err != nil {
+		return nil, err
+	}
+	if read.Selection.Source == ClusterSourceDurable {
+		return s.listDurableClusterSummaries(ctx, options)
+	}
 	raw, err := s.ListRunClusterSummaries(ctx, options)
 	if err != nil {
 		return nil, err
@@ -123,7 +133,7 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 		having = memberCountExpr + ` >= ? and c.close_reason_local is null and sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) < c.member_count`
 	}
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select c.id, c.representative_thread_id,
 			rt.number, rt.kind, rt.title,
 			`+memberCountExpr+` as member_count,
@@ -201,7 +211,7 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 		memberThreadJoin += ` and ` + durableVisibleMemberPredicate("cg", "cm", "mt")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title,
 			count(mt.id) as member_count,
@@ -250,7 +260,7 @@ func (s *Store) listClosedDurableClusterSummaries(ctx context.Context, options C
 	if minSize <= 0 {
 		minSize = 1
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title,
 			count(cm.thread_id) as member_count,
@@ -419,6 +429,11 @@ func idSetOverlapRatio(left, right map[int64]bool) float64 {
 }
 
 func (s *Store) ClusterDetail(ctx context.Context, options ClusterDetailOptions) (ClusterDetail, error) {
+	if s.queries == nil {
+		var result ClusterDetail
+		err := s.WithTx(ctx, func(tx *Store) error { var e error; result, e = tx.ClusterDetail(ctx, options); return e })
+		return result, err
+	}
 	source, err := normalizeClusterDetailSource(options.Source)
 	if err != nil {
 		return ClusterDetail{}, err
@@ -427,6 +442,13 @@ func (s *Store) ClusterDetail(ctx context.Context, options ClusterDetailOptions)
 	case ClusterSourceRun:
 		return s.RunClusterDetail(ctx, options)
 	case ClusterSourceDurable:
+		return s.DurableClusterDetail(ctx, options)
+	}
+	read, err := s.ClusterReadSelection(ctx, options.RepoID, "")
+	if err != nil {
+		return ClusterDetail{}, err
+	}
+	if read.Selection.Source == ClusterSourceDurable {
 		return s.DurableClusterDetail(ctx, options)
 	}
 	detail, err := s.RunClusterDetail(ctx, options)
@@ -467,7 +489,7 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 		where += ` and cm.state = 'active' and ` + durableVisibleMemberPredicate("cg", "cm", "t")
 	}
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select cm.role, cm.state, cm.score_to_representative,
 			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_memberships cm
@@ -506,7 +528,40 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 			members[index].Summaries = summaryMap
 		}
 	}
-	return ClusterDetail{Cluster: summary, Members: members}, nil
+	read, err := s.ClusterReadSelection(ctx, options.RepoID, ClusterSourceDurable)
+	if err != nil {
+		return ClusterDetail{}, err
+	}
+	markers, err := s.q().QueryContext(ctx, "SELECT thread_id,last_seen_run_id FROM cluster_memberships WHERE cluster_id=?", options.ClusterID)
+	if err != nil {
+		return ClusterDetail{}, err
+	}
+	byID := map[int64]*int64{}
+	for markers.Next() {
+		var id int64
+		var run sql.NullInt64
+		if err = markers.Scan(&id, &run); err != nil {
+			markers.Close()
+			return ClusterDetail{}, err
+		}
+		if run.Valid {
+			v := run.Int64
+			byID[id] = &v
+		}
+	}
+	err = markers.Err()
+	markers.Close()
+	if err != nil {
+		return ClusterDetail{}, err
+	}
+	for i := range members {
+		run := byID[members[i].Thread.ID]
+		members[i].LastSeenRunID, members[i].GenerationStatus, err = clusterMemberGeneration(run, read)
+		if err != nil {
+			return ClusterDetail{}, err
+		}
+	}
+	return ClusterDetail{ClusterReadContext: read, Cluster: summary, Members: members}, nil
 }
 
 func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptions) (ClusterDetail, error) {
@@ -524,7 +579,7 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 		where += ` and t.state = 'open' and t.closed_at_local is null`
 	}
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.q().QueryContext(ctx, `
 		select case when t.id = c.representative_thread_id then 'representative' else 'member' end as role,
 			'active' as state,
 			cm.score_to_representative,
@@ -567,7 +622,14 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 			members[index].Summaries = summaryMap
 		}
 	}
-	return ClusterDetail{Cluster: summary, Members: members}, nil
+	read, err := s.ClusterReadSelection(ctx, options.RepoID, ClusterSourceRun)
+	if err != nil {
+		return ClusterDetail{}, err
+	}
+	for i := range members {
+		members[i].GenerationStatus = "legacy_unknown"
+	}
+	return ClusterDetail{ClusterReadContext: read, Cluster: summary, Members: members}, nil
 }
 
 func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, number int, includeClosed bool) (int64, error) {
@@ -576,7 +638,7 @@ func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, numb
 	if !includeClosed {
 		where += ` and cm.state = 'active' and cg.status = 'active' and cg.closed_at is null and ` + durableVisibleMemberPredicate("cg", "cm", "t")
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := s.q().QueryRowContext(ctx, `
 		select cg.id
 		from threads t
 		join cluster_memberships cm on cm.thread_id = t.id
@@ -613,7 +675,7 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 		left join threads mt on mt.id = cm.thread_id
 			and (` + durableVisibleMemberPredicate("cg", "cm", "mt") + `)`
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := s.q().QueryRowContext(ctx, `
 		select cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title,
 			`+memberCountExpr+` as member_count,
@@ -656,7 +718,7 @@ func (s *Store) latestRawClusterRunID(ctx context.Context, repoID int64) (int64,
 	if !s.hasTable(ctx, "cluster_runs") || !s.hasTable(ctx, "clusters") {
 		return 0, false, nil
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := s.q().QueryRowContext(ctx, `
 		select cr.id
 		from cluster_runs cr
 		where cr.repo_id = ?
@@ -695,7 +757,7 @@ func (s *Store) runClusterSummaryByID(ctx context.Context, repoID, clusterID int
 		updatedAtExpr = `coalesce(max(case when t.state = 'open' and t.closed_at_local is null then coalesce(t.updated_at_gh, t.updated_at) end), c.created_at)`
 		having = memberCountExpr + ` > 0 and c.close_reason_local is null`
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := s.q().QueryRowContext(ctx, `
 		select c.id, c.representative_thread_id,
 			rt.number, rt.kind, rt.title,
 			`+memberCountExpr+` as member_count,
@@ -784,7 +846,7 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 	}
 	out := make(map[int64]map[string]string)
 	if s.hasTable(ctx, "document_summaries") {
-		rows, err := s.db.QueryContext(ctx, `
+		rows, err := s.q().QueryContext(ctx, `
 			select thread_id, summary_kind, summary_text
 			from document_summaries
 			where thread_id in (`+strings.Join(placeholders, ",")+`)
@@ -800,7 +862,7 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 	if s.hasTable(ctx, "thread_key_summaries") && s.hasTable(ctx, "thread_revisions") {
 		revisionOrder := s.latestThreadRevisionConsumerOrder(ctx, "latest", "t")
 		revisionFresh := s.threadRevisionFreshnessPredicate(ctx, "tr", "t")
-		rows, err := s.db.QueryContext(ctx, `
+		rows, err := s.q().QueryContext(ctx, `
 			select tr.thread_id, tks.summary_kind, tks.key_text
 			from thread_key_summaries tks
 			join thread_revisions tr on tr.id = tks.thread_revision_id

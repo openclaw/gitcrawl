@@ -46,8 +46,8 @@ class Lifecycle:
   env=dict(os.environ,GIT_OPTIONAL_LOCKS='0',GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',GOMAXPROCS='2')
   argv=[self.a.binary,self.a.mode,'--db',self.a.db,'--commit-gate',str(gate)]
   if self.a.mode=='code-index':argv += ['--source',self.a.source,'--write-timeout',f'{self.a.write_seconds}s']
-  elif self.a.mode=='combined':argv += ['--request',self.a.request,'--response',self.a.response,'--consumer-exclusions',self.a.consumer_exclusions,'--pair-cache-dir',str(self.state/'pair-cache'),'--receipt',str(self.state/(runid+'-native-combined.json'))]
-  elif self.a.mode=='cluster':argv += ['--consumer-exclusions',self.a.consumer_exclusions,'--cache',str(self.state/'cluster-cache.json'),'--receipt',str(self.state/(runid+'-native-cluster.json'))]
+  elif self.a.mode=='combined':argv += ['--request',self.a.request,'--response',self.a.response,'--consumer-exclusions',self.a.consumer_exclusions,'--pair-cache-dir',str(self.state/'available-subset-pair-cache'),'--receipt',str(self.state/(runid+'-native-combined.json'))]
+  elif self.a.mode=='cluster':argv += ['--consumer-exclusions',self.a.consumer_exclusions,'--pair-cache-dir',str(self.state/'available-subset-pair-cache'),'--receipt',str(self.state/(runid+'-native-cluster.json'))]
   else:argv += ['--request',self.a.request,'--response',self.a.response,'--consumer-exclusions',self.a.consumer_exclusions,'--receipt',str(self.state/(runid+'-native-import.json'))]
   try:
    child=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env)
@@ -74,8 +74,10 @@ class Lifecycle:
       if time.monotonic()>=until:raise RuntimeError('native owner did not settle within20s')
       time.sleep(.1)
    # Child checks source identity and takes the original runner.lock itself.
-   with open(gate,'x',encoding='ascii') as f:
-    os.chmod(gate,0o600);f.write(prepared['content_digest']);f.flush();os.fsync(f.fileno())
+   ready=gate.with_suffix('.gate-ready')
+   with open(ready,'x',encoding='ascii') as f:
+    os.chmod(ready,0o600);f.write(prepared['content_digest']);f.flush();os.fsync(f.fileno())
+   os.replace(ready,gate)
    out,err=child.communicate(timeout=self.a.write_seconds+20)
    if child.returncode:raise RuntimeError('native atomic commit failed: '+err[-2000:])
    lines=[x for x in out.splitlines() if x.strip()]

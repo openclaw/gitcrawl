@@ -20,8 +20,11 @@ func main() {
 	}
 }
 func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "code-index" {
-		return codeRun(os.Args[2:])
+	if len(os.Args) > 1 && os.Args[1] == "scope-status" {
+		return scopeStatus(os.Args[2:])
+	}
+	if len(os.Args) > 1 && os.Args[1] == "embedding-validate" {
+		return validateRequest(os.Args[2:])
 	}
 	if len(os.Args) > 1 && os.Args[1] == "embedding-import" {
 		return importRun(os.Args[2:])
@@ -89,4 +92,52 @@ func run() error {
 		runes += x.InputRunes
 	}
 	return json.NewEncoder(os.Stdout).Encode(map[string]any{"request_path": *out, "request_sha256": store.NativeSHA256(raw), "request_bytes": len(raw), "tasks": len(r.Tasks), "input_bytes": bytes, "input_runes": runes, "model": r.Model, "dimensions": r.Dimensions, "database_writes": false, "provider_calls": false})
+}
+
+func scopeStatus(args []string) error {
+	fs := flag.NewFlagSet("scope-status", flag.ContinueOnError)
+	db := fs.String("db", "", "H")
+	if e := fs.Parse(args); e != nil {
+		return e
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s, e := store.OpenReadOnly(ctx, *db)
+	if e != nil {
+		return e
+	}
+	defer s.Close()
+	a, e := s.ReadClusterAvailability(ctx, "openclaw/openclaw", time.Now().UTC())
+	if e != nil {
+		return e
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "mode": a.Scope.Mode, "source_as_of": a.Scope.SourceAsOf, "provider_complete": a.Scope.ProviderComplete, "unavailable": a.Scope.Population.Unavailable})
+}
+func validateRequest(args []string) error {
+	fs := flag.NewFlagSet("embedding-validate", flag.ContinueOnError)
+	db := fs.String("db", "", "H")
+	path := fs.String("request", "", "request")
+	policy := fs.String("consumer-exclusions", "", "consumer policy")
+	if e := fs.Parse(args); e != nil {
+		return e
+	}
+	raw, e := os.ReadFile(*path)
+	if e != nil {
+		return e
+	}
+	p, e := os.ReadFile(*policy)
+	if e != nil {
+		return e
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	s, e := store.OpenReadOnly(ctx, *db)
+	if e != nil {
+		return e
+	}
+	defer s.Close()
+	if e = s.ValidateNativeEmbeddingRequest(ctx, raw, p); e != nil {
+		return e
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "request_sha256": store.NativeSHA256(raw)})
 }

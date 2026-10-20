@@ -22,13 +22,27 @@ func TestNativeCombinedCommandAndRestartNoop(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	repo, e := s.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	repo, e := s.UpsertRepository(ctx, store.Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}
 	for i := 1; i <= 3; i++ {
 		_, e = s.UpsertThread(ctx, store.Thread{RepoID: repo, GitHubID: strconv.Itoa(i), Number: i, Kind: "issue", State: "open", Title: "native", Body: "body", HTMLURL: "https://example.invalid", LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "h", UpdatedAt: "t"})
 		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	at := time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	for key, value := range map[string]string{"core_baseline_verified:openclaw/openclaw": "1", "through:openclaw/openclaw:issues": at, "through:openclaw/openclaw:pullRequests": at} {
+		if e = s.SetAnalyticsState(ctx, key, value); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = s.DB().Exec("insert or replace into analytics_coverage(repository,through,issues,pull_requests,complete,observed_at) values('openclaw/openclaw',?,3,0,1,?)", at, at); e != nil {
+		t.Fatal(e)
+	}
+	for _, op := range []string{"discover_issues", "discover_pullRequests"} {
+		if e = s.RecordAnalyticsAttempt(ctx, store.AnalyticsAttempt{Repository: "openclaw/openclaw", Operation: op, StartedAt: at, FinishedAt: at, Status: "success", Evidence: json.RawMessage(`{}`)}); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -54,10 +68,6 @@ func TestNativeCombinedCommandAndRestartNoop(t *testing.T) {
 	os.WriteFile(reqFile, rawReq, 0600)
 	os.WriteFile(resFile, rawRes, 0600)
 
-	s.DB().Exec(`create table if not exists analytics_coverage(repository text primary key,through text,issues integer,pull_requests integer,complete integer,observed_at text)`)
-	if _, e = s.DB().Exec("insert into analytics_coverage values('openclaw/openclaw','now',3,0,1,?)", time.Now().UTC().Format(time.RFC3339Nano)); e != nil {
-		t.Fatal(e)
-	}
 	s.Close()
 	policy := filepath.Join(dir, "policy.json")
 	os.WriteFile(policy, p, 0600)
@@ -69,6 +79,9 @@ func TestNativeCombinedCommandAndRestartNoop(t *testing.T) {
 	for round := 0; round < 2; round++ {
 		// Native stats, not the host candidate cache, prove no-op.
 		os.Args = []string{"producer", "combined", "--db", db, "--consumer-exclusions", policy, "--pair-cache-dir", cache, "--request", reqFile, "--response", resFile, "--receipt", filepath.Join(dir, "receipt"+strconv.Itoa(round)), "--commit-gate", gate}
+		if round == 1 {
+			os.Args = []string{"producer", "cluster", "--db", db, "--consumer-exclusions", policy, "--pair-cache-dir", cache, "--receipt", filepath.Join(dir, "receipt"+strconv.Itoa(round)), "--commit-gate", gate}
+		}
 		r, w, e := os.Pipe()
 		if e != nil {
 			t.Fatal(e)
@@ -115,5 +128,20 @@ func TestNativeCombinedCommandAndRestartNoop(t *testing.T) {
 	s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count)
 	if count != 1 {
 		t.Fatal("duplicate run")
+	}
+}
+
+func TestIdentityConflictProofSkipsUnchangedGraph(t *testing.T) {
+	dir := t.TempDir()
+	snap := store.NativeClusterSnapshot{InputSHA256: "input", StateSHA256: "state"}
+	if e := durable(filepath.Join(dir, "identity-conflict.json"), cacheReceipt{InputSHA256: "input", StateSHA256: "state"}, false); e != nil {
+		t.Fatal(e)
+	}
+	if e := checkIdentityConflict(dir, snap); e == nil {
+		t.Fatal("unchanged ambiguous graph retried")
+	}
+	snap.InputSHA256 = "changed"
+	if e := checkIdentityConflict(dir, snap); e != nil {
+		t.Fatal(e)
 	}
 }

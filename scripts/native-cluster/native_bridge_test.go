@@ -23,7 +23,8 @@ func TestNativeProducerCodeNoopAndRollback(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: "{}", UpdatedAt: "2026-01-01T00:00:00Z"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "2026-01-01T00:00:00Z"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -68,7 +69,8 @@ func TestNativeProducerExportConsumerFence(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: "{}", UpdatedAt: "2026-01-01T00:00:00Z"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "2026-01-01T00:00:00Z"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -104,7 +106,8 @@ func TestNativeProducerMeasuredCommit(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-01-01T00:00:00Z"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "2026-01-01T00:00:00Z"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -147,7 +150,8 @@ func TestNativeProducerImportFences(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: "{}", UpdatedAt: "2026-01-01T00:00:00Z"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "2026-01-01T00:00:00Z"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -239,7 +243,8 @@ func TestNativeProducerExportProgressAndNoop(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-01-01T00:00:00Z"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "2026-01-01T00:00:00Z"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -291,7 +296,7 @@ func TestNativeProducerExistingWriterNeverMigrates(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-01-01T00:00:00Z"})
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "2026-01-01T00:00:00Z"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -333,7 +338,8 @@ func TestNativeProducerPointInputEquivalence(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -387,7 +393,8 @@ func TestNativeProducerLargePacketPreview(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -452,7 +459,8 @@ func TestNativeProducerExportNativeOrderAndTail(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -506,4 +514,27 @@ func TestNativeProducerExportNativeOrderAndTail(t *testing.T) {
 		}
 	}
 	t.Logf("9500eligible/9000fresh prefix/500tail export seconds=%.3f", time.Since(start).Seconds())
+}
+
+func seedClusterAdmission(t *testing.T, s *Store) {
+	t.Helper()
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	for _, key := range []string{"core_baseline_verified:openclaw/openclaw", "through:openclaw/openclaw:issues", "through:openclaw/openclaw:pullRequests"} {
+		value := at
+		if key == "core_baseline_verified:openclaw/openclaw" {
+			value = "1"
+		}
+		if e := s.SetAnalyticsState(ctx, key, value); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e := s.DB().Exec("insert or replace into analytics_coverage(repository,through,issues,pull_requests,complete,observed_at) values('openclaw/openclaw',?,0,0,1,?)", at, at); e != nil {
+		t.Fatal(e)
+	}
+	for _, op := range []string{"discover_issues", "discover_pullRequests"} {
+		if _, e := s.DB().Exec("insert into analytics_fetch_attempts(repository,number,operation,started_at,finished_at,status,evidence_json) values('openclaw/openclaw',0,?,?,?,'success','{}')", op, at, at); e != nil {
+			t.Fatal(e)
+		}
+	}
 }

@@ -4,7 +4,7 @@ class Tests(unittest.TestCase):
  def make(self):
   t=tempfile.TemporaryDirectory();self.addCleanup(t.cleanup);p=pathlib.Path(t.name);calls=[]
   def call(argv,data=None,timeout=90):calls.append(argv);return b'{}'
-  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.archive_superseded=lambda:{'archived':[]};return c,p,calls
+  c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.validate_pending=lambda p:None;c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.archive_superseded=lambda:{'archived':[]};return c,p,calls
  def pending(self,c,p):
   raw=b'{"scope":{"max_tasks":2000},"source_binding":{"consumer_exclusions_sha256":"policy"},"tasks":[{"task_id":"t","input":"native","thread_binding":{"thread_id":"1"}}]}';(p/'request.json').write_bytes(raw);c.state['pending']={'request':'request.json','sha256':m.sha(raw),'export':{'tasks':1},'inspect':{'tasks':1},'submit':{'status':'submitted'}};c.checkpoint();c.policy_refresh=lambda:'policy'
  def test_pending_resumed_before_export_or_submit(self):
@@ -81,3 +81,16 @@ class CapTests(Tests):
   c.broker=lambda mode,raw:{'status':'complete','results':[]};c.source_ready=lambda:True;verified=iter([False,True]);c.verify_import=lambda pending,result:(pending.update({'matched':1000}) or next(verified));c.finish=lambda p:None
   self.assertEqual(c.run()['status'],'catchup_imported')
 if __name__=='__main__':unittest.main()
+
+class AvailabilityTests(Tests):
+ def test_changed_availability_replaces_before_broker(self):
+  c,p,calls=self.make();self.pending(c,p);digest=c.state['pending']['sha256']
+  c.validate_pending=lambda pending:(_ for _ in ()).throw(RuntimeError('native availability changed'))
+  c.broker=lambda *args:self.fail('provider admission with stale availability')
+  c.new_packet=lambda:False;c.source_ready=lambda:False
+  self.assertEqual(c.run()['status'],'waiting_core');self.assertNotIn('pending',c.state);self.assertEqual(c.state['retained'][0]['sha256'],digest)
+ def test_unqualified_scope_retains_pending_without_broker(self):
+  c,p,calls=self.make();self.pending(c,p)
+  c.validate_pending=lambda pending:(_ for _ in ()).throw(RuntimeError('cluster availability blocked: auth'))
+  c.broker=lambda *args:self.fail('provider admission with unqualified failure')
+  self.assertEqual(c.run()['status'],'waiting_scope');self.assertIn('pending',c.state);self.assertEqual(c.state['retained'],[])

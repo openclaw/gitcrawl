@@ -1,17 +1,87 @@
-# Combined native vector/cluster producer
+# Native available-subset cluster producer
 
-Implements approved PROTOCOL.md (b0dd38bbe7df37284d7b4aa1007fdc4f9e8c1f68ae9e44ddae336d24934abbcb). Source base6c9c1bea/H16, no source DDL/capture activation or .23 replacement. Existing code-v2/metrics/portable/auth/settings unchanged.
+This is the source-owned implementation of the approved
+`gitcrawl.cluster-scope.v1` / final-v2 selection contract. Core collection and the
+independent official-main code producer retain their existing jobs and binaries.
+Installation does not enable the held observation-capture schema.
 
-Actual prior failure: separate import→ordinary core→cluster attempt reached9391eligible/9385fresh/6stale and correctly refused. This artifact overlays only fully validated complete request-bound vectors in one read snapshot, computes exact native graph outside owner settlement, then strict current preview and one transaction import+original native cluster persistence. Transaction adapters are shared; no intermediate vector-only publication for combined scope. Post-import native signature equals overlay, including backend metadata: write sets native exact backend; no-op preserves existing metadata. Injected cluster failure rolls back vectors and run/membership rows.
+## Admission and evidence
 
-Pair cache: private content-addressed files,64MiB max,12000nodes max, bound to exact signed producer hash, native algorithm, source commit/path/device/inode/schema/repo/provider/exclusions, model/basis/dimensions and snapshot lineage. Explicit complete=true and n(n−1)/2 pair count, typed positive node IDs/64hex fingerprints, canonical finite in-range edge endpoints/scores required. Fingerprints include native identity/number/title/kind/native hash/model/dimensions/vector and thresholds. Cache checkpoints only after successful complete pair pass; canceled/partial work cannot replace predecessor. Every later graph reconstructs reference edges/top-k/components from current snapshot. Changed/deleted nodes invalidate touching pairs; source/producer/exclusion mismatch clears these exclusive cache files. At most current+parent cache retained; no bodies or vectors stored in cache. Measured pair_dot_products/pair_facts_reused reported.
+`ReadClusterAvailability` requires a verified core baseline, explicit public
+repository evidence, fresh ordered core/lane frontiers, and successful latest
+issue/PR discovery receipts. An incomplete source is admitted only when each
+unresolved core obligation is a bounded, single-item `repository.n0` NOT_FOUND
+with matching repository identity and retained native item identity where one
+exists. Unmaterialized items remain counted obligations, never fabricated rows.
+Other failures, ambiguous multi-item failures, unknown visibility or stale
+progress still refuse. The bounded read admits at most128 obligations; exceeding
+that bound refuses instead of truncating. NOT_FOUND never means deletion.
 
-Native current input/clock/curation/source/policy validation stays strict. If clocks/content change while computing, cache remains, broker envelope refreshes without relabelling/reusing serving vectors, and a warm exact pass replaces only changed pairs. Source/capture namespace guarantees unchanged; privileged same-inode restore remains outside native identity contract.
+Unavailable inputs are omitted from new native embedding tasks and the computed
+graph. Source history, bodies, vector rows, IDs, retry attempts/backoff, and owner
+exclusions are untouched. `source_binding.availability_sha256` binds each request
+to the semantic availability set. Pre-submit validation and native import recheck
+it and all existing identity, clock, input, model and exclusion bindings. Model
+text and the processor-only broker route remain unchanged. No serving vectors or
+direct model credentials enter this producer.
 
-Lifecycle wrapper changes only combined arguments/receipt and existing300s prepare allowance. Compute/broker waits precede owner settlement; original runner lock and existing-file no-migration writer retained. Write bounded90s; same .23 restored immediately. Native receipt includes model request/result hashes, imported/unchanged count, cluster generation/signatures and cache work metrics. Existing native stats marker yields restart no-op.
+## Atomic publication
 
-Maintenance starts from reviewed v2(M1 release_intent/M2 dynamic policy). Packets<2000 use combined operation. Full2000 packets use existing bounded vector-only catch-up; next incomplete packet can publish full graph. Completed scope only; no partial-cluster completeness claim. Strict prepare staleness/changed complete scope refreshes request once using retained jobs+cache. One successful handoff per cycle, actual complete/current core after preceding restoration required.900s cadence/no KeepAlive. Same durable release/policy/crash fences and metadata-only receipts remain. Exclusions come from installed processor command, not checkout artifacts.
+The original exact native graph algorithm, thresholds, node bounds and completed
+pair-cache validation remain. The new producer uses its own
+`available-subset-pair-cache` beneath the existing controller state; it does not
+delete the previous producer's cache. Observation-only retry changes do not
+change the semantic graph signature.
 
-Focused gates: original native graph and cached delta oracle exact, bitwise cosine, complete-cache/corrupt-shape/exclusion lineage tests, atomic combined rollback/postimage/clock refresh/curation/exclusion/no-op tests, real command commit+restart no-op, previous native importer/progress/document predicates and native durable persistence tests. Python16 maintenance cases and6original lifecycle cases pass. No broad suite/provider native call. Previous9389-node native persistence4.566s and paired CPU benchmarks are retained prior evidence; actual combined live timing still required.
+Computation occurs outside owner settlement. The existing controller/runner
+locks, bounded settlement and write deadlines, source identity/schema checks,
+WAL/FULL/Darwin flush policy, and original analytics restoration remain in place.
+The gate file is fully written/fsynced before atomic rename makes it visible.
 
-Await exact artifact review before native use. Proposed install path is encoded in config.json; files not installed by preparing packet. Original schema17 frozen packet and activation HOLD remain intact.
+The final transaction validates current inputs/curation/availability, imports
+only validated selected vectors, and uses `SaveAvailableSubsetClusters` when
+coverage is partial. This branch does not prune missing memberships, retire
+missing groups or delete legacy similarity groups. Existing partial identity
+reconciliation preserves old representatives and refuses ambiguous overlaps.
+Unchanged ambiguity fingerprints skip another graph pass and require changed
+inputs/curation or operator resolution; no automatic merge is authorized.
+
+Scope metadata and private evidence bindings commit in
+`cluster_runs.stats_json.native_producer`. `started_at` records final admission
+after settlement in RFC3339Nano, with through <= observed_at <= started_at and
+five-minute admission freshness. `finished_at` follows it. The state signature
+includes scope/evidence metadata, excluding only its self-referential hash.
+
+Available-subset runs explicitly record false provider/full-scope completeness,
+true selected-input completeness, cohort counts and retained membership counts.
+Only normal provider recovery and original fresh-vector/full-scope gates enable
+a full-native run. Partial zero-task exports never authorize full-scope broker
+retirement. Existing exact completion/archive/lease guards still apply.
+
+## Native readers
+
+The dedicated reader entrypoint permits only local cluster list/detail/report
+commands and disables release/provider probes. A valid v1 durable history marker
+makes durable results authoritative for defaults, even if legacy raw rows remain.
+Explicit run_cluster access retains legacy ordering and never falls back.
+Malformed scope is not legacy absence. Source namespace and run context travel
+with results; members retain exact prior-run markers and generation status.
+Historical reads validate the recorded admission time, not today's wall clock.
+Claw owns its additional access-revision and filtered-count policies.
+
+## Delivery and validation
+
+The Go producer files use the `native_cluster_overlay` build tag and the same
+pinned schema16 overlay mechanism as the preceding signed producer. The shared
+scope/admission and reader code lives under `internal/store` / `internal/cli`.
+Frozen earlier packets are not edited. Deploy immutable signed artifacts outside
+the checkout; preserve the900s maintenance cadence and journal-only recovery.
+Activation waits for the matching Claw consumer's installed acceptance.
+
+Focused tests cover the shared21-case selection oracle (16 native cases, four
+Claw authorization cases, one old-behavior reference), partial/full recovery,
+retained representatives/legacy groups, rollback, no-op, availability changes,
+bad scopes/anchors, native graph/cache equivalence, and controller lease/crash/
+retention behavior. All providers in tests are synthetic. Initial live acceptance
+must demonstrate an ordinary committed run and resumed core collection before
+claiming the fleet is caught up.

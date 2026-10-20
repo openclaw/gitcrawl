@@ -13,6 +13,14 @@ func renderClustersReportMarkdown(report clustersReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Cluster Report: %s\n\n", report.Repository)
 	fmt.Fprintf(&b, "Generated: %s UTC\n", report.GeneratedAt)
+	if scope := report.ClusterScope; scope != nil {
+		if scope.Mode == "available-subset" {
+			fmt.Fprintf(&b, "Coverage: partial; %d selected inputs, %d unavailable items, %d retained prior memberships. Provider and full-scope coverage remain incomplete.\n", scope.Population.Selected, scope.Population.Unavailable, scope.RetainedPriorMemberships)
+		} else {
+			b.WriteString("Coverage: full native input scope at the recorded source observation.\n")
+		}
+		fmt.Fprintf(&b, "Source observed: %s; cluster run %s.\n", scope.SourceAsOf.ObservedAt, scope.RunID)
+	}
 	fmt.Fprintf(&b, "View: top %d clusters, min size %d, sorted by %s", report.Limit, report.MinSize, report.Sort)
 	if report.HideClosed {
 		b.WriteString(", closed hidden")
@@ -52,6 +60,11 @@ func renderClustersReportMarkdown(report clustersReport) string {
 			fmt.Fprintf(&b, "- Closed locally: %s\n", shortTime(cluster.ClosedAt))
 		}
 		b.WriteString("\n")
+		for _, member := range detail.Members {
+			if member.GenerationStatus == "retained_prior" && member.LastSeenRunID != nil {
+				fmt.Fprintf(&b, "- #%d retains membership from run %s.\n", member.Thread.Number, *member.LastSeenRunID)
+			}
+		}
 		renderClusterMemberTable(&b, detail.Members)
 		renderClusterSnippetList(&b, detail.Members)
 	}

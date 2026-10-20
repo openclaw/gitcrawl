@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,6 +27,7 @@ import (
 // This adapter belongs to the isolated native producer; it is overlaid onto
 // pinned schema16 source and is not part of the held capture candidate.
 type NativeSourceBinding struct {
+	AvailabilitySHA256       string `json:"availability_sha256"`
 	SourceCommit             string `json:"source_commit"`
 	ArchivePath              string `json:"archive_path"`
 	Device                   string `json:"device"`
@@ -132,6 +134,11 @@ func (s *Store) nativeSourceBinding(ctx context.Context, repo string) (NativeSou
 	}
 	raw, _ := json.Marshal(values)
 	b.OwnerExclusionsSHA256 = NativeSHA256(raw)
+	availability, e := s.ReadClusterAvailability(ctx, repo, time.Now().UTC())
+	if e != nil {
+		return b, e
+	}
+	b.AvailabilitySHA256 = availability.SemanticDigest
 	return b, nil
 }
 func (s *Store) nativeTaskBinding(ctx context.Context, tid int64) (NativeThreadBinding, NativeClockBinding, error) {
@@ -190,6 +197,13 @@ func (s *Store) ExportNativeEmbeddingRequest(ctx context.Context, repo string, l
 			return e
 		}
 		request = NativeEmbeddingRequest{Format: "gitcrawl.embedding.request.v1", RequestID: hex.EncodeToString(nonce), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Repository: repo, Model: "text-embedding-3-small", Dimensions: 1536, Basis: "title_original", NativeHashVersion: embeddingContentHashVersion, Scope: NativeScope{false, limit, 16 << 20, MaxEmbeddingTextRunes, MaxEmbeddingTextBytes}, SourceBinding: binding, Tasks: []NativeEmbeddingTask{}}
+		availability, e := tx.ReadClusterAvailability(ctx, repo, time.Now().UTC())
+		if e != nil {
+			return e
+		}
+		for id := range availability.Blocked {
+			blocked[strconv.FormatInt(id, 10)] = true
+		}
 		request.Tasks, e = tx.nativeTitleOriginalExport(ctx, repoID, limit, blocked, request)
 		if e != nil {
 			return e
@@ -400,16 +414,26 @@ func (s *Store) nativeEmbeddingResponse(ctx context.Context, requestRaw, respons
 		if e != nil {
 			return e
 		}
-		current.ConsumerExclusionsSHA256 = req.SourceBinding.ConsumerExclusionsSHA256
+		current.ConsumerExclusionsSHA256 = NativeSHA256(consumerRaw)
+		if current.AvailabilitySHA256 != req.SourceBinding.AvailabilitySHA256 {
+			return fmt.Errorf("native availability changed")
+		}
 		if current != req.SourceBinding {
 			return fmt.Errorf("native source identity or exclusion set changed")
 		}
 		repoID, _ := strconv.ParseInt(current.RepoID, 10, 64)
+		availability, e := tx.ReadClusterAvailability(ctx, req.Repository, time.Now().UTC())
+		if e != nil {
+			return e
+		}
 		// Validate ALL bindings before the first write. A stale peer rejects the batch.
 		for _, task := range req.Tasks {
 			id, e := strconv.ParseInt(task.ThreadBinding.ThreadID, 10, 64)
 			if e != nil {
 				return e
+			}
+			if availability.Blocked[id] {
+				return fmt.Errorf("native availability changed: unavailable task")
 			}
 			t, c, e := tx.nativeTaskBinding(ctx, id)
 			if e != nil {
@@ -510,6 +534,11 @@ func OpenNativeProducerWriter(ctx context.Context, path string) (*Store, error) 
 	q.Set("mode", "rw")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "synchronous(FULL)")
+	if runtime.GOOS == "darwin" {
+		q.Add("_pragma", "fullfsync(1)")
+		q.Add("_pragma", "checkpoint_fullfsync(1)")
+	}
 	u.RawQuery = q.Encode()
 	db, e := sql.Open("sqlite", u.String())
 	if e != nil {
@@ -641,4 +670,77 @@ func (s *Store) nativeTitleOriginalExport(ctx context.Context, repoID int64, lim
 		}
 	}
 	return out, rows.Err()
+}
+
+// ValidateNativeEmbeddingRequest fences queued/new work before broker admission.
+func (s *Store) ValidateNativeEmbeddingRequest(ctx context.Context, raw, consumer []byte) error {
+	if len(raw) > 16<<20 || len(consumer) > 1<<20 {
+		return fmt.Errorf("bounded native request required")
+	}
+	var req NativeEmbeddingRequest
+	if e := json.Unmarshal(raw, &req); e != nil {
+		return e
+	}
+	if req.Format != "gitcrawl.embedding.request.v1" || req.Repository != "openclaw/openclaw" || req.Basis != "title_original" || req.Model != "text-embedding-3-small" || req.Dimensions != 1536 || len(req.Tasks) > 2000 {
+		return fmt.Errorf("native request contract mismatch")
+	}
+	return s.nativeClusterWithTx(ctx, func(tx *Store) error {
+		current, e := tx.nativeSourceBinding(ctx, req.Repository)
+		if e != nil {
+			return e
+		}
+		current.ConsumerExclusionsSHA256 = NativeSHA256(consumer)
+		if current.AvailabilitySHA256 != req.SourceBinding.AvailabilitySHA256 {
+			return fmt.Errorf("native availability changed")
+		}
+		if current != req.SourceBinding {
+			return fmt.Errorf("native source identity or exclusion set changed")
+		}
+		a, e := tx.ReadClusterAvailability(ctx, req.Repository, time.Now().UTC())
+		if e != nil {
+			return e
+		}
+		repoID, _ := strconv.ParseInt(current.RepoID, 10, 64)
+		var p struct {
+			IDs []string `json:"excluded_thread_ids"`
+		}
+		if e = json.Unmarshal(consumer, &p); e != nil {
+			return e
+		}
+		blocked := map[string]bool{}
+		for _, id := range p.IDs {
+			blocked[id] = true
+		}
+		for _, t := range req.Tasks {
+			id, e := strconv.ParseInt(t.ThreadBinding.ThreadID, 10, 64)
+			if e != nil || a.Blocked[id] || blocked[t.ThreadBinding.ThreadID] {
+				return fmt.Errorf("native availability changed: blocked task")
+			}
+			binding, clock, e := tx.nativeTaskBinding(ctx, id)
+			if e != nil {
+				return e
+			}
+			if binding != t.ThreadBinding || !reflect.DeepEqual(clock, t.ClockBinding) {
+				return fmt.Errorf("stale native identity/clock task %s", t.TaskID)
+			}
+			task, e := tx.nativeTitleOriginalTask(ctx, repoID, id, req.Model)
+			if e != nil {
+				return e
+			}
+			if task.Text != t.Input || task.ContentHash != t.NativeContentHash || t.InputSHA256 != NativeSHA256([]byte(t.Input)) {
+				return fmt.Errorf("native input changed")
+			}
+			copy := t
+			copy.TaskID = ""
+			b, _ := json.Marshal(struct {
+				RequestID string
+				Source    NativeSourceBinding
+				Task      NativeEmbeddingTask
+			}{req.RequestID, req.SourceBinding, copy})
+			if t.TaskID != NativeSHA256(b) {
+				return fmt.Errorf("native task binding mismatch")
+			}
+		}
+		return nil
+	})
 }

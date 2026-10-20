@@ -1,0 +1,1120 @@
+{
+  "format": "gitcrawl.cluster-selection-proposed-oracle.v2",
+  "status": "frozen synthetic specification; JSON/mutation consistency checked, native/Claw candidate execution not performed",
+  "fixture": {
+    "tables": {
+      "repositories": [
+        {
+          "id": 1,
+          "full_name": "fixture/repo"
+        }
+      ],
+      "cluster_runs": [
+        {
+          "id": 5,
+          "repo_id": 1,
+          "scope": "raw",
+          "status": "success",
+          "finished_at": "2026-01-01T09:00:00Z"
+        },
+        {
+          "id": 8,
+          "repo_id": 1,
+          "scope": "raw",
+          "status": "success",
+          "finished_at": "2026-01-01T10:00:00Z"
+        },
+        {
+          "id": 9,
+          "repo_id": 1,
+          "scope": "durable",
+          "status": "success",
+          "finished_at": "2026-01-01T10:20:00Z"
+        },
+        {
+          "id": 10,
+          "repo_id": 1,
+          "scope": "durable",
+          "status": "success",
+          "finished_at": "2026-01-01T11:00:30Z",
+          "native_producer_scope": {
+            "format": "gitcrawl.cluster-scope.v1",
+            "mode": "available-subset",
+            "run_id": "10",
+            "repository": "fixture/repo",
+            "policy_version": 1,
+            "policy_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+            "source_as_of": {
+              "through": "2026-01-01T11:00:00Z",
+              "observed_at": "2026-01-01T11:00:10Z"
+            },
+            "provider_complete": false,
+            "full_native_scope_complete": false,
+            "selected_input_complete": true,
+            "population": {
+              "native_eligible": 3,
+              "selected": 2,
+              "unavailable": 1,
+              "unavailable_in_scope": 1,
+              "unmaterialized_unavailable": 0,
+              "missing_vectors": 0,
+              "stale_vectors": 0
+            },
+            "refreshed_memberships": 2,
+            "retained_prior_memberships": 1,
+            "last_full_run_id": null
+          }
+        }
+      ],
+      "clusters": [
+        {
+          "id": 7,
+          "repo_id": 1,
+          "cluster_run_id": 8,
+          "representative_thread_id": 1,
+          "member_count": 4,
+          "created_at": "2026-01-01T10:00:00Z",
+          "closed_at_local": null,
+          "locally_closed": 0
+        },
+        {
+          "id": 99,
+          "repo_id": 1,
+          "cluster_run_id": 5,
+          "representative_thread_id": 3,
+          "member_count": 1,
+          "created_at": "2026-01-01T09:00:00Z",
+          "closed_at_local": null,
+          "locally_closed": 0
+        }
+      ],
+      "cluster_members": [
+        {
+          "cluster_id": 7,
+          "thread_id": 1,
+          "score_to_representative": 1.0
+        },
+        {
+          "cluster_id": 7,
+          "thread_id": 2,
+          "score_to_representative": 0.9
+        },
+        {
+          "cluster_id": 7,
+          "thread_id": 3,
+          "score_to_representative": 0.8
+        },
+        {
+          "cluster_id": 7,
+          "thread_id": 4,
+          "score_to_representative": 0.7
+        },
+        {
+          "cluster_id": 99,
+          "thread_id": 3,
+          "score_to_representative": 1
+        }
+      ],
+      "cluster_groups": [
+        {
+          "id": 7,
+          "repo_id": 1,
+          "stable_slug": "group-seven",
+          "status": "active",
+          "representative_thread_id": 2,
+          "title": "fixture seven",
+          "updated_at": "2026-01-01T11:00:30Z",
+          "closed_at": null
+        },
+        {
+          "id": 11,
+          "repo_id": 1,
+          "stable_slug": "group-eleven",
+          "status": "active",
+          "representative_thread_id": 3,
+          "title": "fixture eleven",
+          "updated_at": "2026-01-01T11:00:30Z",
+          "closed_at": null
+        },
+        {
+          "id": 20,
+          "repo_id": 1,
+          "stable_slug": "closed-twenty",
+          "status": "closed",
+          "representative_thread_id": 4,
+          "title": "fixture twenty",
+          "updated_at": "2026-01-01T10:20:00Z",
+          "closed_at": "2026-01-01T10:20:00Z"
+        },
+        {
+          "id": 21,
+          "repo_id": 1,
+          "stable_slug": "closed-twenty-one",
+          "status": "closed",
+          "representative_thread_id": 5,
+          "title": "fixture twenty-one",
+          "updated_at": "2026-01-01T10:20:00Z",
+          "closed_at": "2026-01-01T10:20:00Z"
+        }
+      ],
+      "cluster_memberships": [
+        {
+          "cluster_id": 7,
+          "thread_id": 2,
+          "role": "canonical",
+          "state": "active",
+          "last_seen_run_id": 9,
+          "score_to_representative": 1
+        },
+        {
+          "cluster_id": 7,
+          "thread_id": 1,
+          "role": "related",
+          "state": "active",
+          "last_seen_run_id": 10,
+          "score_to_representative": 0.9
+        },
+        {
+          "cluster_id": 11,
+          "thread_id": 3,
+          "role": "canonical",
+          "state": "active",
+          "last_seen_run_id": 10,
+          "score_to_representative": 1
+        },
+        {
+          "cluster_id": 20,
+          "thread_id": 4,
+          "role": "canonical",
+          "state": "active",
+          "last_seen_run_id": 9,
+          "score_to_representative": 1
+        },
+        {
+          "cluster_id": 21,
+          "thread_id": 5,
+          "role": "canonical",
+          "state": "active",
+          "last_seen_run_id": 9,
+          "score_to_representative": 1
+        },
+        {
+          "cluster_id": 21,
+          "thread_id": 4,
+          "role": "related",
+          "state": "active",
+          "last_seen_run_id": 9,
+          "score_to_representative": 0.9
+        }
+      ],
+      "cluster_overrides": [],
+      "cluster_closures": [],
+      "threads": [
+        {
+          "id": 1,
+          "repo_id": 1,
+          "number": 1,
+          "kind": "issue",
+          "title": "fixture 1",
+          "state": "open",
+          "closed_at_local": null,
+          "updated_at_gh": "2026-01-01T10:40:00Z"
+        },
+        {
+          "id": 2,
+          "repo_id": 1,
+          "number": 2,
+          "kind": "issue",
+          "title": "fixture 2",
+          "state": "open",
+          "closed_at_local": null,
+          "updated_at_gh": "2026-01-01T10:40:00Z"
+        },
+        {
+          "id": 3,
+          "repo_id": 1,
+          "number": 3,
+          "kind": "issue",
+          "title": "fixture 3",
+          "state": "open",
+          "closed_at_local": null,
+          "updated_at_gh": "2026-01-01T10:40:00Z"
+        },
+        {
+          "id": 4,
+          "repo_id": 1,
+          "number": 4,
+          "kind": "issue",
+          "title": "fixture 4",
+          "state": "closed",
+          "closed_at_local": null,
+          "updated_at_gh": "2026-01-01T10:20:00Z"
+        },
+        {
+          "id": 5,
+          "repo_id": 1,
+          "number": 5,
+          "kind": "issue",
+          "title": "fixture 5",
+          "state": "closed",
+          "closed_at_local": null,
+          "updated_at_gh": "2026-01-01T10:20:00Z"
+        }
+      ]
+    },
+    "summaries": {}
+  },
+  "cases": [
+    {
+      "name": "current_unmodified_renderer_raw_first",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "source_derived_current_rows": [
+          [
+            "run_cluster",
+            "7"
+          ],
+          [
+            "durable_cluster",
+            "21"
+          ]
+        ],
+        "note": "documents current bug; not proposed output"
+      },
+      "fixture_patch": [],
+      "phase": "baseline_reference",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "v1_default_durable_authority",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "10"
+        },
+        "scope_status": "native_v1",
+        "rows": [
+          [
+            "durable_cluster",
+            "7"
+          ],
+          [
+            "durable_cluster",
+            "21"
+          ],
+          [
+            "durable_cluster",
+            "11"
+          ],
+          [
+            "durable_cluster",
+            "20"
+          ]
+        ],
+        "visible_member_total": 6,
+        "provider_complete": false,
+        "full_native_scope_complete": false
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "v1_hide_closed",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": false,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "10"
+        },
+        "rows": [
+          [
+            "durable_cluster",
+            "7"
+          ],
+          [
+            "durable_cluster",
+            "11"
+          ]
+        ]
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "v1_empty_filter_no_raw_fallback",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 3,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "10"
+        },
+        "rows": []
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "explicit_raw_stays_raw",
+      "request": {
+        "operation": "list",
+        "source": "run_cluster",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "run_cluster",
+          "run_id": "8"
+        },
+        "scope_status": "legacy_unknown",
+        "cluster_scope": null,
+        "rows": [
+          [
+            "run_cluster",
+            "7"
+          ]
+        ],
+        "visible_member_total": 4
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "auto_detail_id_collision",
+      "request": {
+        "operation": "detail",
+        "source": "auto",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "10"
+        },
+        "representative_thread_id": "2",
+        "members": [
+          {
+            "thread_id": "2",
+            "last_seen_run_id": "9",
+            "generation_status": "retained_prior"
+          },
+          {
+            "thread_id": "1",
+            "last_seen_run_id": "10",
+            "generation_status": "seen_in_run"
+          }
+        ]
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "explicit_raw_detail_id_collision",
+      "request": {
+        "operation": "detail",
+        "source": "run_cluster",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "run_cluster",
+          "run_id": "8"
+        },
+        "scope_status": "legacy_unknown",
+        "cluster_scope": null,
+        "representative_thread_id": "1",
+        "member_thread_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "all_member_last_seen_run_id": null,
+        "all_member_generation_status": "legacy_unknown"
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "explicit_raw_old_id_no_fallback",
+      "request": {
+        "operation": "detail",
+        "source": "run_cluster",
+        "id": "99",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "error": "not_found",
+        "no_durable_fallback": true
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "legacy_display_preserved",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "legacy_display",
+          "run_id": "8"
+        },
+        "scope_status": "legacy_unknown",
+        "cluster_scope": null,
+        "rows": [
+          [
+            "run_cluster",
+            "7"
+          ],
+          [
+            "durable_cluster",
+            "21"
+          ]
+        ],
+        "suppressed_overlap_group": "20"
+      },
+      "fixture_patch": [
+        {
+          "op": "remove",
+          "path": "/tables/cluster_runs/3/native_producer_scope"
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "later_raw_does_not_retake_default",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "10"
+        },
+        "rows": [
+          [
+            "durable_cluster",
+            "7"
+          ],
+          [
+            "durable_cluster",
+            "21"
+          ],
+          [
+            "durable_cluster",
+            "11"
+          ],
+          [
+            "durable_cluster",
+            "20"
+          ]
+        ]
+      },
+      "fixture_patch": [
+        {
+          "op": "add",
+          "path": "/tables/cluster_runs/-",
+          "value": {
+            "id": 12,
+            "repo_id": 1,
+            "scope": "raw",
+            "status": "success",
+            "finished_at": "2026-01-01T12:00:00Z"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/clusters/-",
+          "value": {
+            "id": 33,
+            "repo_id": 1,
+            "cluster_run_id": 12,
+            "representative_thread_id": 3,
+            "member_count": 2,
+            "created_at": "2026-01-01T12:00:00Z",
+            "closed_at_local": null,
+            "locally_closed": 0
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/cluster_members/-",
+          "value": {
+            "cluster_id": 33,
+            "thread_id": 3,
+            "score_to_representative": 1
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/cluster_members/-",
+          "value": {
+            "cluster_id": 33,
+            "thread_id": 1,
+            "score_to_representative": 0.9
+          }
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "later_raw_explicit_is_available",
+      "request": {
+        "operation": "list",
+        "source": "run_cluster",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "run_cluster",
+          "run_id": "12"
+        },
+        "rows": [
+          [
+            "run_cluster",
+            "33"
+          ]
+        ],
+        "scope_status": "legacy_unknown"
+      },
+      "fixture_patch": [
+        {
+          "op": "add",
+          "path": "/tables/cluster_runs/-",
+          "value": {
+            "id": 12,
+            "repo_id": 1,
+            "scope": "raw",
+            "status": "success",
+            "finished_at": "2026-01-01T12:00:00Z"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/clusters/-",
+          "value": {
+            "id": 33,
+            "repo_id": 1,
+            "cluster_run_id": 12,
+            "representative_thread_id": 3,
+            "member_count": 2,
+            "created_at": "2026-01-01T12:00:00Z",
+            "closed_at_local": null,
+            "locally_closed": 0
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/cluster_members/-",
+          "value": {
+            "cluster_id": 33,
+            "thread_id": 3,
+            "score_to_representative": 1
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/cluster_members/-",
+          "value": {
+            "cluster_id": 33,
+            "thread_id": 1,
+            "score_to_representative": 0.9
+          }
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "later_unversioned_durable_no_stale_scope",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "11"
+        },
+        "scope_status": "legacy_unknown",
+        "cluster_scope": null
+      },
+      "fixture_patch": [
+        {
+          "op": "add",
+          "path": "/tables/cluster_runs/-",
+          "value": {
+            "id": 11,
+            "repo_id": 1,
+            "scope": "durable",
+            "status": "success",
+            "finished_at": "2026-01-01T11:30:00Z"
+          }
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "claimed_scope_binding_mismatch",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "error": "scope_binding",
+        "no_legacy_fallback": true
+      },
+      "fixture_patch": [
+        {
+          "op": "replace",
+          "path": "/tables/cluster_runs/3/native_producer_scope/run_id",
+          "value": "999"
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "future_member_marker_refused",
+      "request": {
+        "operation": "detail",
+        "source": "auto",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "error": "scope_binding"
+      },
+      "fixture_patch": [
+        {
+          "op": "replace",
+          "path": "/tables/cluster_memberships/1/last_seen_run_id",
+          "value": 11
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "removed_representative_counts_withheld",
+      "request": {
+        "operation": "detail",
+        "source": "auto",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "10"
+        },
+        "member_thread_ids": [
+          "1"
+        ],
+        "representative_thread_id": 0,
+        "no_removed_representative_fields": true,
+        "population": null,
+        "refreshed_memberships": null,
+        "retained_prior_memberships": null,
+        "count_scope": "withheld_for_owner_removals"
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "claw_reader"
+      ],
+      "reader_exclusions": {
+        "thread_ids": [
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "raw_count_recomputed_after_removal",
+      "request": {
+        "operation": "detail",
+        "source": "run_cluster",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "run_cluster",
+          "run_id": "8"
+        },
+        "member_thread_ids": [
+          "1",
+          "3",
+          "4"
+        ],
+        "visible_member_total": 3
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "claw_reader"
+      ],
+      "reader_exclusions": {
+        "thread_ids": [
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "pinned_revision_revoked",
+      "request": {
+        "operation": "export_resume",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "revoked_old"
+      },
+      "expected": {
+        "error": "existing_authorization_denial",
+        "no_content_or_totals": true,
+        "no_source_or_publication_fallback": true
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "pinned_revision_revoked_explicit_raw",
+      "request": {
+        "operation": "detail",
+        "source": "run_cluster",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "revoked_old"
+      },
+      "expected": {
+        "error": "existing_authorization_denial",
+        "no_content_or_totals": true
+      },
+      "fixture_patch": [],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "later_unversioned_detail_keeps_original_markers",
+      "request": {
+        "operation": "detail",
+        "source": "auto",
+        "id": "7",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "selection": {
+          "source": "durable_cluster",
+          "run_id": "11"
+        },
+        "representative_thread_id": "2",
+        "members": [
+          {
+            "thread_id": "2",
+            "last_seen_run_id": "9",
+            "generation_status": "legacy_unknown"
+          },
+          {
+            "thread_id": "1",
+            "last_seen_run_id": "10",
+            "generation_status": "legacy_unknown"
+          }
+        ],
+        "scope_status": "legacy_unknown",
+        "cluster_scope": null
+      },
+      "fixture_patch": [
+        {
+          "op": "add",
+          "path": "/tables/cluster_runs/-",
+          "value": {
+            "id": 11,
+            "repo_id": 1,
+            "scope": "durable",
+            "status": "success",
+            "finished_at": "2026-01-01T11:30:00Z"
+          }
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "unsupported_scope_not_legacy_absence",
+      "request": {
+        "operation": "list",
+        "source": "display",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "error": "scope_unsupported",
+        "no_legacy_fallback": true
+      },
+      "fixture_patch": [
+        {
+          "op": "replace",
+          "path": "/tables/cluster_runs/3/native_producer_scope/format",
+          "value": "gitcrawl.cluster-scope.v2"
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    },
+    {
+      "name": "auto_missing_durable_never_falls_back_to_present_raw",
+      "request": {
+        "operation": "detail",
+        "source": "auto",
+        "id": "33",
+        "repo_id": "1",
+        "include_closed": true,
+        "sort": "size",
+        "min_size": 1,
+        "limit": 0,
+        "access_revision": "current"
+      },
+      "expected": {
+        "error": "not_found",
+        "no_raw_fallback": true
+      },
+      "fixture_patch": [
+        {
+          "op": "add",
+          "path": "/tables/cluster_runs/-",
+          "value": {
+            "id": 12,
+            "repo_id": 1,
+            "scope": "raw",
+            "status": "success",
+            "finished_at": "2026-01-01T12:00:00Z"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/clusters/-",
+          "value": {
+            "id": 33,
+            "repo_id": 1,
+            "cluster_run_id": 12,
+            "representative_thread_id": 3,
+            "member_count": 2,
+            "created_at": "2026-01-01T12:00:00Z",
+            "closed_at_local": null,
+            "locally_closed": 0
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/cluster_members/-",
+          "value": {
+            "cluster_id": 33,
+            "thread_id": 3,
+            "score_to_representative": 1
+          }
+        },
+        {
+          "op": "add",
+          "path": "/tables/cluster_members/-",
+          "value": {
+            "cluster_id": 33,
+            "thread_id": 1,
+            "score_to_representative": 0.9
+          }
+        }
+      ],
+      "phase": "proposed_acceptance",
+      "applies_to": [
+        "native_reader",
+        "claw_reader"
+      ]
+    }
+  ],
+  "rules": "SELECTION-CONTRACT.md",
+  "assertions_scope": "selection/order/provenance/privacy only, not complete renderer payload equivalence",
+  "id_assertion_encoding": "Positive native IDs normalized to decimal strings for assertions; absent public representative uses numeric0; null markers remain null."
+}

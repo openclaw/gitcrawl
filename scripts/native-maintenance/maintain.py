@@ -42,7 +42,8 @@ class Cycle:
   if not row:return False
   at=datetime.datetime.fromisoformat(row[1].replace('Z','+00:00')).timestamp()
   self.state['core']={'through':row[0],'observed_at':row[1],'complete':row[2]}
-  return row[2]==1 and at>last and time.time()-at<=300
+  through=datetime.datetime.fromisoformat(row[0].replace('Z','+00:00')).timestamp()
+  return row[2] in (0,1) and at>last and through<=at<=time.time() and time.time()-through<=300 and time.time()-at<=300
  def await_core_boundary(self):
   # Align with a real ordinary receipt, not a fixed sleep or a forced core run.
   until=time.monotonic()+120
@@ -87,6 +88,9 @@ class Cycle:
   except RuntimeError:
    if self.policy_changed(p):self.invalidate_policy(p);return None
    raise
+ def validate_pending(self,p):
+  if sha(pathlib.Path(self.c['binary']).read_bytes())!=self.c['binary_sha256']:raise RuntimeError('native exporter binary changed')
+  return self.call([self.c['binary'],'embedding-validate','--db',self.c['db'],'--request',str(self.base/p['request']),'--consumer-exclusions',str(self.policy)],timeout=30)
  def record_for(self,pending):
   # Durable native receipts survive a killed controller/host orchestration.
   candidates=[pathlib.Path(pending['native_receipt'])] if pending.get('native_receipt') else list(pathlib.Path(self.c['handoff_state']).glob('*-native-import.json'))+list(pathlib.Path(self.c['handoff_state']).glob('*-native-combined.json'))
@@ -125,7 +129,7 @@ class Cycle:
   # Restart re-enters finish without fetching/resubmitting the broker result.
   if pending.get('request_header') and pending.get('native_publication',{}).get('format')=='gitcrawl.combined-producer.v1':
    retention.retire_completed(self,self.base/(pending['sha256']+'-receipt.json'))
-   if pending.get('retirement_scope_before') and self.state['retained']:
+   if pending.get('retirement_scope_before') and self.state['retained'] and pending.get('native_publication',{}).get('cluster_scope',{}).get('mode')=='full-native':
     retention.retire_zero_scope(self,pending['retirement_scope_before'],pending['native_publication'],self.zero_export())
   for name in [pending['request'],pending.get('result')]:
    if name and pathlib.Path(name).name==name:(self.base/name).unlink(missing_ok=True)
@@ -165,11 +169,20 @@ class Cycle:
      before=self.retirement_scope() if self.state['retained'] else None
      raw=self.call(self.c['cluster_invocation'],timeout=420)
      self.state['cluster']=json.loads(raw) if raw.strip() else {'status':'controller_busy'}
-     if before and self.state['cluster'].get('phase') in ('committed','unchanged'):self.state['scope_retirement_pending']={'before':before,'publication':self.state['cluster']}
+     if before and self.state['cluster'].get('phase') in ('committed','unchanged') and self.state['cluster'].get('cluster_scope',{}).get('mode')=='full-native':self.state['scope_retirement_pending']={'before':before,'publication':self.state['cluster']}
      self.checkpoint();self.finish_scope_retirement()
      return {'status':'vectors_current','cluster':self.state['cluster']}
     p=self.state['pending']
    if self.policy_changed(p):self.invalidate_policy(p);continue
+   # Validate current native availability/input before any new broker work.
+   if not self.record_for(p)[1]:
+    try:self.validate_pending(p)
+    except RuntimeError as e:
+     if 'cluster availability blocked' in str(e):return {'status':'waiting_scope','reason':str(e)[-300:]}
+     if any(x in str(e) for x in ['native availability changed','stale native identity/clock task','native input changed']):
+      if len(self.state['retained'])>=16:raise RuntimeError('retained replacement cap reached; operator review')
+      p.pop('retirement_scope_before',None);self.state['retained'].append(p);self.state.pop('pending');self.checkpoint();continue
+     raise
    raw=(self.base/p['request']).read_bytes()
    if sha(raw)!=p['sha256']:raise RuntimeError('persisted request checksum mismatch')
    if 'inspect' not in p:
@@ -209,12 +222,13 @@ class Cycle:
     data=self.call(argv,timeout=420 if mode=='combined' else 150);atomic(log,data)
    except RuntimeError as e:
     p['error']=str(e);self.checkpoint()
+    if 'partial_identity_conflict' in str(e):return {'status':'waiting_identity_resolution','request_sha256':p['sha256']} 
     # Preview must have failed before settlement. Transaction/restore failures
     # receive normal cadence/operator attention, never immediate crash retry.
     failurepath=pathlib.Path(self.c['handoff_state'])/'last-failure.json'
     failure=json.loads(failurepath.read_bytes()) if failurepath.exists() else {}
     if (failure.get('phase')=='prepare' or 'consumer-excluded task' in str(e)) and self.policy_changed(p):self.invalidate_policy(p);continue
-    if failure.get('phase')=='prepare' and any(reason in str(e) for reason in ['stale native identity/clock task','native combined input/curation changed during compute','native cluster coverage incomplete']):
+    if failure.get('phase')=='prepare' and any(reason in str(e) for reason in ['native availability changed','stale native identity/clock task','native combined input/curation changed during compute','native cluster coverage incomplete']):
      if len(self.state['retained'])>=16:raise RuntimeError('retained replacement cap reached; operator review')
      p.pop('retirement_scope_before',None)
      self.state['retained'].append(p);self.state.pop('pending');self.checkpoint();continue
@@ -240,5 +254,8 @@ def main():
   result=c.run();save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
  except CoreBoundaryPending:
   result={'status':'waiting_core_boundary'};save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
+ except RuntimeError as e:
+  if 'cluster availability blocked' not in str(e):save(c.base/'last-failure.json',{'at':now(),'error':str(e)});raise
+  result={'status':'waiting_scope','reason':str(e)[-300:]};save(c.base/'last-result.json',{'at':now(),**result});print(json.dumps(result))
  except BaseException as e:save(c.base/'last-failure.json',{'at':now(),'error':str(e)});raise
 if __name__=='__main__':main()

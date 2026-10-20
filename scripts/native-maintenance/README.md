@@ -91,3 +91,25 @@ the existing controller settles it only at the final prepared native write.
 No stale-clock acceptance, cap increase, quota bypass, or repeated identical
 failed import is introduced. Packet/compute/write limits and 900-second cadence
 stay unchanged.
+
+
+## Available-subset admission
+
+The scoped native exporter/combined producer now owns the availability proof.
+The controller waits for a recent ordinary progress boundary even when provider
+coverage is incomplete; it never changes that coverage flag. Native admission
+then requires qualified item-level NOT_FOUND evidence and healthy discovery,
+and omits unavailable inputs. Before broker admission or pending work resumes,
+`embedding-validate` rechecks the availability binding and exact source clocks.
+Unqualified scope retains pending work and waits; changed availability obtains a
+new request without relabelling the original or resetting its proof.
+
+A partial publication's zero-task export is not full-scope retirement evidence.
+The controller and retirement verifier both refuse that shortcut. Exact completed
+replacement proof and private completed-envelope archival remain available.
+A partial durable identity conflict is explicit operator attention. Its exact
+input/curation fingerprint prevents another unchanged graph pass; neither
+KeepAlive nor a faster retry cadence is added. The original900s schedule remains.
+
+The consumer must be installed and accepted before activating the new producer.
+See `scripts/native-cluster/README.md` for persistence, reader and scope contracts.

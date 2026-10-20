@@ -19,7 +19,8 @@ func TestNativeClusterSnapshotAndPublish(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -116,7 +117,8 @@ func TestNativeClusterMeasuredCommit(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -172,7 +174,8 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Close()
-	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "t"})
+	seedClusterAdmission(t, s)
+	repo, e := s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: "t"})
 	if e != nil {
 		t.Fatal(e)
 	}

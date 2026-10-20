@@ -39,14 +39,8 @@ func readSnapshot(db string, policy, request, response []byte) (store.NativeClus
 	if e = s.NativeCodeWriterReady(ctx); e != nil {
 		return store.NativeClusterSnapshot{}, e
 	}
-	var complete int
-	var observed string
-	if e = s.DB().QueryRowContext(ctx, "select complete,observed_at from analytics_coverage where repository='openclaw/openclaw'").Scan(&complete, &observed); e != nil {
-		return store.NativeClusterSnapshot{}, e
-	}
-	at, e := time.Parse(time.RFC3339Nano, observed)
-	if e != nil || complete != 1 || time.Since(at) > 5*time.Minute {
-		return store.NativeClusterSnapshot{}, fmt.Errorf("core must be complete and current")
+	if len(request) == 0 && len(response) == 0 {
+		return s.NativeClusterSnapshot(ctx, policy)
 	}
 	return s.NativeCombinedSnapshot(ctx, policy, request, response)
 }
@@ -60,13 +54,14 @@ func run() error {
 	response := fs.String("response", "", "broker response")
 	gate := fs.String("commit-gate", "", "owner gate")
 	args := os.Args[1:]
-	if len(args) > 0 && args[0] == "combined" {
+	clusterOnly := len(args) > 0 && args[0] == "cluster"
+	if len(args) > 0 && (args[0] == "combined" || clusterOnly) {
 		args = args[1:]
 	}
 	if e := fs.Parse(args); e != nil {
 		return e
 	}
-	if *db == "" || *policy == "" || *cache == "" || *receipt == "" || *gate == "" || *request == "" || *response == "" {
+	if *db == "" || *policy == "" || *cache == "" || *receipt == "" || *gate == "" || (!clusterOnly && (*request == "" || *response == "")) {
 		return fmt.Errorf("all paths required")
 	}
 	started := time.Now()
@@ -74,19 +69,22 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	req, e := os.ReadFile(*request)
-	if e != nil {
-		return e
-	}
-	res, e := os.ReadFile(*response)
-	if e != nil {
-		return e
+	var req, res []byte
+	if !clusterOnly {
+		req, e = os.ReadFile(*request)
+		if e != nil {
+			return e
+		}
+		res, e = os.ReadFile(*response)
+		if e != nil {
+			return e
+		}
 	}
 	snap, e := readSnapshot(*db, p, req, res)
 	if e != nil {
 		return e
 	}
-	out := map[string]any{"format": "gitcrawl.combined-producer.v1", "input_sha256": snap.InputSHA256, "state_sha256": snap.StateSHA256, "eligible": snap.Eligible, "started_at": started.UTC(), "algorithm": store.NativeClusterAlgorithm}
+	out := map[string]any{"format": "gitcrawl.combined-producer.v1", "input_sha256": snap.InputSHA256, "state_sha256": snap.StateSHA256, "eligible": snap.Eligible, "started_at": started.UTC(), "algorithm": store.NativeClusterAlgorithm, "cluster_scope": snap.Scope}
 	if snap.CommittedInput == snap.InputSHA256 && snap.CommittedState == snap.StateSHA256 && snap.PreviewReceipt.Imported == 0 {
 		r := snap.PreviewReceipt
 		out["phase"] = "unchanged"
@@ -101,6 +99,9 @@ func run() error {
 			return e
 		}
 		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	if e = checkIdentityConflict(*cache, snap); e != nil {
+		return e
 	}
 	pairCache, parentHash, e := loadPairs(*cache, snap)
 	if e != nil {
@@ -126,6 +127,21 @@ func run() error {
 	if current.InputSHA256 != snap.InputSHA256 || current.StateSHA256 != snap.StateSHA256 {
 		return fmt.Errorf("native combined input/curation changed during compute; cache retained")
 	}
+	planCtx, planDone := context.WithTimeout(context.Background(), 15*time.Second)
+	planStore, planErr := store.OpenReadOnly(planCtx, *db)
+	if planErr == nil {
+		planErr = planStore.NativeCheckClusterPlan(planCtx, snap, inputs)
+		planStore.Close()
+	}
+	planDone()
+	if planErr != nil {
+		if strings.Contains(planErr.Error(), "partial_identity_conflict") {
+			if save := durable(filepath.Join(*cache, "identity-conflict.json"), cacheReceipt{InputSHA256: snap.InputSHA256, StateSHA256: snap.StateSHA256}, true); save != nil {
+				return fmt.Errorf("%v; retain conflict proof: %w", planErr, save)
+			}
+		}
+		return planErr
+	}
 	out["pair_cache_sha256"] = cacheHash
 	out["previous_cached_nodes"] = cachedNodes
 	out["pair_dot_products"] = pairCache.recomputed
@@ -135,6 +151,8 @@ func run() error {
 		return e
 	}
 	digest := store.NativeSHA256(append(append(append(append([]byte(snap.InputSHA256+snap.StateSHA256), raw...), req...), res...), p...))
+	delete(out, "cluster_scope")
+	out["admission"] = map[string]any{"mode": snap.Availability.Scope.Mode, "provider_complete": snap.Availability.Scope.ProviderComplete, "source_as_of": snap.Availability.Scope.SourceAsOf}
 	out["phase"] = "prepared"
 	out["content_digest"] = digest
 	out["edges"] = edges
@@ -182,10 +200,27 @@ func run() error {
 	}
 	defer s.Close()
 	writeStart := time.Now()
-	imported, result, state, e := s.NativeCombinedPublish(ctx, snap, p, req, res, inputs)
+	var imported store.NativeImportReceipt
+	var result store.SaveDurableClustersResult
+	var state string
+	if clusterOnly {
+		result, state, e = s.NativePublishClusters(ctx, snap, p, inputs)
+	} else {
+		imported, result, state, e = s.NativeCombinedPublish(ctx, snap, p, req, res, inputs)
+	}
+	if e != nil {
+		if strings.Contains(e.Error(), "partial_identity_conflict") {
+			if save := durable(filepath.Join(*cache, "identity-conflict.json"), cacheReceipt{InputSHA256: snap.InputSHA256, StateSHA256: snap.StateSHA256}, true); save != nil {
+				return fmt.Errorf("%v; retain conflict proof: %w", e, save)
+			}
+		}
+		return e
+	}
+	scope, e := s.NativePublishedClusterScope(ctx, snap.RepoID)
 	if e != nil {
 		return e
 	}
+	out["cluster_scope"] = scope
 	out["phase"] = "committed"
 	out["run_id"] = result.RunID
 	out["cluster_unchanged"] = result.RunID == snap.LastRun
@@ -241,4 +276,25 @@ func durable(path string, value any, replace bool) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+func checkIdentityConflict(dir string, snap store.NativeClusterSnapshot) error {
+	b, e := os.ReadFile(filepath.Join(dir, "identity-conflict.json"))
+	if os.IsNotExist(e) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	if len(b) > 4096 {
+		return fmt.Errorf("identity-conflict proof exceeds bound")
+	}
+	var r cacheReceipt
+	if e = json.Unmarshal(b, &r); e != nil {
+		return e
+	}
+	if r.InputSHA256 == snap.InputSHA256 && r.StateSHA256 == snap.StateSHA256 {
+		return fmt.Errorf("partial_identity_conflict: unchanged input/curation; operator resolution required")
+	}
+	return nil
 }
