@@ -1,0 +1,670 @@
+{
+  "full_recovery": {
+    "proof_json": "{\"format\":\"gitcrawl.identity-quarantine-plan.v1\",\"policy_digest\":\"b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a\",\"repository_id\":1,\"selected_ids\":[1,2,3,4,5],\"candidate_partition\":[{\"StableKey\":\"a\",\"StableSlug\":\"a\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":2,\"Title\":\"a\",\"Members\":[{\"ThreadID\":2,\"Role\":\"canonical\",\"ScoreToRepresentative\":null},{\"ThreadID\":1,\"Role\":\"related\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"b\",\"StableSlug\":\"b\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":3,\"Title\":\"b\",\"Members\":[{\"ThreadID\":3,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"c\",\"StableSlug\":\"c\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":4,\"Title\":\"c\",\"Members\":[{\"ThreadID\":4,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"new-five\",\"StableSlug\":\"new-five\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":5,\"Title\":\"new-five\",\"Members\":[{\"ThreadID\":5,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]}],\"active_identity_metadata\":[{\"id\":1,\"key\":\"a\",\"active\":true,\"protected\":false,\"representative\":2,\"active_members\":[1,2],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":2,\"key\":\"b\",\"active\":true,\"protected\":false,\"representative\":3,\"active_members\":[3],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":3,\"key\":\"c\",\"active\":true,\"protected\":false,\"representative\":4,\"active_members\":[4],\"local_removed\":[],\"retained_membership_count\":1},{\"id\":4,\"key\":\"new-five\",\"active\":true,\"protected\":false,\"representative\":5,\"active_members\":[5],\"local_removed\":[],\"retained_membership_count\":1}],\"resolved_targets\":[{\"candidate_key\":\"a\",\"cluster_id\":1},{\"candidate_key\":\"b\",\"cluster_id\":2},{\"candidate_key\":\"c\",\"cluster_id\":3},{\"candidate_key\":\"new-five\",\"cluster_id\":4}],\"components\":[],\"quarantined_selected_ids\":[],\"quarantined_group_ids\":[],\"preserved_group_ids\":[],\"protected_preimage_sha256\":\"94fea8f29564378d35e4da7bd2325f5524c1da2bc1412c4057daab4140da08eb\",\"input_sha256\":\"bb021d4015a422c3f24f96f10ebc0156f41279b9910360dd04186d4287f1f79f\",\"identity_state_sha256\":\"8dd548c0d9eff63fb5009da84f639a3917662fa5bb559e80e7d442de66bc7277\",\"source_identity_sha256\":\"c21abf087ecaaf4822b5c636f9b0963749d0e75df30a3c363348711aa1dd2c72\",\"availability_sha256\":\"5441b4bb525a5fca1da76118cec562bf5b6ceb4dcf558ceb00a1dc6ade92539e\"}",
+    "read": {
+      "selection": {
+        "source": "durable_cluster",
+        "run_id": "5"
+      },
+      "scope_status": "native_v2",
+      "cluster_scope": {
+        "format": "gitcrawl.cluster-scope.v2",
+        "mode": "full-native",
+        "run_id": "5",
+        "repository": "openclaw/openclaw",
+        "policy_version": 2,
+        "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+        "source_as_of": {
+          "through": "2026-10-20T19:26:30.9288Z",
+          "observed_at": "2026-10-20T19:26:30.9288Z"
+        },
+        "provider_complete": true,
+        "full_native_scope_complete": true,
+        "selected_input_complete": true,
+        "population": {
+          "native_eligible": 5,
+          "selected": 5,
+          "unavailable": 0,
+          "unavailable_in_scope": 0,
+          "unmaterialized_unavailable": 0,
+          "missing_vectors": 0,
+          "stale_vectors": 0,
+          "published": 5,
+          "identity_quarantined": 0
+        },
+        "refreshed_memberships": 5,
+        "retained_prior_memberships": 0,
+        "last_full_run_id": "5",
+        "identity_reconciliation_complete": true,
+        "publication_status": "published",
+        "partial_reasons": [],
+        "quarantine": {
+          "proof_sha256": "7bd9b64c6ae7ae1ef32cf2538c2e2b4e577ebff6830d629d46302062b23692df",
+          "components": []
+        }
+      },
+      "analysis": {
+        "status": "published",
+        "run_id": "5",
+        "scope_status": "native_v2",
+        "cluster_scope": {
+          "format": "gitcrawl.cluster-scope.v2",
+          "mode": "full-native",
+          "run_id": "5",
+          "repository": "openclaw/openclaw",
+          "policy_version": 2,
+          "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+          "source_as_of": {
+            "through": "2026-10-20T19:26:30.9288Z",
+            "observed_at": "2026-10-20T19:26:30.9288Z"
+          },
+          "provider_complete": true,
+          "full_native_scope_complete": true,
+          "selected_input_complete": true,
+          "population": {
+            "native_eligible": 5,
+            "selected": 5,
+            "unavailable": 0,
+            "unavailable_in_scope": 0,
+            "unmaterialized_unavailable": 0,
+            "missing_vectors": 0,
+            "stale_vectors": 0,
+            "published": 5,
+            "identity_quarantined": 0
+          },
+          "refreshed_memberships": 5,
+          "retained_prior_memberships": 0,
+          "last_full_run_id": "5",
+          "identity_reconciliation_complete": true,
+          "publication_status": "published",
+          "partial_reasons": [],
+          "quarantine": {
+            "proof_sha256": "7bd9b64c6ae7ae1ef32cf2538c2e2b4e577ebff6830d629d46302062b23692df",
+            "components": []
+          }
+        }
+      }
+    },
+    "row": {
+      "finished_at": "2026-10-20T19:26:31.979095Z",
+      "id": 5,
+      "started_at": "2026-10-20T19:26:31.976193Z",
+      "status": "success"
+    }
+  },
+  "original_quarantined_row_sha256": "ffc8d5e907489e99932dc5f44df6ef4d8b11ffdc3781a7d2569abc17911a0b10",
+  "partial": {
+    "proof_json": "{\"format\":\"gitcrawl.identity-quarantine-plan.v1\",\"policy_digest\":\"b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a\",\"repository_id\":1,\"selected_ids\":[2,3,4,5],\"candidate_partition\":[{\"StableKey\":\"merge\",\"StableSlug\":\"merge\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":2,\"Title\":\"merge\",\"Members\":[{\"ThreadID\":2,\"Role\":\"canonical\",\"ScoreToRepresentative\":null},{\"ThreadID\":3,\"Role\":\"related\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"c-new\",\"StableSlug\":\"c-new\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":4,\"Title\":\"c-new\",\"Members\":[{\"ThreadID\":4,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"new-five\",\"StableSlug\":\"new-five\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":5,\"Title\":\"new-five\",\"Members\":[{\"ThreadID\":5,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]}],\"active_identity_metadata\":[{\"id\":1,\"key\":\"a\",\"active\":true,\"protected\":false,\"representative\":2,\"active_members\":[1,2],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":2,\"key\":\"b\",\"active\":true,\"protected\":false,\"representative\":3,\"active_members\":[3],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":3,\"key\":\"c\",\"active\":true,\"protected\":false,\"representative\":4,\"active_members\":[4],\"local_removed\":[],\"retained_membership_count\":1}],\"resolved_targets\":[{\"candidate_key\":\"c-new\",\"cluster_id\":3},{\"candidate_key\":\"new-five\",\"cluster_id\":0}],\"components\":[{\"component_id\":\"af246648bd93a7fae5d1f3b96b58eb17590d1b0ade64b2d0ae09cfc603dbaf65\",\"reasons\":[\"multiple_existing_identities\"],\"cluster_ids\":[\"1\",\"2\"],\"candidate_count\":1,\"selected_count\":2,\"retained_membership_count\":4}],\"quarantined_selected_ids\":[2,3],\"quarantined_group_ids\":[1,2],\"preserved_group_ids\":[1,2],\"protected_preimage_sha256\":\"ffc8d5e907489e99932dc5f44df6ef4d8b11ffdc3781a7d2569abc17911a0b10\",\"input_sha256\":\"46e2272a77e1d1f878fd428fcf4ac7b6b493773e1c639bfe77d066c9d275534f\",\"identity_state_sha256\":\"5044b3066083949b1129f9c2bacd6e3158a6e96ca00c093cb2599896475165f4\",\"source_identity_sha256\":\"ad4f67c6cca61898edd31102dcfe9de9c54c17ab566d11840fd550a9cbd1c210\",\"availability_sha256\":\"f411ffc9a87f52e35cee0af37120383caf07da5707003d90c5f83bd7974613be\"}",
+    "read": {
+      "selection": {
+        "source": "durable_cluster",
+        "run_id": "2"
+      },
+      "scope_status": "native_v2",
+      "cluster_scope": {
+        "format": "gitcrawl.cluster-scope.v2",
+        "mode": "available-subset",
+        "run_id": "2",
+        "repository": "openclaw/openclaw",
+        "policy_version": 2,
+        "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+        "source_as_of": {
+          "through": "2026-10-20T19:26:30.9288Z",
+          "observed_at": "2026-10-20T19:26:30.9288Z"
+        },
+        "provider_complete": false,
+        "full_native_scope_complete": false,
+        "selected_input_complete": true,
+        "population": {
+          "native_eligible": 5,
+          "selected": 4,
+          "unavailable": 1,
+          "unavailable_in_scope": 1,
+          "unmaterialized_unavailable": 0,
+          "missing_vectors": 0,
+          "stale_vectors": 0,
+          "published": 2,
+          "identity_quarantined": 2
+        },
+        "refreshed_memberships": 2,
+        "retained_prior_memberships": 3,
+        "last_full_run_id": null,
+        "identity_reconciliation_complete": false,
+        "publication_status": "published",
+        "partial_reasons": [
+          "identity_quarantine",
+          "provider_unavailable"
+        ],
+        "quarantine": {
+          "proof_sha256": "38b19bdaa2329695219a10a78cdf453636729f2c016d41a84f159a6fc398804a",
+          "components": [
+            {
+              "component_id": "af246648bd93a7fae5d1f3b96b58eb17590d1b0ade64b2d0ae09cfc603dbaf65",
+              "reasons": [
+                "multiple_existing_identities"
+              ],
+              "cluster_ids": [
+                "1",
+                "2"
+              ],
+              "candidate_count": 1,
+              "selected_count": 2,
+              "retained_membership_count": 4
+            }
+          ]
+        }
+      },
+      "analysis": {
+        "status": "published",
+        "run_id": "2",
+        "scope_status": "native_v2",
+        "cluster_scope": {
+          "format": "gitcrawl.cluster-scope.v2",
+          "mode": "available-subset",
+          "run_id": "2",
+          "repository": "openclaw/openclaw",
+          "policy_version": 2,
+          "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+          "source_as_of": {
+            "through": "2026-10-20T19:26:30.9288Z",
+            "observed_at": "2026-10-20T19:26:30.9288Z"
+          },
+          "provider_complete": false,
+          "full_native_scope_complete": false,
+          "selected_input_complete": true,
+          "population": {
+            "native_eligible": 5,
+            "selected": 4,
+            "unavailable": 1,
+            "unavailable_in_scope": 1,
+            "unmaterialized_unavailable": 0,
+            "missing_vectors": 0,
+            "stale_vectors": 0,
+            "published": 2,
+            "identity_quarantined": 2
+          },
+          "refreshed_memberships": 2,
+          "retained_prior_memberships": 3,
+          "last_full_run_id": null,
+          "identity_reconciliation_complete": false,
+          "publication_status": "published",
+          "partial_reasons": [
+            "identity_quarantine",
+            "provider_unavailable"
+          ],
+          "quarantine": {
+            "proof_sha256": "38b19bdaa2329695219a10a78cdf453636729f2c016d41a84f159a6fc398804a",
+            "components": [
+              {
+                "component_id": "af246648bd93a7fae5d1f3b96b58eb17590d1b0ade64b2d0ae09cfc603dbaf65",
+                "reasons": [
+                  "multiple_existing_identities"
+                ],
+                "cluster_ids": [
+                  "1",
+                  "2"
+                ],
+                "candidate_count": 1,
+                "selected_count": 2,
+                "retained_membership_count": 4
+              }
+            ]
+          }
+        }
+      }
+    },
+    "row": {
+      "finished_at": "2026-10-20T19:26:31.948803Z",
+      "id": 2,
+      "started_at": "2026-10-20T19:26:31.946798Z",
+      "status": "success"
+    }
+  },
+  "provider_complete_identity_partial": {
+    "proof_json": "{\"format\":\"gitcrawl.identity-quarantine-plan.v1\",\"policy_digest\":\"b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a\",\"repository_id\":1,\"selected_ids\":[1,2,3,4,5],\"candidate_partition\":[{\"StableKey\":\"merge\",\"StableSlug\":\"merge\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":2,\"Title\":\"merge\",\"Members\":[{\"ThreadID\":2,\"Role\":\"canonical\",\"ScoreToRepresentative\":null},{\"ThreadID\":3,\"Role\":\"related\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"c-new\",\"StableSlug\":\"c-new\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":4,\"Title\":\"c-new\",\"Members\":[{\"ThreadID\":4,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"new-five\",\"StableSlug\":\"new-five\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":5,\"Title\":\"new-five\",\"Members\":[{\"ThreadID\":5,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]},{\"StableKey\":\"old-unknown\",\"StableSlug\":\"old-unknown\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":1,\"Title\":\"old-unknown\",\"Members\":[{\"ThreadID\":1,\"Role\":\"canonical\",\"ScoreToRepresentative\":null}]}],\"active_identity_metadata\":[{\"id\":1,\"key\":\"a\",\"active\":true,\"protected\":false,\"representative\":2,\"active_members\":[1,2],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":2,\"key\":\"b\",\"active\":true,\"protected\":false,\"representative\":3,\"active_members\":[3],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":3,\"key\":\"c\",\"active\":true,\"protected\":false,\"representative\":4,\"active_members\":[4],\"local_removed\":[],\"retained_membership_count\":1},{\"id\":4,\"key\":\"new-five\",\"active\":true,\"protected\":false,\"representative\":5,\"active_members\":[5],\"local_removed\":[],\"retained_membership_count\":1}],\"resolved_targets\":[{\"candidate_key\":\"c-new\",\"cluster_id\":3},{\"candidate_key\":\"new-five\",\"cluster_id\":4}],\"components\":[{\"component_id\":\"43c1751f928520f8bb80d92211a3b3c5bf29145fc8b9c018dd6f7dcaef1a7643\",\"reasons\":[\"existing_identity_split\",\"multiple_existing_identities\"],\"cluster_ids\":[\"1\",\"2\"],\"candidate_count\":2,\"selected_count\":3,\"retained_membership_count\":4}],\"quarantined_selected_ids\":[1,2,3],\"quarantined_group_ids\":[1,2],\"preserved_group_ids\":[1,2],\"protected_preimage_sha256\":\"ffc8d5e907489e99932dc5f44df6ef4d8b11ffdc3781a7d2569abc17911a0b10\",\"input_sha256\":\"7667436a61b25e3df1ee920f254a1f01367a04c33e3ffe9799a803fe731d7a2f\",\"identity_state_sha256\":\"2ee9b1d70fbb0dc28d8275301cbe920abe3e09690608a7def9b70ccec0bdca43\",\"source_identity_sha256\":\"c21abf087ecaaf4822b5c636f9b0963749d0e75df30a3c363348711aa1dd2c72\",\"availability_sha256\":\"5441b4bb525a5fca1da76118cec562bf5b6ceb4dcf558ceb00a1dc6ade92539e\"}",
+    "read": {
+      "selection": {
+        "source": "durable_cluster",
+        "run_id": "3"
+      },
+      "scope_status": "native_v2",
+      "cluster_scope": {
+        "format": "gitcrawl.cluster-scope.v2",
+        "mode": "available-subset",
+        "run_id": "3",
+        "repository": "openclaw/openclaw",
+        "policy_version": 2,
+        "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+        "source_as_of": {
+          "through": "2026-10-20T19:26:30.9288Z",
+          "observed_at": "2026-10-20T19:26:30.9288Z"
+        },
+        "provider_complete": true,
+        "full_native_scope_complete": false,
+        "selected_input_complete": true,
+        "population": {
+          "native_eligible": 5,
+          "selected": 5,
+          "unavailable": 0,
+          "unavailable_in_scope": 0,
+          "unmaterialized_unavailable": 0,
+          "missing_vectors": 0,
+          "stale_vectors": 0,
+          "published": 2,
+          "identity_quarantined": 3
+        },
+        "refreshed_memberships": 2,
+        "retained_prior_memberships": 3,
+        "last_full_run_id": null,
+        "identity_reconciliation_complete": false,
+        "publication_status": "published",
+        "partial_reasons": [
+          "identity_quarantine"
+        ],
+        "quarantine": {
+          "proof_sha256": "d202c1cd75b2fa844babe787e01d3aa7ab03d6341ab395f57b6597ceb1f8a4a4",
+          "components": [
+            {
+              "component_id": "43c1751f928520f8bb80d92211a3b3c5bf29145fc8b9c018dd6f7dcaef1a7643",
+              "reasons": [
+                "existing_identity_split",
+                "multiple_existing_identities"
+              ],
+              "cluster_ids": [
+                "1",
+                "2"
+              ],
+              "candidate_count": 2,
+              "selected_count": 3,
+              "retained_membership_count": 4
+            }
+          ]
+        }
+      },
+      "analysis": {
+        "status": "published",
+        "run_id": "3",
+        "scope_status": "native_v2",
+        "cluster_scope": {
+          "format": "gitcrawl.cluster-scope.v2",
+          "mode": "available-subset",
+          "run_id": "3",
+          "repository": "openclaw/openclaw",
+          "policy_version": 2,
+          "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+          "source_as_of": {
+            "through": "2026-10-20T19:26:30.9288Z",
+            "observed_at": "2026-10-20T19:26:30.9288Z"
+          },
+          "provider_complete": true,
+          "full_native_scope_complete": false,
+          "selected_input_complete": true,
+          "population": {
+            "native_eligible": 5,
+            "selected": 5,
+            "unavailable": 0,
+            "unavailable_in_scope": 0,
+            "unmaterialized_unavailable": 0,
+            "missing_vectors": 0,
+            "stale_vectors": 0,
+            "published": 2,
+            "identity_quarantined": 3
+          },
+          "refreshed_memberships": 2,
+          "retained_prior_memberships": 3,
+          "last_full_run_id": null,
+          "identity_reconciliation_complete": false,
+          "publication_status": "published",
+          "partial_reasons": [
+            "identity_quarantine"
+          ],
+          "quarantine": {
+            "proof_sha256": "d202c1cd75b2fa844babe787e01d3aa7ab03d6341ab395f57b6597ceb1f8a4a4",
+            "components": [
+              {
+                "component_id": "43c1751f928520f8bb80d92211a3b3c5bf29145fc8b9c018dd6f7dcaef1a7643",
+                "reasons": [
+                  "existing_identity_split",
+                  "multiple_existing_identities"
+                ],
+                "cluster_ids": [
+                  "1",
+                  "2"
+                ],
+                "candidate_count": 2,
+                "selected_count": 3,
+                "retained_membership_count": 4
+              }
+            ]
+          }
+        }
+      }
+    },
+    "row": {
+      "finished_at": "2026-10-20T19:26:31.966168Z",
+      "id": 3,
+      "started_at": "2026-10-20T19:26:31.963853Z",
+      "status": "success"
+    }
+  },
+  "quarantined_detail": {
+    "selection": {
+      "source": "durable_cluster",
+      "run_id": "2"
+    },
+    "scope_status": "native_v2",
+    "cluster_scope": {
+      "format": "gitcrawl.cluster-scope.v2",
+      "mode": "available-subset",
+      "run_id": "2",
+      "repository": "openclaw/openclaw",
+      "policy_version": 2,
+      "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+      "source_as_of": {
+        "through": "2026-10-20T19:26:30.9288Z",
+        "observed_at": "2026-10-20T19:26:30.9288Z"
+      },
+      "provider_complete": false,
+      "full_native_scope_complete": false,
+      "selected_input_complete": true,
+      "population": {
+        "native_eligible": 5,
+        "selected": 4,
+        "unavailable": 1,
+        "unavailable_in_scope": 1,
+        "unmaterialized_unavailable": 0,
+        "missing_vectors": 0,
+        "stale_vectors": 0,
+        "published": 2,
+        "identity_quarantined": 2
+      },
+      "refreshed_memberships": 2,
+      "retained_prior_memberships": 3,
+      "last_full_run_id": null,
+      "identity_reconciliation_complete": false,
+      "publication_status": "published",
+      "partial_reasons": [
+        "identity_quarantine",
+        "provider_unavailable"
+      ],
+      "quarantine": {
+        "proof_sha256": "38b19bdaa2329695219a10a78cdf453636729f2c016d41a84f159a6fc398804a",
+        "components": [
+          {
+            "component_id": "af246648bd93a7fae5d1f3b96b58eb17590d1b0ade64b2d0ae09cfc603dbaf65",
+            "reasons": [
+              "multiple_existing_identities"
+            ],
+            "cluster_ids": [
+              "1",
+              "2"
+            ],
+            "candidate_count": 1,
+            "selected_count": 2,
+            "retained_membership_count": 4
+          }
+        ]
+      }
+    },
+    "analysis": {
+      "status": "published",
+      "run_id": "2",
+      "scope_status": "native_v2",
+      "cluster_scope": {
+        "format": "gitcrawl.cluster-scope.v2",
+        "mode": "available-subset",
+        "run_id": "2",
+        "repository": "openclaw/openclaw",
+        "policy_version": 2,
+        "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+        "source_as_of": {
+          "through": "2026-10-20T19:26:30.9288Z",
+          "observed_at": "2026-10-20T19:26:30.9288Z"
+        },
+        "provider_complete": false,
+        "full_native_scope_complete": false,
+        "selected_input_complete": true,
+        "population": {
+          "native_eligible": 5,
+          "selected": 4,
+          "unavailable": 1,
+          "unavailable_in_scope": 1,
+          "unmaterialized_unavailable": 0,
+          "missing_vectors": 0,
+          "stale_vectors": 0,
+          "published": 2,
+          "identity_quarantined": 2
+        },
+        "refreshed_memberships": 2,
+        "retained_prior_memberships": 3,
+        "last_full_run_id": null,
+        "identity_reconciliation_complete": false,
+        "publication_status": "published",
+        "partial_reasons": [
+          "identity_quarantine",
+          "provider_unavailable"
+        ],
+        "quarantine": {
+          "proof_sha256": "38b19bdaa2329695219a10a78cdf453636729f2c016d41a84f159a6fc398804a",
+          "components": [
+            {
+              "component_id": "af246648bd93a7fae5d1f3b96b58eb17590d1b0ade64b2d0ae09cfc603dbaf65",
+              "reasons": [
+                "multiple_existing_identities"
+              ],
+              "cluster_ids": [
+                "1",
+                "2"
+              ],
+              "candidate_count": 1,
+              "selected_count": 2,
+              "retained_membership_count": 4
+            }
+          ]
+        }
+      }
+    },
+    "cluster": {
+      "identity_quarantine_status": "quarantined",
+      "identity_quarantine": {
+        "analysis_run_id": "2",
+        "component_id": "af246648bd93a7fae5d1f3b96b58eb17590d1b0ade64b2d0ae09cfc603dbaf65",
+        "reasons": [
+          "multiple_existing_identities"
+        ]
+      },
+      "id": 1,
+      "source": "durable_cluster",
+      "stable_slug": "a",
+      "status": "active",
+      "title": "a",
+      "representative_thread_id": 2,
+      "representative_number": 2,
+      "representative_kind": "issue",
+      "representative_title": "available 2",
+      "member_count": 2,
+      "updated_at": "2026-10-20T19:26:31.930948Z"
+    },
+    "members": [
+      {
+        "thread": {
+          "id": 2,
+          "repo_id": 1,
+          "github_id": "I_2",
+          "number": 2,
+          "kind": "issue",
+          "state": "open",
+          "title": "available 2",
+          "html_url": "https://example.invalid",
+          "labels_json": "[]",
+          "assignees_json": "[]",
+          "content_hash": "fixture",
+          "is_draft": false,
+          "updated_at_gh": "2026-10-20T19:25:31.9288Z",
+          "last_pulled_at": "2026-10-20T19:25:31.9288Z",
+          "updated_at": "2026-10-20T19:25:31.9288Z"
+        },
+        "role": "canonical",
+        "state": "active",
+        "last_seen_run_id": "1",
+        "generation_status": "retained_prior",
+        "retention_reason": "identity_quarantine",
+        "retention_as_of_run_id": "2"
+      },
+      {
+        "thread": {
+          "id": 1,
+          "repo_id": 1,
+          "github_id": "I_ONE",
+          "number": 1,
+          "kind": "issue",
+          "state": "open",
+          "title": "fixture",
+          "html_url": "https://example.invalid/1",
+          "labels_json": "[]",
+          "assignees_json": "[]",
+          "content_hash": "h",
+          "is_draft": false,
+          "updated_at_gh": "2026-10-20T19:24:31.9288Z",
+          "last_pulled_at": "2026-10-20T19:24:31.9288Z",
+          "updated_at": "2026-10-20T19:24:31.9288Z"
+        },
+        "role": "related",
+        "state": "active",
+        "last_seen_run_id": "1",
+        "generation_status": "retained_prior",
+        "retention_reason": "identity_quarantine",
+        "retention_as_of_run_id": "2"
+      }
+    ]
+  },
+  "retained_only": {
+    "proof_json": "{\"format\":\"gitcrawl.identity-quarantine-plan.v1\",\"policy_digest\":\"b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a\",\"repository_id\":1,\"selected_ids\":[1,2,3,4,5],\"candidate_partition\":[{\"StableKey\":\"all\",\"StableSlug\":\"all\",\"ClusterType\":\"duplicate_candidate\",\"RepresentativeThreadID\":1,\"Title\":\"all\",\"Members\":[{\"ThreadID\":1,\"Role\":\"canonical\",\"ScoreToRepresentative\":null},{\"ThreadID\":2,\"Role\":\"related\",\"ScoreToRepresentative\":null},{\"ThreadID\":3,\"Role\":\"related\",\"ScoreToRepresentative\":null},{\"ThreadID\":4,\"Role\":\"related\",\"ScoreToRepresentative\":null},{\"ThreadID\":5,\"Role\":\"related\",\"ScoreToRepresentative\":null}]}],\"active_identity_metadata\":[{\"id\":1,\"key\":\"a\",\"active\":true,\"protected\":false,\"representative\":2,\"active_members\":[1,2],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":2,\"key\":\"b\",\"active\":true,\"protected\":false,\"representative\":3,\"active_members\":[3],\"local_removed\":[],\"retained_membership_count\":2},{\"id\":3,\"key\":\"c\",\"active\":true,\"protected\":false,\"representative\":4,\"active_members\":[4],\"local_removed\":[],\"retained_membership_count\":1},{\"id\":4,\"key\":\"new-five\",\"active\":true,\"protected\":false,\"representative\":5,\"active_members\":[5],\"local_removed\":[],\"retained_membership_count\":1}],\"resolved_targets\":[],\"components\":[{\"component_id\":\"73765bc784d7a3893e86ae9a24fe999ca2ca6654da2be1bf4d2dfc808a336ca4\",\"reasons\":[\"multiple_existing_identities\"],\"cluster_ids\":[\"1\",\"2\",\"3\",\"4\"],\"candidate_count\":1,\"selected_count\":5,\"retained_membership_count\":6}],\"quarantined_selected_ids\":[1,2,3,4,5],\"quarantined_group_ids\":[1,2,3,4],\"preserved_group_ids\":[1,2,3,4],\"protected_preimage_sha256\":\"0827a6fe4d1de18dd4aa31ab5b093a09ab35c83cf3643cc50eeedf9f12a2ffa3\",\"input_sha256\":\"ab0f0e55b47c05c9c9e3eb12f6e7bc653185f878282aa9af23077b240a6c3b7d\",\"identity_state_sha256\":\"94b797f3d60531ee2b9c639aa854fb6d7b82499187f94b75b404c2531a116a65\",\"source_identity_sha256\":\"c21abf087ecaaf4822b5c636f9b0963749d0e75df30a3c363348711aa1dd2c72\",\"availability_sha256\":\"5441b4bb525a5fca1da76118cec562bf5b6ceb4dcf558ceb00a1dc6ade92539e\"}",
+    "read": {
+      "selection": {
+        "source": "durable_cluster",
+        "run_id": "3"
+      },
+      "scope_status": "native_v2",
+      "cluster_scope": {
+        "format": "gitcrawl.cluster-scope.v2",
+        "mode": "available-subset",
+        "run_id": "3",
+        "repository": "openclaw/openclaw",
+        "policy_version": 2,
+        "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+        "source_as_of": {
+          "through": "2026-10-20T19:26:30.9288Z",
+          "observed_at": "2026-10-20T19:26:30.9288Z"
+        },
+        "provider_complete": true,
+        "full_native_scope_complete": false,
+        "selected_input_complete": true,
+        "population": {
+          "native_eligible": 5,
+          "selected": 5,
+          "unavailable": 0,
+          "unavailable_in_scope": 0,
+          "unmaterialized_unavailable": 0,
+          "missing_vectors": 0,
+          "stale_vectors": 0,
+          "published": 2,
+          "identity_quarantined": 3
+        },
+        "refreshed_memberships": 2,
+        "retained_prior_memberships": 3,
+        "last_full_run_id": null,
+        "identity_reconciliation_complete": false,
+        "publication_status": "published",
+        "partial_reasons": [
+          "identity_quarantine"
+        ],
+        "quarantine": {
+          "proof_sha256": "d202c1cd75b2fa844babe787e01d3aa7ab03d6341ab395f57b6597ceb1f8a4a4",
+          "components": [
+            {
+              "component_id": "43c1751f928520f8bb80d92211a3b3c5bf29145fc8b9c018dd6f7dcaef1a7643",
+              "reasons": [
+                "existing_identity_split",
+                "multiple_existing_identities"
+              ],
+              "cluster_ids": [
+                "1",
+                "2"
+              ],
+              "candidate_count": 2,
+              "selected_count": 3,
+              "retained_membership_count": 4
+            }
+          ]
+        }
+      },
+      "analysis": {
+        "status": "retained_only",
+        "run_id": "4",
+        "scope_status": "native_v2",
+        "cluster_scope": {
+          "format": "gitcrawl.cluster-scope.v2",
+          "mode": "available-subset",
+          "run_id": "4",
+          "repository": "openclaw/openclaw",
+          "policy_version": 2,
+          "policy_digest": "b6e52d586f9e0063b3aca46b34dffacd35a4bd458d6b89a0ab363f1d62cee48a",
+          "source_as_of": {
+            "through": "2026-10-20T19:26:30.9288Z",
+            "observed_at": "2026-10-20T19:26:30.9288Z"
+          },
+          "provider_complete": true,
+          "full_native_scope_complete": false,
+          "selected_input_complete": true,
+          "population": {
+            "native_eligible": 5,
+            "selected": 5,
+            "unavailable": 0,
+            "unavailable_in_scope": 0,
+            "unmaterialized_unavailable": 0,
+            "missing_vectors": 0,
+            "stale_vectors": 0,
+            "published": 0,
+            "identity_quarantined": 5
+          },
+          "refreshed_memberships": 0,
+          "retained_prior_memberships": 5,
+          "last_full_run_id": null,
+          "identity_reconciliation_complete": false,
+          "publication_status": "retained_only",
+          "partial_reasons": [
+            "identity_quarantine"
+          ],
+          "quarantine": {
+            "proof_sha256": "ee7245522771f4a30910494e7f224c4634c3c867fe62630f0869fa2a00159cbb",
+            "components": [
+              {
+                "component_id": "73765bc784d7a3893e86ae9a24fe999ca2ca6654da2be1bf4d2dfc808a336ca4",
+                "reasons": [
+                  "multiple_existing_identities"
+                ],
+                "cluster_ids": [
+                  "1",
+                  "2",
+                  "3",
+                  "4"
+                ],
+                "candidate_count": 1,
+                "selected_count": 5,
+                "retained_membership_count": 6
+              }
+            ]
+          }
+        }
+      }
+    },
+    "row": {
+      "finished_at": "2026-10-20T19:26:31.970373Z",
+      "id": 4,
+      "started_at": "2026-10-20T19:26:31.968618Z",
+      "status": "blocked_identity"
+    }
+  },
+  "synthetic_only": true
+}
