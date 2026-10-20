@@ -47,7 +47,7 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 	}
 	now := time.Now().UTC().Format(timeLayout)
 	result := SaveDurableClustersResult{ClusterCount: len(inputs)}
-	err := s.WithTx(ctx, func(tx *Store) error {
+	work := func(tx *Store) error {
 		runID, err := tx.insertClusterRun(ctx, repoID, now)
 		if err != nil {
 			return err
@@ -137,7 +137,15 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 			return fmt.Errorf("finish cluster run: %w", err)
 		}
 		return nil
-	})
+	}
+	// Preserve an outer native publication transaction. In particular, do not
+	// wait for a second connection when the writer deliberately owns only one.
+	var err error
+	if s.queries != nil {
+		err = work(s)
+	} else {
+		err = s.WithTx(ctx, work)
+	}
 	if err != nil {
 		return SaveDurableClustersResult{}, err
 	}
