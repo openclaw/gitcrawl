@@ -222,7 +222,7 @@ class Cycle:
     data=self.call(argv,timeout=420 if mode=='combined' else 150);atomic(log,data)
    except RuntimeError as e:
     p['error']=str(e);self.checkpoint()
-    if 'partial_identity_conflict' in str(e):return {'status':'waiting_identity_resolution','request_sha256':p['sha256']} 
+    if 'partial_identity_conflict' in str(e):return {'status':'waiting_identity_resolution','request_sha256':p['sha256']}
     # Preview must have failed before settlement. Transaction/restore failures
     # receive normal cadence/operator attention, never immediate crash retry.
     failurepath=pathlib.Path(self.c['handoff_state'])/'last-failure.json'
