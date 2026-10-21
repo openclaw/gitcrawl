@@ -42,7 +42,7 @@ Official macOS archives are signed as `org.openclaw.gitcrawl` by `Developer ID A
 
 ```bash
 # Replace VERSION and PLATFORM with the values you want.
-VERSION=v0.10.0
+VERSION=v0.16.0
 PLATFORM=darwin_arm64
 mkdir -p "$HOME/bin"
 curl -L "https://github.com/openclaw/gitcrawl/releases/download/${VERSION}/gitcrawl_${VERSION#v}_${PLATFORM}.tar.gz" \

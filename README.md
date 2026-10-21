@@ -90,7 +90,7 @@ macOS CI runs on the Apple Silicon `xcode-27` image with an explicit macOS 13.0 
 Maintainers can validate the signed release pipeline on `main` without publishing:
 
 ```sh
-gh workflow run release-unified.yml --ref main -f version=0.15.1 -f dry_run=true
+gh workflow run release-unified.yml --ref main -f version=0.16.0 -f dry_run=true
 ```
 
 Use the current version for this dry run. It builds, signs, and verifies the artifacts without creating tags or releases or updating Homebrew.
