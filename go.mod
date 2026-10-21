@@ -2,6 +2,8 @@ module github.com/openclaw/gitcrawl
 
 go 1.27.2
 
+toolchain go1.27.3
+
 require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/charmbracelet/bubbles v1.0.0

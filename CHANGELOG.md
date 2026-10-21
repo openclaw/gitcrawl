@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Build with Go 1.27.3 to fix the reachable crypto/x509 certificate-validation vulnerability GO-2026-6809, retaining the Go 1.27.2 language minimum.
 - Refresh the vulnerability scanner and dead-code checker to their current compatible releases, retaining the Go 1.27.2 minimum.
 - Move macOS CI to Xcode 27 while preserving macOS 13 compatibility, and verify Intel release binaries explicitly under Rosetta.
 - Add `neighbors --open-at`, `--created-after`, and `--merged-after` to filter similar rows by time before ranking, with thread metadata and a complete-sync watermark in the output. Thanks @masatohoshino.
