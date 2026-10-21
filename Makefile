@@ -47,11 +47,11 @@ fmt:
 
 lint:
 	go vet ./...
-	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' 0; \
-	go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... > "$$output_file"; \
+	go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... > "$$output_file"; \
 	if [ -s "$$output_file" ]; then cat "$$output_file"; exit 1; fi
 
 test:
