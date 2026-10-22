@@ -23,6 +23,47 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+type codeCoreProgress struct {
+	Through          string `json:"through"`
+	ObservedAt       string `json:"observed_at"`
+	CoverageComplete bool   `json:"coverage_complete"`
+	throughTime      time.Time
+	observedTime     time.Time
+}
+
+// Code comes from the captured Git commit, not from issue/PR evidence. Require
+// recent successful discovery progress, while retaining any incomplete coverage
+// and retry obligations. Recheck after settlement before opening the writer.
+func readCodeCoreProgress(ctx context.Context, s *store.Store, now time.Time) (codeCoreProgress, error) {
+	var p codeCoreProgress
+	var complete int
+	var baseline string
+	err := s.DB().QueryRowContext(ctx, `SELECT through,observed_at,complete,
+		coalesce((SELECT value FROM analytics_collection_state
+		WHERE name='core_baseline_verified:openclaw/openclaw'),'')
+		FROM analytics_coverage WHERE repository='openclaw/openclaw'`).Scan(
+		&p.Through, &p.ObservedAt, &complete, &baseline)
+	if err != nil {
+		return p, fmt.Errorf("core progress receipt required: %w", err)
+	}
+	p.throughTime, err = time.Parse(time.RFC3339Nano, p.Through)
+	if err != nil {
+		return p, fmt.Errorf("invalid core progress frontier: %w", err)
+	}
+	p.observedTime, err = time.Parse(time.RFC3339Nano, p.ObservedAt)
+	if err != nil {
+		return p, fmt.Errorf("invalid core progress observation: %w", err)
+	}
+	if baseline != "1" || (complete != 0 && complete != 1) ||
+		p.throughTime.After(p.observedTime) || p.observedTime.After(now) ||
+		now.Sub(p.throughTime) > 5*time.Minute || now.Sub(p.observedTime) > 5*time.Minute {
+		return p, fmt.Errorf("verified baseline and core progress within5m required before code handoff")
+	}
+	p.CoverageComplete = complete == 1
+	return p, nil
+}
+
 func codeRun(args []string) error {
 	fs := flag.NewFlagSet("code-index", flag.ContinueOnError)
 	db := fs.String("db", "", "H database")
@@ -108,18 +149,11 @@ func codeRun(args []string) error {
 		done()
 		return e
 	}
-	var coreComplete int
-	var coreObserved string
-	if e = ro.DB().QueryRowContext(readCtx, "select complete,observed_at from analytics_coverage where repository='openclaw/openclaw'").Scan(&coreComplete, &coreObserved); e != nil {
+	preparedProgress, e := readCodeCoreProgress(readCtx, ro, time.Now().UTC())
+	if e != nil {
 		ro.Close()
 		done()
-		return fmt.Errorf("core publication baseline required: %w", e)
-	}
-	at, parseErr := time.Parse(time.RFC3339Nano, coreObserved)
-	if parseErr != nil || coreComplete != 1 || time.Since(at) > 5*time.Minute {
-		ro.Close()
-		done()
-		return fmt.Errorf("core collection must be complete and current before code handoff")
+		return e
 	}
 	repo, e := ro.RepositoryByFullName(readCtx, "openclaw/openclaw")
 	if e != nil {
@@ -161,6 +195,7 @@ func codeRun(args []string) error {
 		return closeErr
 	}
 	output := map[string]any{"format": "gitcrawl.code-producer.v1", "upstream": captured, "phase": "prepared", "started_at": started, "scanned_at": time.Now().UTC(), "git_sha": snap.GitSHA, "tracked_dirty": snap.WorktreeDirty, "source_root": snap.SourceRoot, "documents": len(docs), "text_bytes": snap.ByteCount, "content_digest": digest, "unchanged": same, "snapshot_id": id, "skip_counts": map[string]int{"binary": result.SkippedBinary, "large": result.SkippedLarge, "nonregular": result.SkippedNonRegular, "missing": result.SkippedMissing, "outside": result.SkippedOutsideRoot}}
+	output["core_progress_at_prepare"] = preparedProgress
 	if same {
 		output["phase"] = "unchanged"
 		return json.NewEncoder(os.Stdout).Encode(output)
@@ -221,10 +256,18 @@ func codeRun(args []string) error {
 		return e
 	}
 	e = probe.NativeCodeWriterReady(ctx)
+	var commitProgress codeCoreProgress
+	if e == nil {
+		commitProgress, e = readCodeCoreProgress(ctx, probe, time.Now().UTC())
+	}
 	probe.Close()
 	if e != nil {
 		return e
 	}
+	if commitProgress.throughTime.Before(preparedProgress.throughTime) || commitProgress.observedTime.Before(preparedProgress.observedTime) {
+		return fmt.Errorf("core progress regressed after preparation")
+	}
+	output["core_progress_at_commit"] = commitProgress
 	st, e := store.OpenNativeProducerWriter(ctx, *db)
 	if e != nil {
 		return e
