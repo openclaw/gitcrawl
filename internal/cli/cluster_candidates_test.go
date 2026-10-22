@@ -57,7 +57,7 @@ func TestClusterCandidatesCommandReadsSelectsAndRollsBack(t *testing.T) {
 		}
 		if err := st.WithTx(ctx, func(tx *store.Store) error {
 			_, err := tx.SaveClusterCandidateGeneration(ctx, store.ClusterCandidateGenerationInput{RepoID: repoID, RunID: runID, Algorithm: "test",
-				InputSHA256: strings.Repeat(fmt.Sprint(generation), 64), QuarantinePlanSHA256: strings.Repeat("b", 64), Plan: plan})
+				InputSHA256: strings.Repeat(fmt.Sprint(generation), 64), QuarantinePlanSHA256: strings.Repeat("b", 64), Plan: plan, PublishedClusterIDs: map[string]int64{"b": 7}})
 			return err
 		}); err != nil {
 			t.Fatal(err)

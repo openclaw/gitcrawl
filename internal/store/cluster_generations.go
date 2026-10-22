@@ -19,6 +19,11 @@ const ClusterCandidateFormatV3 = "gitcrawl.cluster-candidates.v3"
 
 var ErrNoClusterCandidateGeneration = errors.New("no computed cluster candidate generation")
 
+// clusterCandidateGenerationTables lists the v3 tables, children first.
+func clusterCandidateGenerationTables() []string {
+	return []string{"cluster_candidate_selection", "cluster_candidate_overlaps", "cluster_candidate_members", "cluster_candidates", "cluster_candidate_generations"}
+}
+
 func (s *Store) ensureClusterCandidateGenerationSchema(ctx context.Context) error {
 	_, err := s.q().ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS cluster_candidate_generations(
@@ -98,6 +103,10 @@ type ClusterCandidateGenerationInput struct {
 	InputSHA256          string
 	QuarantinePlanSHA256 string
 	Plan                 ClusterQuarantinePlan
+	// PublishedClusterIDs maps each published candidate key to the durable
+	// cluster_groups ID it was written to in this run, including identities
+	// newly created by this publication (plan targets record those as 0).
+	PublishedClusterIDs map[string]int64
 }
 
 type ClusterCandidateGeneration struct {
@@ -175,7 +184,14 @@ func (s *Store) SaveClusterCandidateGeneration(ctx context.Context, in ClusterCa
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].StableKey < candidates[j].StableKey })
 	published := map[string]int64{}
 	for _, target := range in.Plan.Targets {
-		published[target.CandidateKey] = target.ClusterID
+		id := in.PublishedClusterIDs[target.CandidateKey]
+		if id <= 0 || target.ClusterID != 0 && target.ClusterID != id {
+			return out, fmt.Errorf("cluster candidate generation lacks the published durable identity for a target")
+		}
+		published[target.CandidateKey] = id
+	}
+	if len(in.PublishedClusterIDs) != len(published) {
+		return out, fmt.Errorf("cluster candidate generation published identities do not match the plan targets")
 	}
 	activeOwner := map[int64][]int64{}
 	for _, identity := range in.Plan.Identities {

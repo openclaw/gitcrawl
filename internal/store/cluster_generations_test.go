@@ -73,6 +73,13 @@ func durableHistoryDump(t *testing.T, ctx context.Context, st *Store) string {
 
 func saveGeneration(t *testing.T, ctx context.Context, st *Store, plan ClusterQuarantinePlan, input string) (ClusterCandidateGeneration, error) {
 	t.Helper()
+	published := map[string]int64{}
+	for i, target := range plan.Targets {
+		published[target.CandidateKey] = target.ClusterID
+		if target.ClusterID == 0 {
+			published[target.CandidateKey] = int64(900 + i)
+		}
+	}
 	var generation ClusterCandidateGeneration
 	err := st.WithTx(ctx, func(tx *Store) error {
 		runID, err := tx.insertClusterRun(ctx, plan.RepositoryID, time.Now().UTC().Format(time.RFC3339Nano))
@@ -80,7 +87,7 @@ func saveGeneration(t *testing.T, ctx context.Context, st *Store, plan ClusterQu
 			return err
 		}
 		generation, err = tx.SaveClusterCandidateGeneration(ctx, ClusterCandidateGenerationInput{RepoID: plan.RepositoryID, RunID: runID,
-			Algorithm: "test-algorithm", InputSHA256: strings.Repeat(input, 64), QuarantinePlanSHA256: strings.Repeat("b", 64), Plan: plan})
+			Algorithm: "test-algorithm", InputSHA256: strings.Repeat(input, 64), QuarantinePlanSHA256: strings.Repeat("b", 64), Plan: plan, PublishedClusterIDs: published})
 		return err
 	})
 	return generation, err
@@ -119,6 +126,11 @@ func TestClusterCandidateGenerationsPublishSelectAndRollBack(t *testing.T) {
 	if merge.ComputedKey != "b-merge" || merge.ID != fmt.Sprintf("%d:2", first.ID) || merge.MemberCount != 3 || merge.DurableStatus != "identity_quarantined" ||
 		len(merge.Overlaps) != 2 || merge.Overlaps[0] != (ClusterCandidateOverlap{ClusterID: 11, SharedMembers: 2}) || len(merge.Members) != 3 {
 		t.Fatalf("merge candidate = %+v", merge)
+	}
+	for _, candidate := range candidates {
+		if candidate.ComputedKey == "c-new" && (candidate.DurableStatus != "published" || candidate.DurableClusterID != 900) {
+			t.Fatalf("newly published identity not recorded: %+v", candidate)
+		}
 	}
 	if after := durableHistoryDump(t, ctx, st); after != before {
 		t.Fatalf("generation changed durable history:\n%s\n%s", before, after)
@@ -178,6 +190,9 @@ func TestClusterCandidateGenerationRefusesInvalidPartitions(t *testing.T) {
 		"other repository":   func(p *ClusterQuarantinePlan) { p.RepositoryID = repoID + 1 },
 		"outside representative": func(p *ClusterQuarantinePlan) {
 			p.Candidates[1].RepresentativeThreadID = ids[0]
+		},
+		"conflicting published identity": func(p *ClusterQuarantinePlan) {
+			p.Targets = []ClusterPublicationTarget{{CandidateKey: "a", ClusterID: -1}}
 		},
 	}
 	for name, mutate := range cases {
@@ -242,5 +257,30 @@ func TestClusterCandidateGenerationsHonorOwnerRemoval(t *testing.T) {
 	var stale ClusterQuarantinePlan = plan
 	if _, err := saveGeneration(t, ctx, st, stale, "c"); err == nil || !strings.Contains(err.Error(), "owner-excluded") {
 		t.Fatalf("stale owner-excluded input = %v", err)
+	}
+}
+
+func TestPortableRepositoryScopeDropsCandidateGenerations(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	repoID, ids := seedCandidateThreads(t, ctx, st, 2)
+	plan := ClusterQuarantinePlan{RepositoryID: repoID, SelectedIDs: ids, Candidates: []DurableClusterInput{candidateInput("a", ids[0], ids[1])}}
+	if _, err := saveGeneration(t, ctx, st, plan, "a"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "other", FullName: "openclaw/other", RawJSON: "{}", UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RestrictPortableRepository(ctx, "openclaw/other"); err != nil {
+		t.Fatalf("restrict a snapshot holding another repository's generations: %v", err)
+	}
+	var remaining int
+	if err := st.DB().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name LIKE 'cluster_candidate%'").Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("portable snapshot retained %d candidate tables: %v", remaining, err)
 	}
 }

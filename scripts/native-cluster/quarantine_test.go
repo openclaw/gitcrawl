@@ -273,6 +273,17 @@ func TestNativeQuarantineWriterRollbackAnalysisAndRecovery(t *testing.T) {
 	save("full_recovery", full.RunID)
 	if computed, e := s.SelectedClusterCandidateGeneration(ctx, repo); e != nil || computed.RunID != full.RunID || computed.CandidateCount != 4 || computed.DurableQuarantinedCandidates != 0 {
 		t.Fatal("full recovery generation", computed, e)
+	} else {
+		candidates, e := s.ClusterCandidates(ctx, repo, computed.ID, 10, false)
+		if e != nil || len(candidates) != 4 {
+			t.Fatal("full recovery candidates", candidates, e)
+		}
+		for _, c := range candidates {
+			var key string
+			if e = s.DB().QueryRow("select stable_key from cluster_groups where id=?", c.DurableClusterID).Scan(&key); e != nil || c.DurableStatus != "published" {
+				t.Fatal("published candidate lacks its durable identity", c, e)
+			}
+		}
 	}
 	if rolled, e := s.RollbackClusterCandidateGeneration(ctx, repo); e != nil || rolled.RunID != blocked.RunID {
 		t.Fatal("computed generation rollback", rolled, e)

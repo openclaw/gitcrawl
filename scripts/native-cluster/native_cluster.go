@@ -428,8 +428,19 @@ func (s *Store) NativePublishClusters(ctx context.Context, want NativeClusterSna
 		// Record the complete computed partition as this run's immutable v3
 		// generation and select it in the same transaction. It never writes the
 		// durable identity tables, so the quarantine postimage stays unchanged.
+		// Resolve every published target to the durable ID actually written in
+		// this run, including identities this publication just created.
+		publishedIDs := map[string]int64{}
+		for i, target := range plan.Targets {
+			var id int64
+			if e = tx.q().QueryRowContext(ctx, "select id from cluster_groups where repo_id=? and stable_key=?", want.RepoID, publish[i].StableKey).Scan(&id); e != nil {
+				return fmt.Errorf("resolve published durable identity: %w", e)
+			}
+			publishedIDs[target.CandidateKey] = id
+		}
 		if _, e = tx.SaveClusterCandidateGeneration(ctx, ClusterCandidateGenerationInput{RepoID: want.RepoID, RunID: result.RunID,
-			Algorithm: NativeClusterAlgorithm, InputSHA256: want.InputSHA256, QuarantinePlanSHA256: proofHash, Plan: plan}); e != nil {
+			Algorithm: NativeClusterAlgorithm, InputSHA256: want.InputSHA256, QuarantinePlanSHA256: proofHash, Plan: plan,
+			PublishedClusterIDs: publishedIDs}); e != nil {
 			return e
 		}
 		if after, e = tx.ClusterQuarantineRowHash(ctx, want.RepoID, plan.PreservedGroupIDs); e != nil {

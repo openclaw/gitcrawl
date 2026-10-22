@@ -40,6 +40,14 @@ func (s *Store) RestrictPortableRepositoryWithOptions(ctx context.Context, fullN
 		return result, fmt.Errorf("begin portable repository scope: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Computed candidate generations are immutable derived history that no
+	// portable profile publishes. Drop them from this disposable snapshot
+	// before repository filtering, which would otherwise hit their triggers.
+	for _, table := range clusterCandidateGenerationTables() {
+		if _, err := tx.ExecContext(ctx, `drop table if exists `+sqliteIdentifier(table)); err != nil {
+			return result, fmt.Errorf("drop portable %s: %w", table, err)
+		}
+	}
 	var targetCount int64
 	if err := tx.QueryRowContext(ctx, `select count(*) from repositories where full_name = ?`, fullName).Scan(&targetCount); err != nil {
 		return result, fmt.Errorf("count portable target repository: %w", err)
