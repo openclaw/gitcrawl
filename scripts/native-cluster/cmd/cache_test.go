@@ -127,6 +127,9 @@ func TestReviewedParentCacheReusePreservesProvenance(t *testing.T) {
 	var f pairCacheFile
 	json.Unmarshal(raw, &f)
 	f.Producer = reviewedSubsetCacheProducer
+	if !reviewedCacheProducer(reviewedQuarantineCacheProducer) || reviewedCacheProducer(store.NativeSHA256([]byte("unreviewed"))) {
+		t.Fatal("reviewed producer set changed")
+	}
 	raw, _ = json.Marshal(f)
 	parent := store.NativeSHA256(raw)
 	os.WriteFile(filepath.Join(dir, parent+".json"), raw, 0600)
