@@ -228,7 +228,7 @@ transaction:
   durable ID (`published`, with `durable_cluster_id`) or quarantined it
   (`identity_quarantined`). Both are present in the computed generation.
 - Generation rows cannot be updated or deleted, with one exception: owner
-  removal (`purge`) deletes a removed thread's member rows, and readers derive
+  removal (`purge`) deletes a removed thread, then its member rows, and readers derive
   counts and representatives from the remaining members.
 - `cluster-candidates --rollback` selects the previous generation. The next
   accepted run selects its own generation again. A ref no-op run records

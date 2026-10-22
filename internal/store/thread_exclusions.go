@@ -485,15 +485,15 @@ func (s *Store) PurgeThreads(ctx context.Context, repository string, numbers []i
 					return err
 				}
 			}
+			if _, err = tx.q().ExecContext(ctx, "DELETE FROM threads WHERE id=?", t.ThreadID); err != nil {
+				return err
+			}
 			// Computed candidate generations are immutable except for owner
-			// removal; the exclusion recorded above admits this deletion.
+			// removal; deleting the thread above admits this deletion.
 			if tx.hasTable(ctx, "cluster_candidate_members") {
 				if _, err = tx.q().ExecContext(ctx, "DELETE FROM cluster_candidate_members WHERE thread_id=?", t.ThreadID); err != nil {
 					return err
 				}
-			}
-			if _, err = tx.q().ExecContext(ctx, "DELETE FROM threads WHERE id=?", t.ThreadID); err != nil {
-				return err
 			}
 		}
 		// Never turn removal of unavailable work into claimed provider completeness.

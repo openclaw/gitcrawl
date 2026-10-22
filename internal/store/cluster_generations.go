@@ -72,16 +72,13 @@ CREATE TABLE IF NOT EXISTS cluster_candidate_selection(
 		return err
 	}
 	// Generations are immutable history; only the selection pointer moves.
-	// The single exception is owner removal: PurgeThreads records the thread
-	// exclusion first and may then delete that thread's member rows.
+	// The single exception is owner removal: once PurgeThreads has deleted a
+	// thread, that thread's member rows may be deleted too.
 	for _, table := range []string{"cluster_candidate_generations", "cluster_candidates", "cluster_candidate_members", "cluster_candidate_overlaps"} {
 		for _, event := range []string{"UPDATE", "DELETE"} {
 			condition := ""
 			if table == "cluster_candidate_members" && event == "DELETE" {
-				if err = s.ensureThreadExclusionsSchema(ctx); err != nil {
-					return err
-				}
-				condition = " WHEN NOT EXISTS(SELECT 1 FROM thread_exclusions WHERE original_thread_id=OLD.thread_id)"
+				condition = " WHEN EXISTS(SELECT 1 FROM threads WHERE id=OLD.thread_id)"
 			}
 			if _, err = s.q().ExecContext(ctx, "CREATE TRIGGER IF NOT EXISTS "+table+"_immutable_"+event+" BEFORE "+event+" ON "+table+condition+
 				" BEGIN SELECT RAISE(ABORT,'cluster candidate generations are immutable'); END"); err != nil {
