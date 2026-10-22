@@ -4,6 +4,7 @@ ARG GO_VERSION=1.27.3
 ARG ALPINE_VERSION=3.24
 
 FROM golang:${GO_VERSION}-alpine AS build
+RUN apk add --no-cache --upgrade ca-certificates=20261020-r0 ca-certificates-bundle=20261020-r0
 RUN apk add --no-cache ca-certificates git
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -15,6 +16,7 @@ RUN CGO_ENABLED=0 GOEXPERIMENT=simd GOOS=linux go build -trimpath \
     -o /out/gitcrawl ./cmd/gitcrawl
 
 FROM alpine:${ALPINE_VERSION}
+RUN apk add --no-cache --upgrade ca-certificates=20261020-r0 ca-certificates-bundle=20261020-r0
 RUN apk add --no-cache ca-certificates git openssh-client tzdata \
     && adduser -D -u 10001 -h /home/gitcrawl gitcrawl \
     && mkdir -p /data/config /data/data /data/cache /data/state \
