@@ -27,6 +27,9 @@ func (s *Store) RestrictPortableRepository(ctx context.Context, fullName string)
 
 func (s *Store) RestrictPortableRepositoryWithOptions(ctx context.Context, fullName string, options PortableRepositoryScopeOptions) (PortableRepositoryScope, error) {
 	var result PortableRepositoryScope
+	if err := RefuseObservationTransformation(ctx, s.q()); err != nil {
+		return result, err
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return result, fmt.Errorf("open portable repository scope connection: %w", err)

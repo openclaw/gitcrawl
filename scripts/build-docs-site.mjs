@@ -66,6 +66,8 @@ for (const page of pages) {
 fs.writeFileSync(path.join(outDir, "favicon.svg"), faviconSvg(), "utf8");
 copyStaticAsset("social-card.svg");
 copyStaticAsset("social-card.png");
+copyStaticAsset("observation-capture-registry-v1.json");
+copyStaticAsset("observation-capture-schema.sql");
 fs.writeFileSync(path.join(outDir, ".nojekyll"), "", "utf8");
 if (cname) fs.writeFileSync(path.join(outDir, "CNAME"), cname, "utf8");
 validateLinks(outDir);

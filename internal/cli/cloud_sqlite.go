@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"github.com/openclaw/gitcrawl/internal/store"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,6 +54,11 @@ func cloudSQLiteSnapshotPath(
 		cleanup()
 		return "", nil, func() {}, fmt.Errorf("open cloud SQLite snapshot: %w", err)
 	}
+	if err := store.DetachObservationCaptureCopy(ctx, dbPath, snapshotPath, snapshotDB); err != nil {
+		_ = snapshotDB.Close()
+		cleanup()
+		return "", nil, func() {}, err
+	}
 	// Derive evidence from the frozen copy before the sanitizer removes run
 	// diagnostics. A source's previous admission marker is never consulted.
 	var admission *gitcrawlCloudAdmission
@@ -95,6 +101,9 @@ func cloudSQLiteSnapshotPath(
 }
 
 func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
+	if err := store.RefuseObservationTransformation(ctx, db); err != nil {
+		return err
+	}
 	for _, column := range []struct {
 		table string
 		name  string

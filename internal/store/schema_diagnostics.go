@@ -102,6 +102,26 @@ func inspectSchema(ctx context.Context, path string, portableSource bool) Schema
 		return diag
 	}
 	diag.CurrentVersion = current
+	nativeVersion := current
+	if current == observationSchemaVersion {
+		present, probeErr := capturePresent(ctx, st.q())
+		if probeErr == nil && present {
+			diag.SupportedVersion = observationSchemaVersion
+			probeErr = validateCaptureSchema(ctx, st.q())
+			if probeErr == nil {
+				_, probeErr = captureCapability(ctx, st.q())
+			}
+			if probeErr == nil {
+				nativeVersion = schemaVersion
+			}
+		}
+		if probeErr != nil {
+			diag.State = "error"
+			diag.Error = probeErr.Error()
+			diag.NextSteps = []string{"Validate the source-owned observation capture schema before running write commands."}
+			return diag
+		}
+	}
 	diag.PRDetails = inspectPRDetailSchema(ctx, st)
 	diag.ChildReservations = st.hasTable(ctx, "thread_child_observation_reservations")
 	diag.ChildReservationsCurrent = diag.ChildReservations &&
@@ -121,7 +141,7 @@ func inspectSchema(ctx context.Context, path string, portableSource bool) Schema
 	diag.PendingMigrations, err = inspectCompatibilityMigrations(
 		ctx,
 		st,
-		current,
+		nativeVersion,
 		diag.PRDetails,
 	)
 	if err != nil {
@@ -133,10 +153,10 @@ func inspectSchema(ctx context.Context, path string, portableSource bool) Schema
 	if diag.PendingMigrations == nil {
 		diag.PendingMigrations = []string{}
 	}
-	diag.Newer = current > schemaVersion
-	diag.Legacy = current < schemaVersion || len(diag.PendingMigrations) > 0
+	diag.Newer = current > diag.SupportedVersion
+	diag.Legacy = current < diag.SupportedVersion || len(diag.PendingMigrations) > 0
 	diag.PendingMigration = diag.Legacy && !diag.Newer
-	diag.Current = current == schemaVersion && len(diag.PendingMigrations) == 0
+	diag.Current = current == diag.SupportedVersion && len(diag.PendingMigrations) == 0
 
 	switch {
 	case diag.Newer:

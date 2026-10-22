@@ -195,6 +195,15 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		return result, err
 	}
 	if options.ConsumeSource {
+		probe, err := store.OpenReadOnly(ctx, sourcePath)
+		if err != nil {
+			return result, err
+		}
+		err = store.RefuseObservationTransformation(ctx, probe.DB())
+		_ = probe.Close()
+		if err != nil {
+			return result, err
+		}
 		if err := consumeSQLite(ctx, sourcePath, dbPath); err != nil {
 			return result, err
 		}
@@ -209,6 +218,10 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return result, fmt.Errorf("open disposable portable snapshot: %w", err)
+	}
+	if err := store.DetachObservationCaptureCopy(ctx, sourcePath, dbPath, st.DB()); err != nil {
+		_ = st.Close()
+		return result, err
 	}
 	closed := false
 	defer func() {

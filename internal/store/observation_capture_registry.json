@@ -1,0 +1,456 @@
+{
+  "format_version": 1,
+  "codec": "sqlite-cells-v1",
+  "source_commit": "6c9c1bea7d094397dcdfecfb50e693460592a5aa",
+  "nullability": "admitted native cells; capture keys are always non-NULL, including native TEXT primary keys whose SQLite declaration permits NULL",
+  "tables": [
+    {
+      "name": "thread_revisions",
+      "key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "thread_id",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "source_updated_at",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "content_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "title_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "body_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "labels_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "raw_json_blob_id",
+          "type": "integer",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "observation_sequence",
+          "type": "integer",
+          "nullable": false,
+          "storage": "observation_overlay"
+        },
+        {
+          "name": "created_at",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        }
+      ]
+    },
+    {
+      "name": "blobs",
+      "key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "sha256",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "media_type",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "compression",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "size_bytes",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "storage_kind",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "storage_path",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "inline_text",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "created_at",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        }
+      ]
+    },
+    {
+      "name": "actor_identity_evidence",
+      "key": [
+        "node_id"
+      ],
+      "columns": [
+        {
+          "name": "node_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "actor_node_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "login",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "actor_type",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "observed_at",
+          "type": "text",
+          "nullable": false,
+          "storage": "observation_overlay"
+        },
+        {
+          "name": "raw_json",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        }
+      ]
+    },
+    {
+      "name": "actor_profiles",
+      "key": [
+        "node_id"
+      ],
+      "columns": [
+        {
+          "name": "node_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "login",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "actor_type",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "bio",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "created_at",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "observed_at",
+          "type": "text",
+          "nullable": false,
+          "storage": "observation_overlay"
+        },
+        {
+          "name": "raw_json",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        }
+      ]
+    },
+    {
+      "name": "pull_request_review_threads",
+      "key": [
+        "thread_id",
+        "review_thread_id"
+      ],
+      "columns": [
+        {
+          "name": "thread_id",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "review_thread_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "path",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "line",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "start_line",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "is_resolved",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "is_outdated",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "viewer_can_resolve",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "viewer_can_unresolve",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "viewer_can_reply",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "first_author_login",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "first_author_type",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "first_comment_body",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "first_comment_url",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "first_comment_created_at",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "first_comment_updated_at",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "comments_json",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "raw_json",
+          "type": "text",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "fetched_at",
+          "type": "text",
+          "nullable": false,
+          "storage": "observation_overlay"
+        },
+        {
+          "name": "deleted_at",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        },
+        {
+          "name": "deletion_reason",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        }
+      ]
+    },
+    {
+      "name": "pull_request_review_thread_syncs",
+      "key": [
+        "thread_id"
+      ],
+      "columns": [
+        {
+          "name": "thread_id",
+          "type": "integer",
+          "nullable": false,
+          "storage": "value_image"
+        },
+        {
+          "name": "fetched_at",
+          "type": "text",
+          "nullable": false,
+          "storage": "observation_overlay"
+        },
+        {
+          "name": "review_thread_ids_json",
+          "type": "text",
+          "nullable": true,
+          "storage": "value_image"
+        }
+      ]
+    }
+  ],
+  "supports": [
+    {
+      "source_table": "thread_revisions",
+      "role": "github_blob",
+      "target_table": "blobs",
+      "source_columns": [
+        "raw_json_blob_id"
+      ],
+      "target_columns": [
+        "id"
+      ],
+      "cardinality": "one if non-NULL",
+      "ordinal": "0",
+      "null_source": "no edge",
+      "missing_target": "fail sealing"
+    },
+    {
+      "source_table": "pull_request_review_threads",
+      "role": "review_membership",
+      "target_table": "pull_request_review_thread_syncs",
+      "source_columns": [
+        "thread_id"
+      ],
+      "target_columns": [
+        "thread_id"
+      ],
+      "cardinality": "zero or one",
+      "ordinal": "0",
+      "missing_target": "explicit legacy absence",
+      "meaning": "binds exact membership row; does not assert source review row is a current member"
+    },
+    {
+      "source_table": "pull_request_review_thread_syncs",
+      "role": "review_thread",
+      "target_table": "pull_request_review_threads",
+      "source_columns": [
+        "thread_id",
+        "review_thread_ids_json"
+      ],
+      "target_columns": [
+        "thread_id",
+        "review_thread_id"
+      ],
+      "cardinality": "one per array member",
+      "ordinal": "zero-based exact array position",
+      "null_source": "unknown membership; no edges",
+      "empty_array": "known empty membership; no edges",
+      "array_requirement": "unique nonempty exact TEXT IDs",
+      "missing_target": "fail sealing"
+    }
+  ]
+}

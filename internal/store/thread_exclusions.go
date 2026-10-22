@@ -147,14 +147,15 @@ type PurgeTarget struct {
 	AlreadyExcluded bool     `json:"already_excluded"`
 }
 type ThreadPurgePlan struct {
-	Repository string         `json:"repository"`
-	RepoID     int64          `json:"repo_id"`
-	Targets    []PurgeTarget  `json:"targets"`
-	Counts     map[string]int `json:"counts"`
-	BlobIDs    []int64        `json:"candidate_blob_ids"`
-	RequestID  string         `json:"request_id,omitempty"`
-	Applied    bool           `json:"applied"`
-	Reason     string         `json:"reason"`
+	Repository      string         `json:"repository"`
+	RepoID          int64          `json:"repo_id"`
+	Targets         []PurgeTarget  `json:"targets"`
+	Counts          map[string]int `json:"counts"`
+	BlobIDs         []int64        `json:"candidate_blob_ids"`
+	RequestID       string         `json:"request_id,omitempty"`
+	Applied         bool           `json:"applied"`
+	Reason          string         `json:"reason"`
+	CaptureImageIDs []int64        `json:"capture_image_ids,omitempty"`
 }
 
 // Only source-owned relationships are traversed. Shared cluster descriptions
@@ -403,6 +404,10 @@ func (s *Store) PlanThreadPurge(ctx context.Context, repository string, numbers 
 			}
 		}
 	}
+	p.CaptureImageIDs, err = s.planCapturePurge(ctx, p)
+	if err != nil {
+		return p, err
+	}
 	return p, nil
 }
 
@@ -439,6 +444,9 @@ func (s *Store) PurgeThreads(ctx context.Context, repository string, numbers []i
 		}
 		p, err := tx.PlanThreadPurge(ctx, repository, numbers)
 		if err != nil {
+			return err
+		}
+		if err = tx.prepareCapturePurge(ctx, p); err != nil {
 			return err
 		}
 		var enabled int

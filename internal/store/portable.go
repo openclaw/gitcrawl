@@ -94,6 +94,9 @@ type PortablePruneStats struct {
 }
 
 func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePruneOptions) (PortablePruneStats, error) {
+	if err := RefuseObservationTransformation(ctx, s.q()); err != nil {
+		return PortablePruneStats{}, err
+	}
 	// Owner exclusions belong to this local archive. Do not silently drop their
 	// policy or publish owner-request metadata through a portable export.
 	if s.hasTable(ctx, "thread_exclusions") {

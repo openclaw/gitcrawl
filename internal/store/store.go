@@ -41,6 +41,8 @@ type Store struct {
 	portableThreadBodyMetadata  bool
 	portableCommentBodyMetadata bool
 	portableBodyChars           int
+	captureCache                *captureSchemaCache
+	captureTx                   *captureTransaction
 }
 
 type dbQueries interface {
@@ -66,7 +68,22 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	db := base.DB()
-	st := &Store{db: db, sqlc: storedb.New(db), path: path}
+	st := &Store{db: db, sqlc: storedb.New(db), path: path, captureCache: &captureSchemaCache{}}
+	if present, probeErr := capturePresent(ctx, db); probeErr != nil {
+		_ = base.Close()
+		return nil, probeErr
+	} else if present {
+		// Capture-owned archives never run unfenced legacy migrations on open.
+		if err := validateCaptureSchema(ctx, db); err != nil {
+			_ = base.Close()
+			return nil, err
+		}
+		if _, err := captureCapability(ctx, db); err != nil {
+			_ = base.Close()
+			return nil, err
+		}
+		return st, nil
+	}
 	if err := st.migrate(ctx); err != nil {
 		_ = base.Close()
 		return nil, err
@@ -105,6 +122,20 @@ func openReadOnly(ctx context.Context, path, openPath string) (*Store, error) {
 	if err != nil {
 		_ = base.Close()
 		return nil, err
+	}
+	if current == observationSchemaVersion {
+		present, err := capturePresent(ctx, db)
+		if err != nil {
+			_ = base.Close()
+			return nil, err
+		}
+		if present {
+			if err := validateCaptureSchema(ctx, db); err != nil {
+				_ = base.Close()
+				return nil, err
+			}
+			return st, nil
+		}
 	}
 	if current > schemaVersion {
 		_ = base.Close()
@@ -171,6 +202,7 @@ func (s *Store) withTxOnce(ctx context.Context, fn func(*Store) error) error {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
+	defer tx.Rollback()
 	txStore := &Store{
 		db:                          s.db,
 		queries:                     tx,
@@ -179,9 +211,17 @@ func (s *Store) withTxOnce(ctx context.Context, fn func(*Store) error) error {
 		portableThreadBodyMetadata:  s.portableThreadBodyMetadata,
 		portableCommentBodyMetadata: s.portableCommentBodyMetadata,
 		portableBodyChars:           s.portableBodyChars,
+		captureCache:                s.captureCache,
+	}
+	txStore.captureTx, err = txStore.beginObservationCapture(ctx)
+	if err != nil {
+		return err
 	}
 	if err := fn(txStore); err != nil {
 		_ = tx.Rollback()
+		return err
+	}
+	if err := txStore.finishObservationCapture(ctx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
