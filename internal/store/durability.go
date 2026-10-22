@@ -3,11 +3,21 @@ package store
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"runtime"
 
 	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+// sqliteNotADatabase reports a file that SQLite cannot interpret. Such a
+// connection cannot acknowledge any commit, so the hook leaves the original
+// open/read error to the caller instead of masking it with a policy failure.
+func sqliteNotADatabase(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_NOTADB
+}
 
 func init() {
 	// Crawlkit's default DSN requests NORMAL. Apply the archive's durability
@@ -17,12 +27,18 @@ func init() {
 	sqlite.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, _ string) error {
 		rows, err := conn.QueryContext(context.Background(), "PRAGMA synchronous", nil)
 		if err != nil {
+			if sqliteNotADatabase(err) {
+				return nil
+			}
 			return fmt.Errorf("read SQLite commit durability: %w", err)
 		}
 		values := make([]driver.Value, 1)
 		err = rows.Next(values)
 		closeErr := rows.Close()
 		if err != nil {
+			if sqliteNotADatabase(err) {
+				return nil
+			}
 			return fmt.Errorf("read SQLite commit durability row: %w", err)
 		}
 		if closeErr != nil {

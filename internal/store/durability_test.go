@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -161,5 +163,23 @@ func TestDarwinFlushPolicyOverridesDSNOnReplacement(t *testing.T) {
 				db.SetMaxIdleConns(0)
 			}
 		})
+	}
+}
+
+func TestDurabilityHookLeavesNonDatabaseErrorsToCaller(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-sqlite.db")
+	if err := os.WriteFile(path, []byte("not a SQLite database at all, padded beyond one header"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Callers see SQLite's own error rather than a durability policy failure
+	// raised by the connection hook.
+	_, err = db.Exec("SELECT count(*) FROM sqlite_schema")
+	if err == nil || strings.Contains(err.Error(), "durability") || !strings.Contains(err.Error(), "not a database") {
+		t.Fatalf("query error = %v, want native not-a-database error", err)
 	}
 }
