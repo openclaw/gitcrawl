@@ -242,7 +242,7 @@ func TestPortableRefreshSuccessNoopAndLocalMirror(t *testing.T) {
 	if err != nil || updated.Result != "updated" || updated.BeforeCommit == updated.AfterCommit || updated.SHA256 == "" {
 		t.Fatalf("update: %+v %v", updated, err)
 	}
-	if updated.Capacity.PeakGrowth <= 0 || updated.Mirror != fixture.mirror {
+	if updated.Capacity.PeakGrowth <= 0 || updated.Mirror != fixture.mirror || updated.Repack != "" {
 		t.Fatalf("observations: %+v", updated)
 	}
 	if err := sqliteStoreImmutableHealth(context.Background(), fixture.mirror); err != nil {

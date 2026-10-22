@@ -124,8 +124,10 @@ checkout files**, hidden index entries, unrelated origins, divergent history,
 active Git locks or operation state, orphan/temporary packs, hooks, filters,
 attributes, submodules, linked worktrees, alternate object stores, config
 includes/redirections and unsupported extensions. Resolve these deliberately
-outside the subscriber command. It never resets, cleans, prunes, repacks,
-reclones, deletes backups or sidecars, or invokes reader/doctor auto-repair.
+outside the subscriber command. It never resets, cleans, prunes, reclones,
+deletes backups or sidecars, or invokes reader/doctor auto-repair. The only
+repack is the bounded post-advance geometric repack of a split store described
+below; raw and gzip stores are never repacked.
 
 Admission examines every exposed Git configuration scope. Refusals identify
 the scope and unsafe category without printing keys or values. Single-valued
@@ -211,10 +213,10 @@ use fixed, credential-safe repository, authentication, connection or disk-space
 diagnostics when recognized, with general troubleshooting guidance otherwise;
 raw remote/helper stderr is never included.
 
-After the checkout advances, refresh runs `git repack -d --geometric=2` inside
-the same deadline and growth budget so a new split generation is stored as
-deltas against its predecessor (`repack: "geometric"`). A larger history pack is
-left untouched. With more than 512 loose objects, such as years of loose gzip
+After the checkout advances to a split generation, refresh runs
+`git repack -d --geometric=2` inside the same deadline and growth budget, so
+the new generation is stored as deltas against its predecessor
+(`repack: "geometric"`). A larger history pack is left untouched. With more than 512 loose objects, such as years of loose gzip
 generations, refresh skips this (`skipped-loose-backlog`); pack that backlog
 once with an owner-run `git repack -d` first. A consolidation failure is reported
 as `repack: "failed"` without undoing the validated generation.

@@ -368,7 +368,9 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 			}
 		}
 	}
-	if target != checkout.head {
+	// Only split stores are repacked: their generations delta against each
+	// other. Raw and gzip subscribers keep the previous no-repack contract.
+	if target != checkout.head && portableSplitArchive(manifest) {
 		stage("repack")
 		repack, err := consolidatePortableObjects(ctx, root)
 		result.Repack = repack
