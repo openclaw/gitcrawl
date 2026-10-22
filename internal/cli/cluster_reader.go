@@ -33,7 +33,7 @@ func (a *App) RunClusterReader(ctx context.Context, args []string) error {
 		command = rest[1]
 	}
 	switch command {
-	case "clusters", "durable-clusters", "clusters-report", "cluster-detail":
+	case "clusters", "durable-clusters", "clusters-report", "cluster-detail", "cluster-candidates":
 	default:
 		return usageErr(fmt.Errorf("cluster reader supports local cluster reads only"))
 	}
@@ -62,10 +62,12 @@ func (a *App) RunClusterReader(ctx context.Context, args []string) error {
 		return a.runClustersReport(ctx, rest[1:])
 	case "cluster-detail":
 		return a.runClusterDetail(ctx, rest[1:])
+	case "cluster-candidates":
+		return a.runClusterCandidates(ctx, rest[1:], true)
 	}
 	return usageErr(fmt.Errorf("unsupported cluster read"))
 }
 func (a *App) clusterReaderUsage() error {
-	_, err := fmt.Fprintln(a.Stdout, "Usage: gitcrawl-cluster-reader --config SOURCE_CONFIG clusters|durable-clusters|clusters-report|cluster-detail [options]\nLocal read-only cluster reader; no collection, embedding or provider commands.")
+	_, err := fmt.Fprintln(a.Stdout, "Usage: gitcrawl-cluster-reader --config SOURCE_CONFIG clusters|durable-clusters|clusters-report|cluster-detail|cluster-candidates [options]\nLocal read-only cluster reader; no collection, embedding or provider commands.")
 	return err
 }

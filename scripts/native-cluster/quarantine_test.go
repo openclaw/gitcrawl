@@ -218,6 +218,17 @@ func TestNativeQuarantineWriterRollbackAnalysisAndRecovery(t *testing.T) {
 		t.Fatal("blocked analysis replaced success", read, e)
 	}
 	save("retained_only", blocked.RunID)
+	// v3: the durably blocked run still publishes its complete computed
+	// partition as the selected run-scoped generation.
+	computed, e := s.SelectedClusterCandidateGeneration(ctx, repo)
+	if e != nil || computed.RunID != blocked.RunID || computed.CandidateCount != 1 || computed.MemberCount != 5 ||
+		computed.DurableQuarantinedCandidates != 1 || computed.DurablePublishedCandidates != 0 || computed.OverlapCount == 0 {
+		t.Fatal("blocked run did not select its computed generation", computed, e)
+	}
+	generations, e := s.ListClusterCandidateGenerations(ctx, repo, 100)
+	if e != nil {
+		t.Fatal(e)
+	}
 	snap, e = s.NativeClusterSnapshot(ctx, policy)
 	if e != nil {
 		t.Fatal(e)
@@ -225,6 +236,9 @@ func TestNativeQuarantineWriterRollbackAnalysisAndRecovery(t *testing.T) {
 	same, _, e = s.NativePublishClusters(ctx, snap, policy, blockedInputs)
 	if e != nil || same.RunID != blocked.RunID {
 		t.Fatal("blocked no-op churn", e)
+	}
+	if after, e := s.ListClusterCandidateGenerations(ctx, repo, 100); e != nil || len(after) != len(generations) {
+		t.Fatal("no-op run recorded another computed generation", e)
 	}
 	// A different genuine graph with one-to-one identity relations can recover.
 	recovery := []DurableClusterInput{quarantineInput("a", 2, unknown), quarantineInput("b", 3), quarantineInput("c", 4), quarantineInput("new-five", 5)}
@@ -257,6 +271,23 @@ func TestNativeQuarantineWriterRollbackAnalysisAndRecovery(t *testing.T) {
 		t.Fatal("full recovery", read, e)
 	}
 	save("full_recovery", full.RunID)
+	if computed, e := s.SelectedClusterCandidateGeneration(ctx, repo); e != nil || computed.RunID != full.RunID || computed.CandidateCount != 4 || computed.DurableQuarantinedCandidates != 0 {
+		t.Fatal("full recovery generation", computed, e)
+	} else {
+		candidates, e := s.ClusterCandidates(ctx, repo, computed.ID, 10, false)
+		if e != nil || len(candidates) != 4 {
+			t.Fatal("full recovery candidates", candidates, e)
+		}
+		for _, c := range candidates {
+			var key string
+			if e = s.DB().QueryRow("select stable_key from cluster_groups where id=?", c.DurableClusterID).Scan(&key); e != nil || c.DurableStatus != "published" {
+				t.Fatal("published candidate lacks its durable identity", c, e)
+			}
+		}
+	}
+	if rolled, e := s.RollbackClusterCandidateGeneration(ctx, repo); e != nil || rolled.RunID != blocked.RunID {
+		t.Fatal("computed generation rollback", rolled, e)
+	}
 	if path := os.Getenv("GITCRAWL_QUARANTINE_FINAL_DB"); path != "" {
 		if _, err := s.DB().Exec("VACUUM INTO ?", path); err != nil {
 			t.Fatal(err)

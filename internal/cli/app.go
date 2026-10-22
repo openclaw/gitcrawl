@@ -187,6 +187,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runClusterDetail(ctx, rest[1:])
 	case "cluster-explain":
 		return a.runClusterDetail(ctx, rest[1:])
+	case "cluster-candidates":
+		return a.runClusterCandidates(ctx, rest[1:], false)
 	case "neighbors":
 		return a.runNeighbors(ctx, rest[1:])
 	case "cluster":

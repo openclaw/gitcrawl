@@ -117,3 +117,17 @@ The strict wire schema is in docs/native-cluster-scope-v2.schema.json. Synthetic
 writer fixtures cover partial publication, provider-complete identity quarantine,
 blocked analysis/no-op, indirect-write rollback and full recovery. Native model
 work remains exclusively in the authorized processor broker.
+
+## Computed candidate generations (v3)
+
+After v2 publication and scope validation, the same native transaction records
+the complete computed candidate partition of the quarantine plan as an
+immutable `gitcrawl.cluster-candidates.v3` generation. The generation is bound
+to its run, algorithm, input hash and quarantine proof hash. It stores each
+candidate's members, its v2 durable status and target, and observed overlaps
+with active durable groups, then moves the per-repository selection pointer to
+it. The quarantine postimage hash is checked again after this write. A
+generation never writes the six durable history tables, so v2 scope, strict
+schema and reader semantics are unchanged. Blocked-identity runs still record
+their generation. No-op runs record none. See `docs/clustering.md`
+(Computed candidate generations) and `gitcrawl cluster-candidates`.
