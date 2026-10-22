@@ -217,8 +217,10 @@ When the checkout's generation is split, strict refresh runs
 `git repack -d --geometric=2` inside the same deadline and growth budget, so
 new generations are stored as deltas against their predecessors
 (`repack: "geometric"`). This also covers objects fetched by an implicit reader
-fast-forward, which never repacks, so a no-op refresh can still consolidate.
-With no loose objects it reports `repack: "current"` and does nothing. A larger
+fast-forward, which never repacks, and generations kept as fetched packs
+(for example with `fetch.unpackLimit`), so a no-op refresh can still
+consolidate. With nothing loose and a single pack it reports
+`repack: "current"` and does nothing. A larger
 history pack is left untouched. With more than 512 loose objects, such as years of loose gzip
 generations, refresh skips this (`skipped-loose-backlog`); pack that backlog
 once with an owner-run `git repack -d` first. A consolidation failure is reported

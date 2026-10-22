@@ -119,9 +119,28 @@ func TestPortableRefreshTransitionsGzipToSplitArchive(t *testing.T) {
 	if loose := portableTestGit(t, fixture.checkout, "count-objects", "-v"); !strings.Contains(loose, "count: 0\n") {
 		t.Fatalf("no-op refresh left loose objects: %s", loose)
 	}
-	if result, err := fixture.refresh(t); err != nil || result.Result != "no-op" || result.Repack != "current" {
+	if result, err := fixture.refresh(t); err != nil || result.Result != "no-op" || result.Repack == "failed" || result.Repack == "" {
 		t.Fatalf("settled split refresh: %+v %v", result, err)
 	}
+	// Generations kept as fetched packs (fetch.unpackLimit=1) leave nothing
+	// loose; repeated packed fetches must still be folded together.
+	portableTestGit(t, fixture.checkout, "config", "fetch.unpackLimit", "1")
+	for generation := 0; generation < 3; generation++ {
+		fixture.advanceSplit(t, 40+generation, fmt.Sprintf("packed fetch generation %d", generation))
+		result, err := fixture.refresh(t)
+		if err != nil || result.Result != "updated" || result.Repack != "geometric" {
+			t.Fatalf("packed fetch generation %d: %+v %v", generation, result, err)
+		}
+	}
+	objects := portableTestGit(t, fixture.checkout, "count-objects", "-v")
+	if !strings.Contains(objects, "count: 0\n") || strings.Contains(objects, "packs: 4") || strings.Contains(objects, "packs: 5") {
+		t.Fatalf("packed fetches were not consolidated: %s", objects)
+	}
+	portableTestGit(t, fixture.checkout, "repack", "-a", "-d", "-q")
+	if result, err := fixture.refresh(t); err != nil || result.Result != "no-op" || result.Repack != "current" {
+		t.Fatalf("single-pack split refresh: %+v %v", result, err)
+	}
+	portableTestGit(t, fixture.checkout, "config", "--unset", "fetch.unpackLimit")
 	head := portableTestGit(t, fixture.checkout, "rev-parse", "HEAD")
 	// A tampered part is refused before the checkout or mirror advance.
 	path := filepath.Join(fixture.remote, fixture.relative)

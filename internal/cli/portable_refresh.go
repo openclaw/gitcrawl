@@ -60,19 +60,24 @@ func consolidatePortableObjects(ctx context.Context, root string) (string, error
 	if err != nil {
 		return "failed", err
 	}
-	loose := int64(-1)
+	loose, packs := int64(-1), int64(-1)
 	for _, line := range strings.Split(output, "\n") {
-		if value, ok := strings.CutPrefix(line, "count: "); ok {
-			loose, err = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-			if err != nil {
-				return "failed", err
+		for prefix, target := range map[string]*int64{"count: ": &loose, "packs: ": &packs} {
+			if value, ok := strings.CutPrefix(line, prefix); ok {
+				*target, err = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+				if err != nil {
+					return "failed", err
+				}
 			}
 		}
 	}
-	if loose < 0 {
-		return "failed", fmt.Errorf("git count-objects did not report loose objects")
+	if loose < 0 || packs < 0 {
+		return "failed", fmt.Errorf("git count-objects did not report loose objects and packs")
 	}
-	if loose == 0 {
+	// Fetched generations may arrive loose or, with fetch.unpackLimit or a
+	// large catch-up, as self-contained packs with duplicate delta bases.
+	// Only a single pack with nothing loose is already consolidated.
+	if loose == 0 && packs <= 1 {
 		return "current", nil
 	}
 	if loose > portableRepackLooseLimit {
