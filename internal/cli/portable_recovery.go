@@ -173,8 +173,12 @@ func preserveMalformedPortableDB(root, dbPath string) (string, error) {
 		dbPath + "-shm",
 		dbPath + ".manifest.json",
 	}
-	if archivePath, _, compressed, err := portableSourceArtifact(dbPath); err == nil && compressed {
-		paths = append(paths, archivePath)
+	if archivePath, manifest, compressed, err := portableSourceArtifact(dbPath); err == nil && compressed {
+		if portableSplitArchive(manifest) {
+			paths = append(paths, portableArchivePartPaths(archivePath, manifest)...)
+		} else {
+			paths = append(paths, archivePath)
+		}
 	}
 	for _, path := range paths {
 		if _, err := os.Stat(path); err != nil {

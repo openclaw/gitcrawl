@@ -20,40 +20,49 @@ type Repository struct {
 	FullName string `json:"fullName"`
 }
 
+// ArchivePart is one ordered piece of a split archive. Path is a basename
+// beside the manifest; the concatenation of all parts is the database.
+type ArchivePart struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
 type Table struct {
 	Name string `json:"name"`
 	Rows int64  `json:"rows"`
 }
 
 type Manifest struct {
-	Schema               string      `json:"schema"`
-	PortableSchema       string      `json:"portableSchema"`
-	Profile              string      `json:"profile"`
-	ProfileVersion       int         `json:"profileVersion"`
-	ExportedAt           string      `json:"exportedAt"`
-	OutputPath           string      `json:"outputPath"`
-	OutputBytes          int64       `json:"outputBytes"`
-	SHA256               string      `json:"sha256"`
-	ArtifactID           string      `json:"artifactId"`
-	ArtifactIDProfile    string      `json:"artifactIdProfile"`
-	Repository           *Repository `json:"repository,omitempty"`
-	BodyChars            int         `json:"bodyChars"`
-	MaxBytes             *int64      `json:"maxBytes,omitempty"`
-	Compression          string      `json:"compression,omitempty"`
-	ArchivePath          string      `json:"archivePath,omitempty"`
-	ArchiveBytes         int64       `json:"archiveBytes,omitempty"`
-	ArchiveSHA256        string      `json:"archiveSha256,omitempty"`
-	MaxArchiveBytes      *int64      `json:"maxArchiveBytes,omitempty"`
-	Tables               []Table     `json:"tables"`
-	Excluded             []string    `json:"excluded"`
-	ValidationOK         bool        `json:"validationOk"`
-	QuickCheck           string      `json:"quickCheck"`
-	IntegrityCheck       string      `json:"integrityCheck"`
-	ForeignKeyViolations int         `json:"foreignKeyViolations"`
-	DroppedTables        []string    `json:"droppedTables"`
-	DroppedIndexes       []string    `json:"droppedIndexes"`
-	IndexProfile         string      `json:"indexProfile"`
-	ColumnProfile        string      `json:"columnProfile,omitempty"`
+	Schema               string        `json:"schema"`
+	PortableSchema       string        `json:"portableSchema"`
+	Profile              string        `json:"profile"`
+	ProfileVersion       int           `json:"profileVersion"`
+	ExportedAt           string        `json:"exportedAt"`
+	OutputPath           string        `json:"outputPath"`
+	OutputBytes          int64         `json:"outputBytes"`
+	SHA256               string        `json:"sha256"`
+	ArtifactID           string        `json:"artifactId"`
+	ArtifactIDProfile    string        `json:"artifactIdProfile"`
+	Repository           *Repository   `json:"repository,omitempty"`
+	BodyChars            int           `json:"bodyChars"`
+	MaxBytes             *int64        `json:"maxBytes,omitempty"`
+	Compression          string        `json:"compression,omitempty"`
+	ArchivePath          string        `json:"archivePath,omitempty"`
+	ArchiveParts         []ArchivePart `json:"archiveParts,omitempty"`
+	ArchiveBytes         int64         `json:"archiveBytes,omitempty"`
+	ArchiveSHA256        string        `json:"archiveSha256,omitempty"`
+	MaxArchiveBytes      *int64        `json:"maxArchiveBytes,omitempty"`
+	Tables               []Table       `json:"tables"`
+	Excluded             []string      `json:"excluded"`
+	ValidationOK         bool          `json:"validationOk"`
+	QuickCheck           string        `json:"quickCheck"`
+	IntegrityCheck       string        `json:"integrityCheck"`
+	ForeignKeyViolations int           `json:"foreignKeyViolations"`
+	DroppedTables        []string      `json:"droppedTables"`
+	DroppedIndexes       []string      `json:"droppedIndexes"`
+	IndexProfile         string        `json:"indexProfile"`
+	ColumnProfile        string        `json:"columnProfile,omitempty"`
 }
 
 func ValidateDatabaseName(name string) error {
@@ -115,7 +124,16 @@ func validateManifestPair(ctx context.Context, dbPath, manifestPath string, expe
 	if sha != actual.SHA256 {
 		return fmt.Errorf("portable manifest sha256 does not match database")
 	}
-	if actual.Compression != "" {
+	if actual.Compression == CompressionSplit {
+		if actual.ArchivePath != "" {
+			return fmt.Errorf("portable manifest split archive must not name a single archivePath")
+		}
+		if err := validateSplitArchive(filepath.Dir(manifestPath), actual.ArchiveParts, actual.ArchiveBytes, actual.ArchiveSHA256, actual.OutputBytes, actual.SHA256, actual.MaxArchiveBytes); err != nil {
+			return err
+		}
+	} else if len(actual.ArchiveParts) > 0 {
+		return fmt.Errorf("portable manifest archiveParts require split compression")
+	} else if actual.Compression != "" {
 		if actual.Compression != CompressionGzip {
 			return fmt.Errorf("portable manifest compression %q is unsupported", actual.Compression)
 		}

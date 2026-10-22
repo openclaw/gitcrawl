@@ -44,7 +44,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	publicPath := fs.String("public-path", "", "logical portable database path")
 	repositoryRaw := fs.String("repository", "", "restrict the artifact to one owner/repo")
 	maxBytesRaw := fs.String("max-bytes", "", "maximum finalized database bytes")
-	compression := fs.String("compression", "", "artifact compression (gzip)")
+	compression := fs.String("compression", "", "artifact packaging (gzip or split)")
 	maxArchiveBytesRaw := fs.String("max-archive-bytes", "", "maximum finalized archive bytes")
 	consumeSource := fs.Bool("consume-source", false, "consume an exclusively owned, backed-up database instead of copying it")
 	jsonOut := fs.Bool("json", false, "write JSON output")
@@ -89,8 +89,8 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 		}
 		maxArchiveBytes = &parsed
 	}
-	if *compression != "" && *compression != portableexport.CompressionGzip {
-		return usageErr(fmt.Errorf("--compression must be %q", portableexport.CompressionGzip))
+	if *compression != "" && *compression != portableexport.CompressionGzip && *compression != portableexport.CompressionSplit {
+		return usageErr(fmt.Errorf("--compression must be %q or %q", portableexport.CompressionGzip, portableexport.CompressionSplit))
 	}
 	if maxArchiveBytes != nil && *compression == "" {
 		return usageErr(fmt.Errorf("--max-archive-bytes requires --compression"))

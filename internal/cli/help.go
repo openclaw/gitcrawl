@@ -345,7 +345,7 @@ const portableUsageText = `gitcrawl portable manages local portable-store snapsh
 Usage:
   gitcrawl portable refresh --expected-remote URL [--store-dir PATH] [--portable-db PATH] [--branch main] [--git PATH] [--timeout 2m] [--min-free-bytes N] [--max-growth-bytes N] [--json]
   gitcrawl portable prune [--body-chars N] [--no-vacuum] [--include-sync-failures] [--no-publish] [--json]
-  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo] [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--compression gzip] [--max-archive-bytes N] [--consume-source] [--json]
+  gitcrawl portable export --profile current-state-v1 --output-dir PATH [--repository owner/repo] [--database-name NAME] [--public-path PATH] [--body-chars N] [--max-bytes N] [--compression gzip|split] [--max-archive-bytes N] [--consume-source] [--json]
 
 Subcommands:
   refresh             validate and fast-forward a clean configured subscriber
@@ -361,6 +361,10 @@ Export never changes the active database or publishes the artifact. It creates
 a complete database and manifest generation at a previously nonexistent path.
 With --compression gzip, it commits the gzip archive and manifest without the
 uncompressed database; --max-archive-bytes applies to that published archive.
+With --compression split, it commits the uncompressed database as ordered
+32 MiB parts (NAME.part-000, ...) and the manifest. Git can store a later
+generation as a small delta against these parts; --max-archive-bytes caps each
+part. Readers reassemble and verify every part and the whole database.
 --repository semantically restricts the disposable snapshot to one owner/repo.
 Refresh never regenerates config or invokes repair. It requires a matching
 origin, clean checkout and manifest-backed artifact. --git requires an absolute

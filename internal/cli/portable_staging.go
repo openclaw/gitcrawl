@@ -113,16 +113,33 @@ func stagePortableSQLiteSourceTempContext(ctx context.Context, sourceDBPath, tar
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return "", fmt.Errorf("create portable runtime dir: %w", err)
 	}
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		return "", fmt.Errorf("open portable source archive: %w", err)
+	var reader io.Reader
+	if portableSplitArchive(manifest) {
+		// Reassemble the validated parts in order; the whole digest is checked
+		// again by the caller's manifest validation of the staged database.
+		var readers []io.Reader
+		for _, path := range portableArchivePartPaths(sourcePath, manifest) {
+			part, err := os.Open(path)
+			if err != nil {
+				return "", fmt.Errorf("open portable archive part: %w", err)
+			}
+			defer part.Close()
+			readers = append(readers, part)
+		}
+		reader = io.MultiReader(readers...)
+	} else {
+		source, err := os.Open(sourcePath)
+		if err != nil {
+			return "", fmt.Errorf("open portable source archive: %w", err)
+		}
+		defer source.Close()
+		gzipReader, err := gzip.NewReader(source)
+		if err != nil {
+			return "", fmt.Errorf("open portable gzip archive: %w", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
 	}
-	defer source.Close()
-	reader, err := gzip.NewReader(source)
-	if err != nil {
-		return "", fmt.Errorf("open portable gzip archive: %w", err)
-	}
-	defer reader.Close()
 	temp, err := os.CreateTemp(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+".tmp-*")
 	if err != nil {
 		return "", fmt.Errorf("create portable runtime temp db: %w", err)

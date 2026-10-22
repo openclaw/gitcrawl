@@ -21,6 +21,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 	var warnings []string
 	stale := false
 	immutable := false
+	splitArtifact := false
 	runtimePath := ""
 	_, portable, err := portableStoreRoot(ctx, cfg.DBPath)
 	if err != nil {
@@ -46,7 +47,7 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return control.Status{}, err
 		} else {
-			artifact, _, compressed, err := portableSourceArtifact(cfg.DBPath)
+			artifact, artifactManifest, compressed, err := portableSourceArtifact(cfg.DBPath)
 			if err != nil {
 				return control.Status{}, err
 			}
@@ -64,7 +65,12 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 					return control.Status{}, err
 				}
 				reportedPath, immutable = artifact, true
-				warnings = append(warnings, "No runtime mirror exists; counts describe the validated gzip artifact and database bytes are its compressed on-disk size.")
+				if portableSplitArchive(artifactManifest) {
+					splitArtifact = true
+					warnings = append(warnings, "No runtime mirror exists; counts describe the validated split artifact and database bytes are its first part's on-disk size.")
+				} else {
+					warnings = append(warnings, "No runtime mirror exists; counts describe the validated gzip artifact and database bytes are its compressed on-disk size.")
+				}
 			}
 		}
 	}
@@ -103,6 +109,9 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 	out.Warnings = append(out.Warnings, warnings...)
 	if immutable {
 		out.Databases[0].Kind = "sqlite-gzip"
+		if splitArtifact {
+			out.Databases[0].Kind = "sqlite-split"
+		}
 	}
 	return out, nil
 }
