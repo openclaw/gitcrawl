@@ -206,17 +206,20 @@ operator inspection before another strict refresh.
 JSON reports `stage`, `result` (`updated`, `no-op`, `refused`, `partial`),
 `before_commit`, `after_commit`, `target_commit`, `artifact_id`, `sha256`,
 `artifact_bytes`, `mirror_destination`, `mirror_result`, `capacity`,
-`elapsed_ms` and, after a checkout advance, `repack`. A refusal includes a bounded `reason` and exits nonzero. Stderr
+`elapsed_ms` and, for split stores, `repack`. A refusal includes a bounded `reason` and exits nonzero. Stderr
 contains stage/elapsed/result diagnostics; stdout remains data. A no-op means
 the refs already match; a missing runtime may still be materialized. Git failures
 use fixed, credential-safe repository, authentication, connection or disk-space
 diagnostics when recognized, with general troubleshooting guidance otherwise;
 raw remote/helper stderr is never included.
 
-After the checkout advances to a split generation, refresh runs
+When the checkout's generation is split, strict refresh runs
 `git repack -d --geometric=2` inside the same deadline and growth budget, so
-the new generation is stored as deltas against its predecessor
-(`repack: "geometric"`). A larger history pack is left untouched. With more than 512 loose objects, such as years of loose gzip
+new generations are stored as deltas against their predecessors
+(`repack: "geometric"`). This also covers objects fetched by an implicit reader
+fast-forward, which never repacks, so a no-op refresh can still consolidate.
+With no loose objects it reports `repack: "current"` and does nothing. A larger
+history pack is left untouched. With more than 512 loose objects, such as years of loose gzip
 generations, refresh skips this (`skipped-loose-backlog`); pack that backlog
 once with an owner-run `git repack -d` first. A consolidation failure is reported
 as `repack: "failed"` without undoing the validated generation.

@@ -40,8 +40,9 @@ type portableRefreshResult struct {
 	Capacity      portableCapacity `json:"capacity"`
 	ElapsedMS     int64            `json:"elapsed_ms"`
 	Reason        string           `json:"reason,omitempty"`
-	// Repack reports post-advance object consolidation: geometric, skipped-
-	// loose-backlog, or failed. It never affects the validated generation.
+	// Repack reports split-store object consolidation: geometric, current
+	// (no loose objects), skipped-loose-backlog, or failed. It never affects
+	// the validated generation.
 	Repack string `json:"repack,omitempty"`
 }
 
@@ -70,6 +71,9 @@ func consolidatePortableObjects(ctx context.Context, root string) (string, error
 	}
 	if loose < 0 {
 		return "failed", fmt.Errorf("git count-objects did not report loose objects")
+	}
+	if loose == 0 {
+		return "current", nil
 	}
 	if loose > portableRepackLooseLimit {
 		return "skipped-loose-backlog", nil
@@ -370,7 +374,9 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 	}
 	// Only split stores are repacked: their generations delta against each
 	// other. Raw and gzip subscribers keep the previous no-repack contract.
-	if target != checkout.head && portableSplitArchive(manifest) {
+	// This also runs when refs already match, because an implicit reader
+	// fast-forward can fetch split objects without consolidating them.
+	if portableSplitArchive(manifest) {
 		stage("repack")
 		repack, err := consolidatePortableObjects(ctx, root)
 		result.Repack = repack

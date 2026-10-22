@@ -104,6 +104,24 @@ func TestPortableRefreshTransitionsGzipToSplitArchive(t *testing.T) {
 			t.Fatalf("retired gzip archive remains in checkout: %v", err)
 		}
 	}
+	// A reader-style fast-forward leaves fetched split objects loose; the next
+	// strict refresh is a no-op for refs but still consolidates them.
+	fixture.advanceSplit(t, 15, "reader fast-forward generation")
+	portableTestGit(t, fixture.checkout, "fetch", "-q", "origin", "main")
+	portableTestGit(t, fixture.checkout, "merge", "-q", "--ff-only", "FETCH_HEAD")
+	portableTestGit(t, fixture.checkout, "update-ref", "refs/remotes/origin/main", "FETCH_HEAD")
+	if loose := portableTestGit(t, fixture.checkout, "count-objects", "-v"); strings.Contains(loose, "count: 0\n") {
+		t.Fatalf("fixture fast-forward did not leave loose objects: %s", loose)
+	}
+	if result, err := fixture.refresh(t); err != nil || result.Result != "no-op" || result.Repack != "geometric" {
+		t.Fatalf("no-op consolidation: %+v %v", result, err)
+	}
+	if loose := portableTestGit(t, fixture.checkout, "count-objects", "-v"); !strings.Contains(loose, "count: 0\n") {
+		t.Fatalf("no-op refresh left loose objects: %s", loose)
+	}
+	if result, err := fixture.refresh(t); err != nil || result.Result != "no-op" || result.Repack != "current" {
+		t.Fatalf("settled split refresh: %+v %v", result, err)
+	}
 	head := portableTestGit(t, fixture.checkout, "rev-parse", "HEAD")
 	// A tampered part is refused before the checkout or mirror advance.
 	path := filepath.Join(fixture.remote, fixture.relative)
