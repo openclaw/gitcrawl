@@ -24,6 +24,9 @@ func clusterCandidateGenerationTables() []string {
 	return []string{"cluster_candidate_selection", "cluster_candidate_overlaps", "cluster_candidate_members", "cluster_candidates", "cluster_candidate_generations"}
 }
 
+// ensureClusterCandidateGenerationSchema creates the v3 tables on first use by
+// the native producer's transaction. Ordinary opens never pay for this DDL;
+// readers, purge and portable shaping treat absent tables as no generations.
 func (s *Store) ensureClusterCandidateGenerationSchema(ctx context.Context) error {
 	_, err := s.q().ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS cluster_candidate_generations(
