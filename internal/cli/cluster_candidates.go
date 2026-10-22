@@ -69,28 +69,37 @@ func (a *App) runClusterCandidates(ctx context.Context, args []string, readerOnl
 	if err != nil {
 		return err
 	}
-	if *listGenerations {
-		generations, err := rt.Store.ListClusterCandidateGenerations(ctx, repo.ID, limit)
+	// One read transaction gives each response a single database snapshot,
+	// so selection flags, counts and members cannot straddle a rollback or an
+	// owner purge.
+	var generations []store.ClusterCandidateGeneration
+	var generation store.ClusterCandidateGeneration
+	var candidates []store.ClusterCandidate
+	err = rt.Store.WithTx(ctx, func(tx *store.Store) error {
+		var err error
+		if *listGenerations {
+			generations, err = tx.ListClusterCandidateGenerations(ctx, repo.ID, limit)
+			return err
+		}
+		if generationID != 0 {
+			generation, err = tx.ClusterCandidateGenerationByID(ctx, repo.ID, int64(generationID))
+		} else {
+			generation, err = tx.SelectedClusterCandidateGeneration(ctx, repo.ID)
+		}
 		if err != nil {
 			return err
 		}
-		return a.writeOutput("cluster-candidates", map[string]any{"repository": repo.FullName, "format": store.ClusterCandidateFormatV3, "generations": generations}, false)
-	}
-	var generation store.ClusterCandidateGeneration
-	if generationID != 0 {
-		generation, err = rt.Store.ClusterCandidateGenerationByID(ctx, repo.ID, int64(generationID))
-	} else {
-		generation, err = rt.Store.SelectedClusterCandidateGeneration(ctx, repo.ID)
-	}
+		candidates, err = tx.ClusterCandidates(ctx, repo.ID, generation.ID, limit, *members)
+		return err
+	})
 	if errors.Is(err, store.ErrNoClusterCandidateGeneration) {
 		return fmt.Errorf("%w for %s", err, repo.FullName)
 	}
 	if err != nil {
 		return err
 	}
-	candidates, err := rt.Store.ClusterCandidates(ctx, repo.ID, generation.ID, limit, *members)
-	if err != nil {
-		return err
+	if *listGenerations {
+		return a.writeOutput("cluster-candidates", map[string]any{"repository": repo.FullName, "format": store.ClusterCandidateFormatV3, "generations": generations}, false)
 	}
 	return a.writeOutput("cluster-candidates", map[string]any{
 		"repository": repo.FullName,
