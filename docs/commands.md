@@ -115,6 +115,7 @@ This applies to `sync --numbers`, `threads --numbers`, `summarize --number`, `em
 | `gitcrawl durable-clusters owner/repo [--include-closed --sort --min-size --limit --json]` | Strict durable-cluster audit view | [Clustering](/clustering/#list-clusters) |
 | `gitcrawl cluster-detail owner/repo --id <n> [--source auto\|run\|durable --member-limit --body-chars --hide-closed --json]` | Cluster + members detail | [Clustering](/clustering/#inspect-a-cluster) |
 | `gitcrawl cluster-explain owner/repo --id <n> [...]` | Alias for `cluster-detail` | [Clustering](/clustering/#inspect-a-cluster) |
+| `gitcrawl cluster-candidates owner/repo [--generation N --generations --limit N --members --rollback --json]` | Run-scoped computed candidate generations | [Clustering](/clustering/#computed-candidate-generations) |
 
 ## Governance
 

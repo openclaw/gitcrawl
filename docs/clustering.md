@@ -206,6 +206,44 @@ Durable cluster IDs are derived from the representative thread, so they survive 
 
 Cluster runs are recorded in `run_records` and visible via `gitcrawl runs --kind cluster`.
 
+## Computed candidate generations
+
+The native available-subset producer keeps durable IDs stable by quarantining
+any computed candidate whose identity is ambiguous: merges, splits and
+protected targets. Those threads keep their retained durable membership, but
+the current computation would otherwise be invisible. Every accepted native run
+now also records its complete computed partition as an immutable
+`gitcrawl.cluster-candidates.v3` generation, and selects it, in the same
+transaction:
+
+- Candidate IDs are `GENERATION:ORDINAL`. They are scoped to that run and are
+  not claimed stable across topology changes. Durable IDs remain the stable,
+  curated domain.
+- `observed_overlaps` lists durable groups that share active members with a
+  candidate. These are lineage observations, not aliases or equivalence. The
+  six durable history tables (`cluster_groups`, `cluster_memberships`,
+  `cluster_overrides`, `cluster_closures`, `cluster_aliases`,
+  `cluster_events`) are never written by generations.
+- `durable_status` says whether the v2 run published the candidate under a
+  durable ID (`published`, with `durable_cluster_id`) or quarantined it
+  (`identity_quarantined`). Both are present in the computed generation.
+- Generation rows cannot be updated or deleted, with one exception: owner
+  removal (`purge`) deletes a removed thread's member rows, and readers derive
+  counts and representatives from the remaining members.
+- `cluster-candidates --rollback` selects the previous generation. The next
+  accepted run selects its own generation again. A ref no-op run records
+  nothing.
+
+```bash
+gitcrawl cluster-candidates openclaw/openclaw --limit 20 --json
+gitcrawl cluster-candidates openclaw/openclaw --generations --json
+```
+
+The dedicated native cluster reader also permits `cluster-candidates`, but not
+`--rollback`. Strict v2 scope metadata is unchanged; consumers that need
+current computed clusters read this explicit, versioned domain rather than
+reinterpreting v2 scope fields.
+
 ## See also
 
 - [Governance](/governance/) — close clusters, exclude members, set canonical

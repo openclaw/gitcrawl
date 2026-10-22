@@ -81,6 +81,7 @@ Core commands:
   durable-clusters     list durable cluster groups
   cluster-detail       dump one latest run cluster, with durable fallback
   cluster-explain      alias for cluster-detail
+  cluster-candidates   read run-scoped computed candidate generations
   neighbors            list vector-nearest local issue and pull request rows
   search               search local thread and source documents; also supports search issues|prs gh syntax
   gh                   moved to Octopool; prints migration note
@@ -254,6 +255,19 @@ Usage:
 
 Usage:
   gitcrawl cluster-detail owner/repo --id N [--source auto|run|durable] [--member-limit N] [--body-chars N] [--hide-closed] [--json]
+`,
+	"cluster-candidates": `gitcrawl cluster-candidates reads computed candidate generations.
+
+Each accepted native cluster run records its complete computed partition as an
+immutable generation and selects it. Candidate IDs (GENERATION:ORDINAL) are
+run-scoped, never durable cluster IDs; observed_overlaps list shared members
+with durable groups and do not claim equivalence. --rollback selects the
+previous generation; the next accepted run selects its own again.
+
+Usage:
+  gitcrawl cluster-candidates owner/repo [--generation N] [--limit N] [--members] [--json]
+  gitcrawl cluster-candidates owner/repo --generations [--limit N] [--json]
+  gitcrawl cluster-candidates owner/repo --rollback [--json]
 `,
 	"neighbors": `gitcrawl neighbors lists vector-nearest local issue and pull request rows.
 

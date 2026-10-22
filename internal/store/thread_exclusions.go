@@ -135,6 +135,7 @@ func purgeRelations(ids string) map[string]string {
 		out[table] = "snapshot_id in (" + snapshots + ")"
 	}
 	out["similarity_edges"] = "left_thread_id in (" + ids + ") or right_thread_id in (" + ids + ")"
+	out["cluster_candidate_members"] = "thread_id in (" + ids + ")"
 	return out
 }
 
@@ -481,6 +482,13 @@ func (s *Store) PurgeThreads(ctx context.Context, repository string, numbers []i
 			}
 			if tx.hasTable(ctx, "sync_attempt_failures") {
 				if _, err = tx.q().ExecContext(ctx, "DELETE FROM sync_attempt_failures WHERE repo_id=? AND number=?", p.RepoID, t.Number); err != nil {
+					return err
+				}
+			}
+			// Computed candidate generations are immutable except for owner
+			// removal; the exclusion recorded above admits this deletion.
+			if tx.hasTable(ctx, "cluster_candidate_members") {
+				if _, err = tx.q().ExecContext(ctx, "DELETE FROM cluster_candidate_members WHERE thread_id=?", t.ThreadID); err != nil {
 					return err
 				}
 			}

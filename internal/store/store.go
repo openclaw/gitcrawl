@@ -355,6 +355,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureThreadExclusionsSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureClusterCandidateGenerationSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureCanonicalObservationTables(ctx); err != nil {
 		return err
 	}
