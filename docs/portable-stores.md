@@ -224,7 +224,8 @@ consolidate. With nothing loose and a single pack it reports
 history pack is left untouched. With more than 512 loose objects, such as years of loose gzip
 generations, refresh skips this (`skipped-loose-backlog`); pack that backlog
 once with an owner-run `git repack -d` first. A consolidation failure is reported
-as `repack: "failed"` without undoing the validated generation.
+as `repack: "failed"` with a bounded `repack_reason` and next step, without
+undoing the validated generation.
 
 All portable Git entry points explicitly set `maintenance.auto=false` and
 `gc.auto=0`, including init, implicit reader fetch/merge and retained recovery

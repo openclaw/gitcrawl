@@ -44,6 +44,8 @@ type portableRefreshResult struct {
 	// (no loose objects), skipped-loose-backlog, or failed. It never affects
 	// the validated generation.
 	Repack string `json:"repack,omitempty"`
+	// RepackReason is a bounded, credential-safe cause for repack=failed.
+	RepackReason string `json:"repack_reason,omitempty"`
 }
 
 // portableRepackLooseLimit bounds the loose objects one refresh will pack.
@@ -390,6 +392,10 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 		// operation's own deadline or growth budget ended it.
 		if err != nil && ctx.Err() != nil {
 			return result, err
+		}
+		if err != nil {
+			result.RepackReason = portableRefreshReason(err) + "; the validated generation is unchanged; check that the store's .git/objects directory is writable, then rerun refresh"
+			fmt.Fprintf(a.Stderr, "gitcrawl: portable refresh: repack failed: %s\n", result.RepackReason)
 		}
 	}
 	if err := budget.check(ctx); err != nil {

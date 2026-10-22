@@ -355,3 +355,20 @@ func TestPortableExportRejectsUnknownPackaging(t *testing.T) {
 		t.Fatalf("unknown packaging error = %v", err)
 	}
 }
+
+func TestPortableRefreshReportsRepackFailureWithoutRefusing(t *testing.T) {
+	fixture := newPortableRefreshFixture(t, true)
+	fixture.advanceSplit(t, 50, "repack failure generation")
+	pack := filepath.Join(fixture.checkout, ".git", "objects", "pack")
+	if err := os.Chmod(pack, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(pack, 0o755) })
+	result, err := fixture.refresh(t)
+	if err != nil || result.Result != "updated" || result.Repack != "failed" || !strings.Contains(result.RepackReason, "writable") {
+		t.Fatalf("repack failure: %+v %v", result, err)
+	}
+	if sum, _ := fileSHA256(fixture.mirror); fmt.Sprintf("%x", sum) != result.SHA256 {
+		t.Fatal("repack failure changed the validated generation")
+	}
+}
