@@ -55,6 +55,24 @@ size and SHA-256, runs SQLite `quick_check`, and only then atomically replaces
 the runtime mirror. Legacy raw SQLite stores continue to use the same manifest
 without compression fields.
 
+Stores may instead commit a split artifact: `compression: "split"` and an
+ordered `archiveParts` list of `{path, bytes, sha256}` basenames beside the
+manifest (`NAME.part-000`, `NAME.part-001`, ...). The parts are the
+uncompressed SQLite bytes, so `archiveBytes`/`archiveSha256` equal
+`outputBytes`/`sha256`. Gitcrawl checks every part's size and digest, the digest
+of their ordered concatenation and the per-part `maxArchiveBytes`, then
+reassembles and validates the database like any other artifact. Readers older
+than split support refuse the manifest as an unsupported compression and keep
+their last good runtime mirror.
+
+Split exists for Git-hosted stores. Each gzip generation is a new compressed
+blob that cannot delta against its predecessor, so every hourly snapshot added
+about 68 MB to the store. Consecutive uncompressed parts share most bytes; a
+measured pair of consecutive production generations transferred as a 0.5 MB
+thin pack and added about 0.5 MB to a fully packed repository. Subscribers
+receive each new part as a full object; strict refresh's post-advance geometric
+repack then folds it into deltas (see below).
+
 Initialization validates portable arguments before invoking Git and validates
 the artifact before saving configuration. Repeated initialization and a
 publisher's raw-to-gzip transition do not require a raw `.db` in the checkout.
@@ -106,8 +124,10 @@ checkout files**, hidden index entries, unrelated origins, divergent history,
 active Git locks or operation state, orphan/temporary packs, hooks, filters,
 attributes, submodules, linked worktrees, alternate object stores, config
 includes/redirections and unsupported extensions. Resolve these deliberately
-outside the subscriber command. It never resets, cleans, prunes, repacks,
-reclones, deletes backups or sidecars, or invokes reader/doctor auto-repair.
+outside the subscriber command. It never resets, cleans, prunes, reclones,
+deletes backups or sidecars, or invokes reader/doctor auto-repair. The only
+repack is the bounded post-advance geometric repack of a split store described
+below; raw and gzip stores are never repacked.
 
 Admission examines every exposed Git configuration scope. Refusals identify
 the scope and unsafe category without printing keys or values. Single-valued
@@ -185,13 +205,27 @@ operator inspection before another strict refresh.
 
 JSON reports `stage`, `result` (`updated`, `no-op`, `refused`, `partial`),
 `before_commit`, `after_commit`, `target_commit`, `artifact_id`, `sha256`,
-`artifact_bytes`, `mirror_destination`, `mirror_result`, `capacity` and
-`elapsed_ms`. A refusal includes a bounded `reason` and exits nonzero. Stderr
+`artifact_bytes`, `mirror_destination`, `mirror_result`, `capacity`,
+`elapsed_ms` and, for split stores, `repack`. A refusal includes a bounded `reason` and exits nonzero. Stderr
 contains stage/elapsed/result diagnostics; stdout remains data. A no-op means
 the refs already match; a missing runtime may still be materialized. Git failures
 use fixed, credential-safe repository, authentication, connection or disk-space
 diagnostics when recognized, with general troubleshooting guidance otherwise;
 raw remote/helper stderr is never included.
+
+When the checkout's generation is split, strict refresh runs
+`git repack -d --geometric=2` inside the same deadline and growth budget, so
+new generations are stored as deltas against their predecessors
+(`repack: "geometric"`). This also covers objects fetched by an implicit reader
+fast-forward, which never repacks, and generations kept as fetched packs
+(for example with `fetch.unpackLimit`), so a no-op refresh can still
+consolidate. With nothing loose and a single pack it reports
+`repack: "current"` and does nothing. A larger
+history pack is left untouched. With more than 512 loose objects, such as years of loose gzip
+generations, refresh skips this (`skipped-loose-backlog`); pack that backlog
+once with an owner-run `git repack -d` first. A consolidation failure is reported
+as `repack: "failed"` with a bounded `repack_reason` and next step, without
+undoing the validated generation.
 
 All portable Git entry points explicitly set `maintenance.auto=false` and
 `gc.auto=0`, including init, implicit reader fetch/merge and retained recovery
@@ -350,7 +384,10 @@ host path. `--body-chars` defaults to `256`. `--max-bytes` is an optional,
 inclusive limit for raw database generations. `--compression gzip` instead
 commits only the gzip archive and manifest in the generation. Pair it with
 `--max-archive-bytes`; a Git host requiring an artifact smaller than
-100,000,000 bytes should pass `99999999`.
+100,000,000 bytes should pass `99999999`. `--compression split` commits the
+manifest and ordered uncompressed parts of 32 MiB (or `--max-archive-bytes`,
+when smaller); `--max-archive-bytes` then caps each part, and more than 64 parts
+is refused.
 The optional `--repository owner/repo` is semantic export behavior: Gitcrawl
 removes all other repositories and their dependent rows from the disposable
 snapshot, verifies the exact remaining identity, and records it in the manifest.
@@ -372,7 +409,9 @@ file SHA while retaining the same meaningful portable state.
 For gzip generations, the manifest also records `compression`, `archivePath`,
 `archiveBytes`, `archiveSha256`, and `maxArchiveBytes`. Gitcrawl validates the
 archive against both compressed and expanded identities before atomically
-committing the generation.
+committing the generation. Split generations record `archiveParts` instead of
+`archivePath`; JSON command output lists them as `archive_parts` with output
+paths.
 Destructive `portable prune` continues to record its operation time as
 `portable_metadata.exported_at`.
 

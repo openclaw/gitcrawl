@@ -16,13 +16,21 @@ import (
 )
 
 const (
-	CurrentStateV1        = "current-state-v1"
-	CompressionGzip       = "gzip"
-	portableSchema        = "gitcrawl-portable-sync-v2"
-	currentProfileVersion = 1
-	defaultBodyChars      = 256
-	onlineBackupPageChunk = int32(1024)
-	onlineBackupBusyRetry = 50 * time.Millisecond
+	CurrentStateV1  = "current-state-v1"
+	CompressionGzip = "gzip"
+	// CompressionSplit stores the uncompressed SQLite bytes as ordered parts.
+	// Consecutive generations then share most content, so Git's delta
+	// compression stores each new generation as a small change instead of a new
+	// fully compressed blob that can never delta against its predecessor.
+	CompressionSplit = "split"
+	// SplitPartBytes keeps each committed part far below hosting file limits.
+	SplitPartBytes        int64 = 32 << 20
+	maxArchiveParts             = 64
+	portableSchema              = "gitcrawl-portable-sync-v2"
+	currentProfileVersion       = 1
+	defaultBodyChars            = 256
+	onlineBackupPageChunk       = int32(1024)
+	onlineBackupBusyRetry       = 50 * time.Millisecond
 )
 
 type ExportOptions struct {
@@ -60,38 +68,39 @@ const (
 type ProgressFunc func(Stage)
 
 type ExportResult struct {
-	Profile              string      `json:"profile"`
-	PortableSchema       string      `json:"portable_schema"`
-	Schema               string      `json:"schema"`
-	SourceDBPath         string      `json:"source_db_path"`
-	SourceConsumed       bool        `json:"source_consumed,omitempty"`
-	OutputDir            string      `json:"output_dir"`
-	DatabasePath         string      `json:"database_path"`
-	ManifestPath         string      `json:"manifest_path"`
-	PublicPath           string      `json:"public_path"`
-	Repository           *Repository `json:"repository,omitempty"`
-	BodyChars            int         `json:"body_chars"`
-	BytesBefore          int64       `json:"bytes_before"`
-	BytesAfter           int64       `json:"bytes_after"`
-	MaxBytes             *int64      `json:"max_bytes,omitempty"`
-	ByteBudgetOK         bool        `json:"byte_budget_ok"`
-	Compression          string      `json:"compression,omitempty"`
-	ArchivePath          string      `json:"archive_path,omitempty"`
-	ArchiveBytes         int64       `json:"archive_bytes,omitempty"`
-	ArchiveSHA256        string      `json:"archive_sha256,omitempty"`
-	MaxArchiveBytes      *int64      `json:"max_archive_bytes,omitempty"`
-	ArchiveByteBudgetOK  bool        `json:"archive_byte_budget_ok"`
-	ArtifactID           string      `json:"artifact_id"`
-	ArtifactIDProfile    string      `json:"artifact_id_profile"`
-	SHA256               string      `json:"sha256"`
-	QuickCheck           string      `json:"quick_check"`
-	IntegrityCheck       string      `json:"integrity_check"`
-	ForeignKeyViolations int         `json:"foreign_key_violations"`
-	Vacuumed             bool        `json:"vacuumed"`
-	DroppedTables        []string    `json:"dropped_tables"`
-	DroppedIndexes       []string    `json:"dropped_indexes"`
-	ArtifactCommitted    bool        `json:"artifact_committed"`
-	ColumnProfile        string      `json:"column_profile,omitempty"`
+	Profile              string        `json:"profile"`
+	PortableSchema       string        `json:"portable_schema"`
+	Schema               string        `json:"schema"`
+	SourceDBPath         string        `json:"source_db_path"`
+	SourceConsumed       bool          `json:"source_consumed,omitempty"`
+	OutputDir            string        `json:"output_dir"`
+	DatabasePath         string        `json:"database_path"`
+	ManifestPath         string        `json:"manifest_path"`
+	PublicPath           string        `json:"public_path"`
+	Repository           *Repository   `json:"repository,omitempty"`
+	BodyChars            int           `json:"body_chars"`
+	BytesBefore          int64         `json:"bytes_before"`
+	BytesAfter           int64         `json:"bytes_after"`
+	MaxBytes             *int64        `json:"max_bytes,omitempty"`
+	ByteBudgetOK         bool          `json:"byte_budget_ok"`
+	Compression          string        `json:"compression,omitempty"`
+	ArchivePath          string        `json:"archive_path,omitempty"`
+	ArchiveParts         []ArchivePart `json:"archive_parts,omitempty"`
+	ArchiveBytes         int64         `json:"archive_bytes,omitempty"`
+	ArchiveSHA256        string        `json:"archive_sha256,omitempty"`
+	MaxArchiveBytes      *int64        `json:"max_archive_bytes,omitempty"`
+	ArchiveByteBudgetOK  bool          `json:"archive_byte_budget_ok"`
+	ArtifactID           string        `json:"artifact_id"`
+	ArtifactIDProfile    string        `json:"artifact_id_profile"`
+	SHA256               string        `json:"sha256"`
+	QuickCheck           string        `json:"quick_check"`
+	IntegrityCheck       string        `json:"integrity_check"`
+	ForeignKeyViolations int           `json:"foreign_key_violations"`
+	Vacuumed             bool          `json:"vacuumed"`
+	DroppedTables        []string      `json:"dropped_tables"`
+	DroppedIndexes       []string      `json:"dropped_indexes"`
+	ArtifactCommitted    bool          `json:"artifact_committed"`
+	ColumnProfile        string        `json:"column_profile,omitempty"`
 }
 
 type exporter struct {
@@ -121,8 +130,8 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if options.MaxBytes != nil && *options.MaxBytes <= 0 {
 		return result, fmt.Errorf("max-bytes must be a positive integer")
 	}
-	if options.Compression != "" && options.Compression != CompressionGzip {
-		return result, fmt.Errorf("unsupported compression %q; supported compression: %s", options.Compression, CompressionGzip)
+	if options.Compression != "" && options.Compression != CompressionGzip && options.Compression != CompressionSplit {
+		return result, fmt.Errorf("unsupported compression %q; supported compression: %s, %s", options.Compression, CompressionGzip, CompressionSplit)
 	}
 	if options.MaxArchiveBytes != nil {
 		if *options.MaxArchiveBytes <= 0 {
@@ -191,6 +200,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if archivePath != "" {
 		result.ArchivePath = filepath.Join(outputDir, filepath.Base(archivePath))
 	}
+	var archiveParts []ArchivePart
 	if err := reportProgress(ctx, options.Progress, StageSnapshot); err != nil {
 		return result, err
 	}
@@ -422,6 +432,26 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			return result, fmt.Errorf("hash portable archive: %w", err)
 		}
 	}
+	if options.Compression == CompressionSplit {
+		if err := reportProgress(ctx, options.Progress, StageCompression); err != nil {
+			return result, err
+		}
+		partBytes := SplitPartBytes
+		if options.MaxArchiveBytes != nil && *options.MaxArchiveBytes < partBytes {
+			partBytes = *options.MaxArchiveBytes
+		}
+		archiveParts, err = writeSplitArchive(dbPath, partBytes)
+		if err != nil {
+			return result, fmt.Errorf("split portable database: %w", err)
+		}
+		// The parts are the database bytes; their concatenation has the same
+		// size and digest, which readers verify after reassembly.
+		result.ArchiveBytes = info.Size()
+		result.ArchiveSHA256 = sha
+		for _, part := range archiveParts {
+			result.ArchiveParts = append(result.ArchiveParts, ArchivePart{Path: filepath.Join(outputDir, part.Path), Bytes: part.Bytes, SHA256: part.SHA256})
+		}
+	}
 	if err := reportProgress(ctx, options.Progress, StageManifest); err != nil {
 		return result, err
 	}
@@ -457,6 +487,9 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	if archivePath != "" {
 		manifest.ArchivePath = filepath.Base(archivePath)
 	}
+	if options.Compression == CompressionSplit {
+		manifest.ArchiveParts = archiveParts
+	}
 	if e.beforeManifest != nil {
 		if err := e.beforeManifest(); err != nil {
 			return result, err
@@ -477,6 +510,11 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			return result, fmt.Errorf("sync portable archive: %w", err)
 		}
 	}
+	for _, part := range archiveParts {
+		if err := syncRegularFile(filepath.Join(stageDir, part.Path)); err != nil {
+			return result, fmt.Errorf("sync portable archive part: %w", err)
+		}
+	}
 	if err := validateManifestPair(ctx, dbPath, manifestPath, manifest); err != nil {
 		return result, err
 	}
@@ -488,7 +526,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	} else if finalSHA != sha {
 		return result, fmt.Errorf("portable database changed during manifest validation")
 	}
-	if archivePath != "" {
+	if archivePath != "" || len(archiveParts) > 0 {
 		if err := os.Remove(dbPath); err != nil {
 			return result, fmt.Errorf("remove unpackaged portable database: %w", err)
 		}

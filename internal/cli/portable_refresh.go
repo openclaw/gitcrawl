@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,55 @@ type portableRefreshResult struct {
 	Capacity      portableCapacity `json:"capacity"`
 	ElapsedMS     int64            `json:"elapsed_ms"`
 	Reason        string           `json:"reason,omitempty"`
+	// Repack reports split-store object consolidation: geometric, current
+	// (no loose objects), skipped-loose-backlog, or failed. It never affects
+	// the validated generation.
+	Repack string `json:"repack,omitempty"`
+	// RepackReason is a bounded, credential-safe cause for repack=failed.
+	RepackReason string `json:"repack_reason,omitempty"`
+}
+
+// portableRepackLooseLimit bounds the loose objects one refresh will pack.
+// A larger backlog (for example years of loose gzip generations) needs a
+// separate owner-run repack instead of a single bounded refresh.
+const portableRepackLooseLimit = 512
+
+// consolidatePortableObjects lets Git store a new split generation as deltas
+// against its predecessor. Fetched objects arrive loose or in packs whose
+// bases are full copies; a geometric repack folds recent packs together with
+// delta search while leaving a much larger history pack untouched.
+func consolidatePortableObjects(ctx context.Context, root string) (string, error) {
+	output, err := portableGitOutput(ctx, root, "count-objects", "-v")
+	if err != nil {
+		return "failed", err
+	}
+	loose, packs := int64(-1), int64(-1)
+	for _, line := range strings.Split(output, "\n") {
+		for prefix, target := range map[string]*int64{"count: ": &loose, "packs: ": &packs} {
+			if value, ok := strings.CutPrefix(line, prefix); ok {
+				*target, err = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+				if err != nil {
+					return "failed", err
+				}
+			}
+		}
+	}
+	if loose < 0 || packs < 0 {
+		return "failed", fmt.Errorf("git count-objects did not report loose objects and packs")
+	}
+	// Fetched generations may arrive loose or, with fetch.unpackLimit or a
+	// large catch-up, as self-contained packs with duplicate delta bases.
+	// Only a single pack with nothing loose is already consolidated.
+	if loose == 0 && packs <= 1 {
+		return "current", nil
+	}
+	if loose > portableRepackLooseLimit {
+		return "skipped-loose-backlog", nil
+	}
+	if err := runPortableGit(ctx, root, io.Discard, "repack", "-d", "-q", "--geometric=2", "--no-write-bitmap-index"); err != nil {
+		return "failed", err
+	}
+	return "geometric", nil
 }
 
 func (a *App) runPortableRefresh(ctx context.Context, args []string) error {
@@ -329,6 +379,25 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 			}
 		}
 	}
+	// Only split stores are repacked: their generations delta against each
+	// other. Raw and gzip subscribers keep the previous no-repack contract.
+	// This also runs when refs already match, because an implicit reader
+	// fast-forward can fetch split objects without consolidating them.
+	if portableSplitArchive(manifest) {
+		stage("repack")
+		repack, err := consolidatePortableObjects(ctx, root)
+		result.Repack = repack
+		// The generation is already validated and promoted. A consolidation
+		// failure is reported, not treated as a refused refresh, unless the
+		// operation's own deadline or growth budget ended it.
+		if err != nil && ctx.Err() != nil {
+			return result, err
+		}
+		if err != nil {
+			result.RepackReason = portableRefreshReason(err) + "; the validated generation is unchanged; check that the store's .git/objects directory is writable, then rerun refresh"
+			fmt.Fprintf(a.Stderr, "gitcrawl: portable refresh: repack failed: %s\n", result.RepackReason)
+		}
+	}
 	if err := budget.check(ctx); err != nil {
 		return result, err
 	}
@@ -368,25 +437,44 @@ func stagePortableCommit(ctx context.Context, root, staging, relative string, tr
 	if manifest.OutputPath != relative && manifest.OutputPath != filepath.Base(relative) {
 		return "", manifest, fmt.Errorf("manifest outputPath does not match the configured logical database")
 	}
-	artifactRelative, err := filepath.Rel(staging, artifact)
-	if err != nil || !pathWithin(staging, artifact) {
-		return "", manifest, fmt.Errorf("artifact path escapes staging")
+	artifacts := []string{artifact}
+	if portableSplitArchive(manifest) {
+		artifacts = portableArchivePartPaths(artifact, manifest)
 	}
-	entry, ok := tree[filepath.ToSlash(artifactRelative)]
-	if !ok {
-		return "", manifest, fmt.Errorf("manifest artifact is absent from fetched commit")
+	entries := make([]portableTreeEntry, 0, len(artifacts))
+	var fetchedBytes int64
+	for index, path := range artifacts {
+		relativePath, err := filepath.Rel(staging, path)
+		if err != nil || !pathWithin(staging, path) {
+			return "", manifest, fmt.Errorf("artifact path escapes staging")
+		}
+		entry, ok := tree[filepath.ToSlash(relativePath)]
+		if !ok {
+			return "", manifest, fmt.Errorf("manifest artifact is absent from fetched commit")
+		}
+		expected := manifest.OutputBytes
+		switch {
+		case portableSplitArchive(manifest):
+			expected = manifest.ArchiveParts[index].Bytes
+		case compressed:
+			expected = manifest.ArchiveBytes
+		}
+		if entry.size != expected {
+			return "", manifest, fmt.Errorf("manifest artifact size does not match fetched blob")
+		}
+		fetchedBytes += entry.size
+		entries = append(entries, entry)
 	}
-	// Allow the extracted blob, inflated DB and both semantic-identity copies,
+	// Allow the extracted blobs, inflated DB and both semantic-identity copies,
 	// plus another artifact-sized checkout allocation. The monitor also counts
 	// fetched objects and all other positive growth throughout the operation.
-	if manifest.OutputBytes <= 0 || manifest.OutputBytes > growth/4 || entry.size > (growth-4*manifest.OutputBytes)/2 {
+	if manifest.OutputBytes <= 0 || manifest.OutputBytes > growth/4 || fetchedBytes > (growth-4*manifest.OutputBytes)/2 {
 		return "", manifest, fmt.Errorf("artifact validation would exceed growth budget")
 	}
-	if compressed && entry.size != manifest.ArchiveBytes || !compressed && entry.size != manifest.OutputBytes {
-		return "", manifest, fmt.Errorf("manifest artifact size does not match fetched blob")
-	}
-	if err := extractPortableBlob(ctx, root, entry, artifact); err != nil {
-		return "", manifest, err
+	for index, entry := range entries {
+		if err := extractPortableBlob(ctx, root, entry, artifacts[index]); err != nil {
+			return "", manifest, err
+		}
 	}
 	stagedDB, err := stagePortableSQLiteSourceTempContext(ctx, logical, filepath.Join(staging, "runtime.db"), 0o600)
 	if err != nil {

@@ -381,13 +381,23 @@ func recentPortableRefresh(value string, now time.Time, maxAge time.Duration) bo
 }
 
 func portableRuntimeNeedsCopy(sourceDBPath, mirrorPath string) (bool, error) {
-	sourcePath, _, _, err := portableSourceArtifact(sourceDBPath)
+	sourcePath, manifest, _, err := portableSourceArtifact(sourceDBPath)
 	if err != nil {
 		return false, err
 	}
-	sourceInfo, err := os.Stat(sourcePath)
-	if err != nil {
-		return false, fmt.Errorf("stat portable source db: %w", err)
+	sourcePaths := []string{sourcePath}
+	if portableSplitArchive(manifest) {
+		sourcePaths = portableArchivePartPaths(sourcePath, manifest)
+	}
+	var sourceInfo os.FileInfo
+	for _, path := range sourcePaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return false, fmt.Errorf("stat portable source db: %w", err)
+		}
+		if sourceInfo == nil || info.ModTime().After(sourceInfo.ModTime()) {
+			sourceInfo = info
+		}
 	}
 	mirrorInfo, err := os.Stat(mirrorPath)
 	if err != nil {

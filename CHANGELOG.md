@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Request `synchronous=FULL` on every SQLite connection and, on macOS, `fullfsync` for commits and checkpoints. Go test binaries skip the macOS full flush.
+- Let the native code producer publish from a captured upstream commit when core progress is fresh, even while provider coverage is incomplete. Retries and coverage are not changed.
+- Add `portable export --compression split`, which publishes the uncompressed portable database as verified 32 MiB parts so Git stores each new generation as a small delta instead of a new 68 MB gzip blob. Refresh, init, status and recovery read split stores; older readers refuse them and keep their last good mirror. After advancing to a split generation, strict refresh geometrically repacks recent objects so subscribers also keep each generation as a delta, skipping a loose backlog of more than 512 objects. Raw and gzip stores are still never repacked.
+
 ## 0.16.0 - 2026-10-20
 
 **Highlights:** Time-filtered neighbor discovery, Go security fixes, and reliable large-result lookups.

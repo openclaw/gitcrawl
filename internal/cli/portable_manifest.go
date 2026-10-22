@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +28,73 @@ type portableDBManifest struct {
 	ArchivePath       string `json:"archivePath,omitempty"`
 	ArchiveBytes      int64  `json:"archiveBytes,omitempty"`
 	ArchiveSHA256     string `json:"archiveSha256,omitempty"`
+	// Split archives list ordered uncompressed parts beside the manifest.
+	ArchiveParts    []portableArchivePart `json:"archiveParts,omitempty"`
+	MaxArchiveBytes int64                 `json:"maxArchiveBytes,omitempty"`
+}
+
+type portableArchivePart struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+const (
+	portableMaxArchiveParts = 64
+	// Each committed part stays below the hosting per-file limit.
+	portableMaxArchivePartBytes = 99999999
+)
+
+// portableArchivePartPaths returns the ordered part paths of a split archive
+// whose first part is firstPart (as returned by portableSourceArtifact).
+func portableArchivePartPaths(firstPart string, manifest portableDBManifest) []string {
+	paths := make([]string, 0, len(manifest.ArchiveParts))
+	for _, part := range manifest.ArchiveParts {
+		paths = append(paths, filepath.Join(filepath.Dir(firstPart), part.Path))
+	}
+	return paths
+}
+
+func portableSplitArchive(manifest portableDBManifest) bool {
+	return strings.TrimSpace(manifest.Compression) == portableexport.CompressionSplit
+}
+
+func validatePortableSplitMetadata(manifest portableDBManifest) error {
+	if strings.TrimSpace(manifest.ArchivePath) != "" {
+		return fmt.Errorf("portable manifest mismatch: split archive must not name archivePath")
+	}
+	if len(manifest.ArchiveParts) == 0 || len(manifest.ArchiveParts) > portableMaxArchiveParts {
+		return fmt.Errorf("portable manifest mismatch: split archive must have 1..%d parts", portableMaxArchiveParts)
+	}
+	if manifest.OutputBytes <= 0 || manifest.ArchiveBytes != manifest.OutputBytes ||
+		!strings.EqualFold(strings.TrimSpace(manifest.ArchiveSHA256), strings.TrimSpace(manifest.SHA256)) ||
+		strings.TrimSpace(manifest.SHA256) == "" {
+		return fmt.Errorf("portable manifest mismatch: split archive must equal the database size and sha256")
+	}
+	var total int64
+	seen := map[string]bool{}
+	for index, part := range manifest.ArchiveParts {
+		name := part.Path
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00:") || seen[name] {
+			return fmt.Errorf("portable manifest mismatch: archive part %d path must be a unique basename", index)
+		}
+		seen[name] = true
+		if part.Bytes <= 0 || part.Bytes > portableMaxArchivePartBytes ||
+			manifest.MaxArchiveBytes > 0 && part.Bytes > manifest.MaxArchiveBytes {
+			return fmt.Errorf("portable manifest mismatch: archive part %d size is outside its budget", index)
+		}
+		if len(strings.TrimSpace(part.SHA256)) != 64 {
+			return fmt.Errorf("portable manifest mismatch: archive part %d sha256 missing", index)
+		}
+		if total > manifest.OutputBytes-part.Bytes {
+			return fmt.Errorf("portable manifest mismatch: archive parts exceed outputBytes")
+		}
+		total += part.Bytes
+	}
+	if total != manifest.OutputBytes {
+		return fmt.Errorf("portable manifest mismatch: archive parts total %d != %d", total, manifest.OutputBytes)
+	}
+	return nil
 }
 
 func portableDBManifestPath(dbPath string) string {
@@ -153,7 +222,20 @@ func portableSourceArtifact(dbPath string) (string, portableDBManifest, bool, er
 		return "", portableDBManifest{}, false, fmt.Errorf("portable manifest mismatch: %w", err)
 	}
 	if !ok || strings.TrimSpace(manifest.Compression) == "" {
+		if ok && len(manifest.ArchiveParts) > 0 {
+			return "", portableDBManifest{}, false, fmt.Errorf("portable manifest mismatch: archiveParts require split compression")
+		}
 		return dbPath, manifest, false, nil
+	}
+	if portableSplitArchive(manifest) {
+		if err := validatePortableSplitMetadata(manifest); err != nil {
+			return "", portableDBManifest{}, false, err
+		}
+		// Callers receive the first part; portableArchivePartPaths lists all.
+		return filepath.Join(filepath.Dir(manifestPath), manifest.ArchiveParts[0].Path), manifest, true, nil
+	}
+	if len(manifest.ArchiveParts) > 0 {
+		return "", portableDBManifest{}, false, fmt.Errorf("portable manifest mismatch: archiveParts require split compression")
 	}
 	if strings.TrimSpace(manifest.Compression) != "gzip" {
 		return "", portableDBManifest{}, false, fmt.Errorf(
@@ -200,6 +282,9 @@ func validatePortableArchive(path string, manifest portableDBManifest) error {
 }
 
 func validatePortableArchiveContext(ctx context.Context, path string, manifest portableDBManifest) error {
+	if portableSplitArchive(manifest) {
+		return validatePortableSplitArchiveContext(ctx, path, manifest)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -222,6 +307,42 @@ func validatePortableArchiveContext(ctx context.Context, path string, manifest p
 			sumText,
 			manifest.ArchiveSHA256,
 		)
+	}
+	return nil
+}
+
+// validatePortableSplitArchiveContext checks every part's size and digest and
+// the digest of their ordered concatenation.
+func validatePortableSplitArchiveContext(ctx context.Context, firstPart string, manifest portableDBManifest) error {
+	if err := validatePortableSplitMetadata(manifest); err != nil {
+		return err
+	}
+	whole := sha256.New()
+	for index, path := range portableArchivePartPaths(firstPart, manifest) {
+		part := manifest.ArchiveParts[index]
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() != part.Bytes {
+			return fmt.Errorf("portable manifest mismatch: archive part %d size %d != %d", index, info.Size(), part.Bytes)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(hash, whole), portableContextReader{ctx: ctx, reader: io.LimitReader(file, part.Bytes+1)})
+		closeErr := file.Close()
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			return err
+		}
+		if written != part.Bytes || !strings.EqualFold(fmt.Sprintf("%x", hash.Sum(nil)), strings.TrimSpace(part.SHA256)) {
+			return fmt.Errorf("portable manifest mismatch: archive part %d sha256 mismatch", index)
+		}
+	}
+	if sum := fmt.Sprintf("%x", whole.Sum(nil)); !strings.EqualFold(sum, strings.TrimSpace(manifest.ArchiveSHA256)) {
+		return fmt.Errorf("portable manifest mismatch: archive sha256 %s != %s", sum, manifest.ArchiveSHA256)
 	}
 	return nil
 }
