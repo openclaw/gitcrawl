@@ -20,6 +20,16 @@ const cacheFormat = "gitcrawl.native-pair-cache.v1"
 // A copied parent keeps this provenance, never relabels it as the new binary.
 const reviewedSubsetCacheProducer = "db85fc43e9b05a709501e458b682da7b86c097c7e915985c6b3eda354851a36f"
 
+// reviewedQuarantineCacheProducer is the deployed identity-quarantine combined
+// producer (2026-10-20). Later producers change only what they write after the
+// graph (for example v3 candidate generations), not the pair algorithm,
+// encoding or lineage checks, so its complete cache remains reusable.
+const reviewedQuarantineCacheProducer = "1b423688055470a1ef921d6ca2b237e670f528111c6132dd1d7772ace56a2ed8"
+
+func reviewedCacheProducer(hash string) bool {
+	return hash == reviewedSubsetCacheProducer || hash == reviewedQuarantineCacheProducer
+}
+
 type pairCacheFile struct {
 	Producer     string                    `json:"producer_sha256"`
 	Format       string                    `json:"format"`
@@ -89,7 +99,7 @@ func loadPairs(dir string, snap store.NativeClusterSnapshot) (*similarityCache, 
 	if e != nil {
 		return nil, "", e
 	}
-	if c.Producer != producer && c.Producer != reviewedSubsetCacheProducer {
+	if c.Producer != producer && !reviewedCacheProducer(c.Producer) {
 		return nil, "", fmt.Errorf("unrecognized complete-cache producer; evidence retained")
 	}
 	if c.Format != cacheFormat || c.Algorithm != store.NativeClusterAlgorithm || c.Model != "text-embedding-3-small" || c.Basis != "title_original" || c.Dimensions != 1536 {
