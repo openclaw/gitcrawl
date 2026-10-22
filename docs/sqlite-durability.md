@@ -19,6 +19,13 @@ connection-local flags preserve read-only/immutable access restrictions. Their
 presence and successful disposable writes do not prove physical power-loss
 durability.
 
+Go test binaries (`testing.Testing()`) start with the Darwin flush flags off:
+per-commit device flushes made disposable fixture suites about 30 times slower
+than their deadlines allow. `synchronous=FULL` still applies in tests, and the
+durability tests re-enable the Darwin flags to verify the production policy. A
+connection to a file SQLite cannot read as a database returns SQLite's native
+error to its caller instead of a durability-policy error.
+
 Validate writer settings on the writer connection, not on a separate read-only
 connection. Disposable SIGKILL tests should check both sides of commit: preserve
 acknowledged multi-table updates and receipts, and roll back interrupted updates

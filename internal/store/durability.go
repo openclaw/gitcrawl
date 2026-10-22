@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync/atomic"
+	"testing"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -19,7 +21,15 @@ func sqliteNotADatabase(err error) bool {
 	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_NOTADB
 }
 
+// darwinFullFlush gates the Darwin F_FULLFSYNC flags. Production binaries
+// always enable it. Go test binaries start with it disabled because a device
+// flush on every disposable fixture commit made package suites about 30 times
+// slower and exceed their deadlines; durability tests enable it explicitly.
+// synchronous=FULL is applied in every binary.
+var darwinFullFlush atomic.Bool
+
 func init() {
+	darwinFullFlush.Store(!testing.Testing())
 	// Crawlkit's default DSN requests NORMAL. Apply the archive's durability
 	// policy after DSN setup, including reconnects. Do not parse the DSN here:
 	// SQLite accepts non-URL filenames and :memory:. This connection-local
@@ -51,7 +61,7 @@ func init() {
 		}
 		// Darwin's VFS uses F_FULLFSYNC for these flags. Apply them even when
 		// the DSN already requests FULL or EXTRA; they are independent settings.
-		if runtime.GOOS == "darwin" {
+		if runtime.GOOS == "darwin" && darwinFullFlush.Load() {
 			for _, pragma := range []string{"PRAGMA fullfsync=ON", "PRAGMA checkpoint_fullfsync=ON"} {
 				if _, err := conn.ExecContext(context.Background(), pragma, nil); err != nil {
 					return fmt.Errorf("configure SQLite Darwin flush policy (%s): %w", pragma, err)

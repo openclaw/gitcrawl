@@ -11,6 +11,7 @@ import (
 )
 
 func TestWriterDurabilitySurvivesConnectionReplacement(t *testing.T) {
+	enableDarwinFullFlush(t)
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "durable.db"))
 	if err != nil {
@@ -65,6 +66,7 @@ func TestDurabilityPreservesReadOnlyBoundary(t *testing.T) {
 }
 
 func TestDurabilityAcceptsSQLiteDSNsAndPreservesAccess(t *testing.T) {
+	enableDarwinFullFlush(t)
 	for _, tc := range []struct {
 		name, dsn string
 		want      int
@@ -118,6 +120,14 @@ func TestDurabilityAcceptsSQLiteDSNsAndPreservesAccess(t *testing.T) {
 	}
 }
 
+// enableDarwinFullFlush restores the production Darwin flush policy for the
+// calling test; test binaries otherwise skip per-commit F_FULLFSYNC.
+func enableDarwinFullFlush(t *testing.T) {
+	t.Helper()
+	previous := darwinFullFlush.Swap(true)
+	t.Cleanup(func() { darwinFullFlush.Store(previous) })
+}
+
 func checkDarwinFlushPolicy(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if runtime.GOOS != "darwin" {
@@ -135,6 +145,7 @@ func TestDarwinFlushPolicyOverridesDSNOnReplacement(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Darwin flush policy")
 	}
+	enableDarwinFullFlush(t)
 	for _, sync := range []string{"NORMAL", "FULL", "EXTRA"} {
 		t.Run(sync, func(t *testing.T) {
 			db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "writer.db")+
@@ -181,5 +192,12 @@ func TestDurabilityHookLeavesNonDatabaseErrorsToCaller(t *testing.T) {
 	_, err = db.Exec("SELECT count(*) FROM sqlite_schema")
 	if err == nil || strings.Contains(err.Error(), "durability") || !strings.Contains(err.Error(), "not a database") {
 		t.Fatalf("query error = %v, want native not-a-database error", err)
+	}
+}
+
+func TestDarwinFullFlushIsProductionDefault(t *testing.T) {
+	// Test binaries opt out for speed; every non-test binary enables the flags.
+	if darwinFullFlush.Load() != !testing.Testing() {
+		t.Fatalf("darwinFullFlush=%v, want %v", darwinFullFlush.Load(), !testing.Testing())
 	}
 }
