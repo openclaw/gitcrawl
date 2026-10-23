@@ -35,6 +35,7 @@ jobs:
       nfpm: auto
       build-runner: macos
       stable-identifier: org.openclaw.gitcrawl
+      require-signed-tag: true
       darwin-universal: disabled
       ci-check-events: '["push","pull_request"]'
     secrets:

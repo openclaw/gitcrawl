@@ -2,14 +2,17 @@
 
 ## Unreleased
 
-- Update CrawlKit to v0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1 and the matching runtime dependency.
-- Keep the cloud snapshot privacy regression compatible with SQLite 3.53 and 3.54 by explicitly preserving nested JSON arrays across subqueries.
+## 0.17.0 - 2026-10-23
 
-- Update the pinned TruffleHog secret-scanning action to v3.99.3. Thanks @dependabot.
-- Request `synchronous=FULL` on every SQLite connection and, on macOS, `fullfsync` for commits and checkpoints. Go test binaries skip the macOS full flush.
-- Let the native code producer publish from a captured upstream commit when core progress is fresh, even while provider coverage is incomplete. Retries and coverage are not changed.
+**Highlights:** Smaller portable-store updates with split archives, inspectable cluster-candidate generations, and SQLite reliability fixes.
+
 - Add `portable export --compression split`, which publishes the uncompressed portable database as verified 32 MiB parts so Git stores each new generation as a small delta instead of a new 68 MB gzip blob. Refresh, init, status and recovery read split stores; older readers refuse them and keep their last good mirror. After advancing to a split generation, strict refresh geometrically repacks recent objects so subscribers also keep each generation as a delta, skipping a loose backlog of more than 512 objects. Raw and gzip stores are still never repacked.
 - Record every accepted native cluster run's complete computed partition as an immutable, run-scoped `gitcrawl.cluster-candidates.v3` generation, with observed overlaps to durable groups, and select it atomically. Quarantined candidates are visible in this domain without changing durable IDs or their history. Add `cluster-candidates` (also in the native reader) and `--rollback`.
+- Let the native code producer publish from a captured upstream commit when core progress is fresh, even while provider coverage is incomplete. Retries and coverage are not changed.
+- Request `synchronous=FULL` on every SQLite connection and, on macOS, `fullfsync` for commits and checkpoints. Go test binaries skip the macOS full flush.
+- Update CrawlKit to v0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1 and the matching runtime dependency.
+- Keep the cloud snapshot privacy regression compatible with SQLite 3.53 and 3.54 by explicitly preserving nested JSON arrays across subqueries.
+- Update the pinned TruffleHog secret-scanning action to v3.99.3. Thanks @dependabot.
 
 ## 0.16.0 - 2026-10-20
 
