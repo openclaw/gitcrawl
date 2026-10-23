@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the cloud snapshot privacy regression compatible with SQLite 3.53 and 3.54 by explicitly preserving nested JSON arrays across subqueries.
+
 - Update the pinned TruffleHog secret-scanning action to v3.99.3. Thanks @dependabot.
 - Request `synchronous=FULL` on every SQLite connection and, on macOS, `fullfsync` for commits and checkpoints. Go test binaries skip the macOS full flush.
 - Let the native code producer publish from a captured upstream commit when core progress is fresh, even while provider coverage is incomplete. Retries and coverage are not changed.

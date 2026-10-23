@@ -216,7 +216,7 @@ func TestCloudSQLiteSnapshotLegacyPrivacyColumns(t *testing.T) {
 				create table sync_attempt_failures(error_message text);
 				insert into sync_attempt_failures values('private');`,
 			query: `select json_array(
-				(select json_group_array(raw_json) from comment_revisions),
+				json((select json_group_array(raw_json) from comment_revisions)),
 				(select raw_json from pull_request_review_thread_revisions),
 				(select error_message from sync_attempt_failures))`,
 			want: `[[null,"",""],"",""]`,
