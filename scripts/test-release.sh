@@ -238,14 +238,11 @@ grep -F 'checksum-filename: checksums.txt' "$release_workflow" >/dev/null
 grep -F 'archive-files: '\''["CHANGELOG.md","LICENSE","README.md"]'\''' "$release_workflow" >/dev/null
 grep -F 'stable-identifier: org.openclaw.gitcrawl' "$release_workflow" >/dev/null
 grep -F 'darwin-universal: disabled' "$release_workflow" >/dev/null
-if grep -F 'require-signed-tag:' "$release_workflow" >/dev/null; then
-  echo "unified release must own the annotated tag" >&2
-  exit 1
-fi
-if [[ -e "$ROOT/.github/release-allowed-signers" ]]; then
-  echo "unified release must not require a local tag-signing allowlist" >&2
-  exit 1
-fi
+grep -F 'require-signed-tag: true' "$release_workflow" >/dev/null
+signers="$ROOT/.github/release-allowed-signers"
+[[ -s "$signers" && ! -L "$signers" ]]
+ssh-keygen -lf <(cut -d ' ' -f 2- "$signers") |
+  grep -F 'SHA256:WmI9lVtd7F2c5XyRHbZVO3yYYJzwsSNzcZQMPT147HI' >/dev/null
 if grep -R -F 'NOTARYTOOL_KEYCHAIN_PROFILE' "$ROOT/.github/workflows" >/dev/null; then
   echo "notary profile must not be configured in GitHub Actions" >&2
   exit 1

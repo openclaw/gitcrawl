@@ -5,7 +5,7 @@ permalink: /releasing/
 
 # Releasing Gitcrawl
 
-`.github/workflows/release-unified.yml` is the only official release path. It calls `openclaw/release-workflows@v1` from protected `main`, creates and owns the immutable annotated version tag, preserves Gitcrawl's six thin platform archives and `checksums.txt`, signs and notarizes both macOS binaries as `org.openclaw.gitcrawl`, verifies the complete asset inventory independently on arm64 and Intel macOS, and waits for `openclaw/homebrew-tap` to update successfully.
+`.github/workflows/release-unified.yml` is the only official release path. It calls `openclaw/release-workflows@v1` from protected `main`, verifies the immutable fleet-signed annotated version tag, preserves Gitcrawl's six thin platform archives and `checksums.txt`, signs and notarizes both macOS binaries as `org.openclaw.gitcrawl`, verifies the complete asset inventory independently on arm64 and Intel macOS, and waits for `openclaw/homebrew-tap` to update successfully.
 
 The public compatibility contract remains:
 
@@ -21,13 +21,23 @@ Official builds run on macOS. CI uses the Apple Silicon `xcode-27` runner, with 
 
 ## Release
 
-Prepare a dated changelog section, land it on protected `main`, and dispatch the workflow:
+Prepare a dated changelog section while retaining an empty `Unreleased` section, land it on protected `main`, and require green CI at that exact commit. First dispatch a dry run and require it to pass:
 
 ```sh
-gh workflow run release-unified.yml --repo openclaw/gitcrawl -f version=X.Y.Z
+gh workflow run release-unified.yml --repo openclaw/gitcrawl --ref main -f version=X.Y.Z -f dry_run=true
 ```
 
-The first run freezes the exact protected `main` head with an immutable annotated tag. Retries reuse that tag and target commit. Tagging, signing, notarization, and Homebrew delivery use only GitHub Actions and repository or organization secrets; maintainers need no local release credentials.
+After the dry run, sign an annotated `vX.Y.Z` tag at that verified commit using only the fleet release SSH key. Verify it against `.github/release-allowed-signers` before pushing; never move or replace an existing tag:
+
+```sh
+set -e
+git -c gpg.format=ssh -c user.signingkey=/secure/path/to/fleet-release-key tag -s vX.Y.Z VERIFIED_COMMIT -m "Release vX.Y.Z"
+git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag vX.Y.Z
+git push origin vX.Y.Z
+gh workflow run release-unified.yml --repo openclaw/gitcrawl --ref main -f version=X.Y.Z -f dry_run=false
+```
+
+The live workflow verifies the tag signature and freezes that exact tagged commit. Retries reuse the same tag and target commit. Artifact signing, notarization, and Homebrew delivery use only GitHub Actions and repository or organization secrets; local artifact publishing remains disabled.
 
 The release is complete only when the GitHub Release contains the full asset set, both native macOS verification jobs pass, and the Homebrew handoff is green.
 
