@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update CrawlKit to v0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1 and the matching runtime dependency.
 - Keep the cloud snapshot privacy regression compatible with SQLite 3.53 and 3.54 by explicitly preserving nested JSON arrays across subqueries.
 
 - Update the pinned TruffleHog secret-scanning action to v3.99.3. Thanks @dependabot.
