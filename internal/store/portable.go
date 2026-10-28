@@ -107,7 +107,7 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 	}
 	// A portable artifact never publishes the local change contract, and the
 	// payload rewrites below are not reader-visible changes of this archive.
-	if _, err := StripChangeContract(ctx, s.db); err != nil {
+	if _, err := s.DisableChangeContract(ctx); err != nil {
 		return PortablePruneStats{}, err
 	}
 	if options.BodyChars <= 0 {

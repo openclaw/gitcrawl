@@ -270,14 +270,37 @@ func (s *Store) EnableChangeContract(ctx context.Context, options ChangeContract
 		if err != nil {
 			return err
 		}
+		if present {
+			complete, err := changeContractComplete(ctx, q)
+			if err != nil {
+				return err
+			}
+			if !complete {
+				// A partial contract cannot prove continuity. Replace it
+				// with a new epoch so every reader rebuilds.
+				if _, err := StripChangeContract(ctx, q); err != nil {
+					return err
+				}
+				present = false
+			}
+		}
 		if !present {
 			if err := createChangeContract(ctx, q, retention, now); err != nil {
 				return err
 			}
 			result.Created = true
 		} else if options.Retention != 0 {
-			if _, err := q.ExecContext(ctx, `update change_contract_sequence set retention = ? where id = 1`, retention); err != nil {
+			// Apply a changed bound to the existing log immediately.
+			if _, err := q.ExecContext(ctx, `
+				update change_contract_sequence
+				set retention = ?1,
+					next_prune = value + 1024,
+					pruned_through = max(pruned_through, value - ?1)
+				where id = 1`, retention); err != nil {
 				return fmt.Errorf("set change contract retention: %w", err)
+			}
+			if _, err := q.ExecContext(ctx, `delete from change_contract_log where seq <= (select pruned_through from change_contract_sequence where id = 1)`); err != nil {
+				return fmt.Errorf("apply change contract retention: %w", err)
 			}
 		}
 		rearmed, err := armChangeContract(ctx, q)
@@ -307,9 +330,15 @@ func (s *Store) repairChangeContract(ctx context.Context) (ChangeContractRepair,
 	if err != nil || !present {
 		return ChangeContractRepair{}, err
 	}
-	armed, err := changeContractArmed(ctx, s.q())
+	complete, err := changeContractComplete(ctx, s.q())
 	if err != nil {
 		return ChangeContractRepair{}, err
+	}
+	armed := false
+	if complete {
+		if armed, err = changeContractArmed(ctx, s.q()); err != nil {
+			return ChangeContractRepair{}, err
+		}
 	}
 	if armed {
 		return ChangeContractRepair{Enabled: true}, nil
@@ -395,6 +424,22 @@ func StripChangeContract(ctx context.Context, q changeContractExec) (bool, error
 		}
 	}
 	return removed, nil
+}
+
+// changeContractComplete reports whether every contract table and singleton
+// row exists.
+func changeContractComplete(ctx context.Context, q changeContractExec) (bool, error) {
+	for _, table := range changeContractObjectTables {
+		present, err := changeContractTablePresent(ctx, q, table)
+		if err != nil || !present {
+			return false, err
+		}
+	}
+	var n int
+	if err := q.QueryRowContext(ctx, `select (select count(*) from change_contract_state where id = 1) + (select count(*) from change_contract_sequence where id = 1)`).Scan(&n); err != nil {
+		return false, err
+	}
+	return n == 2, nil
 }
 
 func createChangeContract(ctx context.Context, q changeContractExec, retention int64, now time.Time) error {

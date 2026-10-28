@@ -39,7 +39,9 @@ gitcrawl change-contract disable [--json]
 - `enable` creates the contract (new epoch, generation 1) or re-arms tables whose
   triggers are missing or altered, advancing the generation. It is idempotent.
   `--retention` sets the retained log span, default 1,000,000 sequence values,
-  minimum 1,024.
+  minimum 1,024. Changing it on an enabled contract prunes the existing log to
+  the new bound in the same transaction. A partial contract (for example after
+  an interrupted manual removal) is replaced by a new epoch.
 - `bump` advances the generation after an owner-run rewrite the triggers could
   not observe, forcing every reader to rebuild once.
 - `disable` removes every contract trigger and table. Readers then see no

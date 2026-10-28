@@ -457,6 +457,57 @@ func TestChangeContractEnableIsIdempotentAndBumpDisableWork(t *testing.T) {
 	}
 }
 
+func TestChangeContractPartialContractIsReplacedWithNewEpoch(t *testing.T) {
+	ctx := context.Background()
+	s := changeContractFixture(t, 0)
+	before, _ := s.ChangeContractStatus(ctx)
+	// An interrupted non-transactional strip could leave only some objects.
+	if _, err := s.DB().Exec(`drop trigger change_contract_log_prune; drop table change_contract_log`); err != nil {
+		t.Fatal(err)
+	}
+	path := s.Path()
+	s.Close()
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	after, err := reopened.ChangeContractStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Armed || after.Epoch == before.Epoch || after.Generation != 1 {
+		t.Fatalf("partial contract must be replaced by a new epoch: %+v", after)
+	}
+}
+
+func TestChangeContractLowerRetentionPrunesImmediately(t *testing.T) {
+	ctx := context.Background()
+	s := changeContractFixture(t, 4096)
+	tx, err := s.DB().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3000; i++ {
+		if _, err := tx.Exec(`insert into blobs(sha256, media_type, size_bytes, storage_kind, created_at) values(?, 'x', 1, 'inline', '2026-01-01')`, fmt.Sprintf("r-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnableChangeContract(ctx, ChangeContractEnableOptions{Retention: MinChangeContractRetention}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := s.ChangeContractStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LogEntries > MinChangeContractRetention || status.PrunedThrough != status.Sequence-MinChangeContractRetention || status.Retention != MinChangeContractRetention {
+		t.Fatalf("lowered retention must prune at once: %+v", status)
+	}
+}
+
 func TestChangeContractStatusReportsFamilies(t *testing.T) {
 	s := changeContractFixture(t, 0)
 	status, err := s.ChangeContractStatus(context.Background())
