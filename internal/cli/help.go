@@ -308,7 +308,8 @@ enable installs in-store triggers that journal every insert, update and delete
 of tracked tables in the writer's own transaction, including writes by older
 binaries. Re-running enable re-arms tables whose triggers a rebuild removed and
 advances the generation. bump forces every reader to rebuild after an owner-run
-rewrite. disable removes the contract. Requires a native local archive. See
+rewrite. disable removes the contract. Requires an existing native local
+archive at this binary's schema version; these commands never migrate it. See
 docs/change-contract.md for the reader algorithm.
 `,
 

@@ -240,9 +240,11 @@ type changeContractExec interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// changeContractPresent reports whether any contract object survives, so a
+// partial contract is repaired rather than mistaken for an absent one.
 func changeContractPresent(ctx context.Context, q changeContractExec) (bool, error) {
 	var n int
-	if err := q.QueryRowContext(ctx, `select count(*) from sqlite_schema where type = 'table' and name = 'change_contract_state'`).Scan(&n); err != nil {
+	if err := q.QueryRowContext(ctx, `select count(*) from sqlite_schema where type in ('table', 'trigger') and name like 'change\_contract\_%' escape '\'`).Scan(&n); err != nil {
 		return false, fmt.Errorf("inspect change contract: %w", err)
 	}
 	return n > 0, nil
@@ -277,7 +279,13 @@ func (s *Store) EnableChangeContract(ctx context.Context, options ChangeContract
 			}
 			if !complete {
 				// A partial contract cannot prove continuity. Replace it
-				// with a new epoch so every reader rebuilds.
+				// with a new epoch so every reader rebuilds, keeping a
+				// surviving retention unless the caller chose another.
+				if options.Retention == 0 {
+					if kept, ok := changeContractStoredRetention(ctx, q); ok {
+						retention = kept
+					}
+				}
 				if _, err := StripChangeContract(ctx, q); err != nil {
 					return err
 				}
@@ -424,6 +432,18 @@ func StripChangeContract(ctx context.Context, q changeContractExec) (bool, error
 		}
 	}
 	return removed, nil
+}
+
+func changeContractStoredRetention(ctx context.Context, q changeContractExec) (int64, bool) {
+	present, err := changeContractTablePresent(ctx, q, "change_contract_sequence")
+	if err != nil || !present {
+		return 0, false
+	}
+	var retention int64
+	if err := q.QueryRowContext(ctx, `select retention from change_contract_sequence where id = 1`).Scan(&retention); err != nil || retention < MinChangeContractRetention {
+		return 0, false
+	}
+	return retention, true
 }
 
 // changeContractComplete reports whether every contract table and singleton

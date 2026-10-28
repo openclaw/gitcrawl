@@ -75,7 +75,8 @@ func (a *App) runChangeContract(ctx context.Context, args []string) error {
 	} else if portable {
 		return fmt.Errorf("change-contract refuses portable stores and mirrors")
 	}
-	st, err := store.Open(ctx, cfg.DBPath)
+	// Never migrate a live archive merely to manage its contract.
+	st, err := store.OpenWritableWithoutMigration(ctx, cfg.DBPath)
 	if err != nil {
 		return err
 	}

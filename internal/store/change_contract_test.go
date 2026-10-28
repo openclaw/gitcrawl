@@ -481,6 +481,62 @@ func TestChangeContractPartialContractIsReplacedWithNewEpoch(t *testing.T) {
 	}
 }
 
+func TestChangeContractOrphanedObjectsAreRepairedKeepingRetention(t *testing.T) {
+	ctx := context.Background()
+	for _, drop := range []string{"drop table change_contract_state", "drop table change_contract_families"} {
+		s := changeContractFixture(t, 2048)
+		before, _ := s.ChangeContractStatus(ctx)
+		if _, err := s.DB().Exec(drop); err != nil {
+			t.Fatal(err)
+		}
+		path := s.Path()
+		s.Close()
+		reopened, err := Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err := reopened.ChangeContractStatus(ctx)
+		reopened.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !after.Enabled || !after.Armed || after.Epoch == before.Epoch || after.Retention != 2048 {
+			t.Fatalf("%s: orphaned contract must be replaced keeping retention: %+v", drop, after)
+		}
+	}
+}
+
+func TestOpenWritableWithoutMigrationRefusesOtherSchemaVersions(t *testing.T) {
+	ctx := context.Background()
+	s := changeContractFixture(t, 0)
+	path := s.Path()
+	if _, err := s.DB().Exec(`update observation_schema_convergence set checked_observation_sequence = -1`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	st, err := OpenWritableWithoutMigration(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checked int64
+	if err := st.DB().QueryRow(`select checked_observation_sequence from observation_schema_convergence`).Scan(&checked); err != nil {
+		t.Fatal(err)
+	}
+	if checked != -1 {
+		t.Fatal("maintenance open must not run convergence work")
+	}
+	if _, err := st.DB().Exec(fmt.Sprintf("pragma user_version = %d", schemaVersion-1)); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if _, err := OpenWritableWithoutMigration(ctx, path); err == nil {
+		t.Fatal("older schema version accepted")
+	}
+	if _, err := OpenWritableWithoutMigration(ctx, path+".missing"); err == nil {
+		t.Fatal("missing archive accepted")
+	}
+}
+
 func TestChangeContractLowerRetentionPrunesImmediately(t *testing.T) {
 	ctx := context.Background()
 	s := changeContractFixture(t, 4096)

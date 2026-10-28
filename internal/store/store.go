@@ -79,6 +79,30 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return st, nil
 }
 
+// OpenWritableWithoutMigration opens an existing archive for a narrow
+// maintenance write without applying schema migrations or convergence work.
+// It refuses any archive whose schema version differs from this binary's.
+func OpenWritableWithoutMigration(ctx context.Context, path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("stat sqlite db: %w", err)
+	}
+	base, err := crawlstore.Open(ctx, crawlstore.Options{Path: path})
+	if err != nil {
+		return nil, err
+	}
+	st := &Store{db: base.DB(), sqlc: storedb.New(base.DB()), path: path}
+	current, err := st.schemaVersion(ctx)
+	if err != nil {
+		_ = base.Close()
+		return nil, err
+	}
+	if current != schemaVersion {
+		_ = base.Close()
+		return nil, fmt.Errorf("database schema version %d differs from supported version %d; run a migrating writer first", current, schemaVersion)
+	}
+	return st, nil
+}
+
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 	return openReadOnly(ctx, path, path)
 }

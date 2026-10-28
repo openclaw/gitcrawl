@@ -40,13 +40,19 @@ gitcrawl change-contract disable [--json]
   triggers are missing or altered, advancing the generation. It is idempotent.
   `--retention` sets the retained log span, default 1,000,000 sequence values,
   minimum 1,024. Changing it on an enabled contract prunes the existing log to
-  the new bound in the same transaction. A partial contract (for example after
-  an interrupted manual removal) is replaced by a new epoch.
+  the new bound in the same transaction. Any surviving partial contract (for
+  example after an interrupted manual removal) is replaced by a new epoch,
+  keeping its retention.
 - `bump` advances the generation after an owner-run rewrite the triggers could
   not observe, forcing every reader to rebuild once.
 - `disable` removes every contract trigger and table. Readers then see no
   contract and rebuild as before.
 - `status` is read-only and reports the cursor, per-table state and families.
+
+`enable`, `bump` and `disable` open an existing archive without running schema
+migrations or convergence work, and refuse an archive whose schema version
+differs from the binary's. They take only SQLite's ordinary write lock, so they
+can run beside a live collector.
 
 Every writable open by this or a later Gitcrawl binary re-arms an enabled
 contract whose triggers a migration removed, and advances the generation. Open
