@@ -679,3 +679,190 @@ INSERT INTO threads(id,repo_id,github_id,number,kind,state,title,body,html_url,l
 		}
 	}
 }
+
+func TestChangeContractRejectsInvalidRequestsAndClosedStores(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnableChangeContract(ctx, ChangeContractEnableOptions{Retention: MinChangeContractRetention - 1}); err == nil {
+		t.Fatal("retention below the minimum was accepted")
+	}
+	if _, err := s.BumpChangeContractGeneration(ctx, " ", time.Time{}); err == nil {
+		t.Fatal("bump without a reason was accepted")
+	}
+	if _, err := s.BumpChangeContractGeneration(ctx, "rewrite", time.Time{}); err == nil || !strings.Contains(err.Error(), "not enabled") {
+		t.Fatalf("bump without a contract = %v", err)
+	}
+	if removed, err := s.DisableChangeContract(ctx); err != nil || removed {
+		t.Fatalf("disable without a contract = %v, %v", removed, err)
+	}
+	if repair, err := s.repairChangeContract(ctx); err != nil || repair.Enabled {
+		t.Fatalf("repair without a contract = %+v, %v", repair, err)
+	}
+	if retention, ok := changeContractStoredRetention(ctx, s.DB()); ok {
+		t.Fatalf("stored retention without a contract = %d", retention)
+	}
+	if _, err := s.EnableChangeContract(ctx, ChangeContractEnableOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if retention, ok := changeContractStoredRetention(ctx, s.DB()); !ok || retention != DefaultChangeContractRetention {
+		t.Fatalf("stored retention = %d, %v", retention, ok)
+	}
+	if _, err := s.DB().Exec(`delete from change_contract_state`); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := changeContractComplete(ctx, s.DB()); err != nil || complete {
+		t.Fatalf("contract without state reported complete = %v, %v", complete, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnableChangeContract(ctx, ChangeContractEnableOptions{}); err == nil {
+		t.Fatal("enable on a closed store succeeded")
+	}
+	if _, err := s.BumpChangeContractGeneration(ctx, "rewrite", time.Time{}); err == nil {
+		t.Fatal("bump on a closed store succeeded")
+	}
+	if _, err := s.DisableChangeContract(ctx); err == nil {
+		t.Fatal("disable on a closed store succeeded")
+	}
+	if _, err := s.ChangeContractStatus(ctx); err == nil {
+		t.Fatal("status on a closed store succeeded")
+	}
+	if _, err := s.repairChangeContract(ctx); err == nil {
+		t.Fatal("repair on a closed store succeeded")
+	}
+	if _, err := StripChangeContract(ctx, s.DB()); err == nil {
+		t.Fatal("strip on a closed store succeeded")
+	}
+	for _, check := range []func() error{
+		func() error { _, err := changeContractPresent(ctx, s.DB()); return err },
+		func() error { _, err := changeContractComplete(ctx, s.DB()); return err },
+		func() error { _, err := changeContractArmed(ctx, s.DB()); return err },
+		func() error { _, err := armChangeContract(ctx, s.DB()); return err },
+		func() error { return createChangeContract(ctx, s.DB(), MinChangeContractRetention, time.Now()) },
+		func() error { return bumpChangeContractGeneration(ctx, s.DB(), "x", time.Now()) },
+	} {
+		if err := check(); err == nil {
+			t.Fatal("contract helper succeeded on a closed store")
+		}
+	}
+}
+
+func TestOpenWritableWithoutMigrationRefusesMissingAndForeignSchemas(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := OpenWritableWithoutMigration(ctx, filepath.Join(dir, "missing.db")); err == nil {
+		t.Fatal("missing archive opened")
+	}
+	path := filepath.Join(dir, "archive.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(fmt.Sprintf(`pragma user_version = %d`, schemaVersion+1)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := OpenWritableWithoutMigration(ctx, path); err == nil || !strings.Contains(err.Error(), "differs from supported version") {
+		t.Fatalf("foreign schema = %v", err)
+	}
+}
+
+func TestChangeContractWriteFailuresLeaveArchiveUnchanged(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	absentPath := filepath.Join(dir, "absent.db")
+	absent, err := Open(ctx, absentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent.Close()
+	readOnlyAbsent, err := OpenReadOnly(ctx, absentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnlyAbsent.Close()
+	if _, err := readOnlyAbsent.EnableChangeContract(ctx, ChangeContractEnableOptions{}); err == nil {
+		t.Fatal("enable through a read-only connection succeeded")
+	}
+	if err := createChangeContract(ctx, readOnlyAbsent.DB(), MinChangeContractRetention, time.Now()); err == nil {
+		t.Fatal("create through a read-only connection succeeded")
+	}
+
+	path := filepath.Join(dir, "enabled.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnableChangeContract(ctx, ChangeContractEnableOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// A tracked table without its state row is not armed.
+	if _, err := s.DB().Exec(`delete from change_contract_tables where table_name = 'blobs'`); err != nil {
+		t.Fatal(err)
+	}
+	if armed, err := changeContractArmed(ctx, s.DB()); err != nil || armed {
+		t.Fatalf("contract missing a table row armed = %v, %v", armed, err)
+	}
+	if _, err := s.DB().Exec(`drop trigger change_contract_log_prune`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	readOnly, err := OpenReadOnly(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	before, err := readOnly.ChangeContractStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOnly.EnableChangeContract(ctx, ChangeContractEnableOptions{Retention: 4096}); err == nil {
+		t.Fatal("retention change through a read-only connection succeeded")
+	}
+	if _, err := readOnly.EnableChangeContract(ctx, ChangeContractEnableOptions{}); err == nil {
+		t.Fatal("re-arm through a read-only connection succeeded")
+	}
+	if _, err := readOnly.BumpChangeContractGeneration(ctx, "rewrite", time.Time{}); err == nil {
+		t.Fatal("bump through a read-only connection succeeded")
+	}
+	if _, err := readOnly.DisableChangeContract(ctx); err == nil {
+		t.Fatal("disable through a read-only connection succeeded")
+	}
+	if _, err := armChangeContract(ctx, readOnly.DB()); err == nil {
+		t.Fatal("arm through a read-only connection succeeded")
+	}
+	if _, err := readOnly.repairChangeContract(ctx); err == nil {
+		t.Fatal("repair through a read-only connection succeeded")
+	}
+	after, err := readOnly.ChangeContractStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Generation != after.Generation || before.Sequence != after.Sequence || after.Armed {
+		t.Fatalf("failed writes changed the contract: %+v -> %+v", before, after)
+	}
+
+	// With the prune trigger restored, a missing table trigger fails on its
+	// own drop/create path.
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`drop trigger change_contract_blobs_update`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	readOnly2, err := OpenReadOnly(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly2.Close()
+	if _, err := armChangeContract(ctx, readOnly2.DB()); err == nil {
+		t.Fatal("trigger re-arm through a read-only connection succeeded")
+	}
+}
