@@ -66,6 +66,7 @@ Core commands:
   code index           index tracked text files from a local Git checkout
   cluster              build durable clusters from local thread vectors
   purge-threads        permanently remove selected local threads and exclude collection
+  change-contract      report or manage the archive's reader change contract
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
   close-cluster        locally hide one durable cluster
@@ -293,6 +294,23 @@ Preview the exact selection, then pass its plan_id to --apply. Changed plans
 are refused. Requires a native local archive and an idle analytics collector.
 Blob-backed targets, workflow dependencies, shared clusters and reusable native
 IDs are refused. Exclusions are permanent; portable publication is unavailable.
+`,
+
+	"change-contract": `gitcrawl change-contract records table changes for read-only consumers.
+
+Usage:
+  gitcrawl change-contract status [--json]
+  gitcrawl change-contract enable [--retention N] [--json]
+  gitcrawl change-contract bump --reason TEXT [--json]
+  gitcrawl change-contract disable [--json]
+
+enable installs in-store triggers that journal every insert, update and delete
+of tracked tables in the writer's own transaction, including writes by older
+binaries. Re-running enable re-arms tables whose triggers a rebuild removed and
+advances the generation. bump forces every reader to rebuild after an owner-run
+rewrite. disable removes the contract. Requires an existing native local
+archive at this binary's schema version; these commands never migrate it. See
+docs/change-contract.md for the reader algorithm.
 `,
 
 	"close-thread": `gitcrawl close-thread locally hides one issue or pull request row.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in reader change contract (`gitcrawl change-contract`). In-store triggers journal every insert, update and delete of the tables Clawmmunity's research reader and history captures read, with row keys, in the writer's own transaction and from every writer binary. A bounded log, a generation for unexpressible rewrites and a documented reader algorithm let a consumer skip unchanged families and rebuild changed ones incrementally. Portable and cloud snapshots strip it.
+
 ## 0.17.0 - 2026-10-23
 
 **Highlights:** Smaller portable-store updates with split archives, inspectable cluster-candidate generations, and SQLite reliability fixes.
