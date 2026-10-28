@@ -71,6 +71,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = base.Close()
 		return nil, err
 	}
+	// Re-arm an enabled change contract after migrations that rebuilt tracked
+	// tables. Readers detect unarmed tables independently, so a failure here
+	// must not block the writer.
+	_, _ = st.repairChangeContract(ctx)
 	st.detectPortableBodyMetadata(ctx)
 	return st, nil
 }

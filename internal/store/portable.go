@@ -105,6 +105,11 @@ func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePrune
 			return PortablePruneStats{}, fmt.Errorf("portable publication is unavailable for an archive with local owner exclusions")
 		}
 	}
+	// A portable artifact never publishes the local change contract, and the
+	// payload rewrites below are not reader-visible changes of this archive.
+	if _, err := StripChangeContract(ctx, s.db); err != nil {
+		return PortablePruneStats{}, err
+	}
 	if options.BodyChars <= 0 {
 		options.BodyChars = 256
 	}

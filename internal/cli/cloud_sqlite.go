@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 func gitcrawlCloudSQLiteBundlePrivacy() map[string]any {
@@ -95,6 +97,11 @@ func cloudSQLiteSnapshotPath(
 }
 
 func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
+	// The local change contract is archive-private reader state. Remove it
+	// before the snapshot's own row rewrites so they are not journaled.
+	if _, err := store.StripChangeContract(ctx, db); err != nil {
+		return fmt.Errorf("strip cloud snapshot change contract: %w", err)
+	}
 	for _, column := range []struct {
 		table string
 		name  string
