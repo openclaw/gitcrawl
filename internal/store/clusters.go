@@ -875,7 +875,7 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 			select tr.thread_id, tks.summary_kind, tks.key_text
 			from thread_key_summaries tks
 			join thread_revisions tr on tr.id = tks.thread_revision_id
-			join threads t on t.id = tr.thread_id
+			join `+s.currentSource(ctx, "threads")+` t on t.id = tr.thread_id
 			where tr.thread_id in (`+strings.Join(placeholders, ",")+`)
 				and tr.id = (
 					select latest.id

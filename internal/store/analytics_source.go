@@ -350,6 +350,25 @@ func (s *Store) SetAnalyticsState(ctx context.Context, key, value string) error 
 	return err
 }
 func (s *Store) SaveAnalyticsCoverage(ctx context.Context, repo, through string, issues, prs int) error {
-	_, e := s.q().ExecContext(ctx, `INSERT INTO analytics_coverage VALUES(?,?,?,?,1,?) ON CONFLICT(repository) DO UPDATE SET through=excluded.through,issues=excluded.issues,pull_requests=excluded.pull_requests,complete=1,observed_at=excluded.observed_at`, repo, through, issues, prs, time.Now().UTC().Format(time.RFC3339Nano))
+	if s.recordChecks && s.queries == nil {
+		return s.WithTx(ctx, func(tx *Store) error { return tx.SaveAnalyticsCoverage(ctx, repo, through, issues, prs) })
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if !s.recordChecks {
+		_, e := s.q().ExecContext(ctx, `INSERT INTO analytics_coverage VALUES(?,?,?,?,1,?) ON CONFLICT(repository) DO UPDATE SET through=excluded.through,issues=excluded.issues,pull_requests=excluded.pull_requests,complete=1,observed_at=excluded.observed_at`, repo, through, issues, prs, now)
+		return e
+	}
+	// The content row records completeness. The watermark and observation time
+	// are check bookkeeping and the counts a run-length metric series; none of
+	// them rewrites the content row on its own.
+	if _, e := s.q().ExecContext(ctx, `INSERT INTO analytics_coverage VALUES(?,?,?,?,1,?) ON CONFLICT(repository) DO UPDATE SET through=excluded.through,issues=excluded.issues,pull_requests=excluded.pull_requests,complete=1,observed_at=excluded.observed_at WHERE analytics_coverage.complete IS NOT 1`, repo, through, issues, prs, now); e != nil {
+		return e
+	}
+	if _, e := s.q().ExecContext(ctx, `INSERT INTO analytics_coverage_checks(repository,coverage,observed_at,through) VALUES(?,'analytics_coverage',?,?) ON CONFLICT(repository,coverage) DO UPDATE SET observed_at=excluded.observed_at,through=excluded.through`, repo, now, through); e != nil {
+		return e
+	}
+	_, e := s.q().ExecContext(ctx, `INSERT INTO analytics_coverage_count_samples(repository,observed_at,issues,pull_requests)
+ SELECT ?1,?2,?3,?4 WHERE NOT EXISTS(SELECT 1 FROM (SELECT issues,pull_requests FROM analytics_coverage_count_samples WHERE repository=?1 ORDER BY julianday(observed_at) DESC, observed_at DESC LIMIT 1) latest WHERE latest.issues IS ?3 AND latest.pull_requests IS ?4)
+ ON CONFLICT(repository,observed_at) DO UPDATE SET issues=excluded.issues,pull_requests=excluded.pull_requests`, repo, now, issues, prs)
 	return e
 }

@@ -104,13 +104,11 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		contentHash         string
 		state               string
 		isDraft             int64
+		content             threadContentColumns
 	}
-	err := s.q().QueryRowContext(ctx, `
-		select id, coalesce(updated_at_gh, ''), observation_sequence,
-			coalesce(raw_json, ''), content_hash, state, is_draft
-		from threads
-		where repo_id = ? and kind = ? and number = ?
-	`, thread.RepoID, thread.Kind, thread.Number).Scan(
+	columns := `id, coalesce(updated_at_gh, ''), observation_sequence,
+			coalesce(raw_json, ''), content_hash, state, is_draft`
+	dest := []any{
 		&existing.id,
 		&existing.sourceUpdatedAt,
 		&existing.observationSequence,
@@ -118,17 +116,57 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		&existing.contentHash,
 		&existing.state,
 		&existing.isDraft,
-	)
+	}
+	if s.recordChecks {
+		columns += `, github_id, title, coalesce(body, ''), coalesce(author_login, ''),
+			coalesce(author_type, ''), coalesce(author_association, ''), html_url,
+			labels_json, assignees_json, coalesce(created_at_gh, ''),
+			coalesce(closed_at_gh, ''), coalesce(merged_at_gh, '')`
+		dest = append(dest,
+			&existing.content.githubID,
+			&existing.content.title,
+			&existing.content.body,
+			&existing.content.authorLogin,
+			&existing.content.authorType,
+			&existing.content.authorAssociation,
+			&existing.content.htmlURL,
+			&existing.content.labelsJSON,
+			&existing.content.assigneesJSON,
+			&existing.content.createdAt,
+			&existing.content.closedAt,
+			&existing.content.mergedAt,
+		)
+	}
+	err := s.q().QueryRowContext(ctx, `
+		select `+columns+`
+		from threads
+		where repo_id = ? and kind = ? and number = ?
+	`, thread.RepoID, thread.Kind, thread.Number).Scan(dest...)
 	if err != nil && err != sql.ErrNoRows {
 		return UpsertThreadResult{}, fmt.Errorf("read current thread observation: %w", err)
 	}
+	if err == nil && s.recordChecks {
+		// The check log carries the latest accepted observation; the content
+		// row keeps the values of its last content change.
+		existing.observationSequence, err = s.effectiveThreadObservationSequence(ctx, existing.id, existing.observationSequence)
+		if err != nil {
+			return UpsertThreadResult{}, err
+		}
+		err = nil
+	}
 	exists := err == nil
+	if s.recordChecks {
+		// Retain even stale observations, without changing current ordering.
+		if err := s.retainRecordCheck(ctx, "threads", fmt.Sprintf("%d/%s/%d", thread.RepoID, thread.Kind, thread.Number), threadCheckTime(thread), thread.RawJSON, map[string]any{"observation_sequence": options.ObservationSequence, "evidence_complete": !options.IncompleteEvidence, "first_pulled_at": thread.FirstPulledAt, "last_pulled_at": thread.LastPulledAt, "updated_at": thread.UpdatedAt, "source_updated_at": thread.UpdatedAtGitHub}); err != nil {
+			return UpsertThreadResult{}, err
+		}
+	}
 	expectedDraft := int64(boolInt(thread.IsDraft))
 	if exists && options.PreserveDraft {
 		expectedDraft = existing.isDraft
 	}
 	samePayload := exists &&
-		existing.rawJSON == thread.RawJSON &&
+		threadPayloadEqual(s.recordChecks, existing.rawJSON, thread.RawJSON) &&
 		existing.contentHash == thread.ContentHash &&
 		existing.state == thread.State &&
 		existing.isDraft == expectedDraft
@@ -252,8 +290,13 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 		ObservationSequence: storedObservationSequence,
 		UpdatedAt:           thread.UpdatedAt,
 	}
+	contentUnchanged := s.recordChecks && exists && samePayload &&
+		existing.content.equal(thread, existing.sourceUpdatedAt)
 	var id int64
-	if options.PreserveDraft {
+	if contentUnchanged {
+		// An unchanged check performs no content-row write.
+		id = existing.id
+	} else if options.PreserveDraft {
 		id, err = s.qsql().UpsertThreadPreservingDraft(ctx, storedb.UpsertThreadPreservingDraftParams(params))
 	} else {
 		id, err = s.qsql().UpsertThread(ctx, params)
@@ -261,10 +304,18 @@ func (s *Store) upsertThreadObservation(ctx context.Context, thread Thread, opti
 	if err != nil {
 		return UpsertThreadResult{}, fmt.Errorf("upsert thread: %w", err)
 	}
+	if s.recordChecks {
+		if err := s.recordThreadCheck(ctx, id, thread, storedObservationSequence); err != nil {
+			return UpsertThreadResult{}, err
+		}
+		if _, err := s.recordMergeState(ctx, id, thread.RawJSON, threadCheckTime(thread)); err != nil {
+			return UpsertThreadResult{}, err
+		}
+	}
 	if err := s.queueAnalyticsActor(ctx, thread.RawJSON); err != nil {
 		return UpsertThreadResult{}, err
 	}
-	if s.portableThreadBodyMetadata {
+	if s.portableThreadBodyMetadata && !contentUnchanged {
 		if _, err := s.q().ExecContext(ctx, `
 			update threads
 			set body_length = length(coalesce(body, '')),
@@ -318,6 +369,9 @@ func (s *Store) reserveThreadEvidenceObservation(
 			return err
 		})
 		return applied, err
+	}
+	if s.recordChecks {
+		return s.reserveThreadCheckEvidence(ctx, threadID, sourceUpdatedAt, sequence)
 	}
 	var currentSourceUpdatedAt string
 	var currentSequence int64

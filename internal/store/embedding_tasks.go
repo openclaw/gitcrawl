@@ -115,7 +115,7 @@ func (s *Store) listEmbeddingTaskPage(ctx context.Context, options EmbeddingTask
 			), '') as text) as key_summary,
 			coalesce(tv.content_hash, '') as existing_hash,
 			coalesce(t.updated_at_gh, t.updated_at) as sort_updated_at
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		left join documents d on d.thread_id = t.id
 		left join thread_vectors tv on tv.thread_id = t.id and tv.basis = ?1 and tv.model = ?2
 		where t.repo_id = ?3

@@ -209,23 +209,8 @@ func (s *Store) upsertPullRequestCacheFamilies(
 	families PullRequestHydrationFamilies,
 ) error {
 	if families.Details {
-		if err := s.qsql().UpsertPullRequestDetail(ctx, storedb.UpsertPullRequestDetailParams{
-			ThreadID:         detail.ThreadID,
-			RepoID:           detail.RepoID,
-			Number:           int64(detail.Number),
-			BaseSha:          nullString(detail.BaseSHA),
-			HeadSha:          nullString(detail.HeadSHA),
-			HeadRef:          nullString(detail.HeadRef),
-			HeadRepoFullName: nullString(detail.HeadRepoFullName),
-			MergeableState:   nullString(detail.MergeableState),
-			Additions:        int64(detail.Additions),
-			Deletions:        int64(detail.Deletions),
-			ChangedFiles:     int64(detail.ChangedFiles),
-			RawJson:          detail.RawJSON,
-			FetchedAt:        detail.FetchedAt,
-			UpdatedAt:        detail.UpdatedAt,
-		}); err != nil {
-			return fmt.Errorf("upsert pull request detail: %w", err)
+		if err := s.upsertPullRequestDetail(ctx, detail); err != nil {
+			return err
 		}
 	}
 	if families.Files {
@@ -606,4 +591,81 @@ func (s *Store) ListWorkflowRuns(ctx context.Context, repoID int64, options Work
 		})
 	}
 	return out, nil
+}
+
+// upsertPullRequestDetail writes the PR detail content row only when PR-own
+// content changed. With record checks enabled every fetch is recorded in
+// pull_request_detail_fetches and merge state in pull_request_merge_state_events;
+// a GraphQL-sourced envelope keeps only PR-own fields and references the full
+// node stored once in the thread envelope.
+func (s *Store) upsertPullRequestDetail(ctx context.Context, detail PullRequestDetail) error {
+	params := storedb.UpsertPullRequestDetailParams{
+		ThreadID:         detail.ThreadID,
+		RepoID:           detail.RepoID,
+		Number:           int64(detail.Number),
+		BaseSha:          nullString(detail.BaseSHA),
+		HeadSha:          nullString(detail.HeadSHA),
+		HeadRef:          nullString(detail.HeadRef),
+		HeadRepoFullName: nullString(detail.HeadRepoFullName),
+		MergeableState:   nullString(detail.MergeableState),
+		Additions:        int64(detail.Additions),
+		Deletions:        int64(detail.Deletions),
+		ChangedFiles:     int64(detail.ChangedFiles),
+		RawJson:          detail.RawJSON,
+		FetchedAt:        detail.FetchedAt,
+		UpdatedAt:        detail.UpdatedAt,
+	}
+	if !s.recordChecks {
+		if err := s.qsql().UpsertPullRequestDetail(ctx, params); err != nil {
+			return fmt.Errorf("upsert pull request detail: %w", err)
+		}
+		return nil
+	}
+	if err := s.retainRecordCheck(ctx, "pull_request_details", fmt.Sprint(detail.ThreadID), detail.FetchedAt, detail.RawJSON, map[string]any{"fetched_at": detail.FetchedAt, "updated_at": detail.UpdatedAt}); err != nil {
+		return err
+	}
+	params.RawJson = slimPullDetailRaw(detail.RawJSON)
+	unchanged, err := s.pullRequestDetailUnchanged(ctx, params)
+	if err != nil {
+		return err
+	}
+	if !unchanged {
+		if err := s.qsql().UpsertPullRequestDetail(ctx, params); err != nil {
+			return fmt.Errorf("upsert pull request detail: %w", err)
+		}
+	}
+	if _, err := s.q().ExecContext(ctx, `
+		insert into pull_request_detail_fetches(thread_id, fetched_at) values(?, ?)
+		on conflict(thread_id) do update set fetched_at = excluded.fetched_at
+	`, detail.ThreadID, detail.FetchedAt); err != nil {
+		return fmt.Errorf("record pull request detail fetch: %w", err)
+	}
+	if _, err := s.recordMergeState(ctx, detail.ThreadID, detail.RawJSON, detail.FetchedAt); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) pullRequestDetailUnchanged(ctx context.Context, params storedb.UpsertPullRequestDetailParams) (bool, error) {
+	var repoID, number, additions, deletions, changedFiles int64
+	var baseSHA, headSHA, headRef, headRepo sql.NullString
+	var raw string
+	err := s.q().QueryRowContext(ctx, `
+		select repo_id, number, base_sha, head_sha, head_ref, head_repo_full_name,
+			additions, deletions, changed_files, raw_json
+		from pull_request_details where thread_id = ?
+	`, params.ThreadID).Scan(&repoID, &number, &baseSHA, &headSHA, &headRef, &headRepo,
+		&additions, &deletions, &changedFiles, &raw)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read pull request detail: %w", err)
+	}
+	return repoID == params.RepoID && number == params.Number &&
+		baseSHA == params.BaseSha && headSHA == params.HeadSha &&
+		headRef == params.HeadRef && headRepo == params.HeadRepoFullName &&
+		additions == params.Additions && deletions == params.Deletions &&
+		changedFiles == params.ChangedFiles &&
+		pullDetailContentRaw(slimPullDetailRaw(raw)) == pullDetailContentRaw(params.RawJson), nil
 }

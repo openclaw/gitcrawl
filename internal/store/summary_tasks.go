@@ -82,7 +82,7 @@ func (s *Store) ListSummaryTasks(ctx context.Context, options SummaryTaskOptions
 			coalesce(t.author_type, ''),
 				coalesce(t.author_association, ''),
 				t.is_draft
-			from threads t
+			from `+s.currentSource(ctx, "threads")+` t
 			join thread_revisions lr on lr.id = (
 				select latest.id
 				from thread_revisions latest

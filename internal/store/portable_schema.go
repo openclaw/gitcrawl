@@ -14,6 +14,11 @@ func (s *Store) canonicalizePortableSchema(ctx context.Context, options Portable
 	bodyChars := options.BodyChars
 	includeSyncFailures := options.IncludeSyncFailures
 	retainSanitizedPayloadColumns := options.RetainSanitizedPayloadColumns
+	// Portable stores keep the legacy single-row layout: fold the latest check
+	// values into the content rows and drop the check tables and views.
+	if err := s.foldRecordEfficiencyChecks(ctx); err != nil {
+		return err
+	}
 	if s.hasColumn(ctx, "threads", "body") && !s.hasColumn(ctx, "threads", "body_excerpt") {
 		if _, err := s.db.ExecContext(ctx, `alter table threads add column body_excerpt text`); err != nil {
 			return fmt.Errorf("add portable threads.body_excerpt: %w", err)
