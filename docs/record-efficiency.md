@@ -77,7 +77,7 @@ snapshots read `threads_current`.
 | `analytics_coverage_count_samples` | `(repository, observed_at)` | append-only, when a count changes | `issues`, `pull_requests` |
 
 A merge-state event is inserted only when `(mergeable, merge_state_status,
-mergeable_state)` differs from the latest event of the same source for that
+mergeable_state)` differs from the latest event (including its source) for that
 pull request. GraphQL events derive `mergeable_state` from `mergeStateStatus`
 exactly like the pull request projection, so a thread and its PR detail record
 one event. REST payloads record `mergeable` as `true`/`false` and the REST
@@ -271,3 +271,6 @@ Current PR views therefore retain the latest known categorical event across
 content-only head changes. Re-enable compares the folded scalar merge state with
 the latest event before seeding; frozen raw payloads are not new observations at
 a folded fetch timestamp. Exact confirmation inputs remain in the check archive.
+
+A GraphQL/REST/GraphQL source transition is retained even when the returning
+source repeats its earlier value, so the latest accepted transport remains current.

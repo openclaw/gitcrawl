@@ -962,3 +962,35 @@ func TestMergeConfirmationSurvivesContentAndDisable(t *testing.T) {
 		t.Fatalf("invented rollback transition: %+v %v", got, err)
 	}
 }
+
+func TestMergeSourceTransitionRemainsCurrent(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := recordFixture(t)
+	at := "2026-10-30T01:00:00Z"
+	thread, err := st.UpsertThreadObservation(ctx, prThread(repoID, prRaw("CLEAN", at, "t"), "t", at, at))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := PullRequestDetail{ThreadID: thread.ID, RepoID: repoID, Number: 7, MergeableState: "clean", RawJSON: prRaw("CLEAN", at, "t"), FetchedAt: at, UpdatedAt: at}
+	for i, raw := range []string{d.RawJSON, `{"mergeable_state":"dirty"}`, d.RawJSON} {
+		d.RawJSON = raw
+		d.FetchedAt = fmt.Sprintf("2026-10-30T0%d:00:00Z", i+2)
+		if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _, err := st.PullRequestDetailByThread(ctx, thread.ID)
+	if err != nil || got.MergeableState != "clean" {
+		t.Fatalf("cross-source confirmation lost: %+v %v", got, err)
+	}
+	if err = st.DisableRecordEfficiency(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.EnableRecordEfficiency(ctx, "2026-10-30T05:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = st.PullRequestDetailByThread(ctx, thread.ID)
+	if err != nil || got.MergeableState != "clean" {
+		t.Fatalf("source rollback lost: %+v %v", got, err)
+	}
+}

@@ -729,7 +729,7 @@ func mergeStateFromRaw(raw string) (mergeStateObservation, bool) {
 }
 
 // recordMergeState appends a merge-state event when the triple differs from the
-// latest event of the same source. It returns whether an event was inserted.
+// latest event across sources. It returns whether an event was inserted.
 func (s *Store) recordMergeState(ctx context.Context, threadID int64, raw, observedAt string) (bool, error) {
 	if !s.recordChecks || threadID <= 0 {
 		return false, nil
@@ -745,8 +745,9 @@ func (s *Store) recordMergeState(ctx context.Context, threadID int64, raw, obser
 			select 1 from pull_request_merge_state_events e
 			where e.id = (
 				select max(latest.id) from pull_request_merge_state_events latest
-				where latest.thread_id = ?1 and latest.source = ?2
+				where latest.thread_id = ?1
 			)
+				and e.source is ?2
 				and e.mergeable is ?4
 				and e.merge_state_status is ?5
 				and e.mergeable_state is ?6
