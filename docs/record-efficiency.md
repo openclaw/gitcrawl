@@ -280,3 +280,10 @@ and review-membership batches before stale-parent/child admission, including emp
 membership. Review recovery validates repository/node identity first; the store
 rechecks owner exclusions. These batch records preserve fetched inputs without
 allowing delayed responses to replace newer accepted current state.
+
+`thread_checks.content_evidence_source_snapshot` records the source string used
+to compute the cached content comparison key. If a legacy writer changes the
+content evidence tuple without refreshing that snapshot, the view selects the
+legacy tuple rather than trusting a stale key. PR merge-state overlay authority
+uses the latest split fetch confirmation, not merely transition existence, so a
+newer legacy detail write remains authoritative during rollback.

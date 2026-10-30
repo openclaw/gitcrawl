@@ -50,6 +50,7 @@ create table if not exists thread_checks (
     check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
   evidence_source_updated_at text not null default '',
   evidence_source_order_key text not null default '',
+  content_evidence_source_snapshot text not null default '',
   content_evidence_source_order_key text not null default '',
   checked_at text not null default ''
 );
@@ -295,13 +296,13 @@ type recordEfficiencyView struct {
 
 func recordEfficiencyViewSpecs() []recordEfficiencyView {
 	useThreadCheck := `(c.thread_id is not null and c.observation_sequence >= abs(t.observation_sequence))`
-	useEvidenceCheck := `(c.thread_id is not null and (c.evidence_source_order_key > coalesce(nullif(c.content_evidence_source_order_key,''),'') or (c.evidence_source_order_key = coalesce(nullif(c.content_evidence_source_order_key,''),'') and c.evidence_observation_sequence >= t.evidence_observation_sequence)))`
+	useEvidenceCheck := `(c.thread_id is not null and c.content_evidence_source_snapshot = t.evidence_source_updated_at and (c.evidence_source_order_key > coalesce(nullif(c.content_evidence_source_order_key,''),'') or (c.evidence_source_order_key = coalesce(nullif(c.content_evidence_source_order_key,''),'') and c.evidence_observation_sequence >= t.evidence_observation_sequence)))`
 	newer := func(check, content string) string {
 		return `(` + check + ` is not null and (` + content + ` is null or julianday(` + check + `) >= julianday(` + content + `)))`
 	}
 	latestMerge := `(select e.%s from pull_request_merge_state_events e where e.thread_id = d.thread_id order by e.id desc limit 1)`
 	latestMergeAt := fmt.Sprintf(latestMerge, "observed_at")
-	useMerge := `(` + latestMergeAt + ` is not null)`
+	useMerge := `(` + latestMergeAt + ` is not null and ` + newer("coalesce(f.fetched_at,"+latestMergeAt+")", "d.fetched_at") + `)`
 	useFetch := newer("f.fetched_at", "d.fetched_at")
 	inMembership := `(s.review_thread_ids_json is not null and json_valid(s.review_thread_ids_json) and exists(select 1 from json_each(s.review_thread_ids_json) j where j.value = rt.review_thread_id))`
 	useSync := `(` + inMembership + ` and ` + newer("s.fetched_at", "rt.fetched_at") + `)`
@@ -839,7 +840,7 @@ func (s *Store) BackfillRecordEfficiency(ctx context.Context) (RecordEfficiencyB
 			}
 			*step.target = rowsAffected(result)
 		}
-		_, err := tx.q().ExecContext(ctx, `update thread_checks set evidence_source_order_key=coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),''),content_evidence_source_order_key=coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'') where evidence_source_order_key is not coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),'') or content_evidence_source_order_key is not coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'')`)
+		_, err := tx.q().ExecContext(ctx, `update thread_checks set content_evidence_source_snapshot=coalesce((select t.evidence_source_updated_at from threads t where t.id=thread_checks.thread_id),''),evidence_source_order_key=coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),''),content_evidence_source_order_key=coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'') where content_evidence_source_snapshot is not coalesce((select t.evidence_source_updated_at from threads t where t.id=thread_checks.thread_id),'') or evidence_source_order_key is not coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),'') or content_evidence_source_order_key is not coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'')`)
 		return err
 	})
 	return out, err

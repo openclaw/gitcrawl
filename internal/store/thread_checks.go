@@ -73,7 +73,7 @@ func (s *Store) ensureThreadCheckRow(ctx context.Context, threadID int64) error 
 	`, threadID); err != nil {
 		return fmt.Errorf("seed thread check: %w", err)
 	}
-	_, err := s.q().ExecContext(ctx, `update thread_checks set evidence_source_order_key=coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),''),content_evidence_source_order_key=coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'') where thread_id=? and (evidence_source_order_key is not coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),'') or content_evidence_source_order_key is not coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),''))`, threadID)
+	_, err := s.q().ExecContext(ctx, `update thread_checks set content_evidence_source_snapshot=coalesce((select t.evidence_source_updated_at from threads t where t.id=thread_checks.thread_id),''),evidence_source_order_key=coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),''),content_evidence_source_order_key=coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'') where thread_id=? and (content_evidence_source_snapshot is not coalesce((select t.evidence_source_updated_at from threads t where t.id=thread_checks.thread_id),'') or evidence_source_order_key is not coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),'') or content_evidence_source_order_key is not coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),''))`, threadID)
 	return err
 }
 

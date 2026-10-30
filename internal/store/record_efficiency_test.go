@@ -994,3 +994,34 @@ func TestMergeSourceTransitionRemainsCurrent(t *testing.T) {
 		t.Fatalf("source rollback lost: %+v %v", got, err)
 	}
 }
+
+func TestLegacyWriteWinsOverRetainedMergeAndEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := recordFixture(t)
+	at := "2026-10-30T01:00:00Z"
+	thread, err := st.UpsertThreadObservation(ctx, prThread(repoID, prRaw("CLEAN", at, "t"), "t", at, at))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := PullRequestDetail{ThreadID: thread.ID, RepoID: repoID, Number: 7, MergeableState: "clean", RawJSON: `{"mergeable_state":"clean"}`, FetchedAt: at, UpdatedAt: at}
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DB().Exec(`update pull_request_details set mergeable_state='dirty',fetched_at='2026-10-30T03:00:00Z',updated_at='2026-10-30T03:00:00Z' where thread_id=?`, thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DB().Exec(`update threads set evidence_source_updated_at='2026-10-30T03:00:00Z',evidence_observation_sequence=99 where id=?`, thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := st.PullRequestDetailByThread(ctx, thread.ID)
+	if err != nil || got.MergeableState != "dirty" {
+		t.Fatalf("legacy merge overwritten: %+v %v", got, err)
+	}
+	v := readThreadView(t, st, thread.ID)
+	if v.evidence != 99 || v.evidenceSource != "2026-10-30T03:00:00Z" {
+		t.Fatalf("legacy evidence overwritten: %+v", v)
+	}
+	if err = st.DisableRecordEfficiency(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
