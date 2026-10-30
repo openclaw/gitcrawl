@@ -486,7 +486,7 @@ type ThreadListOptions struct {
 }
 
 func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptions) ([]Thread, error) {
-	if len(options.Numbers) == 0 &&
+	if !s.hasView(ctx, "threads_current") && len(options.Numbers) == 0 &&
 		s.hasColumn(ctx, "threads", "body") &&
 		s.hasColumn(ctx, "threads", "raw_json") &&
 		s.hasColumn(ctx, "threads", "author_association") {
@@ -524,7 +524,7 @@ func (s *Store) ListThreadsFiltered(ctx context.Context, options ThreadListOptio
 	}
 	rows, err := s.q().QueryContext(ctx, `
 		select `+s.threadSelectColumns(ctx, "")+`
-		from threads
+		from `+s.currentSource(ctx, "threads")+`
 		where `+where+`
 		order by number`+limitSQL, args...)
 	if err != nil {

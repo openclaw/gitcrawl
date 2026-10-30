@@ -116,7 +116,7 @@ func (s *Store) PullRequestDetailByThread(ctx context.Context, threadID int64) (
 	err := s.q().QueryRowContext(ctx, `
 		select thread_id, repo_id, number, base_sha, head_sha, head_ref, head_repo_full_name,
 			mergeable_state, additions, deletions, changed_files, raw_json, fetched_at, updated_at
-		from pull_request_details
+		from `+s.currentSource(ctx, "pull_request_details")+`
 		where thread_id = ?
 	`, threadID).Scan(
 		&detail.ThreadID,
@@ -362,6 +362,13 @@ func (s *Store) PullRequestCache(ctx context.Context, repoID int64, number int) 
 		RawJSON:          detail.RawJson,
 		FetchedAt:        detail.FetchedAt,
 		UpdatedAt:        detail.UpdatedAt,
+	}
+	if s.hasView(ctx, "pull_request_details_current") {
+		current, _, err := s.PullRequestDetailByThread(ctx, cache.Detail.ThreadID)
+		if err != nil {
+			return PullRequestCache{}, err
+		}
+		cache.Detail = current
 	}
 	files, err := s.PullRequestFiles(ctx, cache.Detail.ThreadID)
 	if err != nil {

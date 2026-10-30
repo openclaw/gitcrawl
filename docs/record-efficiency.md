@@ -59,7 +59,7 @@ contains no check table, view or marker.
   as history. Older binaries then continue with correct current values.
 - `status` is read-only.
 
-Portable stores and mirrors never use the layout: `portable prune` folds the
+Portable stores, cloud SQLite publications and mirrors never use the layout: `portable prune` folds the
 current check values into the copied content rows and drops the check tables,
 views and marker, so published stores keep the legacy single-row format. Cloud
 snapshots read `threads_current`.
@@ -133,8 +133,8 @@ replaced by their current values, plus extra columns.
 | `analytics_review_state_coverage_current` | `observed_at` | `content_observed_at` |
 
 A view prefers the check value only when it is at least as new as the content
-row (a larger observation sequence for threads, a later or equal time
-elsewhere). If an older binary rewrites the legacy columns after a rollback,
+row (a larger observation sequence for parent thread checks, source time before
+sequence for evidence pointers, a later or equal time elsewhere). If an older binary rewrites the legacy columns after a rollback,
 the views follow that newer write.
 
 Gitcrawl's own readers (archive coverage, enrichment, summary and embedding
@@ -247,3 +247,13 @@ layout rollback on the new schema: it folds latest clocks back, removes history
 triggers/views/marker, and retains evidence, observations and events. It is not a
 replacement for restoring an old-schema collector from the clone. After resumed
 writes, preserve or replay new data before any snapshot rollback.
+
+## Publication and owner removal boundaries
+
+Cloud SQLite sanitization folds current overlays, then strips all record-efficiency
+views, triggers, checks and exact evidence before publishing the copy. Native
+archives are unchanged. Portable pruning uses the same split-state removal path.
+Owner-directed purge refuses archives retaining `record_check_observations`, even
+when the layout is disabled: shared/delta evidence needs ownership-aware repair,
+and successful removal must never leave reconstructable private payloads behind.
+This is a fail-closed limitation, not a new retention deletion policy.

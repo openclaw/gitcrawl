@@ -139,7 +139,11 @@ func (s *Store) reserveThreadCheckEvidence(ctx context.Context, threadID int64, 
 		return false, fmt.Errorf("read thread evidence observation: %w", err)
 	}
 	currentSource, currentSequence := checkSource, checkSequence
-	if contentSequence > checkSequence {
+	order, err := compareObservationOrder(observationOrder{SourceUpdatedAt: contentSource, ObservationSequence: contentSequence}, observationOrder{SourceUpdatedAt: checkSource, ObservationSequence: checkSequence})
+	if err != nil {
+		return false, err
+	}
+	if order > 0 {
 		currentSource, currentSequence = contentSource, contentSequence
 	}
 	if currentSequence != 0 {

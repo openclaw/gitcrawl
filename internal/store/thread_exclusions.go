@@ -154,6 +154,11 @@ func (s *Store) planThreadPurge(ctx context.Context, repository string, numbers 
 	if s.hasTable(ctx, "portable_metadata") {
 		return p, fmt.Errorf("purge requires a native local archive")
 	}
+	// Delta/shared evidence requires ownership-aware removal. Refuse rather
+	// than claim a purge while leaving recoverable private payloads behind.
+	if s.hasTable(ctx, "record_check_observations") {
+		return p, fmt.Errorf("purge requires a separate record-evidence ownership repair")
+	}
 	archive, err := filepath.Abs(s.path)
 	if err != nil {
 		return p, err

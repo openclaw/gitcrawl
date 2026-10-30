@@ -293,7 +293,7 @@ type recordEfficiencyView struct {
 
 func recordEfficiencyViewSpecs() []recordEfficiencyView {
 	useThreadCheck := `(c.thread_id is not null and c.observation_sequence >= abs(t.observation_sequence))`
-	useEvidenceCheck := `(c.thread_id is not null and c.evidence_observation_sequence >= t.evidence_observation_sequence)`
+	useEvidenceCheck := `(c.thread_id is not null and (coalesce(gitcrawl_timestamp_key(nullif(c.evidence_source_updated_at,'')),'') > coalesce(gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')),'') or (coalesce(gitcrawl_timestamp_key(nullif(c.evidence_source_updated_at,'')),'') = coalesce(gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')),'') and c.evidence_observation_sequence >= t.evidence_observation_sequence)))`
 	newer := func(check, content string) string {
 		return `(` + check + ` is not null and (` + content + ` is null or julianday(` + check + `) >= julianday(` + content + `)))`
 	}
@@ -881,4 +881,11 @@ func (s *Store) RecordEfficiencyStatus(ctx context.Context) (RecordEfficiencySta
 		}
 	}
 	return status, nil
+}
+
+// StripRecordEfficiency folds and removes private split state from a derived
+// publication transaction. It never targets the source archive.
+func StripRecordEfficiency(ctx context.Context, tx *sql.Tx) error {
+	st := &Store{queries: tx}
+	return st.foldRecordEfficiencyChecks(ctx)
 }

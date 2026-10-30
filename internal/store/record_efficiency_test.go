@@ -792,3 +792,85 @@ func TestRepositoryCounterEvidenceAndUnknownPRFields(t *testing.T) {
 		t.Fatal("unknown PR field discarded")
 	}
 }
+
+func TestRecordEfficiencyCurrentReadersAndSourceFirstEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := recordFixture(t)
+	at := "2026-10-30T01:00:00Z"
+	now := "2026-10-30T02:00:00Z"
+	thread := prThread(repoID, prRaw("CLEAN", at, "t"), "t", at, now)
+	first, err := st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{ObservationSequence: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread.LastPulledAt = "2026-10-30T02:05:00Z"
+	thread.UpdatedAt = thread.LastPulledAt
+	if _, err = st.UpsertThreadObservation(ctx, thread, UpsertThreadOptions{ObservationSequence: 3}); err != nil {
+		t.Fatal(err)
+	}
+	for _, numbers := range [][]int{nil, {7}} {
+		rows, err := st.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repoID, IncludeClosed: true, Numbers: numbers})
+		if err != nil || len(rows) != 1 || rows[0].LastPulledAt != thread.LastPulledAt {
+			t.Fatalf("current threads: %+v %v", rows, err)
+		}
+	}
+	d := PullRequestDetail{ThreadID: first.ID, RepoID: repoID, Number: 7, RawJSON: `{"mergeable_state":"clean"}`, MergeableState: "clean", FetchedAt: now, UpdatedAt: now}
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	d.RawJSON = `{"mergeable_state":"dirty"}`
+	d.MergeableState = "dirty"
+	d.FetchedAt = thread.LastPulledAt
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	direct, _, err := st.PullRequestDetailByThread(ctx, first.ID)
+	if err != nil || direct.MergeableState != "dirty" || direct.FetchedAt != d.FetchedAt {
+		t.Fatalf("current detail: %+v %v", direct, err)
+	}
+	cache, err := st.PullRequestCache(ctx, repoID, 7)
+	if err != nil || cache.Detail.MergeableState != "dirty" {
+		t.Fatalf("current cache: %+v %v", cache, err)
+	}
+
+	repo, err := st.RepositoryByFullName(ctx, "openclaw/gitcrawl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.UpdatedAt = "2026-10-30T03:00:00Z"
+	if _, err = st.UpsertRepository(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	currentRepo, err := st.RepositoryByFullName(ctx, repo.FullName)
+	if err != nil || currentRepo.UpdatedAt != repo.UpdatedAt {
+		t.Fatalf("current repository: %+v %v", currentRepo, err)
+	}
+	repos, err := st.ListRepositories(ctx)
+	if err != nil || len(repos) != 1 || repos[0].UpdatedAt != repo.UpdatedAt {
+		t.Fatalf("current repositories: %+v %v", repos, err)
+	}
+	ro, err := OpenReadOnly(ctx, st.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentReadOnly, _, err := ro.PullRequestDetailByThread(ctx, first.ID)
+	ro.Close()
+	if err != nil || currentReadOnly.MergeableState != "dirty" {
+		t.Fatalf("read-only overlay: %+v %v", currentReadOnly, err)
+	}
+	// Newer source time must beat a lower sequence for evidence, including after rollback folding.
+	newer := "2026-10-30T01:01:00Z"
+	if _, err = st.DB().Exec(`update thread_checks set evidence_source_updated_at=?,evidence_observation_sequence=1 where thread_id=?`, newer, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	v := readThreadView(t, st, first.ID)
+	if v.evidenceSource != newer || v.evidence != 1 {
+		t.Fatalf("source-first evidence: %+v", v)
+	}
+	if applied, err := st.reserveThreadCheckEvidence(ctx, first.ID, at, 4); err != nil || applied {
+		t.Fatalf("stale source evidence accepted: %v %v", applied, err)
+	}
+	if _, err = st.PlanThreadPurge(ctx, "openclaw/gitcrawl", []int{7}); err == nil || !strings.Contains(err.Error(), "record-evidence ownership") {
+		t.Fatalf("purge must refuse retained evidence: %v", err)
+	}
+}

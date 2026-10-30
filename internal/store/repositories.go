@@ -105,7 +105,7 @@ func (s *Store) recordRepositoryCheck(ctx context.Context, repoID int64, repo Re
 }
 
 func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repository, error) {
-	if s.hasColumn(ctx, "repositories", "raw_json") {
+	if !s.hasView(ctx, "repositories_current") && s.hasColumn(ctx, "repositories", "raw_json") {
 		repo, err := s.qsql().RepositoryByFullName(ctx, fullName)
 		if err != nil {
 			return Repository{}, fmt.Errorf("select repository: %w", err)
@@ -117,7 +117,7 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 	var rawJSON sql.NullString
 	err := s.q().QueryRowContext(ctx, `
 		select id, owner, name, full_name, github_repo_id, `+s.repositoryRawJSONExpr(ctx)+`, updated_at
-		from repositories
+		from `+s.currentSource(ctx, "repositories")+`
 		where full_name = ?
 	`, fullName).Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName, &githubRepoID, &rawJSON, &repo.UpdatedAt)
 	if err != nil {
@@ -129,7 +129,7 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 }
 
 func (s *Store) ListRepositories(ctx context.Context) ([]Repository, error) {
-	if s.hasColumn(ctx, "repositories", "raw_json") {
+	if !s.hasView(ctx, "repositories_current") && s.hasColumn(ctx, "repositories", "raw_json") {
 		rows, err := s.qsql().ListRepositories(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list repositories: %w", err)
@@ -142,7 +142,7 @@ func (s *Store) ListRepositories(ctx context.Context) ([]Repository, error) {
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		select id, owner, name, full_name, github_repo_id, `+s.repositoryRawJSONExpr(ctx)+`, updated_at
-		from repositories
+		from `+s.currentSource(ctx, "repositories")+`
 		order by coalesce(updated_at, '') desc, id desc
 	`)
 	if err != nil {
