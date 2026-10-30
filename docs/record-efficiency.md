@@ -265,3 +265,9 @@ SQLite functions, not a process-local extension. Backfill reconciles newer
 legacy merge states and coverage samples when re-enabling after legacy writes.
 Repository fetches are retained before child hydration can fail; per-item
 resolution remains write-free.
+
+Merge-state event time is the transition time, not its latest confirmation.
+Current PR views therefore retain the latest known categorical event across
+content-only head changes. Re-enable compares the folded scalar merge state with
+the latest event before seeding; frozen raw payloads are not new observations at
+a folded fetch timestamp. Exact confirmation inputs remain in the check archive.

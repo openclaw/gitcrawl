@@ -141,7 +141,7 @@ func (s *Store) SearchThreads(ctx context.Context, options ThreadSearchOptions) 
 
 func (s *Store) searchThreadsFiltered(ctx context.Context, options ThreadSearchOptions, matchQuery string) ([]Thread, error) {
 	where, args := threadSearchWhere(options)
-	from := `threads t`
+	from := s.currentSource(ctx, "threads") + ` t`
 	if matchQuery != "" {
 		from = `documents_fts join documents d on d.id = documents_fts.rowid join ` + s.currentSource(ctx, "threads") + ` t on t.id = d.thread_id`
 		where = append(where, `documents_fts match ?`)

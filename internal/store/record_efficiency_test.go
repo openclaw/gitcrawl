@@ -918,3 +918,47 @@ func TestReenableReconcilesLegacyMergeAndCounts(t *testing.T) {
 		t.Fatal("persisted view requires private SQL extension")
 	}
 }
+
+func TestMergeConfirmationSurvivesContentAndDisable(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := recordFixture(t)
+	at := "2026-10-30T01:00:00Z"
+	thread, err := st.UpsertThreadObservation(ctx, prThread(repoID, prRaw("CLEAN", at, "t"), "t", at, at))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := PullRequestDetail{ThreadID: thread.ID, RepoID: repoID, Number: 7, MergeableState: "clean", RawJSON: prRaw("CLEAN", at, "t"), FetchedAt: at, UpdatedAt: at}
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	d.HeadSHA = "new"
+	d.FetchedAt = "2026-10-30T02:00:00Z"
+	d.UpdatedAt = d.FetchedAt
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var mergeable string
+	if err = st.DB().QueryRow(`select mergeable from pull_request_details_current where thread_id=?`, thread.ID).Scan(&mergeable); err != nil || mergeable != "MERGEABLE" {
+		t.Fatalf("lost confirmation: %q %v", mergeable, err)
+	}
+	d.MergeableState = "dirty"
+	d.RawJSON = prRaw("DIRTY", at, "t")
+	d.FetchedAt = "2026-10-30T03:00:00Z"
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	d.FetchedAt = "2026-10-30T04:00:00Z"
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DisableRecordEfficiency(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.EnableRecordEfficiency(ctx, "2026-10-30T05:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := st.PullRequestDetailByThread(ctx, thread.ID)
+	if err != nil || got.MergeableState != "dirty" {
+		t.Fatalf("invented rollback transition: %+v %v", got, err)
+	}
+}

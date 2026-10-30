@@ -301,7 +301,7 @@ func recordEfficiencyViewSpecs() []recordEfficiencyView {
 	}
 	latestMerge := `(select e.%s from pull_request_merge_state_events e where e.thread_id = d.thread_id order by e.id desc limit 1)`
 	latestMergeAt := fmt.Sprintf(latestMerge, "observed_at")
-	useMerge := newer(latestMergeAt, "d.updated_at")
+	useMerge := `(` + latestMergeAt + ` is not null)`
 	useFetch := newer("f.fetched_at", "d.fetched_at")
 	inMembership := `(s.review_thread_ids_json is not null and json_valid(s.review_thread_ids_json) and exists(select 1 from json_each(s.review_thread_ids_json) j where j.value = rt.review_thread_id))`
 	useSync := `(` + inMembership + ` and ` + newer("s.fetched_at", "rt.fetched_at") + `)`
@@ -805,17 +805,17 @@ func (s *Store) BackfillRecordEfficiency(ctx context.Context) (RecordEfficiencyB
 						then json_extract(d.raw_json, '$._graphql.mergeable')
 						else case json_type(d.raw_json, '$.mergeable') when 'true' then 'true' when 'false' then 'false' else json_extract(d.raw_json, '$.mergeable') end
 					end,
-					case when json_type(d.raw_json, '$._graphql') = 'object' then json_extract(d.raw_json, '$._graphql.mergeStateStatus') end,
+					case when json_type(d.raw_json, '$._graphql') = 'object' then coalesce(upper(d.mergeable_state),json_extract(d.raw_json,'$._graphql.mergeStateStatus')) end,
 					case when json_type(d.raw_json, '$._graphql') = 'object'
-						then lower(json_extract(d.raw_json, '$._graphql.mergeStateStatus'))
-						else json_extract(d.raw_json, '$.mergeable_state') end
+						then coalesce(d.mergeable_state,lower(json_extract(d.raw_json, '$._graphql.mergeStateStatus')))
+						else coalesce(d.mergeable_state,json_extract(d.raw_json, '$.mergeable_state')) end
 				from pull_request_details d
 				where json_valid(d.raw_json)
 					and (json_type(d.raw_json, '$._graphql.mergeStateStatus') is not null
 						or json_type(d.raw_json, '$._graphql.mergeable') is not null
 						or (json_type(d.raw_json, '$._graphql') is null
 							and (json_type(d.raw_json, '$.mergeable_state') is not null or json_type(d.raw_json, '$.mergeable') is not null)))
-					and not exists (select 1 from pull_request_merge_state_events e where e.thread_id = d.thread_id and julianday(e.observed_at)>=julianday(d.fetched_at))`},
+					and not exists (select 1 from pull_request_merge_state_events e where e.id=(select max(latest.id) from pull_request_merge_state_events latest where latest.thread_id=d.thread_id) and (julianday(e.observed_at)>=julianday(d.fetched_at) or e.mergeable_state is d.mergeable_state))`},
 			{&out.RepositoryChecks, `insert or ignore into repository_checks(repo_id, checked_at, provider_updated_at)
 				select id, updated_at, coalesce(case when json_valid(raw_json) then coalesce(json_extract(raw_json, '$._graphql.updatedAt'), json_extract(raw_json, '$.updated_at')) end, '')
 				from repositories`},
