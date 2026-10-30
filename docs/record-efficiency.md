@@ -110,9 +110,9 @@ thread-owned fields (`body`, `title`, `user`, `author_association`, `html_url`,
 `created_at`, `updated_at`) and replaces the duplicated `_graphql` node with
 `_graphql_pr`, the PR-only GraphQL fields (head and base refs and OIDs,
 repositories, line counts, commit count, merge, draft and state fields), and
-`"_graphql_ref": "threads.raw_json#/_graphql"`. The full node, including
-comments, reviews, review threads and labels, is stored once in
-`threads.raw_json`. Line counts and `base_sha` stay content: they change only
+`"_graphql_ref": "record_evidence_blobs:sha256:<hash>#/_graphql"`. The full node, including comments, reviews, review threads and labels, is
+reconstructed from the referenced immutable evidence blob, so a later REST-only
+parent refresh cannot break the reference. Line counts and `base_sha` stay content: they change only
 with the head or base revision.
 
 Per-item sync transactions resolve the repository without writing; the sync
@@ -175,7 +175,7 @@ coverage counts from their series. The fields that moved:
 | sign of `threads.observation_sequence` | `thread_checks.evidence_complete` |
 | `pull_request_details.fetched_at` | `pull_request_detail_fetches.fetched_at` |
 | `pull_request_details.mergeable_state`, `raw_json._graphql.mergeable`, `mergeStateStatus` | `pull_request_merge_state_events` |
-| `pull_request_details.raw_json._graphql` | `threads.raw_json._graphql` (and `_graphql_pr`) |
+| `pull_request_details.raw_json._graphql` | immutable SHA-256 evidence reference (and `_graphql_pr`) |
 | `pull_request_review_threads.fetched_at` | `pull_request_review_thread_syncs.fetched_at` |
 | `repositories.updated_at`, GitHub `updatedAt` | `repository_checks` |
 | `analytics_coverage.through`, `observed_at` | `analytics_coverage_checks` |
@@ -287,3 +287,7 @@ content evidence tuple without refreshing that snapshot, the view selects the
 legacy tuple rather than trusting a stale key. PR merge-state overlay authority
 uses the latest split fetch confirmation, not merely transition existence, so a
 newer legacy detail write remains authoritative during rollback.
+
+The `_graphql_ref` hash identifies exact PR-input evidence, not the mutable
+parent row. It is excluded from content comparison; the reference retained by a
+content version remains resolvable after subsequent transport or clock changes.

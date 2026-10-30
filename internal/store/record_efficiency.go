@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -302,7 +304,7 @@ func recordEfficiencyViewSpecs() []recordEfficiencyView {
 	}
 	latestMerge := `(select e.%s from pull_request_merge_state_events e where e.thread_id = d.thread_id order by e.id desc limit 1)`
 	latestMergeAt := fmt.Sprintf(latestMerge, "observed_at")
-	useMerge := `(` + latestMergeAt + ` is not null and ` + newer("coalesce(f.fetched_at,"+latestMergeAt+")", "d.fetched_at") + `)`
+	useMerge := `(` + latestMergeAt + ` is not null and ` + `(` + newer("f.fetched_at", "d.fetched_at") + ` or ` + newer(latestMergeAt, "d.fetched_at") + `)` + `)`
 	useFetch := newer("f.fetched_at", "d.fetched_at")
 	inMembership := `(s.review_thread_ids_json is not null and json_valid(s.review_thread_ids_json) and exists(select 1 from json_each(s.review_thread_ids_json) j where j.value = rt.review_thread_id))`
 	useSync := `(` + inMembership + ` and ` + newer("s.fetched_at", "rt.fetched_at") + `)`
@@ -551,7 +553,7 @@ func threadContentRaw(raw string) string {
 // comparison: merge state and the provider activity clock are excluded.
 func pullDetailContentRaw(raw string) string {
 	return normalizeRawJSON(raw,
-		[]string{"mergeable", "mergeable_state", "updated_at"},
+		[]string{"mergeable", "mergeable_state", "updated_at", "_graphql_ref"},
 		map[string][]string{"_graphql": {"mergeable", "mergeStateStatus", "updatedAt"}})
 }
 
@@ -620,7 +622,7 @@ var pullDetailThreadOwnedFields = []string{"body", "title", "user", "author_asso
 
 // GraphQLPullRequestEnvelopeRef marks a PR detail whose full GraphQL node is
 // stored once in the same thread's threads.raw_json under "_graphql".
-const GraphQLPullRequestEnvelopeRef = "threads.raw_json#/_graphql"
+const GraphQLPullRequestEnvelopeRef = "record_evidence_blobs:sha256:"
 
 // slimPullDetailRaw removes the GraphQL PR node duplicated from the thread
 // envelope. REST payloads and payloads without a GraphQL node are unchanged.
@@ -648,7 +650,8 @@ func slimPullDetailRaw(raw string) string {
 		delete(payload, key)
 	}
 	payload["_graphql_pr"] = own
-	payload["_graphql_ref"] = GraphQLPullRequestEnvelopeRef
+	sum := sha256.Sum256([]byte(raw))
+	payload["_graphql_ref"] = GraphQLPullRequestEnvelopeRef + hex.EncodeToString(sum[:]) + "#/_graphql"
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return raw
