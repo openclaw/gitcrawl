@@ -531,6 +531,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			if err != nil {
 				return err
 			}
+			if payload.hasPullDetails {
+				if err := st.RetainHydrationObservation(ctx, upsert.ID, payload.pullDetails.fetchedAt, observationSequence, map[string]any{"pull": payload.pullDetails.pull, "review_threads": payload.reviewThreads, "review_threads_fetched_at": payload.reviewThreadsFetchedAt}); err != nil {
+					return err
+				}
+			}
 			if !upsert.Applied && !upsert.EvidenceApplied {
 				if workflowRunsEligible {
 					count, err := s.persistWorkflowRunSnapshot(

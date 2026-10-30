@@ -53,3 +53,32 @@ func TestRecordEvidenceIntegrityAndDepthBound(t *testing.T) {
 		t.Fatal("missing evidence accepted")
 	}
 }
+
+func TestHydrationObservationRetainsStaleAndEmptyMembership(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := recordFixture(t)
+	at := "2026-10-30T01:00:00Z"
+	thread, err := st.UpsertThreadObservation(ctx, prThread(repoID, prRaw("CLEAN", at, "t"), "t", at, at))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, seq := range []int64{11, 10} {
+		if err = st.WithTx(ctx, func(tx *Store) error {
+			if err := tx.RetainHydrationObservation(ctx, thread.ID, at, seq, map[string]any{"review_threads": []any{}}); err != nil {
+				return err
+			}
+			_, err := tx.ReserveThreadChildObservation(ctx, thread.ID, ThreadChildReviewThreads, at, seq)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err = st.DB().QueryRow(`select count(*) from record_check_observations where source_table='hydration_inputs'`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("lost stale empty membership: %d %v", n, err)
+	}
+	var seq int64
+	if err = st.DB().QueryRow(`select observation_sequence from thread_child_observation_reservations where thread_id=? and family=?`, thread.ID, ThreadChildReviewThreads).Scan(&seq); err != nil || seq != 11 {
+		t.Fatalf("stale replaced current: %d %v", seq, err)
+	}
+}

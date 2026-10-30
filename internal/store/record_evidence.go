@@ -205,3 +205,25 @@ func (s *Store) retainExactBlob(ctx context.Context, table, key, hash string, ra
 	_, err = s.q().ExecContext(ctx, `insert into record_evidence_blobs(sha256,raw_bytes) values(?,?)`, hash, raw)
 	return err
 }
+
+// RetainHydrationObservation journals fetched native child inputs independently
+// of admission to current state. Call inside the owning transaction after parent
+// identity validation; exclusions are rechecked here. The batch blob preserves
+// empty membership and unknown fields as well as rejected stale inputs.
+func (s *Store) RetainHydrationObservation(ctx context.Context, threadID int64, at string, sequence int64, payload any) error {
+	if !s.recordChecks {
+		return nil
+	}
+	var excluded bool
+	if err := s.q().QueryRowContext(ctx, `select exists(select 1 from threads t join repositories r on r.id=t.repo_id join thread_exclusions e on e.repository=lower(r.full_name) and e.number=t.number where t.id=?)`, threadID).Scan(&excluded); err != nil {
+		return err
+	}
+	if excluded {
+		return ErrThreadExcluded
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return s.retainRecordCheck(ctx, "hydration_inputs", fmt.Sprint(threadID), at, string(raw), map[string]any{"observation_sequence": sequence})
+}

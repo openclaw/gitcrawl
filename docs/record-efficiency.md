@@ -274,3 +274,9 @@ a folded fetch timestamp. Exact confirmation inputs remain in the check archive.
 
 A GraphQL/REST/GraphQL source transition is retained even when the returning
 source repeats its earlier value, so the latest accepted transport remains current.
+
+`hydration_inputs` observations (source key `thread_id`) retain native PR detail
+and review-membership batches before stale-parent/child admission, including empty
+membership. Review recovery validates repository/node identity first; the store
+rechecks owner exclusions. These batch records preserve fetched inputs without
+allowing delayed responses to replace newer accepted current state.
