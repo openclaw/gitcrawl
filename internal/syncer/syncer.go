@@ -227,7 +227,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	var repoID int64
 	if err := s.store.WithTx(ctx, func(st *store.Store) error {
 		var err error
-		repoID, err = s.ensureRepository(ctx, st, options, repoRaw)
+		repoID, err = s.upsertRepository(ctx, st, options, repoRaw)
 		if err != nil {
 			return err
 		}
@@ -759,7 +759,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	}
 	// Partial commits are useful evidence, never a successful list checkpoint.
 	err = s.store.WithTx(ctx, func(st *store.Store) error {
-		repoID, err := s.upsertRepository(ctx, st, options, repoRaw)
+		repoID, err := s.ensureRepository(ctx, st, options, repoRaw)
 		if err != nil {
 			return err
 		}

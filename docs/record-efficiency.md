@@ -257,3 +257,11 @@ Owner-directed purge refuses archives retaining `record_check_observations`, eve
 when the layout is disabled: shared/delta evidence needs ownership-aware repair,
 and successful removal must never leave reconstructable private payloads behind.
 This is a fail-closed limitation, not a new retention deletion policy.
+
+Evidence comparison keys (`evidence_source_order_key` and
+`content_evidence_source_order_key`) are UTC nanosecond-normalized strings saved
+by the writer in `thread_checks`; compatibility views require only built-in
+SQLite functions, not a process-local extension. Backfill reconciles newer
+legacy merge states and coverage samples when re-enabling after legacy writes.
+Repository fetches are retained before child hydration can fail; per-item
+resolution remains write-free.

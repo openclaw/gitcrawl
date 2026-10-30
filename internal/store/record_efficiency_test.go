@@ -860,7 +860,7 @@ func TestRecordEfficiencyCurrentReadersAndSourceFirstEvidence(t *testing.T) {
 	}
 	// Newer source time must beat a lower sequence for evidence, including after rollback folding.
 	newer := "2026-10-30T01:01:00Z"
-	if _, err = st.DB().Exec(`update thread_checks set evidence_source_updated_at=?,evidence_observation_sequence=1 where thread_id=?`, newer, first.ID); err != nil {
+	if _, err = st.DB().Exec(`update thread_checks set evidence_source_updated_at=?,evidence_source_order_key=gitcrawl_timestamp_key(?),evidence_observation_sequence=1 where thread_id=?`, newer, newer, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	v := readThreadView(t, st, first.ID)
@@ -872,5 +872,49 @@ func TestRecordEfficiencyCurrentReadersAndSourceFirstEvidence(t *testing.T) {
 	}
 	if _, err = st.PlanThreadPurge(ctx, "openclaw/gitcrawl", []int{7}); err == nil || !strings.Contains(err.Error(), "record-evidence ownership") {
 		t.Fatalf("purge must refuse retained evidence: %v", err)
+	}
+}
+
+func TestReenableReconcilesLegacyMergeAndCounts(t *testing.T) {
+	ctx := context.Background()
+	st, repoID := recordFixture(t)
+	at := "2026-10-30T01:00:00Z"
+	thread, err := st.UpsertThreadObservation(ctx, prThread(repoID, prRaw("CLEAN", at, "t"), "t", at, at))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := PullRequestDetail{ThreadID: thread.ID, RepoID: repoID, Number: 7, MergeableState: "dirty", RawJSON: `{"mergeable_state":"dirty"}`, FetchedAt: at, UpdatedAt: at}
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DisableRecordEfficiency(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d.MergeableState = "clean"
+	d.RawJSON = `{"mergeable_state":"clean"}`
+	d.FetchedAt = "2026-10-30T02:00:00Z"
+	d.UpdatedAt = d.FetchedAt
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.EnableRecordEfficiency(ctx, "2026-10-30T03:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	d.MergeableState = "dirty"
+	d.RawJSON = `{"mergeable_state":"dirty"}`
+	d.FetchedAt = "2026-10-30T04:00:00Z"
+	if err = st.UpsertPullRequestCache(ctx, d, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := st.PullRequestDetailByThread(ctx, thread.ID)
+	if err != nil || got.MergeableState != "dirty" {
+		t.Fatalf("reenabled merge state: %+v %v", got, err)
+	}
+	var viewSQL string
+	if err = st.DB().QueryRow(`select sql from sqlite_schema where name='threads_current'`).Scan(&viewSQL); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(viewSQL, "gitcrawl_timestamp_key") {
+		t.Fatal("persisted view requires private SQL extension")
 	}
 }

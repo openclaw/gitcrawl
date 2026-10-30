@@ -73,7 +73,8 @@ func (s *Store) ensureThreadCheckRow(ctx context.Context, threadID int64) error 
 	`, threadID); err != nil {
 		return fmt.Errorf("seed thread check: %w", err)
 	}
-	return nil
+	_, err := s.q().ExecContext(ctx, `update thread_checks set evidence_source_order_key=coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),''),content_evidence_source_order_key=coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'') where thread_id=? and (evidence_source_order_key is not coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),'') or content_evidence_source_order_key is not coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),''))`, threadID)
+	return err
 }
 
 // effectiveThreadObservationSequence returns the signed observation sequence
@@ -160,9 +161,9 @@ func (s *Store) reserveThreadCheckEvidence(ctx context.Context, threadID int64, 
 	}
 	if _, err := s.q().ExecContext(ctx, `
 		update thread_checks
-		set evidence_source_updated_at = ?, evidence_observation_sequence = ?
+		set evidence_source_updated_at = ?, evidence_observation_sequence = ?, evidence_source_order_key = coalesce(gitcrawl_timestamp_key(nullif(?,'')),'')
 		where thread_id = ?
-	`, sourceUpdatedAt, sequence, threadID); err != nil {
+	`, sourceUpdatedAt, sequence, sourceUpdatedAt, threadID); err != nil {
 		return false, fmt.Errorf("reserve thread evidence observation: %w", err)
 	}
 	return true, nil

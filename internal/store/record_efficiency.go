@@ -49,6 +49,8 @@ create table if not exists thread_checks (
   evidence_observation_sequence integer not null default 0
     check (typeof(evidence_observation_sequence) = 'integer' and evidence_observation_sequence >= 0),
   evidence_source_updated_at text not null default '',
+  evidence_source_order_key text not null default '',
+  content_evidence_source_order_key text not null default '',
   checked_at text not null default ''
 );
 
@@ -293,7 +295,7 @@ type recordEfficiencyView struct {
 
 func recordEfficiencyViewSpecs() []recordEfficiencyView {
 	useThreadCheck := `(c.thread_id is not null and c.observation_sequence >= abs(t.observation_sequence))`
-	useEvidenceCheck := `(c.thread_id is not null and (coalesce(gitcrawl_timestamp_key(nullif(c.evidence_source_updated_at,'')),'') > coalesce(gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')),'') or (coalesce(gitcrawl_timestamp_key(nullif(c.evidence_source_updated_at,'')),'') = coalesce(gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')),'') and c.evidence_observation_sequence >= t.evidence_observation_sequence)))`
+	useEvidenceCheck := `(c.thread_id is not null and (c.evidence_source_order_key > coalesce(nullif(c.content_evidence_source_order_key,''),'') or (c.evidence_source_order_key = coalesce(nullif(c.content_evidence_source_order_key,''),'') and c.evidence_observation_sequence >= t.evidence_observation_sequence)))`
 	newer := func(check, content string) string {
 		return `(` + check + ` is not null and (` + content + ` is null or julianday(` + check + `) >= julianday(` + content + `)))`
 	}
@@ -813,7 +815,7 @@ func (s *Store) BackfillRecordEfficiency(ctx context.Context) (RecordEfficiencyB
 						or json_type(d.raw_json, '$._graphql.mergeable') is not null
 						or (json_type(d.raw_json, '$._graphql') is null
 							and (json_type(d.raw_json, '$.mergeable_state') is not null or json_type(d.raw_json, '$.mergeable') is not null)))
-					and not exists (select 1 from pull_request_merge_state_events e where e.thread_id = d.thread_id)`},
+					and not exists (select 1 from pull_request_merge_state_events e where e.thread_id = d.thread_id and julianday(e.observed_at)>=julianday(d.fetched_at))`},
 			{&out.RepositoryChecks, `insert or ignore into repository_checks(repo_id, checked_at, provider_updated_at)
 				select id, updated_at, coalesce(case when json_valid(raw_json) then coalesce(json_extract(raw_json, '$._graphql.updatedAt'), json_extract(raw_json, '$.updated_at')) end, '')
 				from repositories`},
@@ -823,7 +825,7 @@ func (s *Store) BackfillRecordEfficiency(ctx context.Context) (RecordEfficiencyB
 					select repository, 'analytics_coverage', observed_at, through from analytics_coverage`},
 				backfillStep{&out.CoverageCountRows, `insert or ignore into analytics_coverage_count_samples(repository, observed_at, issues, pull_requests)
 					select repository, observed_at, issues, pull_requests from analytics_coverage a
-					where not exists (select 1 from analytics_coverage_count_samples n where n.repository = a.repository)`})
+					where not exists (select 1 from analytics_coverage_count_samples n where n.repository = a.repository and julianday(n.observed_at)>=julianday(a.observed_at))`})
 		}
 		if tx.hasTable(ctx, "analytics_review_state_coverage") {
 			steps = append(steps, backfillStep{&out.ReviewCoverageChecks, `insert or ignore into analytics_coverage_checks(repository, coverage, observed_at, through)
@@ -836,7 +838,8 @@ func (s *Store) BackfillRecordEfficiency(ctx context.Context) (RecordEfficiencyB
 			}
 			*step.target = rowsAffected(result)
 		}
-		return nil
+		_, err := tx.q().ExecContext(ctx, `update thread_checks set evidence_source_order_key=coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),''),content_evidence_source_order_key=coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'') where evidence_source_order_key is not coalesce(gitcrawl_timestamp_key(nullif(evidence_source_updated_at,'')),'') or content_evidence_source_order_key is not coalesce((select gitcrawl_timestamp_key(nullif(t.evidence_source_updated_at,'')) from threads t where t.id=thread_checks.thread_id),'')`)
+		return err
 	})
 	return out, err
 }
