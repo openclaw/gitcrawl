@@ -77,7 +77,7 @@ func (s *Store) ListThreadVectorsFiltered(ctx context.Context, query ThreadVecto
 	rows, err := s.db.QueryContext(ctx, `
 		select tv.thread_id, tv.basis, tv.model, tv.dimensions, tv.content_hash, tv.vector_json, tv.vector_backend, tv.created_at, tv.updated_at
 		from thread_vectors tv
-		join threads t on t.id = tv.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = tv.thread_id
 		where `+where+`
 		order by tv.thread_id
 	`, args...)
@@ -112,7 +112,7 @@ func (s *Store) CountThreadVectorScope(ctx context.Context, query ThreadVectorQu
 		where += ` and state = 'open' and closed_at_local is null`
 	}
 	var count int
-	if err := s.q().QueryRowContext(ctx, `select count(*) from threads where `+where, args...).Scan(&count); err != nil {
+	if err := s.q().QueryRowContext(ctx, `select count(*) from `+s.currentSource(ctx, "threads")+` where `+where, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count thread vector scope: %w", err)
 	}
 	return count, nil
@@ -127,7 +127,7 @@ func (s *Store) ThreadVectorByNumber(ctx context.Context, query ThreadVectorQuer
 	row := s.db.QueryRowContext(ctx, `
 		select `+s.threadSelectColumns(ctx, "t")+`,
 			tv.thread_id, tv.basis, tv.model, tv.dimensions, tv.content_hash, tv.vector_json, tv.vector_backend, tv.created_at, tv.updated_at
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		join thread_vectors tv on tv.thread_id = t.id
 		where `+where+` and t.number = ?
 		limit 1
@@ -151,7 +151,7 @@ func (s *Store) ThreadsByIDs(ctx context.Context, repoID int64, ids []int64) (ma
 	idJSON, _ := json.Marshal(ids)
 	rows, err := s.db.QueryContext(ctx, `
 		select `+s.threadSelectColumns(ctx, "")+`
-		from threads
+		from `+s.currentSource(ctx, "threads")+`
 		where repo_id = ? and id in (select value from json_each(?))
 	`, repoID, string(idJSON))
 	if err != nil {

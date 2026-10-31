@@ -50,6 +50,9 @@ func (s *Syncer) syncReviewState(ctx context.Context, options Options, started s
 			if known := stringValue(raw["node_id"]); known != "" && known != item.NodeID {
 				return fmt.Errorf("review-state archived node identity mismatch")
 			}
+			if err := tx.RetainHydrationObservation(ctx, t.ID, started, sequence, map[string]any{"review_threads": item.Threads, "source_updated_at": item.UpdatedAt, "node_id": item.NodeID}); err != nil {
+				return err
+			}
 			reserved, err := tx.ReserveThreadChildObservation(ctx, t.ID, store.ThreadChildReviewThreads, item.UpdatedAt, sequence)
 			if err != nil {
 				return err

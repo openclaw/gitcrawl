@@ -157,7 +157,7 @@ func (s *Store) archiveChildObservations(ctx context.Context, repoID int64, fami
 	rows, err := s.q().QueryContext(ctx, `
 		select coalesce(t.updated_at_gh, ''), t.observation_sequence,
 			r.thread_id is not null, coalesce(r.source_updated_at, ''), coalesce(r.observation_sequence, 0)
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		left join thread_child_observation_reservations r on r.thread_id = t.id and r.family = ?
 		where t.repo_id = ?`+filter, string(family), repoID)
 	if err != nil {

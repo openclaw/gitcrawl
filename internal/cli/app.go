@@ -145,6 +145,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runPurgeThreads(ctx, rest[1:])
 	case "change-contract":
 		return a.runChangeContract(ctx, rest[1:])
+	case "record-checks":
+		return a.runRecordChecks(ctx, rest[1:])
 	case "close-thread":
 		return a.runCloseThread(ctx, rest[1:])
 	case "reopen-thread":

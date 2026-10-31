@@ -21,14 +21,23 @@ func gitcrawlThreadExportSQL(ctx context.Context, db *sql.DB) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Record-efficient archives keep check bookkeeping (updated_at,
+	// observation_sequence) current in the threads_current view.
+	source := "threads"
+	var view string
+	if err := db.QueryRowContext(ctx, `select name from sqlite_schema where type = 'view' and name = 'threads_current'`).Scan(&view); err == nil {
+		source = "threads_current"
+	} else if err != sql.ErrNoRows {
+		return "", err
+	}
 	return fmt.Sprintf(`
 select id, repo_id, github_id, number, kind, state, title, %s,
        coalesce(author_login, ''), coalesce(author_type, ''), html_url,
        labels_json, assignees_json, is_draft, coalesce(created_at_gh, ''),
        coalesce(updated_at_gh, ''), coalesce(closed_at_gh, ''),
        coalesce(merged_at_gh, ''), updated_at
-from threads
-order by repo_id, number`, bodyExpr), nil
+from %s
+order by repo_id, number`, bodyExpr, source), nil
 }
 
 func gitcrawlThreadBodyExpr(ctx context.Context, db *sql.DB) (string, error) {

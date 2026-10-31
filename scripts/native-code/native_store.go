@@ -116,6 +116,7 @@ func OpenNativeProducerWriter(ctx context.Context, path string) (*Store, error) 
 		db.Close()
 		return nil, e
 	}
+	s.detectRecordChecks(ctx)
 	var journal string
 	if e = db.QueryRowContext(ctx, "pragma journal_mode").Scan(&journal); e != nil || journal != "wal" {
 		db.Close()

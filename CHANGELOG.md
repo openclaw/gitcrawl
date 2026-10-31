@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve every exact native envelope and check in append-only observations backed by content-addressed evidence with reversible, bounded byte deltas. Repeated checks share bytes, metric/merge-state changes retain their original evidence, and old IDs remain unchanged.
+
+- Add an opt-in record-efficient archive layout (`gitcrawl record-checks`). Threads, pull request details, review threads, repositories and analytics coverage rows are written only when content changes; every check is recorded in `thread_checks`, `pull_request_detail_fetches`, `pull_request_review_thread_syncs`, `repository_checks` and `analytics_coverage_checks`, with an explicit `evidence_complete` flag instead of the sign of `observation_sequence`. Merge state becomes the append-only `pull_request_merge_state_events` series and coverage counts the run-length `analytics_coverage_count_samples` series. A GraphQL pull request node is stored once, in the thread envelope. `*_current` views return the legacy column values, and the repository row is no longer rewritten inside every per-item transaction.
+- Add change contract version 2 (`change-contract enable --contract-version 2`), whose update triggers skip updates that change no column. Version 1 stays the default. The contract now also tracks the record-efficiency tables and `pull_request_review_thread_syncs`.
 - Add an opt-in reader change contract (`gitcrawl change-contract`). In-store triggers journal every insert, update and delete of the tables Clawmmunity's research reader and history captures read, with row keys, in the writer's own transaction and from every writer binary. A bounded log, a generation for unexpressible rewrites and a documented reader algorithm let a consumer skip unchanged families and rebuild changed ones incrementally. Portable and cloud snapshots strip it.
 
 ## 0.17.0 - 2026-10-23

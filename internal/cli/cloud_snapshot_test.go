@@ -501,3 +501,25 @@ func TestLatestRFC3339QueryValueRejectsInvalidTimestamp(t *testing.T) {
 		t.Fatal("invalid RFC3339 timestamp was accepted")
 	}
 }
+
+func TestCloudSnapshotStripsRecordEfficiencyEvidence(t *testing.T) {
+	ctx := context.Background()
+	st, err := crawlstore.Open(ctx, filepath.Join(t.TempDir(), "private.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err = st.EnableRecordEfficiency(ctx, "2026-10-30T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.UpsertRepository(ctx, crawlstore.Repository{Owner: "fixture", Name: "repo", FullName: "fixture/repo", RawJSON: `{"private":"must-not-publish"}`, UpdatedAt: "2026-10-30T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = sanitizeCloudSQLiteSnapshot(ctx, st.DB()); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err = st.DB().QueryRow(`select count(*) from sqlite_schema where name in ('record_evidence_blobs','record_check_observations','record_efficiency_state','threads_current') or name like 'record_history_%'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("private schema retained: %d %v", n, err)
+	}
+}

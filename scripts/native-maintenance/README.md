@@ -140,3 +140,14 @@ The five-minute source freshness limit and five-second receipt alignment remain
 unchanged, as do provider/graph/write budgets. Pending broker work remains first.
 A completed pending result waits for the same boundary only when a controller
 handoff is actually active; an idle controller keeps the existing fast path.
+
+## Record-efficient archive compatibility
+
+Producer artifacts must be built against the qualified record-efficient native
+store, not the pre-split delivery baseline. With the persisted record-efficiency
+marker enabled, core readiness reads `analytics_coverage_current`; legacy archives
+continue to use the base coverage table. Missing split views must fail closed,
+never substitute a frozen content clock. Five-minute freshness, verified baseline,
+repository visibility, completeness semantics and controller/runner handoff guards
+remain unchanged. Existing-writer overlays detect split mode without migration.
+The ordinary collector executable does not change during this helper-only rollout.

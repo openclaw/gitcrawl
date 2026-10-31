@@ -144,9 +144,9 @@ func (s *Store) ListRunClusterSummaries(ctx context.Context, options ClusterSumm
 			c.closed_at_local, c.close_reason_local,
 			sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) as closed_member_count
 		from clusters c
-		left join threads rt on rt.id = c.representative_thread_id
+		left join `+s.currentSource(ctx, "threads")+` rt on rt.id = c.representative_thread_id
 		join cluster_members cm on cm.cluster_id = c.id
-		join threads t on t.id = cm.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = cm.thread_id
 		where `+where+`
 		group by c.id, c.representative_thread_id, rt.number, rt.kind, rt.title, c.member_count, c.created_at, c.closed_at_local, c.close_reason_local
 		having `+having+`
@@ -209,7 +209,7 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 		minSize = 1
 	}
 	args = append(args, minSize, limit)
-	memberThreadJoin := `left join threads mt on mt.id = cm.thread_id`
+	memberThreadJoin := `left join ` + s.currentSource(ctx, "threads") + ` mt on mt.id = cm.thread_id`
 	if !options.IncludeClosed {
 		memberThreadJoin += ` and ` + durableVisibleMemberPredicate("cg", "cm", "mt")
 	}
@@ -222,7 +222,7 @@ func (s *Store) listDurableClusterSummaries(ctx context.Context, options Cluster
 		from cluster_groups cg
 		left join cluster_memberships cm on cm.cluster_id = cg.id and cm.state = 'active'
 		`+memberThreadJoin+`
-		left join threads rt on rt.id = cg.representative_thread_id
+		left join `+s.currentSource(ctx, "threads")+` rt on rt.id = cg.representative_thread_id
 		where `+where+`
 		group by cg.id
 		having member_count >= ?
@@ -273,9 +273,9 @@ func (s *Store) listClosedDurableClusterSummaries(ctx context.Context, options C
 			group_concat(t.id, ',') as member_thread_ids
 		from cluster_groups cg
 		left join cluster_closures cc on cc.cluster_id = cg.id
-		left join threads rt on rt.id = cg.representative_thread_id
+		left join `+s.currentSource(ctx, "threads")+` rt on rt.id = cg.representative_thread_id
 		join cluster_memberships cm on cm.cluster_id = cg.id and cm.state <> 'removed_by_user'
-		join threads t on t.id = cm.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = cm.thread_id
 		where cg.repo_id = ?
 		group by cg.id, cg.stable_slug, cg.status, cg.title, cg.representative_thread_id,
 			rt.number, rt.kind, rt.title, cg.closed_at, cc.updated_at, cc.reason
@@ -497,7 +497,7 @@ func (s *Store) DurableClusterDetail(ctx context.Context, options ClusterDetailO
 			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_memberships cm
 		join cluster_groups cg on cg.id = cm.cluster_id
-		join threads t on t.id = cm.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = cm.thread_id
 		where `+where+`
 		order by case cm.role when 'canonical' then 0 when 'representative' then 1 else 2 end,
 			coalesce(cm.score_to_representative, 0) desc,
@@ -594,7 +594,7 @@ func (s *Store) RunClusterDetail(ctx context.Context, options ClusterDetailOptio
 			`+s.threadSelectColumns(ctx, "t")+`
 		from cluster_members cm
 		join clusters c on c.id = cm.cluster_id and c.cluster_run_id = ?
-		join threads t on t.id = cm.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = cm.thread_id
 		where `+where+`
 		order by case when t.id = c.representative_thread_id then 0 else 1 end,
 			coalesce(cm.score_to_representative, 0) desc,
@@ -649,7 +649,7 @@ func (s *Store) ClusterIDForThreadNumber(ctx context.Context, repoID int64, numb
 	}
 	row := s.q().QueryRowContext(ctx, `
 		select cg.id
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		join cluster_memberships cm on cm.thread_id = t.id
 		join cluster_groups cg on cg.id = cm.cluster_id
 		where `+where+`
@@ -681,7 +681,7 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 		memberCountExpr = `count(mt.id)`
 		closedMemberCountExpr = `0`
 		memberThreadJoin = `
-		left join threads mt on mt.id = cm.thread_id
+		left join ` + s.currentSource(ctx, "threads") + ` mt on mt.id = cm.thread_id
 			and (` + durableVisibleMemberPredicate("cg", "cm", "mt") + `)`
 	}
 	row := s.q().QueryRowContext(ctx, `
@@ -693,9 +693,9 @@ func (s *Store) clusterSummaryByID(ctx context.Context, repoID, clusterID int64,
 		from cluster_groups cg
 		left join cluster_closures cc on cc.cluster_id = cg.id
 		left join cluster_memberships cm on cm.cluster_id = cg.id and cm.state = 'active'
-		left join threads t on t.id = cm.thread_id
+		left join `+s.currentSource(ctx, "threads")+` t on t.id = cm.thread_id
 		`+memberThreadJoin+`
-		left join threads rt on rt.id = cg.representative_thread_id
+		left join `+s.currentSource(ctx, "threads")+` rt on rt.id = cg.representative_thread_id
 		where `+where+`
 		group by cg.id
 	`, args...)
@@ -774,9 +774,9 @@ func (s *Store) runClusterSummaryByID(ctx context.Context, repoID, clusterID int
 			c.closed_at_local, c.close_reason_local,
 			sum(case when t.closed_at_local is not null or t.state <> 'open' then 1 else 0 end) as closed_member_count
 		from clusters c
-		left join threads rt on rt.id = c.representative_thread_id
+		left join `+s.currentSource(ctx, "threads")+` rt on rt.id = c.representative_thread_id
 		join cluster_members cm on cm.cluster_id = c.id
-		join threads t on t.id = cm.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = cm.thread_id
 		where c.repo_id = ? and c.cluster_run_id = ? and c.id = ?
 		group by c.id, c.representative_thread_id, rt.number, rt.kind, rt.title, c.member_count, c.created_at, c.closed_at_local, c.close_reason_local
 		having `+having+`
@@ -875,7 +875,7 @@ func (s *Store) summariesByThreadIDs(ctx context.Context, threadIDs []int64) (ma
 			select tr.thread_id, tks.summary_kind, tks.key_text
 			from thread_key_summaries tks
 			join thread_revisions tr on tr.id = tks.thread_revision_id
-			join threads t on t.id = tr.thread_id
+			join `+s.currentSource(ctx, "threads")+` t on t.id = tr.thread_id
 			where tr.thread_id in (`+strings.Join(placeholders, ",")+`)
 				and tr.id = (
 					select latest.id

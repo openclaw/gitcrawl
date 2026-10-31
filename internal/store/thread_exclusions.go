@@ -120,7 +120,7 @@ func purgeRelations(ids string) map[string]string {
 	rev := "select id from thread_revisions where thread_id in (" + ids + ")"
 	snapshots := "select id from thread_code_snapshots where thread_revision_id in (" + rev + ")"
 	out := map[string]string{}
-	for _, table := range []string{"threads", "comments", "documents", "document_embeddings", "document_summaries", "pull_request_details", "pull_request_files", "pull_request_commits", "pull_request_checks", "pull_request_review_threads", "pull_request_review_thread_revisions", "pull_request_review_thread_syncs", "thread_revisions", "thread_vectors", "thread_child_observation_memberships", "thread_child_observation_reservations", "cluster_members", "cluster_memberships", "cluster_overrides"} {
+	for _, table := range []string{"threads", "comments", "documents", "document_embeddings", "document_summaries", "pull_request_details", "pull_request_files", "pull_request_commits", "pull_request_checks", "pull_request_review_threads", "pull_request_review_thread_revisions", "pull_request_review_thread_syncs", "thread_revisions", "thread_vectors", "thread_child_observation_memberships", "thread_child_observation_reservations", "thread_checks", "pull_request_detail_fetches", "pull_request_merge_state_events", "cluster_members", "cluster_memberships", "cluster_overrides"} {
 		col := "thread_id"
 		if table == "threads" {
 			col = "id"
@@ -153,6 +153,11 @@ func (s *Store) planThreadPurge(ctx context.Context, repository string, numbers 
 	p := ThreadPurgePlan{Repository: strings.ToLower(strings.TrimSpace(repository)), Reason: "owner_requested", Counts: map[string]int{}, Targets: []PurgeTarget{}}
 	if s.hasTable(ctx, "portable_metadata") {
 		return p, fmt.Errorf("purge requires a native local archive")
+	}
+	// Delta/shared evidence requires ownership-aware removal. Refuse rather
+	// than claim a purge while leaving recoverable private payloads behind.
+	if s.hasTable(ctx, "record_check_observations") {
+		return p, fmt.Errorf("purge requires a separate record-evidence ownership repair")
 	}
 	archive, err := filepath.Abs(s.path)
 	if err != nil {

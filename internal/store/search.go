@@ -46,7 +46,7 @@ func (s *Store) SearchDocuments(ctx context.Context, repoID int64, query string,
 			snippet(documents_fts, 3, '[', ']', '...', 18)
 		from documents_fts
 		join documents d on d.id = documents_fts.rowid
-		join threads t on t.id = d.thread_id
+		join `+s.currentSource(ctx, "threads")+` t on t.id = d.thread_id
 		where t.repo_id = ? and documents_fts match ?
 		order by bm25(documents_fts)
 		limit ?
@@ -89,7 +89,7 @@ func (s *Store) searchThreads(ctx context.Context, repoID int64, query string, l
 	rows, err := s.db.QueryContext(ctx, `
 		select id, number, kind, state, title, html_url, author_login,
 			coalesce(nullif(`+bodyExpr+`, ''), title)
-		from threads
+		from `+s.currentSource(ctx, "threads")+`
 		where repo_id = ?
 		  and (
 			lower(title) like ? escape '\'
@@ -141,9 +141,9 @@ func (s *Store) SearchThreads(ctx context.Context, options ThreadSearchOptions) 
 
 func (s *Store) searchThreadsFiltered(ctx context.Context, options ThreadSearchOptions, matchQuery string) ([]Thread, error) {
 	where, args := threadSearchWhere(options)
-	from := `threads t`
+	from := s.currentSource(ctx, "threads") + ` t`
 	if matchQuery != "" {
-		from = `documents_fts join documents d on d.id = documents_fts.rowid join threads t on t.id = d.thread_id`
+		from = `documents_fts join documents d on d.id = documents_fts.rowid join ` + s.currentSource(ctx, "threads") + ` t on t.id = d.thread_id`
 		where = append(where, `documents_fts match ?`)
 		args = append(args, matchQuery)
 	}
@@ -174,7 +174,7 @@ func (s *Store) searchThreadsLike(ctx context.Context, options ThreadSearchOptio
 	args = append(args, options.Limit)
 	rows, err := s.q().QueryContext(ctx, `
 		select `+s.threadSelectColumns(ctx, "t")+`
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		where `+strings.Join(where, " and ")+`
 		order by coalesce(t.updated_at_gh, t.updated_at) desc, t.number desc
 		limit ?
