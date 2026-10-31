@@ -156,3 +156,12 @@ or handoff checks. Unknown producers still fail with their evidence retained.
 The predecessor regression cases require identical graphs, zero recomputed
 unchanged pairs and byte-preserved parent provenance. A later guard refusal is
 not permission to clear, rebuild or invalidate a retained cache during rollout.
+
+## Bounded identity reconciliation lookup
+
+Partial identity reconciliation starts with the existing membership thread/state
+index and then resolves groups by primary key. The explicit join order avoids
+scanning every active group for each candidate in a skewed archive. DISTINCT,
+ordered identity selection, active/nonclosed/nonsimilarity predicates and
+ambiguity refusal remain unchanged. No schema, index, publication deadline,
+quarantine proof or transaction boundary changes accompany this query correction.
