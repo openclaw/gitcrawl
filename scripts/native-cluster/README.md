@@ -142,3 +142,17 @@ never substitute a frozen content clock. Five-minute freshness, verified baselin
 repository visibility, completeness semantics and controller/runner handoff guards
 remain unchanged. Existing-writer overlays detect split mode without migration.
 The ordinary collector executable does not change during this helper-only rollout.
+
+## Reviewed v3 cache predecessor
+
+The exact immutable v3 producer hash
+`107a402976844d8e5f3cad1a974f3801acc66bf5c5a68103088961149f921aa8`
+is qualified from source `38d6aee915a859b34cfda33a501427060d377055` and the
+native owner's `identity-v3-20261022/INSTALL-MANIFEST.json`, matching retained
+build and installed bytes. Its pair cache, graph, cosine, parameters and encoding
+are byte-identical to the current implementation. Exact-hash admission does not
+relabel the parent or relax source identity, model, shape, completeness, freshness
+or handoff checks. Unknown producers still fail with their evidence retained.
+The predecessor regression cases require identical graphs, zero recomputed
+unchanged pairs and byte-preserved parent provenance. A later guard refusal is
+not permission to clear, rebuild or invalidate a retained cache during rollout.
