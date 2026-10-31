@@ -131,3 +131,14 @@ generation never writes the six durable history tables, so v2 scope, strict
 schema and reader semantics are unchanged. Blocked-identity runs still record
 their generation. No-op runs record none. See `docs/clustering.md`
 (Computed candidate generations) and `gitcrawl cluster-candidates`.
+
+## Record-efficient archive compatibility
+
+Producer artifacts must be built against the qualified record-efficient native
+store, not the pre-split delivery baseline. With the persisted record-efficiency
+marker enabled, core readiness reads `analytics_coverage_current`; legacy archives
+continue to use the base coverage table. Missing split views must fail closed,
+never substitute a frozen content clock. Five-minute freshness, verified baseline,
+repository visibility, completeness semantics and controller/runner handoff guards
+remain unchanged. Existing-writer overlays detect split mode without migration.
+The ordinary collector executable does not change during this helper-only rollout.
