@@ -165,3 +165,10 @@ scanning every active group for each candidate in a skewed archive. DISTINCT,
 ordered identity selection, active/nonclosed/nonsimilarity predicates and
 ambiguity refusal remain unchanged. No schema, index, publication deadline,
 quarantine proof or transaction boundary changes accompany this query correction.
+
+The lookup correction also admits the exact immediate predecessor
+`9b50cfe6bbbc27f5cc71b5f298ce66049ebe4ef93fa414b27b5a4a2ab56a0461`,
+bound by the reviewed `d043d557b972fa8124bde3bcacb7665770137676` deployment's
+immutable manifest. Its unchanged pair algorithm, encoding and parameters permit
+reuse of its native successor cache without clearing or rewinding the pointer.
+The same parent-byte preservation and unknown-producer rejection tests apply.

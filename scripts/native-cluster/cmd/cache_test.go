@@ -111,7 +111,7 @@ func TestPairCacheRejectsShapeAndInvalidatesIdentity(t *testing.T) {
 }
 
 func TestReviewedParentCacheReusePreservesProvenance(t *testing.T) {
-	for _, producer := range []string{reviewedSubsetCacheProducer, reviewedQuarantineCacheProducer, reviewedCandidateV3CacheProducer} {
+	for _, producer := range []string{reviewedSubsetCacheProducer, reviewedQuarantineCacheProducer, reviewedCandidateV3CacheProducer, reviewedSplitCacheProducer} {
 		t.Run(producer, func(t *testing.T) {
 			s := cacheFixture()
 			dir := t.TempDir()

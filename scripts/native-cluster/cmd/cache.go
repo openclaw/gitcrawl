@@ -33,8 +33,14 @@ const reviewedQuarantineCacheProducer = "1b423688055470a1ef921d6ca2b237e670f5281
 // preserves parent bytes/attribution and all subsequent lineage/shape checks.
 const reviewedCandidateV3CacheProducer = "107a402976844d8e5f3cad1a974f3801acc66bf5c5a68103088961149f921aa8"
 
+// reviewedSplitCacheProducer binds the d043d557b972fa8124bde3bcacb7665770137676
+// deployment's immutable combined helper (gitcrawl-pair-predecessor/bundle/MANIFEST.json).
+// Pair computation, encoding and parameters are unchanged; the subsequent
+// correction changes only the identity-reconciliation lookup join order.
+const reviewedSplitCacheProducer = "9b50cfe6bbbc27f5cc71b5f298ce66049ebe4ef93fa414b27b5a4a2ab56a0461"
+
 func reviewedCacheProducer(hash string) bool {
-	return hash == reviewedSubsetCacheProducer || hash == reviewedQuarantineCacheProducer || hash == reviewedCandidateV3CacheProducer
+	return hash == reviewedSubsetCacheProducer || hash == reviewedQuarantineCacheProducer || hash == reviewedCandidateV3CacheProducer || hash == reviewedSplitCacheProducer
 }
 
 type pairCacheFile struct {
