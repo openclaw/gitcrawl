@@ -52,7 +52,7 @@ func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("rows: got %d want 3", len(rows))
 	}
-	if intValue(rows[2]["number"]) != 3 {
+	if rows[2]["number"] != json.Number("3") {
 		t.Fatalf("last number: %#v", rows[2]["number"])
 	}
 	joined := strings.Join(messages, "\n")
@@ -187,13 +187,13 @@ func TestClientSingleResourceAndCollectionEndpoints(t *testing.T) {
 
 	client := New(Options{BaseURL: server.URL, PageDelay: -1})
 	ctx := context.Background()
-	if row, err := client.GetRepo(ctx, "openclaw", "gitcrawl", nil); err != nil || intValue(row["id"]) != 1 {
+	if row, err := client.GetRepo(ctx, "openclaw", "gitcrawl", nil); err != nil || row["id"] != json.Number("1") {
 		t.Fatalf("get repo = %#v %v", row, err)
 	}
-	if row, err := client.GetIssue(ctx, "openclaw", "gitcrawl", 7, nil); err != nil || intValue(row["number"]) != 7 {
+	if row, err := client.GetIssue(ctx, "openclaw", "gitcrawl", 7, nil); err != nil || row["number"] != json.Number("7") {
 		t.Fatalf("get issue = %#v %v", row, err)
 	}
-	if row, err := client.GetPull(ctx, "openclaw", "gitcrawl", 8, nil); err != nil || intValue(row["number"]) != 8 {
+	if row, err := client.GetPull(ctx, "openclaw", "gitcrawl", 8, nil); err != nil || row["number"] != json.Number("8") {
 		t.Fatalf("get pull = %#v %v", row, err)
 	}
 	for name, fn := range map[string]func() ([]map[string]any, error){
@@ -217,7 +217,7 @@ func TestClientSingleResourceAndCollectionEndpoints(t *testing.T) {
 		}
 	}
 	if run, err := client.GetWorkflowRun(ctx, "openclaw", "gitcrawl", "99", nil); err != nil ||
-		intValue(run["id"]) != 99 {
+		run["id"] != json.Number("99") {
 		t.Fatalf("get workflow run = %+v err=%v", run, err)
 	}
 	if len(requests) != 11 {
@@ -270,7 +270,7 @@ func TestCheckRunsAndWorkflowRunsPaginate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
-	if len(runs) != 3 || intValue(runs[2]["id"]) != 3 {
+	if len(runs) != 3 || runs[2]["id"] != json.Number("3") {
 		t.Fatalf("runs = %#v", runs)
 	}
 	if requests["/repos/openclaw/gitcrawl/commits/abc/check-runs"] != 2 || requests["/repos/openclaw/gitcrawl/actions/runs"] != 2 {
@@ -667,12 +667,6 @@ func TestClientErrorAndHelperBranches(t *testing.T) {
 	if got := pathEscape("owner/name"); got != "owner%2Fname" {
 		t.Fatalf("escaped path = %q", got)
 	}
-	if got := intValue(json.Number("7")); got != 7 {
-		t.Fatalf("json int = %d", got)
-	}
-	if got := intValue("bad"); got != 0 {
-		t.Fatalf("bad int = %d", got)
-	}
 }
 
 func TestRateLimitRetriesOn403WithRemainingZero(t *testing.T) {
@@ -693,7 +687,7 @@ func TestRateLimitRetriesOn403WithRemainingZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get repo: %v", err)
 	}
-	if intValue(row["id"]) != 1 {
+	if row["id"] != json.Number("1") {
 		t.Fatalf("row = %#v", row)
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
@@ -1269,7 +1263,7 @@ func TestRateLimitRetriesOn429WithRetryAfter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get repo: %v", err)
 	}
-	if intValue(row["id"]) != 2 {
+	if row["id"] != json.Number("2") {
 		t.Fatalf("row = %#v", row)
 	}
 }

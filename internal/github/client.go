@@ -968,17 +968,3 @@ func (r Reporter) Printf(format string, args ...any) {
 		r(fmt.Sprintf(format, args...))
 	}
 }
-
-func intValue(value any) int {
-	switch typed := value.(type) {
-	case float64:
-		return int(typed)
-	case int:
-		return typed
-	case json.Number:
-		parsed, _ := strconv.Atoi(string(typed))
-		return parsed
-	default:
-		return 0
-	}
-}

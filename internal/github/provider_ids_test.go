@@ -40,7 +40,7 @@ func TestProviderIDsSingleResources(t *testing.T) {
 			}
 			requireProviderNumber(t, row["id"], id)
 			requireProviderNumber(t, row["owner"].(map[string]any)["id"], id)
-			if intValue(row["number"]) != 7 || row["draft"] != false || row["body"] != nil {
+			if row["number"] != json.Number("7") || row["draft"] != false || row["body"] != nil {
 				t.Errorf("ordinary fields = %#v", row)
 			}
 			encoded, err := json.Marshal(row)
@@ -154,7 +154,7 @@ func TestProviderIDsGraphQLPagination(t *testing.T) {
 	}
 	first := threads[0]
 	if first["id"] != "PRRT_first" || first["isResolved"] != false || first["isOutdated"] != true ||
-		intValue(first["line"]) != 42 || first["startLine"] != nil ||
+		first["line"] != json.Number("42") || first["startLine"] != nil ||
 		first["viewerCanResolve"] != true || first["viewerCanUnresolve"] != false || first["viewerCanReply"] != true {
 		t.Errorf("first thread = %#v", first)
 	}
@@ -165,7 +165,7 @@ func TestProviderIDsGraphQLPagination(t *testing.T) {
 	for i, row := range comments.Nodes {
 		requireProviderNumber(t, row["databaseId"], providerIDFixtures[i])
 	}
-	if comments.Nodes[2]["id"] != "PRRC_third" || threads[1]["id"] != "PRRT_second" || intValue(threads[1]["line"]) != 8 {
+	if comments.Nodes[2]["id"] != "PRRC_third" || threads[1]["id"] != "PRRT_second" || threads[1]["line"] != json.Number("8") {
 		t.Errorf("opaque IDs or line changed: %#v", threads)
 	}
 	last := reviewThreadCommentsFromMap(threads[1]["comments"])
