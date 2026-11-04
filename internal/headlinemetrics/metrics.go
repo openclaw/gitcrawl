@@ -403,24 +403,6 @@ func latestDaily(ctx context.Context, tx *sql.Tx, r Row) (sql.NullFloat64, strin
 	return sql.NullFloat64{}, "", sql.ErrNoRows
 }
 
-func Write(ctx context.Context, s *store.Store, rows []Row) (int, error) {
-	written := 0
-	err := s.WithTx(ctx, func(tx *sql.Tx) error {
-		for _, r := range rows {
-			n, err := insert(ctx, tx, r)
-			if err != nil {
-				return err
-			}
-			written += n
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return written, nil
-}
-
 func inScope(c Config, r Row) bool {
 	for _, t := range c.Targets {
 		if t.Target == r.Target && t.Entity == r.Entity {
