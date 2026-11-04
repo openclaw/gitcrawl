@@ -70,72 +70,12 @@ func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmpPath, path)
 }
 
-func normalizeGHAPIRoute(args []string) string {
-	path := ghAPIPathArg(args)
-	path = strings.TrimPrefix(path, "https://api.github.com/")
-	path = strings.TrimPrefix(path, "http://api.github.com/")
-	path = strings.TrimPrefix(path, "/")
-	if before, _, found := strings.Cut(path, "?"); found {
-		path = before
-	}
-	if path == "" {
-		return "api"
-	}
-	parts := strings.Split(path, "/")
-	for index, part := range parts {
-		if part == "" {
-			continue
-		}
-		switch {
-		case index > 0 && parts[index-1] == "commits" && isHexString(part) && len(part) >= 7:
-			parts[index] = ":sha"
-		case isDecimalString(part):
-			parts[index] = ":id"
-		case index >= 2 && parts[index-2] == "repos":
-			parts[index-1] = ":owner"
-			parts[index] = ":repo"
-		}
-	}
-	return "api " + strings.Join(parts, "/")
-}
-
-func ghAPIPathArg(args []string) string {
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		switch arg {
-		case "-X", "--method", "-H", "--header", "--hostname", "--jq", "-q", "--preview", "--template", "-t", "--input", "--cache", "-f", "-F", "--field", "--raw-field":
-			index++
-			continue
-		case "--paginate":
-			continue
-		default:
-			if strings.HasPrefix(arg, "--cache=") || strings.HasPrefix(arg, "-") {
-				continue
-			}
-			return strings.TrimSpace(arg)
-		}
-	}
-	return ""
-}
-
 func isDecimalString(value string) bool {
 	if value == "" {
 		return false
 	}
 	for _, r := range value {
 		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func isHexString(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 			return false
 		}
 	}
