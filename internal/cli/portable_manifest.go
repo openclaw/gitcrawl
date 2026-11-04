@@ -277,10 +277,6 @@ func portableSourceArtifact(dbPath string) (string, portableDBManifest, bool, er
 	return resolved, manifest, true, nil
 }
 
-func validatePortableArchive(path string, manifest portableDBManifest) error {
-	return validatePortableArchiveContext(context.Background(), path, manifest)
-}
-
 func validatePortableArchiveContext(ctx context.Context, path string, manifest portableDBManifest) error {
 	if portableSplitArchive(manifest) {
 		return validatePortableSplitArchiveContext(ctx, path, manifest)

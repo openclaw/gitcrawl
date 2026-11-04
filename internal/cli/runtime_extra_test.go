@@ -470,14 +470,14 @@ func TestCompressedPortableArchiveRejectsTampering(t *testing.T) {
 	}
 
 	manifest.ArchiveBytes++
-	if err := validatePortableArchive(archivePath, manifest); err == nil ||
+	if err := validatePortableArchiveContext(t.Context(), archivePath, manifest); err == nil ||
 		!strings.Contains(err.Error(), "archive size") {
 		t.Fatalf("archive size error = %v", err)
 	}
 
 	manifest.ArchiveBytes--
 	manifest.ArchiveSHA256 = strings.Repeat("0", 64)
-	if err := validatePortableArchive(archivePath, manifest); err == nil ||
+	if err := validatePortableArchiveContext(t.Context(), archivePath, manifest); err == nil ||
 		!strings.Contains(err.Error(), "archive sha256") {
 		t.Fatalf("archive hash error = %v", err)
 	}
@@ -521,7 +521,7 @@ func TestCompressedPortableArchiveRejectsInvalidPayload(t *testing.T) {
 	}
 
 	writeArchive([]byte("not gzip"), 1)
-	if _, err := stagePortableSQLiteSourceTemp(dbPath, targetPath, 0o600); err == nil ||
+	if _, err := stagePortableSQLiteSourceTempContext(t.Context(), dbPath, targetPath, 0o600); err == nil ||
 		!strings.Contains(err.Error(), "open portable gzip archive") {
 		t.Fatalf("invalid gzip error = %v", err)
 	}
@@ -535,7 +535,7 @@ func TestCompressedPortableArchiveRejectsInvalidPayload(t *testing.T) {
 		t.Fatalf("close gzip payload: %v", err)
 	}
 	writeArchive(compressed.Bytes(), 10)
-	if _, err := stagePortableSQLiteSourceTemp(dbPath, targetPath, 0o600); err == nil ||
+	if _, err := stagePortableSQLiteSourceTempContext(t.Context(), dbPath, targetPath, 0o600); err == nil ||
 		!strings.Contains(err.Error(), "inflated size") {
 		t.Fatalf("inflated size error = %v", err)
 	}

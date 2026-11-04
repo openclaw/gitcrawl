@@ -59,7 +59,7 @@ func (fixture portableRefreshFixture) advanceSplit(t *testing.T, number int, bod
 	t.Helper()
 	path := filepath.Join(fixture.remote, fixture.relative)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		temp, err := stagePortableSQLiteSourceTemp(path, path, 0o644)
+		temp, err := stagePortableSQLiteSourceTempContext(t.Context(), path, path, 0o644)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -310,7 +310,7 @@ func TestSplitPortableArchiveValidationRejectsMissingAndResizedParts(t *testing.
 	if err != nil || !compressed {
 		t.Fatalf("split source: compressed=%v err=%v", compressed, err)
 	}
-	if err := validatePortableArchive(first, manifest); err != nil {
+	if err := validatePortableArchiveContext(t.Context(), first, manifest); err != nil {
 		t.Fatalf("valid split archive: %v", err)
 	}
 	second := portableArchivePartPaths(first, manifest)[1]

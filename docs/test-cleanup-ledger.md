@@ -41,3 +41,14 @@ runtime exit code 1. No release artifacts changed.
 - Kept the documented future `sync-status` reservation and unrelated commands.
 
 Launcher metadata changes; the supported status command and archive data do not.
+
+## Test-only portable adapters
+
+- Removed `validatePortableArchive` and `stagePortableSQLiteSourceTemp`, whose
+  only callers were tests. Production uses their context-aware implementations.
+- Updated all nine test/fixture calls to use those same implementations with
+  the test context instead of an adapter that substituted `context.Background()`.
+- Retained archive size/hash and payload validation, split archive checks,
+  portable refresh and transition fixtures, and cancellation checks.
+
+No archive format, staging behavior, or release artifacts changed.
