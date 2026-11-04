@@ -22,16 +22,16 @@ func TestCosine(t *testing.T) {
 
 func TestCosineLargeFiniteVectors(t *testing.T) {
 	large := math.MaxFloat64 / 4
-	if got := Cosine([]float64{large, large}, []float64{large, large}); math.Abs(got-1) > 1e-12 {
+	if got := Cosine([]float64{large, large}, []float64{large, large}); !(math.Abs(got-1) <= 1e-12) {
 		t.Fatalf("large same cosine = %.17g, want 1", got)
 	}
-	if got := Cosine([]float64{large, -large}, []float64{-large, large}); math.Abs(got+1) > 1e-12 {
+	if got := Cosine([]float64{large, -large}, []float64{-large, large}); !(math.Abs(got+1) <= 1e-12) {
 		t.Fatalf("large opposite cosine = %.17g, want -1", got)
 	}
 	if got := Cosine([]float64{large, 0}, []float64{0, large}); got != 0 {
 		t.Fatalf("large orthogonal cosine = %.17g, want 0", got)
 	}
-	if got := Cosine([]float64{1e-100}, []float64{1e150}); math.Abs(got-1) > 1e-12 {
+	if got := Cosine([]float64{1e-100}, []float64{1e150}); !(math.Abs(got-1) <= 1e-12) {
 		t.Fatalf("mixed-scale cosine = %.17g, want 1", got)
 	}
 }

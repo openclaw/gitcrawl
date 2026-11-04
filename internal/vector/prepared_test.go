@@ -39,14 +39,14 @@ func TestPreparedCosine(t *testing.T) {
 			want, got := Cosine(left, right), l.Cosine(r)
 			deviation := math.Abs(want - got)
 			maxDeviation = max(maxDeviation, deviation)
-			if math.IsNaN(got) || deviation > 1e-12 {
+			if !(deviation <= 1e-12) {
 				t.Fatalf("n=%d trial=%d: got %.17g want %.17g", n, trial, got, want)
 			}
 			if n > 0 {
 				scalar := dotScalar(l.values, r.values) / (l.magnitude * r.magnitude)
 				actual := preparedDot(l.values, r.values) / (l.magnitude * r.magnitude)
 				maxDotDeviation = max(maxDotDeviation, math.Abs(scalar-actual))
-				if math.Abs(scalar-actual) > 1e-12 {
+				if !(math.Abs(scalar-actual) <= 1e-12) {
 					t.Fatalf("dot n=%d: got %.17g want %.17g", n, actual, scalar)
 				}
 			}
@@ -60,7 +60,7 @@ func TestPreparedSpecialValues(t *testing.T) {
 	for _, left := range cases {
 		for _, right := range cases {
 			want, got := Cosine(left, right), Prepare(left).Cosine(Prepare(right))
-			if math.IsNaN(got) || math.Abs(want-got) > 1e-12 {
+			if !(math.Abs(want-got) <= 1e-12) {
 				t.Fatalf("%v / %v: got %.17g want %.17g", left, right, got, want)
 			}
 		}
@@ -79,7 +79,7 @@ func TestPreparedSpecialValues(t *testing.T) {
 	values := []float64{1, 2, 3}
 	prepared := Prepare(values)
 	values[0] = math.NaN()
-	if got := prepared.Cosine(Prepare([]float64{1, 2, 3})); math.Abs(got-1) > 1e-12 {
+	if got := prepared.Cosine(Prepare([]float64{1, 2, 3})); !(math.Abs(got-1) <= 1e-12) {
 		t.Fatalf("Prepare aliases input: %g", got)
 	}
 	if got := preparedDot(nil, nil); got != 0 {
@@ -112,7 +112,7 @@ func TestPreparedQueryMatchesOriginal(t *testing.T) {
 		t.Fatalf("neighbors: %d want %d", len(got), len(want))
 	}
 	for i := range want {
-		if got[i].ThreadID != want[i].ThreadID || math.Abs(got[i].Score-want[i].Score) > 1e-12 {
+		if got[i].ThreadID != want[i].ThreadID || !(math.Abs(got[i].Score-want[i].Score) <= 1e-12) {
 			t.Fatalf("neighbor %d: %+v want %+v", i, got[i], want[i])
 		}
 	}
