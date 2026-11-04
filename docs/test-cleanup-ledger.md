@@ -93,3 +93,15 @@ P0–P3 review, and PR CI cover the candidate. No production or live archive cha
   keeping separate viewport computations solely for tests.
 
 No terminal layout, mouse behavior, archive data, or release artifacts changed.
+
+## Test-only portable rebuild adapter
+
+- Removed `rebuildPortableCompatibilityThreads`, called only by store tests.
+  Production portable pruning uses the implementation with options and stats.
+- Updated the seven existing calls to that same implementation with exactly
+  the adapter's empty options and fresh stats. No rebuild scenario was removed.
+- Retained SQLite proofs for autoincrement, dependent views, index retention,
+  trigger/FK rejection, transaction rollback, and cancellation. Progress and
+  injected-failure tests already use the options-aware implementation.
+
+No portable schema, pruning, rollback, or release behavior changed.

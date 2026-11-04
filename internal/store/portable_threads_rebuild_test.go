@@ -250,7 +250,7 @@ func TestPortableThreadsRebuildPreservesAutoincrementAndDependentView(t *testing
 		t.Fatalf("seed autoincrement rebuild: %v", err)
 	}
 	st := &Store{db: db, path: "autoincrement.db"}
-	dropped, err := st.rebuildPortableCompatibilityThreads(ctx)
+	dropped, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{})
 	if err != nil {
 		t.Fatalf("rebuild autoincrement threads: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestPortableThreadsRebuildFailsBeforeUnknownUpdateTrigger(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("create custom update trigger: %v", err)
 	}
-	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "cannot preserve update-trigger semantics") {
+	if _, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{}); err == nil || !strings.Contains(err.Error(), "cannot preserve update-trigger semantics") {
 		t.Fatalf("custom update trigger error = %v", err)
 	}
 	if !tableExistsForPortableTest(t, st.DB(), "threads") {
@@ -339,7 +339,7 @@ func TestPortableThreadsRebuildRejectsReplacedConvergenceUpdateTrigger(t *testin
 	`); err != nil {
 		t.Fatalf("replace convergence update trigger: %v", err)
 	}
-	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "cannot preserve update-trigger semantics") {
+	if _, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{}); err == nil || !strings.Contains(err.Error(), "cannot preserve update-trigger semantics") {
 		t.Fatalf("replaced convergence trigger error = %v", err)
 	}
 }
@@ -371,7 +371,7 @@ func TestPortableThreadsRebuildAbortsTransformedConstraintConflict(t *testing.T)
 		t.Fatal(err)
 	}
 	st := &Store{db: db, path: "conflict.db"}
-	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "copy compact portable threads") {
+	if _, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{}); err == nil || !strings.Contains(err.Error(), "copy compact portable threads") {
 		t.Fatalf("transformed uniqueness conflict error = %v", err)
 	}
 	var count int
@@ -411,7 +411,7 @@ func TestPortableThreadsRebuildRollsBackTransformedForeignKeyViolation(t *testin
 		t.Fatal(err)
 	}
 	st := &Store{db: db, path: "foreign-key.db"}
-	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "referencing mutable threads column body") {
+	if _, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{}); err == nil || !strings.Contains(err.Error(), "referencing mutable threads column body") {
 		t.Fatalf("transformed foreign-key error = %v", err)
 	}
 	var body, childBody string
@@ -458,7 +458,7 @@ func TestPortableThreadsRebuildRejectsForeignKeyFromTransformedColumn(t *testing
 		t.Fatal(err)
 	}
 	st := &Store{db: db, path: "outgoing-foreign-key.db"}
-	if _, err := st.rebuildPortableCompatibilityThreads(ctx); err == nil || !strings.Contains(err.Error(), "foreign key from transformed threads column body") {
+	if _, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{}); err == nil || !strings.Contains(err.Error(), "foreign key from transformed threads column body") {
 		t.Fatalf("outgoing transformed foreign-key error = %v", err)
 	}
 	var body string

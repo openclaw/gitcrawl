@@ -22,11 +22,6 @@ type portableSchemaObject struct {
 	sql  string
 }
 
-func (s *Store) rebuildPortableCompatibilityThreads(ctx context.Context) ([]string, error) {
-	stats := &PortablePruneStats{}
-	return s.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, stats)
-}
-
 func (s *Store) rebuildPortableCompatibilityThreadsWithOptions(ctx context.Context, options PortablePruneOptions, stats *PortablePruneStats) (_ []string, retErr error) {
 	if stats == nil {
 		stats = &PortablePruneStats{}
