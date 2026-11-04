@@ -98,54 +98,32 @@ func (m *clusterBrowserModel) openReopenClusterMenu() {
 }
 
 func (m *clusterBrowserModel) openExcludeMemberMenu() {
-	cluster, clusterOK := m.selectedCluster()
-	member, memberOK := m.selectedMember()
-	if !clusterOK || !memberOK {
-		m.status = "No selected cluster member"
-		return
-	}
-	m.menuTitle = "Exclude Member"
-	m.menuItems = []tuiMenuItem{
-		{label: fmt.Sprintf("Exclude #%d from C%d", member.Thread.Number, cluster.ID), action: "exclude-member-local"},
-		{label: "Back to actions", action: "back-to-actions"},
-	}
-	m.menuIndex = 0
-	m.menuOff = 0
-	m.status = fmt.Sprintf("Confirm local exclude for #%d", member.Thread.Number)
+	m.openMemberConfirmationMenu("Exclude Member", "exclude-member-local", "Exclude #%d from C%d", "Confirm local exclude for #%d")
 }
 
 func (m *clusterBrowserModel) openIncludeMemberMenu() {
-	cluster, clusterOK := m.selectedCluster()
-	member, memberOK := m.selectedMember()
-	if !clusterOK || !memberOK {
-		m.status = "No selected cluster member"
-		return
-	}
-	m.menuTitle = "Include Member"
-	m.menuItems = []tuiMenuItem{
-		{label: fmt.Sprintf("Include #%d in C%d", member.Thread.Number, cluster.ID), action: "include-member-local"},
-		{label: "Back to actions", action: "back-to-actions"},
-	}
-	m.menuIndex = 0
-	m.menuOff = 0
-	m.status = fmt.Sprintf("Confirm local include for #%d", member.Thread.Number)
+	m.openMemberConfirmationMenu("Include Member", "include-member-local", "Include #%d in C%d", "Confirm local include for #%d")
 }
 
 func (m *clusterBrowserModel) openCanonicalMemberMenu() {
+	m.openMemberConfirmationMenu("Canonical Member", "canonical-member-local", "Set #%d as canonical for C%d", "Confirm canonical member #%d")
+}
+
+func (m *clusterBrowserModel) openMemberConfirmationMenu(title, action, labelFormat, statusFormat string) {
 	cluster, clusterOK := m.selectedCluster()
 	member, memberOK := m.selectedMember()
 	if !clusterOK || !memberOK {
 		m.status = "No selected cluster member"
 		return
 	}
-	m.menuTitle = "Canonical Member"
+	m.menuTitle = title
 	m.menuItems = []tuiMenuItem{
-		{label: fmt.Sprintf("Set #%d as canonical for C%d", member.Thread.Number, cluster.ID), action: "canonical-member-local"},
+		{label: fmt.Sprintf(labelFormat, member.Thread.Number, cluster.ID), action: action},
 		{label: "Back to actions", action: "back-to-actions"},
 	}
 	m.menuIndex = 0
 	m.menuOff = 0
-	m.status = fmt.Sprintf("Confirm canonical member #%d", member.Thread.Number)
+	m.status = fmt.Sprintf(statusFormat, member.Thread.Number)
 }
 
 func (m *clusterBrowserModel) closeSelectedThreadLocally() {
