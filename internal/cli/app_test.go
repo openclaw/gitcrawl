@@ -2581,6 +2581,10 @@ func TestRemoteLoginWithGitHubTokenEnvStoresKeyringToken(t *testing.T) {
 func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 	configPath := filepath.Join(dir, "config.toml")
 	dbPath := filepath.Join(dir, "gitcrawl.db")
 	init := New()
@@ -2616,6 +2620,19 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 			}
 			if _, ok := payload[tc.want]; !ok {
 				t.Fatalf("expected %s in %#v", tc.want, payload)
+			}
+			if tc.name == "metadata" {
+				var manifest control.Manifest
+				if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+					t.Fatalf("decode manifest: %v", err)
+				}
+				if _, ok := manifest.Commands["legacy-sync-api"]; ok {
+					t.Fatal("metadata advertises the unimplemented sync-status alias")
+				}
+				status := manifest.Commands["status"]
+				if !slices.Equal(status.Argv, []string{"gitcrawl", "status", "--json"}) || !status.JSON || status.Mutates {
+					t.Fatalf("status command = %#v, want read-only status --json", status)
+				}
 			}
 		})
 	}
