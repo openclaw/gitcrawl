@@ -1,5 +1,16 @@
 # Test cleanup ledger
 
+## Test-only CLI helpers
+
+- Removed the unused `exitErr` constructor and its test of an arbitrary exit
+  code 7. CLI command tests still verify real usage and runtime exit codes.
+- Removed `firstMarkdownLink`, `selectedColor`, and `selectedFG`, which had no
+  production callers, along with their isolated display-helper assertions.
+- Retained the active Markdown link extraction, menu palettes, rendered-row
+  style tests, and command behavior tests.
+
+This removes test-maintained dead code without changing CLI or TUI behavior.
+
 ## Invalid CLI arguments
 
 - Consolidated the overlapping `TestCLIAppUsageBranches` argument table into

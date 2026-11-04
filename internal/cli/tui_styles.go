@@ -231,20 +231,6 @@ func color(hex, value string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(value)
 }
 
-func selectedColor(focused bool) string {
-	if focused {
-		return "#f7f7ff"
-	}
-	return "#23445c"
-}
-
-func selectedFG(focused bool) string {
-	if focused {
-		return "#05070d"
-	}
-	return "#f7f7ff"
-}
-
 func floatingMenuStyle(width, height int, palette actionMenuPalette) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Width(max(1, width-2)).
