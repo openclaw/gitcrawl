@@ -18,11 +18,9 @@ import (
 )
 
 func TestAnalyticsEnrichIsolatesForbiddenActorAndTerminates(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.db")
-	st, err := store.Open(ctx, path)
+	st, err := store.Open(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +60,10 @@ func TestAnalyticsEnrichIsolatesForbiddenActorAndTerminates(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token-placeholder")
 	app := New()
 	app.Stdout, app.Stderr = io.Discard, io.Discard
-	err = app.Run(ctx, []string{"--config", writeDoctorTestConfig(t, dir, path), "analytics", "fixture/repo", "--enrich"})
+	configPath := writeDoctorTestConfig(t, dir, path)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	err = app.Run(ctx, []string{"--config", configPath, "analytics", "fixture/repo", "--enrich"})
 	if err == nil || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "synthetic-private-actor-failure") {
 		t.Errorf("expected bounded, safe incomplete-enrichment error, got %v", err)
 	}
