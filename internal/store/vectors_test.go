@@ -40,12 +40,31 @@ func TestUpsertAndListThreadVectors(t *testing.T) {
 		t.Fatalf("summary vector: %v", err)
 	}
 
-	vectors, err := st.ListThreadVectors(ctx, repoID)
-	if err != nil {
-		t.Fatalf("list vectors: %v", err)
-	}
-	if len(vectors) != 2 {
-		t.Fatalf("unexpected vectors: %#v", vectors)
+	for _, tc := range []struct {
+		name  string
+		query ThreadVectorQuery
+		want  int
+	}{
+		{"all bases", ThreadVectorQuery{RepoID: repoID}, 2},
+		{"matching model", ThreadVectorQuery{RepoID: repoID, Model: "test"}, 2},
+		{"other model", ThreadVectorQuery{RepoID: repoID, Model: "other"}, 0},
+		{"title basis", ThreadVectorQuery{RepoID: repoID, Basis: "title_original"}, 1},
+		{"summary basis", ThreadVectorQuery{RepoID: repoID, Basis: "llm_key_summary"}, 1},
+		{"matching dimensions", ThreadVectorQuery{RepoID: repoID, Dimensions: 3}, 2},
+		{"other dimensions", ThreadVectorQuery{RepoID: repoID, Dimensions: 2}, 0},
+		{"other repository", ThreadVectorQuery{RepoID: repoID + 1}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vectors, err := st.ListThreadVectorsFiltered(ctx, tc.query)
+			if err != nil || len(vectors) != tc.want {
+				t.Fatalf("list vectors = %+v, err=%v, want %d rows", vectors, err, tc.want)
+			}
+			for _, vector := range vectors {
+				if vector.ThreadID != threadID || (tc.query.Basis != "" && vector.Basis != tc.query.Basis) {
+					t.Fatalf("unexpected vector for query %+v: %+v", tc.query, vector)
+				}
+			}
+		})
 	}
 
 	thread, vector, err := st.ThreadVectorByNumber(ctx, ThreadVectorQuery{RepoID: repoID, Model: "test", Basis: "title_original"}, 1)
@@ -83,6 +102,10 @@ func TestUpsertAndListThreadVectors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if count, err := st.CountThreadVectorScope(ctx, tc.query); err != nil || count != tc.want {
 				t.Fatalf("vector scope = %d, err=%v, want %d", count, err, tc.want)
+			}
+			vectors, err := st.ListThreadVectorsFiltered(ctx, tc.query)
+			if err != nil || len(vectors) != 2*tc.want {
+				t.Fatalf("closed-thread vectors = %+v, err=%v, want %d rows", vectors, err, 2*tc.want)
 			}
 		})
 	}
@@ -165,7 +188,7 @@ func TestOpenMigratesThreadVectorsToCompositeKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("summary vector: %v", err)
 	}
-	vectors, err := st.ListThreadVectors(ctx, repoID)
+	vectors, err := st.ListThreadVectorsFiltered(ctx, ThreadVectorQuery{RepoID: repoID})
 	if err != nil {
 		t.Fatalf("list vectors: %v", err)
 	}

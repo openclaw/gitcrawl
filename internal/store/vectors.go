@@ -65,10 +65,6 @@ func (s *Store) UpsertThreadVector(ctx context.Context, vector ThreadVector) err
 	return nil
 }
 
-func (s *Store) ListThreadVectors(ctx context.Context, repoID int64) ([]ThreadVector, error) {
-	return s.ListThreadVectorsFiltered(ctx, ThreadVectorQuery{RepoID: repoID})
-}
-
 func (s *Store) ListThreadVectorsFiltered(ctx context.Context, query ThreadVectorQuery) ([]ThreadVector, error) {
 	if !s.hasTable(ctx, "thread_vectors") {
 		return []ThreadVector{}, nil
