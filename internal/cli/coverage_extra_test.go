@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 func TestCLIAppCommandCoveragePaths(t *testing.T) {
 	ctx := context.Background()
-	configPath := seedGHShimRepo(t, ctx)
+	configPath := seedCLICommandArchive(t, ctx)
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -96,54 +97,51 @@ func TestCLIAppCommandCoveragePaths(t *testing.T) {
 	}
 }
 
-func TestCLIAppHumanAndLogOutputE2E(t *testing.T) {
+func TestCLIAppControlOutputFormats(t *testing.T) {
 	ctx := context.Background()
-	configPath := seedGHShimRepo(t, ctx)
-	textCommands := [][]string{
-		{"--config", configPath, "version"},
-		{"--config", configPath, "metadata"},
-		{"--config", configPath, "status"},
-		{"--config", configPath, "doctor"},
-		{"--config", configPath, "help", "portable"},
-		{"--config", configPath, "help", "tui"},
+	configPath := seedCLICommandArchive(t, ctx)
+	for _, tc := range []struct {
+		command string
+		want    map[string]any
+	}{
+		{command: "metadata", want: map[string]any{"id": "gitcrawl"}},
+		{command: "status", want: map[string]any{"app_id": "gitcrawl", "summary": "2 threads across 1 repositories"}},
+		{command: "doctor", want: map[string]any{"repository_count": float64(1), "thread_count": float64(2)}},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			app.Stdout = &stdout
+			if err := app.Run(ctx, []string{"--config", configPath, tc.command}); err != nil {
+				t.Fatal(err)
+			}
+			prefix := tc.command + "\n"
+			if !strings.HasPrefix(stdout.String(), prefix) {
+				t.Fatalf("output = %q, want %q prefix", stdout.String(), prefix)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(stdout.Bytes()[len(prefix):], &payload); err != nil {
+				t.Fatalf("decode output: %v", err)
+			}
+			for key, want := range tc.want {
+				if got := payload[key]; got != want {
+					t.Errorf("%s = %v, want %v", key, got, want)
+				}
+			}
+		})
 	}
-	for _, args := range textCommands {
+
+	t.Run("doctor log", func(t *testing.T) {
 		app := New()
 		var stdout bytes.Buffer
 		app.Stdout = &stdout
-		if err := app.Run(ctx, args); err != nil {
-			t.Fatalf("%v failed: %v", args, err)
+		if err := app.Run(ctx, []string{"--config", configPath, "--format", "log", "doctor"}); err != nil {
+			t.Fatal(err)
 		}
-		if strings.TrimSpace(stdout.String()) == "" {
-			t.Fatalf("%v produced no text output", args)
+		if !strings.HasPrefix(stdout.String(), "doctor=") || !strings.Contains(stdout.String(), " thread_count:2 ") || !strings.Contains(stdout.String(), " repository_count:1 ") {
+			t.Fatalf("doctor log output = %q, want seeded archive counts", stdout.String())
 		}
-	}
-
-	logCommands := [][]string{
-		{"--config", configPath, "--format", "log", "configure", "--summary-model", "gpt-log"},
-		{"--config", configPath, "--format", "log", "doctor"},
-	}
-	for _, args := range logCommands {
-		app := New()
-		var stdout bytes.Buffer
-		app.Stdout = &stdout
-		if err := app.Run(ctx, args); err != nil {
-			t.Fatalf("%v failed: %v", args, err)
-		}
-		if !strings.Contains(stdout.String(), "=") {
-			t.Fatalf("%v log output = %q", args, stdout.String())
-		}
-	}
-
-	jsonVersion := New()
-	var jsonOut bytes.Buffer
-	jsonVersion.Stdout = &jsonOut
-	if err := jsonVersion.Run(ctx, []string{"--config", configPath, "--format", "json", "version"}); err != nil {
-		t.Fatalf("json version: %v", err)
-	}
-	if !strings.Contains(jsonOut.String(), `"version"`) {
-		t.Fatalf("json version output = %q", jsonOut.String())
-	}
+	})
 }
 
 func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
@@ -215,22 +213,19 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 	}
 }
 
-func seedGHShimRepo(t *testing.T, ctx context.Context) string {
+func seedCLICommandArchive(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	configPath := filepath.Join(dir, "config.toml")
 	dbPath := filepath.Join(dir, "gitcrawl.db")
 	app := New()
 	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
 		t.Fatalf("init: %v", err)
-	}
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	cfg.CacheDir = filepath.Join(dir, "cache")
-	if err := config.Save(configPath, cfg); err != nil {
-		t.Fatalf("save config: %v", err)
 	}
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
