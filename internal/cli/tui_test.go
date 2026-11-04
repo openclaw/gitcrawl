@@ -383,11 +383,16 @@ func TestTUIMouseSelectsVisibleClusterWindow(t *testing.T) {
 	model.selected = 20
 	model.syncComponents()
 	model.keepVisible()
-	start := model.clusterVisibleStart()
+	start := model.clusterOff
 	if start == 0 {
 		t.Fatalf("expected selected row to force a scrolled cluster window")
 	}
 	layout := model.layout()
+	view := model.renderClusters(layout.clusters)
+	lines := strings.Split(view, "\n")
+	if len(lines) < 4 || !strings.Contains(lines[3], model.payload.Clusters[start].RepresentativeTitle) || strings.Contains(view, model.payload.Clusters[start-1].RepresentativeTitle) {
+		t.Fatalf("rendered window does not start at row %d: %q", start, view)
+	}
 
 	model.handleMouse(tea.MouseMsg{
 		X:      layout.clusters.x + 2,
@@ -504,11 +509,16 @@ func TestTUIMouseSelectsVisibleMemberWindow(t *testing.T) {
 	model.memberIndex = 20
 	model.syncComponents()
 	model.keepVisible()
-	start := model.memberVisibleStart()
+	start := model.memberOff
 	if start == 0 {
 		t.Fatalf("expected selected row to force a scrolled member window")
 	}
 	layout := model.layout()
+	view := model.renderMembers(layout.members)
+	lines := strings.Split(view, "\n")
+	if len(lines) < 4 || !strings.Contains(lines[3], model.memberRows[start].member.Thread.Title) || strings.Contains(view, model.memberRows[start-1].member.Thread.Title) {
+		t.Fatalf("rendered window does not start at row %d: %q", start, view)
+	}
 
 	model.handleMouse(tea.MouseMsg{
 		X:      layout.members.x + 2,

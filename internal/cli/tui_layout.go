@@ -262,14 +262,6 @@ func (m *clusterBrowserModel) keepVisible() {
 	m.memberOff = keepRowVisible(m.memberOff, m.memberIndex, len(m.memberRows), m.memberViewportHeight())
 }
 
-func (m clusterBrowserModel) clusterVisibleStart() int {
-	return keepRowVisible(m.clusterOff, m.selected, len(m.payload.Clusters), m.clusterViewportHeight())
-}
-
-func (m clusterBrowserModel) memberVisibleStart() int {
-	return keepRowVisible(m.memberOff, m.memberIndex, len(m.memberRows), m.memberViewportHeight())
-}
-
 func (m clusterBrowserModel) clusterViewportHeight() int {
 	return tableViewportHeight(m.layout().clusters)
 }

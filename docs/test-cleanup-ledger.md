@@ -80,3 +80,16 @@ No embedding selection, text, hashing, or release behavior changed.
 Validation: temporary Go overlays compare NaN failure probes against the old
 and updated tests; vector race tests, full Go tests/static gates, independent
 P0–P3 review, and PR CI cover the candidate. No production or live archive changes.
+
+## Test-only viewport adapters
+
+- Removed `clusterVisibleStart` and `memberVisibleStart`, whose only callers
+  were mouse-selection tests. Rendering and mouse selection use the stored
+  `clusterOff` and `memberOff` values maintained by `keepVisible`.
+- The tests now inspect those actual offsets and render each pane before
+  clicking. They require the first visible fixture row and exclude the
+  preceding row, then retain the first-row mouse-selection assertions.
+- This checks agreement between scrolling, rendering, and hit testing without
+  keeping separate viewport computations solely for tests.
+
+No terminal layout, mouse behavior, archive data, or release artifacts changed.
