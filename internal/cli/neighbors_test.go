@@ -49,7 +49,7 @@ func TestNeighborsRowsCarryThreadStateAndTimes(t *testing.T) {
 	}
 }
 
-func TestNeighborsTimeFilters(t *testing.T) {
+func TestNeighborsFilters(t *testing.T) {
 	configPath := seedNeighborTimelineStore(t)
 
 	for _, tc := range []struct {
@@ -59,6 +59,8 @@ func TestNeighborsTimeFilters(t *testing.T) {
 		want   []int
 	}{
 		{name: "default open now", want: []int{201, 205}},
+		{name: "limit truncates ranked matches", args: []string{"--limit", "1"}, want: []int{201}},
+		{name: "threshold excludes lower scoring matches", args: []string{"--threshold", "0.98"}, want: []int{201}},
 		{name: "open at includes rows closed since", args: []string{"--open-at", "2026-09-10T12:00:00Z"}, want: []int{201, 204}},
 		// 2026-09-11T23:00Z: #204 closes an hour later, #203 is already open.
 		{name: "open at compares instants across offsets", args: []string{"--open-at", "2026-09-12T08:00:00+09:00"}, want: []int{201, 204, 203}},

@@ -42,7 +42,6 @@ func TestNeighborsDefaultOutputGolden(t *testing.T) {
 	}{
 		{"neighbors.json", []string{"neighbors", "openclaw/openclaw", "--number", "301", "--json"}},
 		{"neighbors.txt", []string{"neighbors", "openclaw/openclaw", "--number", "301"}},
-		{"neighbors-limit-threshold.json", []string{"neighbors", "openclaw/openclaw", "--number", "301", "--limit", "2", "--threshold", "0.95", "--json"}},
 		{"neighbors-include-closed.json", []string{"neighbors", "openclaw/openclaw", "--number", "301", "--include-closed", "--json"}},
 		{"neighbors-closed-source.json", []string{"neighbors", "openclaw/openclaw", "--number", "#303", "--include-closed", "--json"}},
 	} {
