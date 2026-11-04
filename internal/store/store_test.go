@@ -2427,3 +2427,12 @@ func TestHydrationRefreshesPortableBodyMetadata(t *testing.T) {
 		)
 	}
 }
+
+func openTestStore(t *testing.T, ctx context.Context) *Store {
+	t.Helper()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	return st
+}

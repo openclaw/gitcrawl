@@ -11,10 +11,7 @@ import (
 
 func TestRepositoryListAndStoreUtilityBranches(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	if st.Path() == "" || st.DB() == nil {
 		t.Fatalf("store accessors returned empty values")
@@ -67,10 +64,7 @@ func TestRepositoryListAndStoreUtilityBranches(t *testing.T) {
 
 func TestVectorsThreadsByIDsAndDecodeBranches(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -108,10 +102,7 @@ func TestVectorsThreadsByIDsAndDecodeBranches(t *testing.T) {
 
 func TestEmbeddingTaskBasisBranches(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -164,10 +155,7 @@ func TestEmbeddingTaskBasisBranches(t *testing.T) {
 
 func TestEmbeddingTasksSkipExistingHashAndForce(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	text := "First vector thread\nalpha body"
@@ -301,10 +289,7 @@ func TestPortablePruneCanonicalizesSchemaAndMetadata(t *testing.T) {
 
 func TestPortablePruneDeletesOnlyEquivalentLegacyKeySummaries(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	_, threadIDs := seedVectorThreads(t, ctx, st)
 	if _, err := st.DB().ExecContext(ctx, `
@@ -359,10 +344,7 @@ func TestPortablePruneDeletesOnlyEquivalentLegacyKeySummaries(t *testing.T) {
 
 func TestPortablePruneClearsPRRawJSONBlobPointersAndFingerprints(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	threadID := threadIDs[1]
@@ -480,10 +462,7 @@ func TestClusterHelperBranches(t *testing.T) {
 
 func TestThreadGitHubCloseAndRunBranches(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	if err := (*Store)(nil).Close(); err != nil {
 		t.Fatalf("nil close: %v", err)
@@ -603,10 +582,7 @@ func TestThreadGitHubCloseAndRunBranches(t *testing.T) {
 
 func TestDurableClusterLifecycleAndClosedSummaries(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	thirdID, err := st.UpsertThread(ctx, Thread{
@@ -853,10 +829,7 @@ func TestOpenBackfillsLegacyPortableColumns(t *testing.T) {
 
 func TestClusterErrorBranchesAndSummaryScanning(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	if err := st.CloseClusterLocally(ctx, 0, 1, ""); err == nil {
@@ -934,10 +907,7 @@ func TestClusterErrorBranchesAndSummaryScanning(t *testing.T) {
 
 func TestPortableVacuumAndVectorQueryBranches(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	if err := st.UpsertThreadVector(ctx, ThreadVector{ThreadID: threadIDs[0], Basis: "title_original", Model: "test", Dimensions: 2, ContentHash: "hash", Vector: []float64{0.5, 0.5}, CreatedAt: "2026-04-30T00:00:00Z", UpdatedAt: "2026-04-30T00:00:00Z"}); err != nil {
@@ -992,10 +962,7 @@ func seedVectorThreads(t *testing.T, ctx context.Context, st *Store) (int64, []i
 
 func TestClosedStoreErrorBranches(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey:              "closed-store",

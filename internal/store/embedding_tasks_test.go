@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -11,10 +10,7 @@ import (
 
 func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -102,10 +98,7 @@ func TestListEmbeddingTasksUsesLatestLLMKeySummary(t *testing.T) {
 
 func TestListEmbeddingTasksUsesLatestObservedRevision(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -158,10 +151,7 @@ func TestListEmbeddingTasksUsesLatestObservedRevision(t *testing.T) {
 
 func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -219,10 +209,7 @@ func TestListEmbeddingTasksRejectsSummaryFromOlderRevision(t *testing.T) {
 
 func TestListEmbeddingTasksAppliesSummaryLimitAfterEligibility(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -361,10 +348,7 @@ func TestSupportsEmbeddingBasis(t *testing.T) {
 
 func TestListEmbeddingTasksIncludeClosed(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
