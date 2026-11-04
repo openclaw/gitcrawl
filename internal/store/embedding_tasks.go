@@ -223,11 +223,6 @@ func SupportsEmbeddingBasis(basis string) bool {
 	}
 }
 
-func embeddingTextForBasis(basis, title, body, rawText, dedupeText, keySummary string) (string, error) {
-	text, _, err := embeddingTextForBasisWithMeta(basis, title, body, rawText, dedupeText, keySummary)
-	return text, err
-}
-
 type embeddingTextMeta struct {
 	Truncated     bool
 	OriginalRunes int

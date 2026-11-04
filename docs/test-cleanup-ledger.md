@@ -52,3 +52,15 @@ Launcher metadata changes; the supported status command and archive data do not.
   portable refresh and transition fixtures, and cancellation checks.
 
 No archive format, staging behavior, or release artifacts changed.
+
+## Test-only embedding adapter
+
+- Removed `embeddingTextForBasis`, whose only callers were tests. Production
+  task generation uses `embeddingTextForBasisWithMeta` to retain truncation data.
+- Updated unsupported-basis, empty-summary, and canonical-text assertions to
+  call that same implementation. Removed the error-only raw-text assertion:
+  the canonical-text test already requires the exact selected document text.
+- Kept task selection, existing-hash/force, truncation, Unicode-byte-cap, and
+  summary-availability coverage.
+
+No embedding selection, text, hashing, or release behavior changed.
