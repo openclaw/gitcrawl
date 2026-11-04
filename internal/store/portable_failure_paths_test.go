@@ -227,7 +227,10 @@ func TestPortableStoreHelpersPropagateCancellation(t *testing.T) {
 			return validatePortableRetainedSchemaDependencies(canceled, st.DB(), []string{"documents"})
 		}},
 		{name: "bulk drop", run: func() error { return st.dropCanonicalPortableTablesBulk(canceled, false, &PortablePruneStats{}, nil) }},
-		{name: "threads rebuild", run: func() error { _, err := st.rebuildPortableCompatibilityThreads(canceled); return err }},
+		{name: "threads rebuild", run: func() error {
+			_, err := st.rebuildPortableCompatibilityThreadsWithOptions(canceled, PortablePruneOptions{}, &PortablePruneStats{})
+			return err
+		}},
 		{name: "threads sequence", run: func() error { _, err := portableThreadsSequence(canceled, st.DB()); return err }},
 		{name: "threads identity", run: func() error { _, err := portableThreadsIdentityForTable(canceled, st.DB(), "threads"); return err }},
 		{name: "foreign keys", run: func() error { _, err := portableForeignKeysForTable(canceled, st.DB(), "threads"); return err }},
