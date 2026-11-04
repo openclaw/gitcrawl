@@ -199,3 +199,15 @@ No production writer behavior or archive schema changed.
   the seeded issue and pull request. Each row uses its own temporary SQLite store.
 
 No production graph behavior or archive schema changed.
+
+## Review pagination cursor fixtures
+
+- Consolidated duplicate empty/repeated review-thread cursor fixtures into one
+  table, retaining the real HTTP client, bounded loop guard, deadline, error
+  checks, and exact request counts.
+- Reuse the nested comment-pagination fixture for empty and repeated cursors.
+  The empty nested cursor previously had no rejection proof in these tests.
+- Require errors to identify the affected pagination level; keep the comment
+  request's thread ID and cursor checks, and all successful pagination tests.
+
+All HTTP responses are synthetic and local. Production pagination is unchanged.
