@@ -195,22 +195,22 @@ func TestTUISelectionAndVisibilityHelperBranches(t *testing.T) {
 			{selectable: true, member: store.ClusterMemberDetail{Thread: store.Thread{Number: 202, State: "open"}}},
 		},
 	}
-	if got := model.currentClusterID(); got != 1 {
-		t.Fatalf("current cluster = %d", got)
+	if cluster, ok := model.selectedCluster(); !ok || cluster.ID != 1 {
+		t.Fatalf("current cluster = %d", cluster.ID)
 	}
 	if got := model.clusterRefreshLimit(); got != 2 {
 		t.Fatalf("refresh limit = %d", got)
 	}
-	if got := model.findLoadedClusterIDForThreadNumber(909); got != 9 {
-		t.Fatalf("detail cluster lookup = %d", got)
+	if cluster, ok := model.findLoadedClusterForThreadNumber(909); !ok || cluster.ID != 9 {
+		t.Fatalf("detail cluster lookup = %d", cluster.ID)
 	}
-	if got := model.findLoadedClusterIDForThreadNumber(808); got != 8 {
-		t.Fatalf("cache cluster lookup = %d", got)
+	if cluster, ok := model.findLoadedClusterForThreadNumber(808); !ok || cluster.ID != 8 {
+		t.Fatalf("cache cluster lookup = %d", cluster.ID)
 	}
-	if got := model.findLoadedClusterIDForThreadNumber(303); got != 3 {
-		t.Fatalf("working-set cluster lookup = %d", got)
+	if cluster, ok := model.findLoadedClusterForThreadNumber(303); !ok || cluster.ID != 3 {
+		t.Fatalf("working-set cluster lookup = %d", cluster.ID)
 	}
-	if _, ok := model.clusterFromWorkingSet(404); ok {
+	if _, ok := model.clusterSummaryFromWorkingSet(store.ClusterSummary{ID: 404}); ok {
 		t.Fatal("missing cluster should not be found")
 	}
 	if !model.selectMemberByNumber(202) || model.memberIndex != 1 {

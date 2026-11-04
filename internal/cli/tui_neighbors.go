@@ -11,20 +11,6 @@ import (
 	"github.com/openclaw/gitcrawl/internal/vector"
 )
 
-func (m *clusterBrowserModel) loadSelectedThreadNeighbors(limit int, threshold float64) {
-	thread, ok := m.selectedThread()
-	if !ok {
-		m.status = "No selected thread"
-		return
-	}
-	threadID, threadNumber, neighbors, err := loadThreadNeighbors(m.ctx, m.store, m.repoID, m.payload, m.queryNeighbors, thread.Number, limit, threshold)
-	if err != nil {
-		m.status = err.Error()
-		return
-	}
-	m.applyLoadedNeighbors(threadID, threadNumber, neighbors)
-}
-
 func (m *clusterBrowserModel) requestSelectedThreadNeighbors(limit int, threshold float64) tea.Cmd {
 	thread, ok := m.selectedThread()
 	if !ok {
