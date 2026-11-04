@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 func (m *clusterBrowserModel) openReferenceLinkMenu(mode string) {
@@ -232,19 +234,8 @@ func (m *clusterBrowserModel) reopenSelectedClusterLocally() {
 }
 
 func (m *clusterBrowserModel) excludeSelectedClusterMemberLocally() {
-	m.invalidateNeighborLoad()
-	cluster, clusterOK := m.selectedCluster()
-	member, memberOK := m.selectedMember()
-	if !clusterOK || !memberOK {
-		m.status = "No selected cluster member"
-		return
-	}
-	if !clusterSupportsDurableLocalActions(cluster) {
-		m.status = "Local member triage is only available for durable clusters"
-		return
-	}
-	if m.store == nil || m.repoID == 0 {
-		m.status = "Local member exclude unavailable for this view"
+	cluster, member, ok := m.selectedMemberForLocalAction("Local member exclude unavailable for this view")
+	if !ok {
 		return
 	}
 	if _, err := m.store.ExcludeClusterMemberLocally(m.ctx, m.repoID, cluster.ID, member.Thread.Number, "TUI manual exclude"); err != nil {
@@ -257,19 +248,8 @@ func (m *clusterBrowserModel) excludeSelectedClusterMemberLocally() {
 }
 
 func (m *clusterBrowserModel) includeSelectedClusterMemberLocally() {
-	m.invalidateNeighborLoad()
-	cluster, clusterOK := m.selectedCluster()
-	member, memberOK := m.selectedMember()
-	if !clusterOK || !memberOK {
-		m.status = "No selected cluster member"
-		return
-	}
-	if !clusterSupportsDurableLocalActions(cluster) {
-		m.status = "Local member triage is only available for durable clusters"
-		return
-	}
-	if m.store == nil || m.repoID == 0 {
-		m.status = "Local member include unavailable for this view"
+	cluster, member, ok := m.selectedMemberForLocalAction("Local member include unavailable for this view")
+	if !ok {
 		return
 	}
 	if _, err := m.store.IncludeClusterMemberLocally(m.ctx, m.repoID, cluster.ID, member.Thread.Number, "TUI manual include"); err != nil {
@@ -281,19 +261,8 @@ func (m *clusterBrowserModel) includeSelectedClusterMemberLocally() {
 }
 
 func (m *clusterBrowserModel) setSelectedClusterCanonicalLocally() {
-	m.invalidateNeighborLoad()
-	cluster, clusterOK := m.selectedCluster()
-	member, memberOK := m.selectedMember()
-	if !clusterOK || !memberOK {
-		m.status = "No selected cluster member"
-		return
-	}
-	if !clusterSupportsDurableLocalActions(cluster) {
-		m.status = "Local member triage is only available for durable clusters"
-		return
-	}
-	if m.store == nil || m.repoID == 0 {
-		m.status = "Local canonical unavailable for this view"
+	cluster, member, ok := m.selectedMemberForLocalAction("Local canonical unavailable for this view")
+	if !ok {
 		return
 	}
 	if _, err := m.store.SetClusterCanonicalLocally(m.ctx, m.repoID, cluster.ID, member.Thread.Number, "TUI manual canonical"); err != nil {
@@ -302,4 +271,23 @@ func (m *clusterBrowserModel) setSelectedClusterCanonicalLocally() {
 	}
 	m.refreshFromStore()
 	m.status = fmt.Sprintf("Set #%d as canonical for C%d", member.Thread.Number, cluster.ID)
+}
+
+func (m *clusterBrowserModel) selectedMemberForLocalAction(unavailable string) (store.ClusterSummary, store.ClusterMemberDetail, bool) {
+	m.invalidateNeighborLoad()
+	cluster, clusterOK := m.selectedCluster()
+	member, memberOK := m.selectedMember()
+	if !clusterOK || !memberOK {
+		m.status = "No selected cluster member"
+		return cluster, member, false
+	}
+	if !clusterSupportsDurableLocalActions(cluster) {
+		m.status = "Local member triage is only available for durable clusters"
+		return cluster, member, false
+	}
+	if m.store == nil || m.repoID == 0 {
+		m.status = unavailable
+		return cluster, member, false
+	}
+	return cluster, member, true
 }
