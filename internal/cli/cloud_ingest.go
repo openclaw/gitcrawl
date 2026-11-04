@@ -260,31 +260,6 @@ func sendSnapshotIngestDataset(
 	return ingestProgress{RowsAccepted: accepted, MutationToken: mutationToken}, nil
 }
 
-func sendIngestRows(
-	ctx context.Context,
-	client *crawlremote.Client,
-	app, archive string,
-	manifest crawlremote.IngestManifest,
-	table string,
-	columns []string,
-	rows [][]any,
-	final bool,
-) (int64, error) {
-	progress, err := sendSnapshotIngestRows(
-		ctx,
-		client,
-		app,
-		archive,
-		manifest,
-		table,
-		columns,
-		rows,
-		"",
-		final,
-	)
-	return progress.RowsAccepted, err
-}
-
 func sendSnapshotIngestRows(
 	ctx context.Context,
 	client *crawlremote.Client,

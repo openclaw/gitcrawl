@@ -2,34 +2,11 @@ package cli
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
 	crawlremote "github.com/openclaw/crawlkit/remote"
 )
-
-func uploadSQLiteArchive(ctx context.Context, client *crawlremote.Client, app, archive string, db *sql.DB, dbPath string, manifest crawlremote.IngestManifest, counts map[string]int64) (*crawlremote.SQLiteBundle, error) {
-	snapshotPath, _, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, dbPath, gitcrawlCloudPublishOptions{})
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-	snapshotID, err := cloudFileSHA256(snapshotPath)
-	if err != nil {
-		return nil, err
-	}
-	bundle, _, err := uploadSQLiteSnapshotArchive(
-		ctx,
-		client,
-		app,
-		archive,
-		snapshotPath,
-		snapshotID,
-		counts,
-	)
-	return bundle, err
-}
 
 func uploadSQLiteSnapshotArchive(
 	ctx context.Context,

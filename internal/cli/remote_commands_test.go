@@ -149,12 +149,12 @@ func TestSendIngestRowsBatchesAndFinalizes(t *testing.T) {
 	for i := range rows {
 		rows[i] = []any{i}
 	}
-	accepted, err := sendIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", crawlremote.IngestManifest{App: "gitcrawl"}, "threads", []string{"id"}, rows, true)
+	accepted, err := sendSnapshotIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", crawlremote.IngestManifest{App: "gitcrawl"}, "threads", []string{"id"}, rows, "", true)
 	if err != nil {
 		t.Fatalf("send ingest: %v", err)
 	}
-	if accepted != int64(len(rows)) {
-		t.Fatalf("accepted = %d", accepted)
+	if accepted.RowsAccepted != int64(len(rows)) {
+		t.Fatalf("accepted = %d", accepted.RowsAccepted)
 	}
 	if len(requests) != 2 {
 		t.Fatalf("requests len = %d", len(requests))
