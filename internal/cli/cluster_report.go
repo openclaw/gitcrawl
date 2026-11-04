@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/openclaw/gitcrawl/internal/documents"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -110,7 +110,7 @@ func renderClusterMemberTable(b *strings.Builder, members []store.ClusterMemberD
 			markdownTableText(firstNonEmpty(thread.State, member.State, "unknown")),
 			markdownTableText(score),
 			markdownTableText(thread.Title),
-			markdownTableText(strings.Join(cliLabelNames(thread.LabelsJSON), ", ")),
+			markdownTableText(strings.Join(documents.LabelNames(thread.LabelsJSON), ", ")),
 		)
 	}
 }
@@ -178,32 +178,4 @@ func shortTime(value string) string {
 		return value[:len("2006-01-02")]
 	}
 	return value
-}
-
-func cliLabelNames(raw string) []string {
-	var labels []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(raw), &labels); err == nil {
-		out := make([]string, 0, len(labels))
-		for _, label := range labels {
-			if name := strings.TrimSpace(label.Name); name != "" {
-				out = append(out, name)
-			}
-		}
-		if len(out) > 0 {
-			return out
-		}
-	}
-	var names []string
-	if err := json.Unmarshal([]byte(raw), &names); err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(names))
-	for _, name := range names {
-		if name = strings.TrimSpace(name); name != "" {
-			out = append(out, name)
-		}
-	}
-	return out
 }

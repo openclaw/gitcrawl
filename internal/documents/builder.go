@@ -25,7 +25,7 @@ func BuildWithComments(thread store.Thread, comments []store.Comment) store.Docu
 }
 
 func BuildWithContext(thread store.Thread, comments []store.Comment, files []store.PullRequestFile, commits []store.PullRequestCommit) store.Document {
-	labels := labelNames(thread.LabelsJSON)
+	labels := LabelNames(thread.LabelsJSON)
 	sections := []string{
 		"# " + thread.Title,
 	}
@@ -116,7 +116,8 @@ func normalizeDedupe(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func labelNames(raw string) []string {
+// LabelNames decodes object labels and legacy string labels, trimming empty names.
+func LabelNames(raw string) []string {
 	var labels []struct {
 		Name string `json:"name"`
 	}
