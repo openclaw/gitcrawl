@@ -2,17 +2,13 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -170,10 +166,7 @@ func TestUpsertThreadRevisionAndFingerprintTracksCanonicalEvidence(t *testing.T)
 
 func TestUpsertThreadRevisionAndFingerprintRollsBackTogether(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z"})
@@ -215,10 +208,7 @@ func TestUpsertThreadRevisionAndFingerprintRollsBackTogether(t *testing.T) {
 
 func TestUpsertThreadRevisionRefreshesSourceTimestampWithoutNewRevision(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -455,10 +445,7 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-			if err != nil {
-				t.Fatalf("open store: %v", err)
-			}
+			st := openTestStore(t, ctx)
 			defer st.Close()
 
 			repoID, err := st.UpsertRepository(ctx, Repository{

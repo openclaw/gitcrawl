@@ -14,10 +14,7 @@ import (
 
 func TestSyncAttemptFailureRetryAndResolve(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
@@ -403,10 +400,7 @@ func seedPortableSyncFailureHistory(t *testing.T, ctx context.Context) (*Store, 
 
 func seedPortableSyncFailure(t *testing.T, ctx context.Context, message string) (*Store, int64) {
 	t.Helper()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-16T00:00:00Z",
 	})

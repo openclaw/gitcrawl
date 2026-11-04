@@ -2,16 +2,12 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
 func TestCloseThreadLocallyHidesThreadAndSurvivesUpsert(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -114,10 +110,7 @@ func TestCloseThreadLocallyHidesThreadAndSurvivesUpsert(t *testing.T) {
 
 func TestCloseThreadLocallyRequiresExistingThread(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	if err := st.CloseThreadLocally(ctx, 1, 404, "missing"); err == nil {
@@ -127,10 +120,7 @@ func TestCloseThreadLocallyRequiresExistingThread(t *testing.T) {
 
 func TestReopenThreadLocallyRequiresExistingThread(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	if err := st.ReopenThreadLocally(ctx, 1, 404); err == nil {

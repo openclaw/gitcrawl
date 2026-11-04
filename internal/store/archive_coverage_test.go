@@ -10,10 +10,7 @@ import (
 
 func TestArchiveCoverageReportsAndFiltersCurrentStore(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	primaryID, secondaryID := seedArchiveCoverageRows(t, ctx, st)
 
@@ -94,10 +91,7 @@ func TestArchiveCoveragePRDetailFreshnessParsesTimestamps(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-			if err != nil {
-				t.Fatalf("open store: %v", err)
-			}
+			st := openTestStore(t, ctx)
 			defer st.Close()
 
 			repoID, err := st.UpsertRepository(ctx, Repository{
@@ -510,10 +504,7 @@ func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-			if err != nil {
-				t.Fatalf("open store: %v", err)
-			}
+			st := openTestStore(t, ctx)
 			defer st.Close()
 
 			repoID, err := st.UpsertRepository(ctx, Repository{
@@ -566,10 +557,7 @@ func TestArchiveCoverageRevisionFreshnessParsesTimestamps(t *testing.T) {
 
 func TestArchiveCoverageClocklessFreshnessUsesObservationSequence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -646,10 +634,7 @@ func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("portable", func(t *testing.T) {
-		st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
+		st := openTestStore(t, ctx)
 		defer st.Close()
 		seedArchiveCoverageRows(t, ctx, st)
 		if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 2000, Vacuum: false}); err != nil {
@@ -665,10 +650,7 @@ func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 	})
 
 	t.Run("optional tables absent", func(t *testing.T) {
-		st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
+		st := openTestStore(t, ctx)
 		defer st.Close()
 		seedArchiveCoverageRows(t, ctx, st)
 		for _, table := range []string{
@@ -711,10 +693,7 @@ func TestArchiveCoverageSupportsPortableAndOptionalTableDrift(t *testing.T) {
 
 func TestArchiveCoverageRejectsIncompatibleCoreTables(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	if _, err := st.DB().ExecContext(ctx, `alter table threads rename to legacy_threads`); err != nil {
 		t.Fatalf("rename threads: %v", err)
