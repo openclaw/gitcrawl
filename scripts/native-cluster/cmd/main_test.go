@@ -131,21 +131,6 @@ func TestNativeCombinedCommandAndRestartNoop(t *testing.T) {
 	}
 }
 
-func TestIdentityConflictProofSkipsUnchangedGraph(t *testing.T) {
-	dir := t.TempDir()
-	snap := store.NativeClusterSnapshot{InputSHA256: "input", StateSHA256: "state"}
-	if e := durable(filepath.Join(dir, "identity-conflict.json"), cacheReceipt{InputSHA256: "input", StateSHA256: "state"}, false); e != nil {
-		t.Fatal(e)
-	}
-	if e := checkIdentityConflict(dir, snap); e == nil {
-		t.Fatal("unchanged ambiguous graph retried")
-	}
-	snap.InputSHA256 = "changed"
-	if e := checkIdentityConflict(dir, snap); e != nil {
-		t.Fatal(e)
-	}
-}
-
 func TestRetainedPlanAtomicCompressedProof(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "proof.json.gz")
 	raw := []byte(`{"format":"synthetic","groups":["1","2"]}`)

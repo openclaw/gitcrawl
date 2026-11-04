@@ -579,31 +579,6 @@ func (s *Store) NativePublishedClusterScope(ctx context.Context, repoID int64) (
 	return r.ClusterScope, e
 }
 
-// Preview partial identity reconciliation without settling the ordinary owner.
-func (s *Store) NativeCheckClusterPlan(ctx context.Context, want NativeClusterSnapshot, inputs []DurableClusterInput) error {
-	return s.nativeClusterWithTx(ctx, func(tx *Store) error {
-		state, e := tx.nativeClusterState(ctx, want.RepoID)
-		if e != nil {
-			return e
-		}
-		if state != want.StateSHA256 {
-			return fmt.Errorf("native combined input/curation changed during compute")
-		}
-		if want.Availability.Scope.Mode != "available-subset" {
-			return nil
-		}
-		for _, input := range inputs {
-			if _, e = tx.reconcilePartialDurableClusterInput(ctx, want.RepoID, input); e != nil {
-				if strings.Contains(e.Error(), "overlaps multiple active identities") {
-					return fmt.Errorf("partial_identity_conflict: %w", e)
-				}
-				return e
-			}
-		}
-		return nil
-	})
-}
-
 // NativePlanClusters constructs complete current relation closure without source
 // writes. The exact same proof is recomputed inside the final transaction.
 func (s *Store) NativePlanClusters(ctx context.Context, want NativeClusterSnapshot, inputs []DurableClusterInput) (ClusterQuarantinePlan, error) {

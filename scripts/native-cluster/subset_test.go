@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -68,11 +69,19 @@ func TestNativeAvailableSubsetAtomicRecoveryNoop(t *testing.T) {
 	}
 	inputs := []DurableClusterInput{{StableKey: "new-a", StableSlug: "new-a", RepresentativeThreadID: 2, Title: "new", Members: []DurableClusterMemberInput{{ThreadID: 2, Role: "canonical"}}}, {StableKey: "new-b", StableSlug: "new-b", RepresentativeThreadID: 3, Title: "other", Members: []DurableClusterMemberInput{{ThreadID: 3, Role: "canonical"}}}}
 	badPlan := []DurableClusterInput{{StableKey: "ambiguous", RepresentativeThreadID: 2, Members: []DurableClusterMemberInput{{ThreadID: 2, Role: "canonical"}, {ThreadID: 3, Role: "related"}}}}
-	if e = s.NativeCheckClusterPlan(ctx, snap, badPlan); e == nil {
-		t.Fatal("ambiguous identity preview admitted")
-	}
-	if e = s.NativeCheckClusterPlan(ctx, snap, inputs); e != nil {
+	plan, e := s.NativePlanClusters(ctx, snap, badPlan)
+	if e != nil {
 		t.Fatal(e)
+	}
+	if !reflect.DeepEqual(plan.QuarantinedIDs, []int64{2, 3}) || len(plan.QuarantinedGroups) != 2 || len(plan.Published) != 0 || len(plan.Targets) != 0 {
+		t.Fatalf("ambiguous identity was not quarantined: %+v", plan)
+	}
+	plan, e = s.NativePlanClusters(ctx, snap, inputs)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(plan.Published) != 2 || len(plan.QuarantinedIDs) != 0 {
+		t.Fatalf("independent identities were not publishable: %+v", plan)
 	}
 	if _, e = s.DB().Exec("CREATE TRIGGER refuse_partial BEFORE INSERT ON cluster_runs BEGIN SELECT RAISE(ABORT,'rollback'); END"); e != nil {
 		t.Fatal(e)
