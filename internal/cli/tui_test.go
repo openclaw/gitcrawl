@@ -1681,9 +1681,16 @@ func TestTUILocalActionUnavailableBranches(t *testing.T) {
 		"include-member-local",
 		"canonical-member-local",
 	} {
+		loadCtx, cancel := context.WithCancel(context.Background())
+		model.neighborLoadStop = cancel
+		previousSeq := model.neighborLoadSeq
 		if !model.runMenuItem(tuiMenuItem{action: action}) {
 			t.Fatalf("action %s should be handled", action)
 		}
+		if strings.Contains(action, "member") && (loadCtx.Err() != context.Canceled || model.neighborLoadSeq != previousSeq+1) {
+			t.Fatalf("action %s did not invalidate pending neighbor load", action)
+		}
+		cancel()
 		if !strings.Contains(model.status, "unavailable") {
 			t.Fatalf("action %s status = %q", action, model.status)
 		}
