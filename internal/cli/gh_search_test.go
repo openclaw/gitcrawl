@@ -179,7 +179,9 @@ func TestGHSearchSyncIfStaleHydratesCache(t *testing.T) {
 				return
 			}
 			if got := r.URL.Query().Get("state"); got != "open" {
-				t.Fatalf("state query = %q", got)
+				t.Errorf("state query = %q", got)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"id":         501,
@@ -195,7 +197,9 @@ func TestGHSearchSyncIfStaleHydratesCache(t *testing.T) {
 				"user":       map[string]any{"login": "alice", "type": "User"},
 			}})
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -253,7 +257,9 @@ func TestGHSearchSyncIfStaleMigratesFreshPortableRuntime(t *testing.T) {
 		case "/repos/openclaw/openclaw/issues":
 			_ = json.NewEncoder(w).Encode([]map[string]any{githubIssueJSON(501, "issue", "fresh portable runtime")})
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
