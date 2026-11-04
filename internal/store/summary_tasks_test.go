@@ -3,17 +3,13 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -162,10 +158,7 @@ func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 
 func TestSummaryTasksUseImmutableRevisionEvidence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	if _, err := st.ListSummaryTasks(ctx, SummaryTaskOptions{}); err == nil || !strings.Contains(err.Error(), "provider") {
@@ -284,10 +277,7 @@ func TestSummaryTasksUseImmutableRevisionEvidence(t *testing.T) {
 
 func TestSummaryTaskIncludesCanonicalPullRequestEvidence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T03:00:00Z",
@@ -351,10 +341,7 @@ func TestSummaryTaskIncludesCanonicalPullRequestEvidence(t *testing.T) {
 
 func TestListSummaryTasksFailsClosedOnSameTimestampThreadDivergence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T03:00:00Z",
@@ -397,10 +384,7 @@ func TestListSummaryTasksFailsClosedOnSameTimestampThreadDivergence(t *testing.T
 
 func TestListSummaryTasksFailsClosedOnOversizedRevisionEvidence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-12T03:00:00Z",
@@ -436,10 +420,7 @@ func TestListSummaryTasksFailsClosedOnOversizedRevisionEvidence(t *testing.T) {
 
 func TestListSummaryTasksRequiresStoredRevisionEvidence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{

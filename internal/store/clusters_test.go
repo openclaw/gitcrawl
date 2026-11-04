@@ -2,17 +2,13 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestListClusterSummaries(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -79,10 +75,7 @@ func TestSortClusterSummariesOldest(t *testing.T) {
 
 func TestDurableClusterSummariesUsePrimaryOpenMembers(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -177,10 +170,7 @@ func TestDurableClusterSummariesUsePrimaryOpenMembers(t *testing.T) {
 
 func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -303,10 +293,7 @@ func TestListDisplayClusterSummariesPrefersLatestRawRun(t *testing.T) {
 
 func TestCloseAndReopenClusterLocally(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -362,10 +349,7 @@ func TestCloseAndReopenClusterLocally(t *testing.T) {
 
 func TestClusterMemberLocalOverrides(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -462,10 +446,7 @@ func TestClusterMemberLocalOverrides(t *testing.T) {
 
 func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -541,10 +522,7 @@ func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
 
 func TestSaveDurableClustersChoosesVisibleRepresentative(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-05-15T00:00:00Z"})
@@ -595,10 +573,7 @@ func TestSaveDurableClustersChoosesVisibleRepresentative(t *testing.T) {
 
 func TestSaveCompleteDurableClustersRefreshesRepresentativeAfterRetiringStaleClusters(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-05-15T00:00:00Z"})
@@ -654,10 +629,7 @@ func TestSaveCompleteDurableClustersRefreshesRepresentativeAfterRetiringStaleClu
 
 func TestSaveDurableClustersRefreshesRepresentativeAfterDeletingLegacyClusters(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-05-15T00:00:00Z"})
@@ -736,10 +708,7 @@ func TestSaveDurableClustersRefreshesRepresentativeAfterDeletingLegacyClusters(t
 
 func TestSaveDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-05-15T00:00:00Z"})
@@ -796,10 +765,7 @@ func TestSaveDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
 
 func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
@@ -875,10 +841,7 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 
 func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
@@ -918,10 +881,7 @@ func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
 
 func TestSavePartialDurableClustersIgnoresDeletedLegacySimilarityIdentity(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
@@ -993,10 +953,7 @@ func TestSavePartialDurableClustersIgnoresDeletedLegacySimilarityIdentity(t *tes
 
 func TestSavePartialDurableClustersReusesIdentityWhenRepresentativeIsOmitted(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
@@ -1076,10 +1033,7 @@ func TestSavePartialDurableClustersReusesIdentityWhenRepresentativeIsOmitted(t *
 
 func TestSavePartialDurableClustersRejectsAmbiguousActiveIdentities(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{
@@ -1094,7 +1048,7 @@ func TestSavePartialDurableClustersRejectsAmbiguousActiveIdentities(t *testing.T
 	}); err != nil {
 		t.Fatalf("seed durable clusters: %v", err)
 	}
-	_, err = st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{{
+	_, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey: "ambiguous", RepresentativeThreadID: threadIDs[0],
 		Members: []DurableClusterMemberInput{
 			{ThreadID: threadIDs[0], Role: "canonical"},
@@ -1119,10 +1073,7 @@ func TestSavePartialDurableClustersRejectsAmbiguousActiveIdentities(t *testing.T
 
 func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -1196,10 +1147,7 @@ func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
 
 func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
