@@ -17,3 +17,16 @@
 This is a bounded argument-test cleanup, not a complete repository audit.
 Invalid clustering-shape arguments now return usage exit code 2 instead of
 runtime exit code 1. No release artifacts changed.
+
+## Launcher status mapping
+
+- Removed the `legacy-sync-api` manifest entry: its advertised `sync-status`
+  command only returns a not-implemented error and was never an alias.
+- Strengthened the existing metadata/status test to reject that entry and require
+  the supported read-only `status --json` invocation. Reused its temporary archive
+  instead of adding a second fixture.
+- Isolated the test's home and XDG paths so missing-config status checks use
+  temporary default paths.
+- Kept the documented future `sync-status` reservation and unrelated commands.
+
+Launcher metadata changes; the supported status command and archive data do not.

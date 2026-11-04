@@ -61,7 +61,6 @@ func (a *App) runMetadata(args []string) error {
 		"portable":         {Title: "Portable store tools", Argv: []string{"gitcrawl", "portable", "prune", "--json"}, JSON: true, Mutates: true},
 		"portable-refresh": {Title: "Refresh portable subscriber", Argv: []string{"gitcrawl", "portable", "refresh", "--expected-remote", "URL", "--json"}, JSON: true, Mutates: true},
 		"clusters":         {Title: "Clusters", Argv: []string{"gitcrawl", "clusters", "--json"}, JSON: true},
-		"legacy-sync-api":  {Title: "Legacy sync-status alias", Argv: []string{"gitcrawl", "sync-status"}, Legacy: true, Deprecated: true},
 	}
 	return a.writeOutput("metadata", manifest, false)
 }
