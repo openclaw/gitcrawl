@@ -199,35 +199,24 @@ func preserveMalformedPortableDB(root, dbPath string) (string, error) {
 }
 
 func fastForwardGitCheckoutWithStaleIndexLockRetry(ctx context.Context, root string, quiet bool) (bool, error) {
-	ctx, release, err := acquirePortableOwner(ctx, root)
-	if err != nil {
-		return false, err
-	}
-	defer release()
-	err = fastForwardGitCheckout(ctx, root, quiet)
-	if err == nil {
-		return false, nil
-	}
-	if !isGitIndexLockError(err) {
-		return false, err
-	}
-	removed, cleanupErr := removeStaleGitIndexLock(ctx, root, staleGitIndexLockAge)
-	if cleanupErr != nil || !removed {
-		if cleanupErr != nil {
-			return false, fmt.Errorf("%w; cleanup stale index lock: %v", err, cleanupErr)
-		}
-		return false, err
-	}
-	return true, fastForwardGitCheckout(ctx, root, quiet)
+	return withStaleGitIndexLockRetry(ctx, root, func(ctx context.Context) error {
+		return fastForwardGitCheckout(ctx, root, quiet)
+	})
 }
 
 func runGitWithStaleIndexLockRetry(ctx context.Context, root string, args ...string) (bool, error) {
+	return withStaleGitIndexLockRetry(ctx, root, func(ctx context.Context) error {
+		return runGit(ctx, "", args...)
+	})
+}
+
+func withStaleGitIndexLockRetry(ctx context.Context, root string, operation func(context.Context) error) (bool, error) {
 	ctx, release, err := acquirePortableOwner(ctx, root)
 	if err != nil {
 		return false, err
 	}
 	defer release()
-	err = runGit(ctx, "", args...)
+	err = operation(ctx)
 	if err == nil {
 		return false, nil
 	}
@@ -241,7 +230,7 @@ func runGitWithStaleIndexLockRetry(ctx context.Context, root string, args ...str
 		}
 		return false, err
 	}
-	return true, runGit(ctx, "", args...)
+	return true, operation(ctx)
 }
 
 func isGitIndexLockError(err error) bool {

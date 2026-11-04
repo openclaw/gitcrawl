@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPortableOwnerRejectsCrossStoreAndCanceledAcquisition(t *testing.T) {
@@ -114,5 +116,64 @@ func TestPortablePathAndRemoteAdmission(t *testing.T) {
 		if err := validatePortableRemote(remote); err == nil {
 			t.Fatalf("unsafe remote %q accepted", remote)
 		}
+	}
+}
+
+func TestStaleIndexLockRetryRetainsOwnerUntilFailedRetry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake lsof uses a shell script")
+	}
+	t.Setenv("GITCRAWL_PORTABLE_GIT", os.Args[0])
+	root := filepath.Join(t.TempDir(), "store")
+	lockPath := filepath.Join(root, ".git", "index.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "lsof"), []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	firstErr := errors.New("index.lock: file exists")
+	retryErr := errors.New("retry refused")
+	var owner *portableOwner
+	var ownedCtx context.Context
+	calls := 0
+	removed, err := withStaleGitIndexLockRetry(context.Background(), root, func(ctx context.Context) error {
+		calls++
+		current, ok := ctx.Value(portableOwnerKey{}).(*portableOwner)
+		if !ok {
+			t.Fatal("operation did not receive ownership")
+		}
+		if err := current.check(); err != nil {
+			t.Fatalf("operation lost ownership: %v", err)
+		}
+		if _, ok := ctx.Value(portableGitKey{}).(portableGitExecutable); !ok {
+			t.Fatal("operation did not receive pinned Git executable")
+		}
+		if calls == 1 {
+			owner, ownedCtx = current, ctx
+			return firstErr
+		}
+		if calls != 2 || current != owner || ctx != ownedCtx {
+			t.Fatal("retry changed ownership or attempted more than once")
+		}
+		if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("retry ran before removing stale lock: %v", err)
+		}
+		return retryErr
+	})
+	if !removed || err != retryErr || calls != 2 {
+		t.Fatalf("failed retry: removed=%t, calls=%d, err=%v", removed, calls, err)
+	}
+	if err := owner.check(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("retry retained ownership after return: %v", err)
 	}
 }
