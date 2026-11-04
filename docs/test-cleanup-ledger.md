@@ -186,3 +186,16 @@ No archive schema, controller, deployment, or active publication behavior change
   pruning, coverage, and transactional rollback checks.
 
 No production writer behavior or archive schema changed.
+
+## Shared deterministic reference-edge fixture
+
+- Removed the two standalone local-reference and cross-repository qualified
+  reference fixtures. The existing reference table already covered the same
+  local edge; it now retains the qualified cross-repository rejection too.
+- Rename the table to cover reference scope generally, keeping all nine existing
+  rows and adding the former standalone rejection as its tenth row.
+- Keep orthogonal issue/PR vectors so references must supply the edge, retain
+  exact edge/cluster counts, and require the positive cluster to contain exactly
+  the seeded issue and pull request. Each row uses its own temporary SQLite store.
+
+No production graph behavior or archive schema changed.
