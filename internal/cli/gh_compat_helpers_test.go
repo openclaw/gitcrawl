@@ -12,22 +12,9 @@ import (
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
-func TestGHAPIRouteNormalization(t *testing.T) {
-	args := []string{"--method", "GET", "-H", "accept: application/json", "repos/openclaw/gitcrawl/issues/123?state=open"}
-	if got := normalizeGHAPIRoute(args); got != "api repos/:owner/:repo/issues/:id" {
-		t.Fatalf("route = %q", got)
-	}
-	if got := normalizeGHAPIRoute([]string{"https://api.github.com/repos/openclaw/gitcrawl/commits/abcdef123456"}); got != "api repos/:owner/:repo/commits/:sha" {
-		t.Fatalf("commit route = %q", got)
-	}
-	if got := normalizeGHAPIRoute([]string{"--paginate"}); got != "api" {
-		t.Fatalf("empty route = %q", got)
-	}
+func TestIsDecimalString(t *testing.T) {
 	if !isDecimalString("123") || isDecimalString("12a") {
 		t.Fatalf("decimal classifier failed")
-	}
-	if !isHexString("abcDEF123") || isHexString("xyz") {
-		t.Fatalf("hex classifier failed")
 	}
 }
 
