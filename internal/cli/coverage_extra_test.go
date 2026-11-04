@@ -36,7 +36,7 @@ func TestCLIAppCommandCoveragePaths(t *testing.T) {
 	if len(threads) != 2 {
 		t.Fatalf("seed threads = %+v", threads)
 	}
-	result, err := st.SaveDurableClusters(ctx, repo.ID, []store.DurableClusterInput{{
+	result, err := st.SaveCompleteDurableClusters(ctx, repo.ID, []store.DurableClusterInput{{
 		StableKey:              "cli:10,12",
 		StableSlug:             "cli-10-12",
 		RepresentativeThreadID: threads[0].ID,

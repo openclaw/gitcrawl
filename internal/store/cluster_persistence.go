@@ -29,19 +29,15 @@ type SaveDurableClustersResult struct {
 	MemberCount  int   `json:"member_count"`
 }
 
-func (s *Store) SaveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, true, false, false)
-}
-
 func (s *Store) SavePartialDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, false, false, false)
+	return s.saveDurableClusters(ctx, repoID, inputs, false, false)
 }
 
 func (s *Store) SaveCompleteDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, true, true, false)
+	return s.saveDurableClusters(ctx, repoID, inputs, true, false)
 }
 
-func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, pruneMissingMembers, retireMissing, preserveLegacy bool, protectedIDs ...int64) (SaveDurableClustersResult, error) {
+func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, complete, preserveLegacy bool, protectedIDs ...int64) (SaveDurableClustersResult, error) {
 	if repoID <= 0 {
 		return SaveDurableClustersResult{}, fmt.Errorf("repo id must be positive")
 	}
@@ -58,7 +54,7 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 			if len(input.Members) == 0 {
 				return fmt.Errorf("durable cluster %q has no members", strings.TrimSpace(input.StableKey))
 			}
-			if !pruneMissingMembers && !retireMissing {
+			if !complete {
 				input, err = tx.reconcilePartialDurableClusterInput(ctx, repoID, input)
 				if err != nil {
 					return err
@@ -99,7 +95,7 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 				memberIDs = append(memberIDs, member.ThreadID)
 				result.MemberCount++
 			}
-			if pruneMissingMembers {
+			if complete {
 				if err := tx.markMissingClusterMembersRemoved(ctx, clusterID, memberIDs, now); err != nil {
 					return err
 				}
@@ -108,7 +104,7 @@ func (s *Store) saveDurableClusters(ctx context.Context, repoID int64, inputs []
 				return err
 			}
 		}
-		if retireMissing {
+		if complete {
 			if err := tx.markMissingDurableClustersRetired(ctx, repoID, runID, append(append([]int64{}, seenClusterIDs...), protectedIDs...), now); err != nil {
 				return err
 			}
@@ -396,11 +392,11 @@ func nullableFloat(value *float64) sql.NullFloat64 {
 
 // SaveAvailableSubsetClusters retains all omitted and legacy rows.
 func (s *Store) SaveAvailableSubsetClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, false, false, true)
+	return s.saveDurableClusters(ctx, repoID, inputs, false, true)
 }
 
 // SaveCompleteScopedClusters keeps historical similarity identities referenced by
 // versioned scopes. Ordinary complete callers retain their previous contract.
 func (s *Store) SaveCompleteScopedClusters(ctx context.Context, repoID int64, inputs []DurableClusterInput, protectedIDs ...int64) (SaveDurableClustersResult, error) {
-	return s.saveDurableClusters(ctx, repoID, inputs, true, true, true, protectedIDs...)
+	return s.saveDurableClusters(ctx, repoID, inputs, true, true, protectedIDs...)
 }

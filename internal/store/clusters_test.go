@@ -444,7 +444,7 @@ func TestClusterMemberLocalOverrides(t *testing.T) {
 	}
 }
 
-func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
+func TestSaveCompleteDurableClustersAppliesLocalOverrides(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -480,7 +480,7 @@ func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
 			{ThreadID: secondID, Role: "member", ScoreToRepresentative: &score},
 		},
 	}
-	result, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input})
+	result, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input})
 	if err != nil {
 		t.Fatalf("save durable clusters: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
 	if _, err := st.SetClusterCanonicalLocally(ctx, repoID, detail.Cluster.ID, 42, "best issue"); err != nil {
 		t.Fatalf("set canonical: %v", err)
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
 		t.Fatalf("resave durable clusters: %v", err)
 	}
 	detail, err = st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: detail.Cluster.ID, IncludeClosed: false, MemberLimit: 10})
@@ -520,7 +520,7 @@ func TestSaveDurableClustersAppliesLocalOverrides(t *testing.T) {
 	}
 }
 
-func TestSaveDurableClustersChoosesVisibleRepresentative(t *testing.T) {
+func TestSaveCompleteDurableClustersChoosesVisibleRepresentative(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -556,7 +556,7 @@ func TestSaveDurableClustersChoosesVisibleRepresentative(t *testing.T) {
 			{ThreadID: openID, Role: "member", ScoreToRepresentative: &score},
 		},
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
 		t.Fatalf("save durable clusters: %v", err)
 	}
 	detail, err := st.ClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 1, IncludeClosed: false, MemberLimit: 10})
@@ -596,7 +596,7 @@ func TestSaveCompleteDurableClustersRefreshesRepresentativeAfterRetiringStaleClu
 	if err != nil {
 		t.Fatalf("open thread: %v", err)
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey:              "old:62",
 		StableSlug:             "old-62",
 		RepresentativeThreadID: openID,
@@ -627,7 +627,7 @@ func TestSaveCompleteDurableClustersRefreshesRepresentativeAfterRetiringStaleClu
 	}
 }
 
-func TestSaveDurableClustersRefreshesRepresentativeAfterDeletingLegacyClusters(t *testing.T) {
+func TestSaveCompleteDurableClustersRefreshesRepresentativeAfterDeletingLegacyClusters(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -666,7 +666,7 @@ func TestSaveDurableClustersRefreshesRepresentativeAfterDeletingLegacyClusters(t
 	}
 
 	score := 0.75
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey:              "new:81,82",
 		StableSlug:             "new-8182",
 		RepresentativeThreadID: closedID,
@@ -706,7 +706,7 @@ func TestSaveDurableClustersRefreshesRepresentativeAfterDeletingLegacyClusters(t
 	}
 }
 
-func TestSaveDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
+func TestSaveCompleteDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -742,7 +742,7 @@ func TestSaveDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
 			{ThreadID: openID, Role: "member", ScoreToRepresentative: &score},
 		},
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
 		t.Fatalf("save durable cluster: %v", err)
 	}
 	if _, err := st.SetClusterCanonicalLocally(ctx, repoID, 1, 71, "historical canonical"); err != nil {
@@ -751,7 +751,7 @@ func TestSaveDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
 	if err := st.CloseClusterLocally(ctx, repoID, 1, "done"); err != nil {
 		t.Fatalf("close cluster: %v", err)
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
 		t.Fatalf("resave locally closed durable cluster: %v", err)
 	}
 	detail, err := st.DurableClusterDetail(ctx, ClusterDetailOptions{RepoID: repoID, ClusterID: 1, IncludeClosed: true, MemberLimit: 10})
@@ -763,7 +763,7 @@ func TestSaveDurableClustersPreservesLocallyClosedRepresentative(t *testing.T) {
 	}
 }
 
-func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
+func TestClusterSaveCompletenessControlsRetirement(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -781,7 +781,7 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 		RepresentativeThreadID: threadIDs[1],
 		Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[1], Role: "canonical"}},
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{first, second}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{first, second}); err != nil {
 		t.Fatalf("seed durable clusters: %v", err)
 	}
 	secondID, err := st.ClusterIDForThreadNumber(ctx, repoID, 302, false)
@@ -789,7 +789,7 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 		t.Fatalf("second cluster id: %v", err)
 	}
 
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{first}); err != nil {
+	if _, err := st.SavePartialDurableClusters(ctx, repoID, []DurableClusterInput{first}); err != nil {
 		t.Fatalf("partial resave without second cluster: %v", err)
 	}
 	if _, err := st.ClusterIDForThreadNumber(ctx, repoID, 302, false); err != nil {
@@ -839,7 +839,7 @@ func TestSaveDurableClustersRetiresMissingClusters(t *testing.T) {
 	}
 }
 
-func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
+func TestClusterSaveCompletenessControlsMemberRemoval(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -854,7 +854,7 @@ func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
 			{ThreadID: threadIDs[1], Role: "member"},
 		},
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
 		t.Fatalf("seed durable cluster: %v", err)
 	}
 	input.Members = input.Members[:1]
@@ -876,6 +876,19 @@ func TestSavePartialDurableClustersPreservesUnobservedMembers(t *testing.T) {
 	}
 	if len(detail.Members) != 2 || detail.Members[1].State != "active" {
 		t.Fatalf("partial save pruned unobserved member: %+v", detail.Members)
+	}
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+		t.Fatalf("complete durable cluster save: %v", err)
+	}
+	var state string
+	if err := st.DB().QueryRowContext(ctx, `select state from cluster_memberships where cluster_id = ? and thread_id = ?`, clusterID, threadIDs[1]).Scan(&state); err != nil {
+		t.Fatalf("omitted membership state: %v", err)
+	}
+	if state != "removed" {
+		t.Fatalf("complete save left omitted member %q, want removed", state)
+	}
+	if _, err := st.ClusterIDForThreadNumber(ctx, repoID, 302, false); err == nil {
+		t.Fatal("removed member should not resolve to an active cluster")
 	}
 }
 
@@ -974,7 +987,7 @@ func TestSavePartialDurableClustersReusesIdentityWhenRepresentativeIsOmitted(t *
 			{ThreadID: thirdID, Role: "canonical"},
 		},
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{initial}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{initial}); err != nil {
 		t.Fatalf("seed durable cluster: %v", err)
 	}
 	partial := DurableClusterInput{
@@ -1036,7 +1049,7 @@ func TestSavePartialDurableClustersRejectsAmbiguousActiveIdentities(t *testing.T
 	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{
 		{
 			StableKey: "cluster:301", RepresentativeThreadID: threadIDs[0],
 			Members: []DurableClusterMemberInput{{ThreadID: threadIDs[0], Role: "canonical"}},
@@ -1145,7 +1158,7 @@ func TestSummariesByThreadIDsRequiresFreshLatestRevision(t *testing.T) {
 	}
 }
 
-func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
+func TestSaveCompleteDurableClustersRejectsEmptyMembers(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	defer st.Close()
@@ -1157,7 +1170,7 @@ func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
 		RepresentativeThreadID: threadIDs[0],
 		Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0], Role: "canonical"}},
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err != nil {
 		t.Fatalf("seed durable cluster: %v", err)
 	}
 	clusterID, err := st.ClusterIDForThreadNumber(ctx, repoID, 301, false)
@@ -1166,7 +1179,7 @@ func TestSaveDurableClustersRejectsEmptyMembers(t *testing.T) {
 	}
 
 	input.Members = nil
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{input}); err == nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{input}); err == nil {
 		t.Fatal("empty member cluster should fail")
 	}
 
