@@ -269,3 +269,14 @@ All HTTP responses are synthetic and local. Production pagination is unchanged.
   table; all eight context-discarding helper mutations fail the repaired table.
   Full Go/static gates, portable-package race tests, independent review, and CI
   validate synthetic temporary databases only. Production behavior is unchanged.
+
+## Inert neighbor golden fixture
+
+Removed the combined limit/threshold golden case and its byte-identical copy of
+the default JSON fixture. Neither flag affected its two results. Retain the
+other four output goldens; add independent limit and threshold cases to the
+existing filter table, each requiring one exact ID instead of the default two.
+
+Temporary flag-discarding overlays pass the original golden suite and fail
+the corresponding new rows. Focused race/static checks, review and full CI
+validate synthetic archives only. Production neighbor behavior is unchanged.
