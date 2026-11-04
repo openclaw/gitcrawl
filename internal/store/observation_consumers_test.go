@@ -131,19 +131,8 @@ func TestRevisionFreshnessKeepsLegacyRowsScoped(t *testing.T) {
 
 func TestClocklessRevisionConsumersUseObservationSequence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "clockless", Number: 88, Kind: "issue", State: "open",
 		Title: "Clockless revision", Body: "Use durable observation order.",
@@ -151,6 +140,7 @@ func TestClocklessRevisionConsumersUseObservationSequence(t *testing.T) {
 		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
 		UpdatedAt: "2026-07-12T00:00:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
@@ -251,19 +241,8 @@ func TestClocklessRevisionConsumersUseObservationSequence(t *testing.T) {
 
 func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "malformed", Number: 89, Kind: "issue", State: "open",
 		Title: "Malformed clock", Body: "Malformed clocks must fail closed.",
@@ -275,6 +254,7 @@ func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
 		UpdatedAt:       "2026-07-12T00:00:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
@@ -408,19 +388,8 @@ func TestRevisionConsumersRejectMalformedClocksAtCurrentSequence(t *testing.T) {
 
 func TestRevisionConsumersRequireAcceptedEvidenceGenerationAfterNewerFetch(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	staleThread := Thread{
 		RepoID: repoID, GitHubID: "fresh-source", Number: 90, Kind: "issue", State: "open",
 		Title: "Stale source", Body: "Fetched second from the older source revision.",

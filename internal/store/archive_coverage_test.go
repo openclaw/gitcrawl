@@ -145,19 +145,8 @@ func TestArchiveCoveragePRDetailFreshnessParsesTimestamps(t *testing.T) {
 
 func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := archiveCoverageThread(repoID, 1, "pull_request")
 	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
 	thread.RawJSON = `{"version":1}`
@@ -226,19 +215,8 @@ func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testin
 
 func TestArchiveCoveragePRFilesRequireCurrentObservation(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := archiveCoverageThread(repoID, 1, "pull_request")
 	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
 	thread.RawJSON = `{"version":1}`
@@ -347,19 +325,8 @@ func TestArchiveCoveragePRFilesRequireCurrentObservation(t *testing.T) {
 
 func TestArchiveCoveragePRFilesUsesLegacySnapshotProof(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := archiveCoverageThread(repoID, 1, "pull_request")
 	thread.UpdatedAtGitHub = "2026-07-12T12:00:00Z"
 	thread.RawJSON = `{"version":1}`

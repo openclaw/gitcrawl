@@ -297,19 +297,8 @@ func TestUpsertThreadRevisionRefreshesSourceTimestampWithoutNewRevision(t *testi
 
 func TestUpsertThreadRevisionRefreshesEqualContentFromNewerSourceAtLowerSequence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "8", Number: 8, Kind: "issue", State: "open",
 		Title: "stable evidence", Body: "same canonical content",
@@ -371,25 +360,15 @@ func TestUpsertThreadRevisionRefreshesEqualContentFromNewerSourceAtLowerSequence
 
 func TestUpsertThreadRevisionPreservesTransitionsAndDeduplicatesObservations(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "9", Number: 9, Kind: "issue", State: "open",
 		Title: "current B", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/9",
 		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
 		UpdatedAtGitHub: "2026-07-12T12:03:00Z", UpdatedAt: "2026-07-12T12:03:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
@@ -558,25 +537,15 @@ func TestUpsertThreadRevisionDoesNotPromoteRepeatedTiedObservation(t *testing.T)
 
 func TestUpsertThreadRevisionPreservesSameClockReviewThreadReversion(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "12", Number: 12, Kind: "pull_request", State: "open",
 		Title: "review thread transition", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/12",
 		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
 		UpdatedAtGitHub: "2026-07-12T12:00:00Z", UpdatedAt: "2026-07-12T12:00:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
@@ -638,19 +607,8 @@ func TestUpsertThreadRevisionPreservesSameClockReviewThreadReversion(t *testing.
 
 func TestUpsertThreadRevisionPromotesCompleteSnapshotAfterEvidenceDeletion(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "14", Number: 14, Kind: "issue", State: "open",
 		Title: "evidence deletion", Body: "latest complete snapshot wins",
@@ -747,25 +705,15 @@ func TestUpsertThreadRevisionPromotesCompleteSnapshotAfterEvidenceDeletion(t *te
 
 func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "11", Number: 11, Kind: "pull_request", State: "open",
 		Title: "current B", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/11",
 		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
 		UpdatedAtGitHub: "2026-07-12T12:03:00Z", UpdatedAt: "2026-07-12T12:03:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
@@ -853,25 +801,15 @@ func TestUpsertThreadRevisionDoesNotOrderByHydrationTime(t *testing.T) {
 
 func TestUpsertThreadRevisionUsesSequenceWhenSourceTimestampIsMissing(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "12", Number: 12, Kind: "issue", State: "open",
 		Title: "current B", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/12",
 		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
 		UpdatedAt: "2026-07-12T12:03:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
@@ -913,25 +851,15 @@ func TestUpsertThreadRevisionUsesSequenceWhenSourceTimestampIsMissing(t *testing
 
 func TestUpsertThreadRevisionRejectsAmbiguousMalformedSourceTimestamps(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T12:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T12:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "13", Number: 13, Kind: "issue", State: "open",
 		Title: "state A", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/13",
 		LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: "thread",
 		UpdatedAtGitHub: "malformed-a", UpdatedAt: "2026-07-12T12:00:00Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
