@@ -557,7 +557,7 @@ func TestCloudFileSHA256(t *testing.T) {
 	}
 }
 
-func TestSendIngestRowsBatchesAndAcceptsEmpty(t *testing.T) {
+func TestSendSnapshotIngestRowsBatchesAndAcceptsEmpty(t *testing.T) {
 	ctx := context.Background()
 	var cursors []string
 	var finals []bool
@@ -585,23 +585,23 @@ func TestSendIngestRowsBatchesAndAcceptsEmpty(t *testing.T) {
 		t.Fatalf("remote client: %v", err)
 	}
 	manifest := crawlremote.IngestManifest{App: "gitcrawl", Archive: "gitcrawl/openclaw"}
-	empty, err := sendIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", manifest, "repositories", gitcrawlRepositoryColumns, nil, false)
+	empty, err := sendSnapshotIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", manifest, "repositories", gitcrawlRepositoryColumns, nil, "", false)
 	if err != nil {
 		t.Fatalf("empty ingest: %v", err)
 	}
-	if empty != 0 {
-		t.Fatalf("empty rows accepted = %d, want 0", empty)
+	if empty.RowsAccepted != 0 {
+		t.Fatalf("empty rows accepted = %d, want 0", empty.RowsAccepted)
 	}
 	rows := make([][]any, gitcrawlCloudBatchSize+1)
 	for i := range rows {
 		rows[i] = []any{fmt.Sprintf("r%d", i), "openclaw/repo", "openclaw", "repo", "", "", ""}
 	}
-	total, err := sendIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", manifest, "repositories", gitcrawlRepositoryColumns, rows, true)
+	total, err := sendSnapshotIngestRows(ctx, client, "gitcrawl", "gitcrawl/openclaw", manifest, "repositories", gitcrawlRepositoryColumns, rows, "", true)
 	if err != nil {
 		t.Fatalf("batched ingest: %v", err)
 	}
-	if total != int64(len(rows)) {
-		t.Fatalf("rows accepted = %d, want %d", total, len(rows))
+	if total.RowsAccepted != int64(len(rows)) {
+		t.Fatalf("rows accepted = %d, want %d", total.RowsAccepted, len(rows))
 	}
 	if got, want := strings.Join(cursors, ","), ",,250"; got != want {
 		t.Fatalf("cursors = %q, want %q", got, want)
@@ -648,7 +648,7 @@ func TestRemoteValueCoercionHelpers(t *testing.T) {
 	}
 }
 
-func TestUploadSQLiteArchiveReturnsRemoteError(t *testing.T) {
+func TestUploadSQLiteSnapshotArchiveReturnsRemoteError(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "source.db"))
 	if err != nil {
@@ -669,7 +669,16 @@ func TestUploadSQLiteArchiveReturnsRemoteError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remote client: %v", err)
 	}
-	_, err = uploadSQLiteArchive(ctx, client, "gitcrawl", "gitcrawl/openclaw", db, "", crawlremote.IngestManifest{SchemaName: "gitcrawl-cloud-v1"}, nil)
+	snapshotPath, _, cleanup, err := cloudSQLiteSnapshotPath(ctx, db, "", gitcrawlCloudPublishOptions{})
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	defer cleanup()
+	snapshotID, err := cloudFileSHA256(snapshotPath)
+	if err != nil {
+		t.Fatalf("snapshot digest: %v", err)
+	}
+	_, _, err = uploadSQLiteSnapshotArchive(ctx, client, "gitcrawl", "gitcrawl/openclaw", snapshotPath, snapshotID, nil)
 	if err == nil {
 		t.Fatal("upload unexpectedly succeeded")
 	}
