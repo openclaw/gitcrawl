@@ -122,3 +122,16 @@ No portable schema, pruning, rollback, or release behavior changed.
   later cache-path override now that initialization is already isolated.
 
 No CLI formatting, provider, archive, or release behavior changed.
+
+## Vector query test surface
+
+- Removed the test-only `ListThreadVectors` adapter. Production callers use
+  `ListThreadVectorsFiltered`; vector round-trip and migration tests now do too.
+- Consolidated a duplicate listing assertion into the existing round-trip test,
+  and removed its unused second vector fixture.
+  Keep its default-backend assertion on the existing by-number query.
+- Reuse the two-basis fixture to check repository, model, basis, dimension, and
+  closed-thread selection through the production listing API. Retain migration,
+  binary decoding, thread-ID lookup, and scope-count coverage.
+
+No query implementation, archive schema, or CLI behavior changed.

@@ -71,21 +71,11 @@ func TestVectorsThreadsByIDsAndDecodeBranches(t *testing.T) {
 	if err := st.UpsertThreadVector(ctx, ThreadVector{ThreadID: threadIDs[0], Basis: "title_original", Model: "test", Dimensions: 3, ContentHash: "h1", Vector: []float64{1, 0, 0}, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatalf("upsert vector 1: %v", err)
 	}
-	if err := st.UpsertThreadVector(ctx, ThreadVector{ThreadID: threadIDs[1], Basis: "title_original", Model: "test", Dimensions: 3, ContentHash: "h2", Vector: []float64{0.9, 0.1, 0}, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatalf("upsert vector 2: %v", err)
-	}
-	vectors, err := st.ListThreadVectors(ctx, repoID)
-	if err != nil {
-		t.Fatalf("list vectors: %v", err)
-	}
-	if len(vectors) != 2 || vectors[0].Backend != "exact" {
-		t.Fatalf("vectors = %+v", vectors)
-	}
 	thread, vector, err := st.ThreadVectorByNumber(ctx, ThreadVectorQuery{RepoID: repoID, Model: "test", Basis: "title_original", Dimensions: 3}, 301)
 	if err != nil {
 		t.Fatalf("thread vector by number: %v", err)
 	}
-	if thread.Number != 301 || len(vector.Vector) != 3 {
+	if thread.Number != 301 || len(vector.Vector) != 3 || vector.Backend != "exact" {
 		t.Fatalf("thread/vector = %+v %+v", thread, vector)
 	}
 	threads, err := st.ThreadsByIDs(ctx, repoID, []int64{threadIDs[1], threadIDs[0], 999999})
