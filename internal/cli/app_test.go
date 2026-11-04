@@ -4989,7 +4989,7 @@ func TestPortableExportCommandCreatesCurrentStateGenerationFromLiveWAL(t *testin
 	if _, err := os.Stat(payload.ArchivePath); err != nil {
 		t.Fatalf("compressed export archive missing: %v", err)
 	}
-	materializedPath, err := stagePortableSQLiteSourceTemp(payload.DatabasePath, filepath.Join(dir, "materialized.db"), 0o600)
+	materializedPath, err := stagePortableSQLiteSourceTempContext(t.Context(), payload.DatabasePath, filepath.Join(dir, "materialized.db"), 0o600)
 	if err != nil {
 		t.Fatalf("materialize compressed export through portable reader: %v", err)
 	}

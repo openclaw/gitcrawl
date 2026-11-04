@@ -95,10 +95,6 @@ func copySQLiteFileAtomicVerified(ctx context.Context, sourcePath, targetPath st
 	return digest, nil
 }
 
-func stagePortableSQLiteSourceTemp(sourceDBPath, targetPath string, mode os.FileMode) (string, error) {
-	return stagePortableSQLiteSourceTempContext(context.Background(), sourceDBPath, targetPath, mode)
-}
-
 func stagePortableSQLiteSourceTempContext(ctx context.Context, sourceDBPath, targetPath string, mode os.FileMode) (string, error) {
 	sourcePath, manifest, compressed, err := portableSourceArtifact(sourceDBPath)
 	if err != nil {

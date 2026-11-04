@@ -60,7 +60,7 @@ func publishPortableTransition(t *testing.T, publisher, format string) [32]byte 
 	t.Helper()
 	path := filepath.Join(publisher, "archive.db")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		temp, err := stagePortableSQLiteSourceTemp(path, path, 0o600)
+		temp, err := stagePortableSQLiteSourceTempContext(t.Context(), path, path, 0o600)
 		if err != nil {
 			t.Fatal(err)
 		}

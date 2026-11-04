@@ -163,7 +163,7 @@ func (fixture portableRefreshFixture) advance(t *testing.T, compressed bool) {
 	t.Helper()
 	path := filepath.Join(fixture.remote, fixture.relative)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		temp, err := stagePortableSQLiteSourceTemp(path, path, 0o644)
+		temp, err := stagePortableSQLiteSourceTempContext(t.Context(), path, path, 0o644)
 		if err != nil {
 			t.Fatal(err)
 		}
