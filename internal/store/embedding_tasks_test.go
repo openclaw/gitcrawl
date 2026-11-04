@@ -300,7 +300,7 @@ func TestEmbeddingTextForBasisCapsLongInputs(t *testing.T) {
 
 func TestTitleOriginalEmbeddingPrefersCanonicalDocumentText(t *testing.T) {
 	rawText := "# Refresh cache\n\nOriginal body\n\nChanged files:\n- internal/cache/store.go\n\nCommits:\n- fix: refresh manifest"
-	text, err := embeddingTextForBasis("title_original", "Refresh cache", "Original body", rawText, "", "")
+	text, _, err := embeddingTextForBasisWithMeta("title_original", "Refresh cache", "Original body", rawText, "", "")
 	if err != nil {
 		t.Fatalf("embedding text: %v", err)
 	}

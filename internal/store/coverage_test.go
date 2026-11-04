@@ -157,7 +157,7 @@ func TestEmbeddingTaskBasisBranches(t *testing.T) {
 			t.Fatalf("tasks %s = %+v, want text containing %q", tc.basis, tasks, tc.want)
 		}
 	}
-	if _, err := embeddingTextForBasis("missing", "", "", "", "", ""); err == nil {
+	if _, _, err := embeddingTextForBasisWithMeta("missing", "", "", "", "", ""); err == nil {
 		t.Fatal("unsupported basis should fail")
 	}
 }
@@ -189,10 +189,7 @@ func TestEmbeddingTasksSkipExistingHashAndForce(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].Number != 301 {
 		t.Fatalf("forced tasks = %+v", tasks)
 	}
-	if _, err := embeddingTextForBasis("title_original", "title", "", "raw fallback", "", ""); err != nil {
-		t.Fatalf("raw text fallback: %v", err)
-	}
-	if text, err := embeddingTextForBasis("llm_key_summary", "title", "", "", "", ""); err != nil || text != "" {
+	if text, _, err := embeddingTextForBasisWithMeta("llm_key_summary", "title", "", "", "", ""); err != nil || text != "" {
 		t.Fatalf("empty key summary text=%q err=%v", text, err)
 	}
 }
