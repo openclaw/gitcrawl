@@ -8,32 +8,6 @@ import (
 	"database/sql"
 )
 
-type Blob struct {
-	ID          int64          `json:"id"`
-	Sha256      string         `json:"sha256"`
-	MediaType   string         `json:"media_type"`
-	Compression string         `json:"compression"`
-	SizeBytes   int64          `json:"size_bytes"`
-	StorageKind string         `json:"storage_kind"`
-	StoragePath sql.NullString `json:"storage_path"`
-	InlineText  sql.NullString `json:"inline_text"`
-	CreatedAt   string         `json:"created_at"`
-}
-
-type ClusterGroup struct {
-	ID                     int64          `json:"id"`
-	RepoID                 int64          `json:"repo_id"`
-	StableKey              string         `json:"stable_key"`
-	StableSlug             string         `json:"stable_slug"`
-	Status                 string         `json:"status"`
-	ClusterType            sql.NullString `json:"cluster_type"`
-	RepresentativeThreadID sql.NullInt64  `json:"representative_thread_id"`
-	Title                  sql.NullString `json:"title"`
-	CreatedAt              string         `json:"created_at"`
-	UpdatedAt              string         `json:"updated_at"`
-	ClosedAt               sql.NullString `json:"closed_at"`
-}
-
 type ClusterRun struct {
 	ID         int64          `json:"id"`
 	RepoID     int64          `json:"repo_id"`
@@ -43,71 +17,6 @@ type ClusterRun struct {
 	FinishedAt sql.NullString `json:"finished_at"`
 	StatsJson  sql.NullString `json:"stats_json"`
 	ErrorText  sql.NullString `json:"error_text"`
-}
-
-type CodeDocument struct {
-	ID          int64  `json:"id"`
-	SnapshotID  int64  `json:"snapshot_id"`
-	RepoID      int64  `json:"repo_id"`
-	Path        string `json:"path"`
-	Language    string `json:"language"`
-	ContentHash string `json:"content_hash"`
-	TextContent string `json:"text_content"`
-	ByteSize    int64  `json:"byte_size"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-type CodeSnapshot struct {
-	ID            int64  `json:"id"`
-	RepoID        int64  `json:"repo_id"`
-	SourceRoot    string `json:"source_root"`
-	GitSha        string `json:"git_sha"`
-	WorktreeDirty int64  `json:"worktree_dirty"`
-	FileCount     int64  `json:"file_count"`
-	ByteCount     int64  `json:"byte_count"`
-	IndexedAt     string `json:"indexed_at"`
-}
-
-type Comment struct {
-	ID             int64          `json:"id"`
-	ThreadID       int64          `json:"thread_id"`
-	GithubID       string         `json:"github_id"`
-	CommentType    string         `json:"comment_type"`
-	AuthorLogin    sql.NullString `json:"author_login"`
-	AuthorType     sql.NullString `json:"author_type"`
-	Body           string         `json:"body"`
-	IsBot          int64          `json:"is_bot"`
-	RawJson        string         `json:"raw_json"`
-	RawJsonBlobID  sql.NullInt64  `json:"raw_json_blob_id"`
-	CreatedAtGh    sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh    sql.NullString `json:"updated_at_gh"`
-	DeletedAt      sql.NullString `json:"deleted_at"`
-	DeletionReason sql.NullString `json:"deletion_reason"`
-}
-
-type CommentRevision struct {
-	ID             int64          `json:"id"`
-	CommentID      int64          `json:"comment_id"`
-	AuthorLogin    sql.NullString `json:"author_login"`
-	AuthorType     sql.NullString `json:"author_type"`
-	Body           string         `json:"body"`
-	IsBot          int64          `json:"is_bot"`
-	RawJson        string         `json:"raw_json"`
-	CreatedAtGh    sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh    sql.NullString `json:"updated_at_gh"`
-	DeletedAt      sql.NullString `json:"deleted_at"`
-	DeletionReason sql.NullString `json:"deletion_reason"`
-	RecordedAt     string         `json:"recorded_at"`
-}
-
-type Document struct {
-	ID         int64          `json:"id"`
-	ThreadID   int64          `json:"thread_id"`
-	Title      string         `json:"title"`
-	Body       sql.NullString `json:"body"`
-	RawText    string         `json:"raw_text"`
-	DedupeText string         `json:"dedupe_text"`
-	UpdatedAt  string         `json:"updated_at"`
 }
 
 type EmbeddingRun struct {
@@ -136,11 +45,6 @@ type GithubWorkflowRun struct {
 	UpdatedAtGh  sql.NullString `json:"updated_at_gh"`
 	RawJson      string         `json:"raw_json"`
 	FetchedAt    string         `json:"fetched_at"`
-}
-
-type PortableMetadatum struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
 }
 
 type PullRequestCheck struct {
@@ -226,46 +130,6 @@ type PullRequestReviewThread struct {
 	DeletionReason        sql.NullString `json:"deletion_reason"`
 }
 
-type PullRequestReviewThreadRevision struct {
-	ID                    int64          `json:"id"`
-	ThreadID              int64          `json:"thread_id"`
-	ReviewThreadID        string         `json:"review_thread_id"`
-	Path                  sql.NullString `json:"path"`
-	Line                  int64          `json:"line"`
-	StartLine             int64          `json:"start_line"`
-	IsResolved            int64          `json:"is_resolved"`
-	IsOutdated            int64          `json:"is_outdated"`
-	ViewerCanResolve      int64          `json:"viewer_can_resolve"`
-	ViewerCanUnresolve    int64          `json:"viewer_can_unresolve"`
-	ViewerCanReply        int64          `json:"viewer_can_reply"`
-	FirstAuthorLogin      sql.NullString `json:"first_author_login"`
-	FirstAuthorType       sql.NullString `json:"first_author_type"`
-	FirstCommentBody      sql.NullString `json:"first_comment_body"`
-	FirstCommentUrl       sql.NullString `json:"first_comment_url"`
-	FirstCommentCreatedAt sql.NullString `json:"first_comment_created_at"`
-	FirstCommentUpdatedAt sql.NullString `json:"first_comment_updated_at"`
-	CommentsJson          string         `json:"comments_json"`
-	RawJson               string         `json:"raw_json"`
-	FetchedAt             string         `json:"fetched_at"`
-	DeletedAt             sql.NullString `json:"deleted_at"`
-	DeletionReason        sql.NullString `json:"deletion_reason"`
-	RecordedAt            string         `json:"recorded_at"`
-}
-
-type PullRequestReviewThreadSync struct {
-	ThreadID  int64  `json:"thread_id"`
-	FetchedAt string `json:"fetched_at"`
-}
-
-type RepoSyncState struct {
-	RepoID                             int64          `json:"repo_id"`
-	LastFullOpenScanStartedAt          sql.NullString `json:"last_full_open_scan_started_at"`
-	LastOverlappingOpenScanCompletedAt sql.NullString `json:"last_overlapping_open_scan_completed_at"`
-	LastNonOverlappingScanCompletedAt  sql.NullString `json:"last_non_overlapping_scan_completed_at"`
-	LastOpenCloseReconciledAt          sql.NullString `json:"last_open_close_reconciled_at"`
-	UpdatedAt                          string         `json:"updated_at"`
-}
-
 type Repository struct {
 	ID           int64          `json:"id"`
 	Owner        string         `json:"owner"`
@@ -287,20 +151,6 @@ type SummaryRun struct {
 	ErrorText  sql.NullString `json:"error_text"`
 }
 
-type SyncAttemptFailure struct {
-	ID           int64          `json:"id"`
-	RepoID       int64          `json:"repo_id"`
-	ThreadID     sql.NullInt64  `json:"thread_id"`
-	Number       int64          `json:"number"`
-	Operation    string         `json:"operation"`
-	ErrorClass   string         `json:"error_class"`
-	ErrorMessage string         `json:"error_message"`
-	FirstSeenAt  string         `json:"first_seen_at"`
-	LastSeenAt   string         `json:"last_seen_at"`
-	RetryCount   int64          `json:"retry_count"`
-	ResolvedAt   sql.NullString `json:"resolved_at"`
-}
-
 type SyncRun struct {
 	ID         int64          `json:"id"`
 	RepoID     int64          `json:"repo_id"`
@@ -310,110 +160,4 @@ type SyncRun struct {
 	FinishedAt sql.NullString `json:"finished_at"`
 	StatsJson  sql.NullString `json:"stats_json"`
 	ErrorText  sql.NullString `json:"error_text"`
-}
-
-type Thread struct {
-	ID                          int64          `json:"id"`
-	RepoID                      int64          `json:"repo_id"`
-	GithubID                    string         `json:"github_id"`
-	Number                      int64          `json:"number"`
-	Kind                        string         `json:"kind"`
-	State                       string         `json:"state"`
-	Title                       string         `json:"title"`
-	Body                        sql.NullString `json:"body"`
-	AuthorLogin                 sql.NullString `json:"author_login"`
-	AuthorType                  sql.NullString `json:"author_type"`
-	AuthorAssociation           sql.NullString `json:"author_association"`
-	HtmlUrl                     string         `json:"html_url"`
-	LabelsJson                  string         `json:"labels_json"`
-	AssigneesJson               string         `json:"assignees_json"`
-	RawJson                     string         `json:"raw_json"`
-	ContentHash                 string         `json:"content_hash"`
-	IsDraft                     int64          `json:"is_draft"`
-	CreatedAtGh                 sql.NullString `json:"created_at_gh"`
-	UpdatedAtGh                 sql.NullString `json:"updated_at_gh"`
-	ClosedAtGh                  sql.NullString `json:"closed_at_gh"`
-	MergedAtGh                  sql.NullString `json:"merged_at_gh"`
-	ClosedAtLocal               sql.NullString `json:"closed_at_local"`
-	CloseReasonLocal            sql.NullString `json:"close_reason_local"`
-	FirstPulledAt               sql.NullString `json:"first_pulled_at"`
-	LastPulledAt                sql.NullString `json:"last_pulled_at"`
-	ObservationSequence         int64          `json:"observation_sequence"`
-	EvidenceObservationSequence int64          `json:"evidence_observation_sequence"`
-	EvidenceSourceUpdatedAt     string         `json:"evidence_source_updated_at"`
-	UpdatedAt                   string         `json:"updated_at"`
-}
-
-type ThreadChildObservationReservation struct {
-	ThreadID            int64  `json:"thread_id"`
-	Family              string `json:"family"`
-	SourceUpdatedAt     string `json:"source_updated_at"`
-	ObservationSequence int64  `json:"observation_sequence"`
-}
-
-type ThreadFingerprint struct {
-	ID                int64  `json:"id"`
-	ThreadRevisionID  int64  `json:"thread_revision_id"`
-	AlgorithmVersion  string `json:"algorithm_version"`
-	FingerprintHash   string `json:"fingerprint_hash"`
-	FingerprintSlug   string `json:"fingerprint_slug"`
-	TitleTokensJson   string `json:"title_tokens_json"`
-	BodyTokenHash     string `json:"body_token_hash"`
-	LinkedRefsJson    string `json:"linked_refs_json"`
-	FileSetHash       string `json:"file_set_hash"`
-	ModuleBucketsJson string `json:"module_buckets_json"`
-	Simhash64         string `json:"simhash64"`
-	FeatureJson       string `json:"feature_json"`
-	CreatedAt         string `json:"created_at"`
-}
-
-type ThreadKeySummary struct {
-	ID               int64  `json:"id"`
-	ThreadRevisionID int64  `json:"thread_revision_id"`
-	SummaryKind      string `json:"summary_kind"`
-	PromptVersion    string `json:"prompt_version"`
-	Provider         string `json:"provider"`
-	Model            string `json:"model"`
-	InputHash        string `json:"input_hash"`
-	OutputHash       string `json:"output_hash"`
-	KeyText          string `json:"key_text"`
-	CreatedAt        string `json:"created_at"`
-}
-
-type ThreadObservationSequence struct {
-	ID            int64  `json:"id"`
-	Value         int64  `json:"value"`
-	LastStartedAt string `json:"last_started_at"`
-}
-
-type ThreadRevision struct {
-	ID                  int64          `json:"id"`
-	ThreadID            int64          `json:"thread_id"`
-	SourceUpdatedAt     sql.NullString `json:"source_updated_at"`
-	ContentHash         string         `json:"content_hash"`
-	TitleHash           string         `json:"title_hash"`
-	BodyHash            string         `json:"body_hash"`
-	LabelsHash          string         `json:"labels_hash"`
-	RawJsonBlobID       sql.NullInt64  `json:"raw_json_blob_id"`
-	ObservationSequence int64          `json:"observation_sequence"`
-	CreatedAt           string         `json:"created_at"`
-}
-
-type ThreadVector struct {
-	ThreadID      int64  `json:"thread_id"`
-	Basis         string `json:"basis"`
-	Model         string `json:"model"`
-	Dimensions    int64  `json:"dimensions"`
-	ContentHash   string `json:"content_hash"`
-	VectorJson    string `json:"vector_json"`
-	VectorBackend string `json:"vector_backend"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
-}
-
-type WorkflowRunObservationReservation struct {
-	RepoID              int64  `json:"repo_id"`
-	HeadSha             string `json:"head_sha"`
-	SourceUpdatedAt     string `json:"source_updated_at"`
-	ObservationSequence int64  `json:"observation_sequence"`
 }
