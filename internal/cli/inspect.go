@@ -181,8 +181,8 @@ func (a *App) writeCoverageTable(coverage store.ArchiveCoverage) error {
 	if _, err := fmt.Fprintln(tw, "REPOSITORY\tISSUES\tPRS\tCOMMENTS\tPR_REVIEWS\tPRS_WITH_DETAILS\tMISSING_PR_DETAILS\tFILES\tCOMMITS\tCHECKS\tREVIEW_THREADS\tWORKFLOW_RUNS\tLAST_SYNC"); err != nil {
 		return err
 	}
-	for _, row := range coverage.Rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
+	writeRow := func(row store.ArchiveCoverageRow) error {
+		_, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
 			row.Repository,
 			row.Issues,
 			row.PullRequests,
@@ -196,27 +196,16 @@ func (a *App) writeCoverageTable(coverage store.ArchiveCoverage) error {
 			row.PRReviewThreads,
 			row.WorkflowRuns,
 			row.LastSyncAt,
-		); err != nil {
+		)
+		return err
+	}
+	for _, row := range coverage.Rows {
+		if err := writeRow(row); err != nil {
 			return err
 		}
 	}
 	if len(coverage.Rows) > 1 {
-		row := coverage.Totals
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n",
-			row.Repository,
-			row.Issues,
-			row.PullRequests,
-			row.Comments,
-			row.PRReviews,
-			row.PullRequestsWithDetails,
-			row.MissingPRDetails,
-			row.PRFiles,
-			row.PRCommits,
-			row.PRChecks,
-			row.PRReviewThreads,
-			row.WorkflowRuns,
-			row.LastSyncAt,
-		); err != nil {
+		if err := writeRow(coverage.Totals); err != nil {
 			return err
 		}
 	}
