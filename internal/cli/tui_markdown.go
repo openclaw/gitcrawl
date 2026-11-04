@@ -124,14 +124,6 @@ func renderInlineMarkdown(value string) string {
 	return strings.TrimSpace(replacer.Replace(value))
 }
 
-func firstMarkdownLink(value string) (string, bool) {
-	links := markdownLinks(value)
-	if len(links) == 0 {
-		return "", false
-	}
-	return links[0], true
-}
-
 func markdownLinks(value string) []string {
 	links := make([]string, 0, 2)
 	seen := map[string]bool{}
