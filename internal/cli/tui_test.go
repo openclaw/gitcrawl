@@ -4137,40 +4137,28 @@ func menuLabels(items []tuiMenuItem) []string {
 }
 
 func seedTUIClusterPair(ctx context.Context, st *store.Store, repoID, clusterID int64, firstNumber, secondNumber int) (int64, int64, error) {
-	firstID, err := st.UpsertThread(ctx, store.Thread{
-		RepoID:        repoID,
-		GitHubID:      fmt.Sprintf("%d", firstNumber),
-		Number:        firstNumber,
-		Kind:          "issue",
-		State:         "open",
-		Title:         fmt.Sprintf("member %d", firstNumber),
-		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", firstNumber),
-		LabelsJSON:    "[]",
-		AssigneesJSON: "[]",
-		RawJSON:       "{}",
-		ContentHash:   fmt.Sprintf("cluster-pair-hash-%d", firstNumber),
-		UpdatedAt:     "2026-04-27T00:00:00Z",
-	})
-	if err != nil {
-		return 0, 0, err
+	var ids [2]int64
+	for i, number := range []int{firstNumber, secondNumber} {
+		id, err := st.UpsertThread(ctx, store.Thread{
+			RepoID:        repoID,
+			GitHubID:      fmt.Sprintf("%d", number),
+			Number:        number,
+			Kind:          "issue",
+			State:         "open",
+			Title:         fmt.Sprintf("member %d", number),
+			HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
+			LabelsJSON:    "[]",
+			AssigneesJSON: "[]",
+			RawJSON:       "{}",
+			ContentHash:   fmt.Sprintf("cluster-pair-hash-%d", number),
+			UpdatedAt:     "2026-04-27T00:00:00Z",
+		})
+		if err != nil {
+			return 0, 0, err
+		}
+		ids[i] = id
 	}
-	secondID, err := st.UpsertThread(ctx, store.Thread{
-		RepoID:        repoID,
-		GitHubID:      fmt.Sprintf("%d", secondNumber),
-		Number:        secondNumber,
-		Kind:          "issue",
-		State:         "open",
-		Title:         fmt.Sprintf("member %d", secondNumber),
-		HTMLURL:       fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", secondNumber),
-		LabelsJSON:    "[]",
-		AssigneesJSON: "[]",
-		RawJSON:       "{}",
-		ContentHash:   fmt.Sprintf("cluster-pair-hash-%d", secondNumber),
-		UpdatedAt:     "2026-04-27T00:00:00Z",
-	})
-	if err != nil {
-		return 0, 0, err
-	}
+	firstID, secondID := ids[0], ids[1]
 	if _, err := st.DB().ExecContext(ctx, `
 		insert into cluster_groups(id, repo_id, stable_key, stable_slug, status, representative_thread_id, title, created_at, updated_at)
 		values(?, ?, ?, ?, 'active', ?, ?, '2026-04-27T00:00:00Z', '2026-04-27T00:00:00Z')
