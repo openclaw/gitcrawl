@@ -143,7 +143,8 @@ func TestDailyRevisionsAppendAndImportedIDsRemainIndependent(t *testing.T) {
 	for i, v := range []float64{10, 10, 9, 10} {
 		r.Value = Value(v)
 		r.ObservedAt = fmt.Sprintf("2026-09-15T%02d:00:00Z", i)
-		n, err := Write(ctx, s, []Row{r})
+		written, err := Execute(ctx, "collect", c, func(context.Context, Config, string) ([]Row, error) { return []Row{r}, nil }, nil)
+		n := written.RowsWritten
 		want := 1
 		if i == 1 {
 			want = 0
@@ -343,9 +344,14 @@ func TestCollectRetainsPartialAndCancelledResultsAtomically(t *testing.T) {
 	r := testRow()
 	bad := r
 	bad.Type = "invalid"
-	n, err := Write(context.Background(), s, []Row{r, bad})
+	written, err := Execute(context.Background(), "collect", c, func(context.Context, Config, string) ([]Row, error) { return []Row{r, bad}, nil }, nil)
+	n := written.RowsWritten
 	if err == nil || n != 0 {
-		t.Fatalf("write rollback=%d %v", n, err)
+		t.Fatalf("collect rollback=%d %v", n, err)
+	}
+	var count int
+	if err := s.DB().QueryRow("SELECT count(*) FROM metric_observations").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("partial collection committed: %d, %v", count, err)
 	}
 }
 
@@ -383,7 +389,7 @@ func TestFailedInitializationCanRetryWithoutAdoptingForeignFiles(t *testing.T) {
 		t.Fatalf("failed initialization stranded a file: %v", err)
 	}
 	s := openTestStore(t, c)
-	if _, err := Write(context.Background(), s, []Row{testRow()}); err != nil {
+	if _, err := Execute(context.Background(), "collect", c, func(context.Context, Config, string) ([]Row, error) { return []Row{testRow()}, nil }, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -436,7 +442,8 @@ func TestDailyCollectionUsesLatestImportedUTCDay(t *testing.T) {
 	for i, value := range []*float64{Value(12), nil, nil, Value(0), Value(12)} {
 		r.Value = value
 		r.ObservedAt = fmt.Sprintf("2026-09-15T%02d:00:00Z", i+2)
-		n, err := Write(ctx, s, []Row{r})
+		written, err := Execute(ctx, "collect", c, func(context.Context, Config, string) ([]Row, error) { return []Row{r}, nil }, nil)
+		n := written.RowsWritten
 		want := 1
 		if i == 0 || i == 2 {
 			want = 0
