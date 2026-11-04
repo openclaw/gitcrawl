@@ -72,6 +72,11 @@ func TestCoverageCommandJSONAndTable(t *testing.T) {
 		t.Fatalf("coverage table output = %q", tableOut.String())
 	}
 
+	lines := strings.Split(strings.TrimSpace(tableOut.String()), "\n")
+	if got := strings.Join(strings.Fields(lines[len(lines)-1]), " "); got != "total 1 4 2 1 1 3 1 1 1 1 1" {
+		t.Fatalf("coverage totals row = %q", got)
+	}
+
 	multiRun := New()
 	var multiOut bytes.Buffer
 	multiRun.Stdout = &multiOut
