@@ -80,6 +80,12 @@ Claw owns its additional access-revision and filtered-count policies.
 
 ## Delivery and validation
 
+Run `python3 scripts/native-cluster/test_overlay.py` for the synthetic overlay
+suite. It maps the native store adapters and tests onto the current schema16
+source, compares graph output against the original Go builder, and compiles the
+exporter and reader. CI runs this on Linux and macOS. It uses temporary archives
+and excludes the separate opt-in volume and CPU experiments; it does not deploy a producer.
+
 The Go producer files use the `native_cluster_overlay` build tag and the same
 pinned schema16 overlay mechanism as the preceding signed producer. The shared
 scope/admission and reader code lives under `internal/store` / `internal/cli`.

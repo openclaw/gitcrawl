@@ -149,3 +149,16 @@ No query implementation, archive schema, or CLI behavior changed.
   partial-member fixture to require removal on a subsequent complete save.
 
 No archive schema or production save-mode semantics changed.
+
+## Native graph reference validation
+
+- Restored the missing `NativeOriginalGraphOracle` entrypoint behind the native
+  overlay build tag. It calls the existing Go graph builder with the exact
+  reference-test parameters; ordinary builds do not gain an API.
+- Added a temporary-overlay runner for the existing synthetic store and native
+  command tests, plus exporter/reader compilation. Select their actual test
+  names without rerunning the ordinary store suite or the opt-in volume and CPU experiments.
+- Run this gate in Linux and macOS CI. Keep graph/cache equivalence, lifecycle,
+  admission, quarantine, rollback, and recovery proofs; no test is weakened.
+
+No live archives, producer deployment, controller operation, or release changes.
