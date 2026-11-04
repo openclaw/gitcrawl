@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
@@ -24,19 +23,8 @@ func TestTimestampOrderKeyPreservesRFC3339NanoPrecision(t *testing.T) {
 
 func TestSQLiteTimestampKeyOrdersLegacySubMillisecondRevisions(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "10", Number: 10, Kind: "issue", State: "open",
 		Title: "newer", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/10",
@@ -44,6 +32,7 @@ func TestSQLiteTimestampKeyOrdersLegacySubMillisecondRevisions(t *testing.T) {
 		UpdatedAtGitHub: "2026-07-12T00:00:00.000000002Z",
 		UpdatedAt:       "2026-07-12T00:00:00.000000002Z",
 	}
+	var err error
 	thread.ID, err = st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("thread: %v", err)

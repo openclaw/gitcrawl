@@ -174,19 +174,8 @@ func TestCompareRevisionObservationOrder(t *testing.T) {
 
 func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	threadID, err := st.UpsertThread(ctx, Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "pull_request", State: "open",
 		Title: "family reservations", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/1",
@@ -345,19 +334,8 @@ func TestThreadChildObservationReservationsAdvanceIndependently(t *testing.T) {
 
 func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	for _, reservation := range []struct {
 		headSHA         string
 		sourceUpdatedAt string
@@ -467,19 +445,8 @@ func TestWorkflowRunObservationReservationsAreRepositoryHeadScoped(t *testing.T)
 
 func TestUpsertThreadObservationRejectsDelayedCanonicalOverwrite(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "state a", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -522,19 +489,8 @@ func TestUpsertThreadObservationRejectsDelayedCanonicalOverwrite(t *testing.T) {
 
 func TestUpsertThreadObservationIsIdempotentButRejectsTiedConflicts(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "same", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -564,19 +520,8 @@ func TestUpsertThreadObservationIsIdempotentButRejectsTiedConflicts(t *testing.T
 
 func TestUpsertThreadObservationTracksIncompleteEvidenceGeneration(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "hydrated", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -675,19 +620,8 @@ func TestUpsertThreadObservationTracksIncompleteEvidenceGeneration(t *testing.T)
 
 func TestUpsertThreadObservationRejectsDelayedIntermediateParentAfterIncompleteReplay(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "canonical", Body: "canonical body",
@@ -751,19 +685,8 @@ func TestUpsertThreadObservationRejectsDelayedIntermediateParentAfterIncompleteR
 
 func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "complete payload", Body: "complete body",
@@ -908,19 +831,8 @@ func TestUpsertThreadObservationCompletionPreservesGenerationHighWaterMark(t *te
 
 func TestUpsertThreadObservationCompletesNewerSourceBelowEvidenceSequence(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "old source", Body: "old body",
@@ -1098,19 +1010,8 @@ func TestPortableReopenPreservesIncompleteObservationGeneration(t *testing.T) {
 
 func TestUpsertThreadObservationUsesSequenceWithoutSourceTimestamp(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "newer", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -1134,19 +1035,8 @@ func TestUpsertThreadObservationUsesSequenceWithoutSourceTimestamp(t *testing.T)
 
 func TestUpsertThreadObservationRejectsAmbiguousMalformedClocks(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st, repoID := openObservationRepository(t, ctx, "2026-07-12T00:00:00Z")
 	defer st.Close()
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
 	thread := Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "first", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -1165,4 +1055,21 @@ func TestUpsertThreadObservationRejectsAmbiguousMalformedClocks(t *testing.T) {
 		!strings.Contains(err.Error(), "ambiguous malformed observation timestamps") {
 		t.Fatalf("ambiguous observation error = %v", err)
 	}
+}
+
+func openObservationRepository(t *testing.T, ctx context.Context, updatedAt string) (*Store, int64) {
+	t.Helper()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	repoID, err := st.UpsertRepository(ctx, Repository{
+		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
+		RawJSON: "{}", UpdatedAt: updatedAt,
+	})
+	if err != nil {
+		_ = st.Close()
+		t.Fatalf("repository: %v", err)
+	}
+	return st, repoID
 }
