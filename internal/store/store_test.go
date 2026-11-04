@@ -102,10 +102,7 @@ func TestOpenReadOnlyImmutableRejectsWritesAndMissingDatabase(t *testing.T) {
 
 func TestOpenMigratesSchema(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	var version int
@@ -1654,10 +1651,7 @@ func TestInspectSchemaReportsLegacyPendingMigrationWithoutMutation(t *testing.T)
 
 func TestStatusOnEmptyStore(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	status, err := st.Status(ctx)
@@ -2096,13 +2090,10 @@ func TestOpenMigratesPortableStoreColumns(t *testing.T) {
 
 func TestDocumentsFTSWorks(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
-	_, err = st.DB().ExecContext(ctx, `
+	_, err := st.DB().ExecContext(ctx, `
 		insert into repositories(owner, name, full_name, raw_json, updated_at)
 		values('openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{}', '2026-04-26T00:00:00Z');
 		insert into threads(repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
@@ -2125,13 +2116,10 @@ func TestDocumentsFTSWorks(t *testing.T) {
 
 func TestSearchFallsBackToThreadPayloadsWhenDocumentsArePruned(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
-	_, err = st.DB().ExecContext(ctx, `
+	_, err := st.DB().ExecContext(ctx, `
 		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
 		values(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '{}', '2026-04-26T00:00:00Z');
 		insert into threads(repo_id, github_id, number, kind, state, title, body, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)
@@ -2152,13 +2140,10 @@ func TestSearchFallsBackToThreadPayloadsWhenDocumentsArePruned(t *testing.T) {
 
 func TestPrunePortablePayloads(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
-	_, err = st.DB().ExecContext(ctx, `
+	_, err := st.DB().ExecContext(ctx, `
 		insert into repositories(id, owner, name, full_name, raw_json, updated_at)
 		values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{"id":1}', '2026-04-26T00:00:00Z');
 		insert into threads(id, repo_id, github_id, number, kind, state, title, body, author_association, html_url, labels_json, assignees_json, raw_json, content_hash, updated_at)

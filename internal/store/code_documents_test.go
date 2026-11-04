@@ -4,16 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
 func TestReplaceAndSearchCodeSnapshot(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
 	if err != nil {
@@ -82,10 +78,7 @@ func TestReplaceAndSearchCodeSnapshot(t *testing.T) {
 
 func TestPortablePruneDropsCodeCorpus(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
 	if err != nil {
@@ -119,10 +112,7 @@ func TestPortablePruneDropsCodeCorpus(t *testing.T) {
 
 func TestSearchCodeDocumentsHandlesEmptyStates(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-06-06T00:00:00Z"})
 	if err != nil {

@@ -2,17 +2,13 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestUpsertPullRequestReviewThreadsRollsBackMergeOnInsertError(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-05-15T00:00:00Z"})
@@ -68,10 +64,7 @@ func TestUpsertPullRequestReviewThreadsRollsBackMergeOnInsertError(t *testing.T)
 
 func TestPullRequestReviewThreadMergeTombstoneRevisionAndRestore(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-05-15T00:00:00Z"})
 	if err != nil {

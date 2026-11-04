@@ -12,10 +12,7 @@ import (
 
 func TestUpsertAndListThreadVectors(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})
@@ -179,10 +176,7 @@ func TestOpenMigratesThreadVectorsToCompositeKey(t *testing.T) {
 
 func TestListThreadVectorsDecodesBinaryPayloads(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z"})

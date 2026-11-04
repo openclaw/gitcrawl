@@ -12,10 +12,7 @@ import (
 
 func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	threadID := threadIDs[1]
@@ -131,10 +128,7 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 
 func TestMissingPullRequestDetailNumbersSelectsOnlyUnfilledPRs(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
 	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: now})
@@ -186,10 +180,7 @@ func TestMissingPullRequestDetailNumbersSelectsOnlyUnfilledPRs(t *testing.T) {
 
 func TestPullRequestCacheAllowsDuplicateFilePaths(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	threadID := threadIDs[1]
@@ -253,10 +244,7 @@ func TestPullRequestCacheAllowsDuplicateFilePaths(t *testing.T) {
 
 func TestPullRequestCacheReplacesCompleteWorkflowRunSnapshot(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	threadID := threadIDs[1]
@@ -466,13 +454,10 @@ func TestPullRequestCacheRejectsStaleEmptyWorkflowSnapshotAcrossStores(t *testin
 
 func TestPullRequestCacheRejectsClocklessEmptyWorkflowSnapshot(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
-	err = st.UpsertPullRequestCacheFamilies(
+	err := st.UpsertPullRequestCacheFamilies(
 		ctx,
 		PullRequestDetail{
 			ThreadID: threadIDs[1],
@@ -602,14 +587,11 @@ func TestOpenMigratesLegacyPullRequestFilesToPositionKey(t *testing.T) {
 
 func TestPullRequestCacheTransactionRollsBackOnDocumentFailure(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	threadID := threadIDs[1]
-	err = st.WithTx(ctx, func(tx *Store) error {
+	err := st.WithTx(ctx, func(tx *Store) error {
 		if err := tx.UpsertPullRequestCacheFamilies(ctx,
 			PullRequestDetail{
 				ThreadID: threadID, RepoID: repoID, Number: 302,

@@ -1059,10 +1059,7 @@ func TestUpsertThreadObservationRejectsAmbiguousMalformedClocks(t *testing.T) {
 
 func openObservationRepository(t *testing.T, ctx context.Context, updatedAt string) (*Store, int64) {
 	t.Helper()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
 		RawJSON: "{}", UpdatedAt: updatedAt,

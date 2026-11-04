@@ -2,16 +2,12 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
 func TestUpsertRepositoryAndThread(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{

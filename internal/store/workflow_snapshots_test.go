@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,10 +31,7 @@ func TestApplyWorkflowRunSnapshotMergesEqualTuplesContentAware(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-			if err != nil {
-				t.Fatalf("open store: %v", err)
-			}
+			st := openTestStore(t, ctx)
 			defer st.Close()
 
 			repoID := workflowSnapshotRepository(t, ctx, st)
@@ -85,10 +81,7 @@ func TestApplyWorkflowRunSnapshotMergesEqualTuplesContentAware(t *testing.T) {
 
 func TestApplyWorkflowRunSnapshotRejectsStaleCASAfterDeletion(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID := workflowSnapshotRepository(t, ctx, st)
@@ -178,10 +171,7 @@ func TestApplyWorkflowRunSnapshotRejectsStaleCASAfterDeletion(t *testing.T) {
 
 func TestReadWorkflowRunSnapshotStateRejectsClocklessStoredRun(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID := workflowSnapshotRepository(t, ctx, st)

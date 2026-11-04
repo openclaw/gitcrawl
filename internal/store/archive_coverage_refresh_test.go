@@ -2,16 +2,12 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
 func TestArchiveCoverageFreshnessUsesSuccessfulRefreshRuns(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -149,10 +145,7 @@ func TestArchiveCoverageFreshnessUsesSuccessfulRefreshRuns(t *testing.T) {
 
 func TestArchiveCoverageSummariesRequireKeySummaryKind(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -216,10 +209,7 @@ func TestArchiveCoverageSummariesRequireKeySummaryKind(t *testing.T) {
 
 func TestArchiveCoverageUsesSummaryCreationTimeWithoutRunHistory(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
@@ -266,10 +256,7 @@ func TestArchiveCoverageUsesSummaryCreationTimeWithoutRunHistory(t *testing.T) {
 
 func TestArchiveCoverageUsesLatestObservedRevision(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openTestStore(t, ctx)
 	defer st.Close()
 
 	repoID, err := st.UpsertRepository(ctx, Repository{
