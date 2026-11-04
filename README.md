@@ -90,6 +90,27 @@ make check
 
 `make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.12.1 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.18.2 for snapshot builds.
 
+On Linux or macOS, use Python 3 and the Go toolchain declared in `go.mod` to
+compare durable clustering output across scalar, SIMD-enabled and forced-fallback
+builds:
+
+```sh
+python3 -m unittest discover -s scripts -p test_cluster_simd_parity.py
+python3 scripts/cluster_simd_parity.py
+```
+
+The runner builds two test binaries and reuses the SIMD-enabled binary with
+`GODEBUG=simd=0` for fallback. It exercises a synthetic 2000-node SQLite fixture
+through full, limited, model-partial and strict-rejection commands, without
+providers or real archives. Temporary binaries and output are removed on exit.
+Durable identities, vectors, coverage and lineage must match exactly; only
+enumerated generated clocks are normalized, and membership scores allow an
+absolute difference of `1e-12`. Stored JSON text stays lossless, including SQL
+NULL versus JSON null, and clock ordering retains nanosecond precision.
+This checks correctness, not performance or
+hardware SIMD availability. Ubuntu CI runs it explicitly; ordinary `go test`
+skips the output-producing test unless its output path is supplied.
+
 macOS CI runs on the Apple Silicon `xcode-27` image with an explicit macOS 13.0 deployment target. Release verification executes Intel binaries under Rosetta, installing it if needed, and rejects binaries that raise the macOS 13 minimum.
 
 Maintainers can validate the signed release pipeline on `main` without publishing:
