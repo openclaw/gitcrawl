@@ -36,7 +36,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          # Compiler experiments and validation tools also shape the build cache.
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/ci.yml
 
       - name: Download modules
         run: go mod download

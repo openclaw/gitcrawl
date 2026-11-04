@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh CI Go caches when validation workflow inputs change so newly added compiler experiments and analysis tools can be cached.
+
 - Add an opt-in reader change contract (`gitcrawl change-contract`). In-store triggers journal every insert, update and delete of the tables Clawmmunity's research reader and history captures read, with row keys, in the writer's own transaction and from every writer binary. A bounded log, a generation for unexpressible rewrites and a documented reader algorithm let a consumer skip unchanged families and rebuild changed ones incrementally. Portable and cloud snapshots strip it.
 
 ## 0.17.0 - 2026-10-23
