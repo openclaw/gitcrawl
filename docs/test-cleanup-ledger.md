@@ -175,3 +175,14 @@ No live archives, producer deployment, controller operation, or release changes.
   with conflict diagnostic writing recognized by historical maintenance clients.
 
 No archive schema, controller, deployment, or active publication behavior changed.
+
+## Test-only pull request cache wrapper
+
+- Removed `UpsertPullRequestCache`, whose callers were all test fixtures. Tests
+  now call the production `UpsertPullRequestCacheFamilies` writer directly.
+- Keep the same five enabled hydration families in every migrated call, including
+  empty input semantics. The all-family selection lives in store tests only.
+- Retain cache replacement, tombstone, workflow ordering, migration, portable
+  pruning, coverage, and transactional rollback checks.
+
+No production writer behavior or archive schema changed.

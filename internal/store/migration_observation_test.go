@@ -42,9 +42,9 @@ func TestOpenMigratesFamilyTombstonesLosslessly(t *testing.T) {
 		t.Fatalf("seed comment: %v", err)
 	}
 	detail := PullRequestDetail{ThreadID: threadID, RepoID: repoID, Number: 17, RawJSON: "{}", FetchedAt: "2026-07-18T00:03:00Z", UpdatedAt: "2026-07-18T00:03:00Z"}
-	if err := st.UpsertPullRequestCache(ctx, detail, nil, []PullRequestCommit{{
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, nil, []PullRequestCommit{{
 		SHA: "abc17", Message: "legacy commit", RawJSON: `{"sha":"abc17"}`, FetchedAt: "2026-07-18T00:03:00Z",
-	}}, nil, nil); err != nil {
+	}}, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("seed commit: %v", err)
 	}
 	if err := st.UpsertPullRequestReviewThreads(ctx, threadID, "2026-07-18T00:04:00Z", []PullRequestReviewThread{{

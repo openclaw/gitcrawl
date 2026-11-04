@@ -261,7 +261,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 	if _, err := st.UpsertThread(ctx, coverageThread(otherID, 9, "pull_request")); err != nil {
 		t.Fatalf("other pr: %v", err)
 	}
-	if err := st.UpsertPullRequestCache(ctx, store.PullRequestDetail{
+	if err := st.UpsertPullRequestCacheFamilies(ctx, store.PullRequestDetail{
 		ThreadID:  detailedPRID,
 		RepoID:    gitcrawlID,
 		Number:    3,
@@ -290,7 +290,7 @@ func seedCoverageStore(t *testing.T, ctx context.Context, dbPath string) {
 		HeadSHA:   "coverage-head",
 		RawJSON:   "{}",
 		FetchedAt: "2026-07-03T00:00:00Z",
-	}}); err != nil {
+	}}, store.PullRequestHydrationFamilies{Details: true, Files: true, Commits: true, Checks: true, WorkflowRuns: true}); err != nil {
 		t.Fatalf("pr details: %v", err)
 	}
 	if err := st.UpsertPullRequestReviewThreads(ctx, detailedPRID, "2026-07-03T00:00:00Z", []store.PullRequestReviewThread{{

@@ -110,14 +110,14 @@ func TestArchiveCoveragePRDetailFreshnessParsesTimestamps(t *testing.T) {
 			if err != nil {
 				t.Fatalf("thread: %v", err)
 			}
-			if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{
+			if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{
 				ThreadID:  threadID,
 				RepoID:    repoID,
 				Number:    thread.Number,
 				RawJSON:   "{}",
 				FetchedAt: test.fetchedAt,
 				UpdatedAt: test.fetchedAt,
-			}, nil, nil, nil, nil); err != nil {
+			}, nil, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 				t.Fatalf("PR detail: %v", err)
 			}
 
@@ -161,14 +161,14 @@ func TestArchiveCoveragePRDetailFreshnessUsesAcceptedSourceObservation(t *testin
 	); err != nil || !applied {
 		t.Fatalf("reserve PR detail observation = %t, %v", applied, err)
 	}
-	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{
+	if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{
 		ThreadID:  thread.ID,
 		RepoID:    repoID,
 		Number:    thread.Number,
 		RawJSON:   "{}",
 		FetchedAt: "2026-07-12T12:05:00Z",
 		UpdatedAt: "2026-07-12T12:05:00Z",
-	}, nil, nil, nil, nil); err != nil {
+	}, nil, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("PR detail: %v", err)
 	}
 
@@ -424,9 +424,9 @@ func TestArchiveCoveragePRFilesDistinguishesMetadataOnlyFromLegacy(t *testing.T)
 				if files > 0 {
 					rows = []PullRequestFile{{ThreadID: threadID, Path: "README.md", RawJSON: "{}", FetchedAt: observed}}
 				}
-				if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{
+				if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{
 					ThreadID: threadID, RepoID: repoID, Number: 1, ChangedFiles: files, RawJSON: "{}", FetchedAt: observed, UpdatedAt: observed,
-				}, rows, nil, nil, nil); err != nil {
+				}, rows, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 					t.Fatal(err)
 				}
 				if mode != "legacy" {
@@ -738,11 +738,12 @@ func seedArchiveCoverageRows(t *testing.T, ctx context.Context, st *Store) (int6
 			t.Fatalf("comment: %v", err)
 		}
 	}
-	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{ThreadID: detailedPRID, RepoID: primaryID, Number: 2, HeadSHA: "coverage-head", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z", UpdatedAt: "2026-07-06T00:01:00Z"},
+	if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{ThreadID: detailedPRID, RepoID: primaryID, Number: 2, HeadSHA: "coverage-head", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z", UpdatedAt: "2026-07-06T00:01:00Z"},
 		[]PullRequestFile{{ThreadID: detailedPRID, Path: "README.md", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
 		[]PullRequestCommit{{ThreadID: detailedPRID, SHA: "abc", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
 		[]PullRequestCheck{{ThreadID: detailedPRID, Name: "test", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
 		[]WorkflowRun{{RepoID: primaryID, RunID: "1", HeadSHA: "coverage-head", RawJSON: "{}", FetchedAt: "2026-07-06T00:01:00Z"}},
+		allPullRequestHydrationFamilies,
 	); err != nil {
 		t.Fatalf("PR cache: %v", err)
 	}

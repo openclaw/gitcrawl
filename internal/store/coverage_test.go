@@ -354,12 +354,13 @@ func TestPortablePruneClearsPRRawJSONBlobPointersAndFingerprints(t *testing.T) {
 	if _, err := st.DB().ExecContext(ctx, `update comments set raw_json_blob_id = 1 where github_id = 'raw-comment'`); err != nil {
 		t.Fatalf("link comment blob: %v", err)
 	}
-	if err := st.UpsertPullRequestCache(ctx,
+	if err := st.UpsertPullRequestCacheFamilies(ctx,
 		PullRequestDetail{ThreadID: threadID, RepoID: repoID, Number: 302, HeadSHA: "head", RawJSON: `{"detail":true}`, FetchedAt: "2026-05-05T00:00:00Z", UpdatedAt: "2026-05-05T00:00:00Z"},
 		[]PullRequestFile{{Path: "a.go", RawJSON: `{"file":true}`, FetchedAt: "2026-05-05T00:00:00Z"}},
 		[]PullRequestCommit{{SHA: "abc", RawJSON: `{"commit":true}`, FetchedAt: "2026-05-05T00:00:00Z"}},
 		[]PullRequestCheck{{Name: "ci", RawJSON: `{"check":true}`, FetchedAt: "2026-05-05T00:00:00Z"}},
 		[]WorkflowRun{{RepoID: repoID, RunID: "1", RawJSON: `{"run":true}`, FetchedAt: "2026-05-05T00:00:00Z"}},
+		allPullRequestHydrationFamilies,
 	); err != nil {
 		t.Fatalf("seed pr cache: %v", err)
 	}
