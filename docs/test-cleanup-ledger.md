@@ -64,3 +64,19 @@ No archive format, staging behavior, or release artifacts changed.
   summary-availability coverage.
 
 No embedding selection, text, hashing, or release behavior changed.
+
+## Finite vector comparisons
+
+- Replaced tolerance rejection checks with explicit in-tolerance requirements
+  in scalar cosine, prepared cosine/kernel comparisons, the immutable-input
+  regression, and neighbor-score comparison. A NaN difference now fails rather
+  than satisfying neither side of an ordered comparison.
+- Kept all existing vector scenarios and tolerances. Scalar correctness,
+  prepared/dispatch equivalence, input ownership, and query ranking exercise
+  distinct contracts; none is removed as a duplicate.
+- Removed redundant one-sided NaN guards where the difference check now rejects
+  non-finite values from either implementation. No assertion framework added.
+
+Validation: temporary Go overlays compare NaN failure probes against the old
+and updated tests; vector race tests, full Go tests/static gates, independent
+P0–P3 review, and PR CI cover the candidate. No production or live archive changes.
