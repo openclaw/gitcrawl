@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+var allPullRequestHydrationFamilies = PullRequestHydrationFamilies{
+	Details:      true,
+	Files:        true,
+	Commits:      true,
+	Checks:       true,
+	WorkflowRuns: true,
+}
+
 func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
@@ -39,7 +47,7 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 		{RepoID: repoID, RunID: "100", RunNumber: 7, HeadBranch: "main", HeadSHA: "head", Status: "completed", Conclusion: "success", WorkflowName: "CI", Event: "push", HTMLURL: "https://example.invalid/run/100", CreatedAtGH: "2026-05-05T09:00:00Z", UpdatedAtGH: "2026-05-05T09:05:00Z", RawJSON: "{}", FetchedAt: fetchedAt},
 		{RepoID: repoID, RunID: "101", RunNumber: 8, HeadBranch: "release", HeadSHA: "other", Status: "in_progress", WorkflowName: "release", Event: "workflow_dispatch", CreatedAtGH: "2026-05-05T09:10:00Z", UpdatedAtGH: "2026-05-05T09:11:00Z", RawJSON: "{}", FetchedAt: fetchedAt},
 	}
-	if err := st.UpsertPullRequestCache(ctx, detail, files, commits, checks, runs); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, files, commits, checks, runs, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("upsert pr cache: %v", err)
 	}
 	byThread, found, err := st.PullRequestDetailByThread(ctx, threadID)
@@ -81,7 +89,7 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	}
 
 	detail.HeadSHA = "head-v2"
-	if err := st.UpsertPullRequestCache(ctx, detail, files[:1], nil, nil, []WorkflowRun{{RepoID: repoID, RunID: "100", RunNumber: 9, HeadBranch: "main", HeadSHA: "head-v2", Status: "completed", Conclusion: "failure", UpdatedAtGH: "2026-05-05T10:00:00Z", RawJSON: "{}", FetchedAt: fetchedAt}}); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, files[:1], nil, nil, []WorkflowRun{{RepoID: repoID, RunID: "100", RunNumber: 9, HeadBranch: "main", HeadSHA: "head-v2", Status: "completed", Conclusion: "failure", UpdatedAtGH: "2026-05-05T10:00:00Z", RawJSON: "{}", FetchedAt: fetchedAt}}, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("update pr cache: %v", err)
 	}
 	cache, err = st.PullRequestCache(ctx, repoID, 302)
@@ -151,7 +159,7 @@ func TestMissingPullRequestDetailNumbersSelectsOnlyUnfilledPRs(t *testing.T) {
 			filledThreadID = id
 		}
 	}
-	if err := st.UpsertPullRequestCache(ctx, PullRequestDetail{ThreadID: filledThreadID, RepoID: repoID, Number: 13, RawJSON: "{}", FetchedAt: now, UpdatedAt: now}, nil, nil, nil, nil); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, PullRequestDetail{ThreadID: filledThreadID, RepoID: repoID, Number: 13, RawJSON: "{}", FetchedAt: now, UpdatedAt: now}, nil, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("fill pr detail: %v", err)
 	}
 
@@ -215,7 +223,7 @@ func TestPullRequestCacheAllowsDuplicateFilePaths(t *testing.T) {
 		},
 	}
 
-	if err := st.UpsertPullRequestCache(ctx, detail, files, nil, nil, nil); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, files, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("upsert duplicate-path pr files: %v", err)
 	}
 	cache, err := st.PullRequestCache(ctx, repoID, 302)
@@ -230,7 +238,7 @@ func TestPullRequestCacheAllowsDuplicateFilePaths(t *testing.T) {
 		t.Fatalf("files = %+v", cache.Files)
 	}
 
-	if err := st.UpsertPullRequestCache(ctx, detail, files[:1], nil, nil, nil); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, files[:1], nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("replace duplicate-path pr files: %v", err)
 	}
 	cache, err = st.PullRequestCache(ctx, repoID, 302)
@@ -259,7 +267,7 @@ func TestPullRequestCacheReplacesCompleteWorkflowRunSnapshot(t *testing.T) {
 			RawJSON: "{}", FetchedAt: "2026-07-12T03:00:00Z",
 		}
 	}
-	if err := st.UpsertPullRequestCache(ctx, detail, nil, nil, nil, initial); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, nil, nil, nil, initial, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("seed workflow runs: %v", err)
 	}
 	all, err := st.ListWorkflowRuns(ctx, repoID, WorkflowRunListOptions{HeadSHA: "head", Limit: -1})
@@ -280,7 +288,7 @@ func TestPullRequestCacheReplacesCompleteWorkflowRunSnapshot(t *testing.T) {
 		t.Fatalf("normalized legacy workflow snapshot = %+v", state)
 	}
 	replacement := initial[:3]
-	if err := st.UpsertPullRequestCache(ctx, detail, nil, nil, nil, replacement); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, nil, nil, nil, replacement, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("replace workflow runs: %v", err)
 	}
 	all, err = st.ListWorkflowRuns(ctx, repoID, WorkflowRunListOptions{HeadSHA: "head", Limit: -1})
@@ -315,7 +323,7 @@ func TestPullRequestCacheWorkflowWritesHonorOrderedSnapshotAcrossStores(t *testi
 			UpdatedAtGH: "2026-07-12T03:02:00Z", RawJSON: "{}", FetchedAt: detail.FetchedAt,
 		},
 	}
-	if err := firstStore.UpsertPullRequestCache(ctx, detail, nil, nil, nil, initial); err != nil {
+	if err := firstStore.UpsertPullRequestCacheFamilies(ctx, detail, nil, nil, nil, initial, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("seed legacy workflow cache: %v", err)
 	}
 	baseline, err := firstStore.ReadWorkflowRunSnapshotState(ctx, repoID, detail.HeadSHA)
@@ -406,7 +414,7 @@ func TestPullRequestCacheRejectsStaleEmptyWorkflowSnapshotAcrossStores(t *testin
 		RepoID: repoID, RunID: "100", RunNumber: 1, HeadSHA: "head",
 		UpdatedAtGH: "2026-07-12T03:00:00Z", RawJSON: "{}", FetchedAt: detail.FetchedAt,
 	}}
-	if err := firstStore.UpsertPullRequestCache(ctx, detail, nil, nil, nil, initial); err != nil {
+	if err := firstStore.UpsertPullRequestCacheFamilies(ctx, detail, nil, nil, nil, initial, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("seed newer workflow cache: %v", err)
 	}
 
@@ -500,7 +508,7 @@ func TestOpenMigratesLegacyPullRequestFilesToPositionKey(t *testing.T) {
 		{Path: "z.go", Status: "modified", Additions: 2, Changes: 2, RawJSON: `{"filename":"z.go"}`, FetchedAt: fetchedAt},
 		{Path: "a.go", Status: "added", Additions: 1, Changes: 1, RawJSON: `{"filename":"a.go"}`, FetchedAt: fetchedAt},
 	}
-	if err := st.UpsertPullRequestCache(ctx, detail, legacyFiles, nil, nil, nil); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, legacyFiles, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("seed pr cache: %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -571,7 +579,7 @@ func TestOpenMigratesLegacyPullRequestFilesToPositionKey(t *testing.T) {
 		{Path: "docs/governance/GOVERNANCE.md", Status: "removed", Deletions: 1, Changes: 1, RawJSON: `{"filename":"docs/governance/GOVERNANCE.md","status":"removed"}`, FetchedAt: fetchedAt},
 		{Path: "docs/governance/GOVERNANCE.md", Status: "added", Additions: 161, Changes: 161, RawJSON: `{"filename":"docs/governance/GOVERNANCE.md","status":"added"}`, FetchedAt: fetchedAt},
 	}
-	if err := st.UpsertPullRequestCache(ctx, detail, duplicateFiles, nil, nil, nil); err != nil {
+	if err := st.UpsertPullRequestCacheFamilies(ctx, detail, duplicateFiles, nil, nil, nil, allPullRequestHydrationFamilies); err != nil {
 		t.Fatalf("upsert duplicate-path pr files after migration: %v", err)
 	}
 	cache, err = st.PullRequestCache(ctx, repoID, 302)

@@ -99,14 +99,6 @@ type PullRequestHydrationFamilies struct {
 	WorkflowRuns bool
 }
 
-var allPullRequestHydrationFamilies = PullRequestHydrationFamilies{
-	Details:      true,
-	Files:        true,
-	Commits:      true,
-	Checks:       true,
-	WorkflowRuns: true,
-}
-
 func (s *Store) PullRequestDetailByThread(ctx context.Context, threadID int64) (PullRequestDetail, bool, error) {
 	if !s.tableExists(ctx, "pull_request_details") {
 		return PullRequestDetail{}, false, nil
@@ -146,18 +138,6 @@ func (s *Store) PullRequestDetailByThread(ctx context.Context, threadID int64) (
 	detail.HeadRepoFullName = headRepoFullName.String
 	detail.MergeableState = mergeableState.String
 	return detail, true, nil
-}
-
-func (s *Store) UpsertPullRequestCache(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun) error {
-	return s.UpsertPullRequestCacheFamilies(
-		ctx,
-		detail,
-		files,
-		commits,
-		checks,
-		runs,
-		allPullRequestHydrationFamilies,
-	)
 }
 
 func (s *Store) UpsertPullRequestCacheFamilies(
