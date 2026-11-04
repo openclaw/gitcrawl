@@ -11,163 +11,60 @@ import (
 )
 
 func (a *App) runCloseThread(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("close-thread", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	numberRaw := fs.String("number", "", "issue or pull request number")
-	reason := fs.String("reason", "CLI manual close", "local close reason")
-	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"number": true, "reason": true})); err != nil {
-		return usageErr(err)
-	}
-	a.applyCommandJSON(*jsonOut)
-	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("close-thread requires owner/repo"))
-	}
-	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
-	if err != nil {
-		return usageErr(err)
-	}
-	number, err := parseOptionalThreadNumber(*numberRaw, owner+"/"+repoName)
-	if err != nil {
-		return usageErr(err)
-	}
-	if number == 0 {
-		return usageErr(fmt.Errorf("close-thread requires --number"))
-	}
-
-	rt, err := a.openLocalRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer rt.Store.Close()
-
-	repo, err := rt.repository(ctx, owner, repoName)
-	if err != nil {
-		return err
-	}
-	if err := rt.Store.CloseThreadLocally(ctx, repo.ID, number, *reason); err != nil {
-		return err
-	}
-	return a.writeOutput("close-thread", map[string]any{
-		"repository": repo.FullName,
-		"number":     number,
-		"reason":     strings.TrimSpace(*reason),
-		"closed":     true,
-	}, true)
+	return a.runLocalClosureCommand(ctx, args, "close-thread")
 }
 
 func (a *App) runReopenThread(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("reopen-thread", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	numberRaw := fs.String("number", "", "issue or pull request number")
-	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"number": true})); err != nil {
-		return usageErr(err)
-	}
-	a.applyCommandJSON(*jsonOut)
-	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("reopen-thread requires owner/repo"))
-	}
-	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
-	if err != nil {
-		return usageErr(err)
-	}
-	number, err := parseOptionalThreadNumber(*numberRaw, owner+"/"+repoName)
-	if err != nil {
-		return usageErr(err)
-	}
-	if number == 0 {
-		return usageErr(fmt.Errorf("reopen-thread requires --number"))
-	}
-
-	rt, err := a.openLocalRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer rt.Store.Close()
-
-	repo, err := rt.repository(ctx, owner, repoName)
-	if err != nil {
-		return err
-	}
-	if err := rt.Store.ReopenThreadLocally(ctx, repo.ID, number); err != nil {
-		return err
-	}
-	return a.writeOutput("reopen-thread", map[string]any{
-		"repository": repo.FullName,
-		"number":     number,
-		"reopened":   true,
-	}, true)
+	return a.runLocalClosureCommand(ctx, args, "reopen-thread")
 }
 
 func (a *App) runCloseCluster(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("close-cluster", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	idRaw := fs.String("id", "", "cluster id")
-	reason := fs.String("reason", "CLI manual close", "local close reason")
-	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "reason": true})); err != nil {
-		return usageErr(err)
-	}
-	a.applyCommandJSON(*jsonOut)
-	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("close-cluster requires owner/repo"))
-	}
-	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
-	if err != nil {
-		return usageErr(err)
-	}
-	clusterID, err := parseOptionalPositiveInt(*idRaw)
-	if err != nil {
-		return usageErr(err)
-	}
-	if clusterID == 0 {
-		return usageErr(fmt.Errorf("close-cluster requires --id"))
-	}
-
-	rt, err := a.openLocalRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer rt.Store.Close()
-
-	repo, err := rt.repository(ctx, owner, repoName)
-	if err != nil {
-		return err
-	}
-	if err := rt.Store.CloseClusterLocally(ctx, repo.ID, int64(clusterID), *reason); err != nil {
-		return err
-	}
-	return a.writeOutput("close-cluster", map[string]any{
-		"repository": repo.FullName,
-		"id":         clusterID,
-		"reason":     strings.TrimSpace(*reason),
-		"closed":     true,
-	}, true)
+	return a.runLocalClosureCommand(ctx, args, "close-cluster")
 }
 
 func (a *App) runReopenCluster(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("reopen-cluster", flag.ContinueOnError)
+	return a.runLocalClosureCommand(ctx, args, "reopen-cluster")
+}
+
+func (a *App) runLocalClosureCommand(ctx context.Context, args []string, command string) error {
+	cluster := command == "close-cluster" || command == "reopen-cluster"
+	closing := command == "close-thread" || command == "close-cluster"
+	idFlag, idHelp := "number", "issue or pull request number"
+	if cluster {
+		idFlag, idHelp = "id", "cluster id"
+	}
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	idRaw := fs.String("id", "", "cluster id")
+	idRaw := fs.String(idFlag, "", idHelp)
+	var reason string
+	valueFlags := map[string]bool{idFlag: true}
+	if closing {
+		fs.StringVar(&reason, "reason", "CLI manual close", "local close reason")
+		valueFlags["reason"] = true
+	}
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args, valueFlags)); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("reopen-cluster requires owner/repo"))
+		return usageErr(fmt.Errorf("%s requires owner/repo", command))
 	}
 	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
 	if err != nil {
 		return usageErr(err)
 	}
-	clusterID, err := parseOptionalPositiveInt(*idRaw)
+	var id int
+	if cluster {
+		id, err = parseOptionalPositiveInt(*idRaw)
+	} else {
+		id, err = parseOptionalThreadNumber(*idRaw, owner+"/"+repoName)
+	}
 	if err != nil {
 		return usageErr(err)
 	}
-	if clusterID == 0 {
-		return usageErr(fmt.Errorf("reopen-cluster requires --id"))
+	if id == 0 {
+		return usageErr(fmt.Errorf("%s requires --%s", command, idFlag))
 	}
 
 	rt, err := a.openLocalRuntime(ctx)
@@ -175,19 +72,33 @@ func (a *App) runReopenCluster(ctx context.Context, args []string) error {
 		return err
 	}
 	defer rt.Store.Close()
-
 	repo, err := rt.repository(ctx, owner, repoName)
 	if err != nil {
 		return err
 	}
-	if err := rt.Store.ReopenClusterLocally(ctx, repo.ID, int64(clusterID)); err != nil {
+	switch command {
+	case "close-thread":
+		err = rt.Store.CloseThreadLocally(ctx, repo.ID, id, reason)
+	case "reopen-thread":
+		err = rt.Store.ReopenThreadLocally(ctx, repo.ID, id)
+	case "close-cluster":
+		err = rt.Store.CloseClusterLocally(ctx, repo.ID, int64(id), reason)
+	case "reopen-cluster":
+		err = rt.Store.ReopenClusterLocally(ctx, repo.ID, int64(id))
+	default:
+		return fmt.Errorf("unsupported local closure command %q", command)
+	}
+	if err != nil {
 		return err
 	}
-	return a.writeOutput("reopen-cluster", map[string]any{
-		"repository": repo.FullName,
-		"id":         clusterID,
-		"reopened":   true,
-	}, true)
+	payload := map[string]any{"repository": repo.FullName, idFlag: id}
+	if closing {
+		payload["reason"] = strings.TrimSpace(reason)
+		payload["closed"] = true
+	} else {
+		payload["reopened"] = true
+	}
+	return a.writeOutput(command, payload, true)
 }
 
 func (a *App) runExcludeClusterMember(ctx context.Context, args []string) error {
