@@ -85,6 +85,12 @@ jobs:
           GOEXPERIMENT=simd go test ./...
           GOEXPERIMENT=simd GODEBUG=simd=0 go test ./internal/vector ./internal/cli
 
+      - name: Compare durable cluster output across SIMD modes
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          python3 -m unittest discover -s scripts -p test_cluster_simd_parity.py
+          python3 scripts/cluster_simd_parity.py
+
       - name: Build
         run: go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=${GITHUB_SHA:0:7}" -o bin/gitcrawl ./cmd/gitcrawl
 
