@@ -492,28 +492,40 @@ func TestAppendUniquePreservesFirstOccurrence(t *testing.T) {
 func TestPortableDatabaseHelpersPropagateCancellation(t *testing.T) {
 	db := openRawDB(t, filepath.Join(t.TempDir(), "canceled.db"))
 	defer db.Close()
-	if _, err := db.Exec(`create table disposable(id integer)`); err != nil {
+	if _, err := db.Exec(`
+		create table disposable(id integer);
+		create table repositories(id integer primary key, owner text, name text, full_name text);
+		insert into repositories values(1, 'openclaw', 'gitcrawl', 'openclaw/gitcrawl');
+		create table portable_metadata(key text primary key, value text not null);
+	`); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	checks := []struct {
 		name string
-		run  func() error
+		run  func(context.Context) error
 	}{
-		{name: "configure", run: func() error { return configureDisposableStore(ctx, db) }},
-		{name: "indexes", run: func() error { _, err := ordinaryNonUniqueIndexes(ctx, db); return err }},
-		{name: "tables", run: func() error { _, err := databaseTableNames(ctx, db); return err }},
-		{name: "table stats", run: func() error { _, err := databaseTableStats(ctx, db); return err }},
-		{name: "repository", run: func() error { _, err := singleRepository(ctx, db); return err }},
-		{name: "verify repository", run: func() error { return verifyRepository(ctx, db, Repository{FullName: "openclaw/gitcrawl"}) }},
-		{name: "metadata", run: func() error { return writeMetadata(ctx, db, map[string]string{"schema": "portable-v1"}) }},
-		{name: "pragma", run: func() error { _, err := checkPragma(ctx, db, "quick_check"); return err }},
+		{name: "configure", run: func(ctx context.Context) error { return configureDisposableStore(ctx, db) }},
+		{name: "indexes", run: func(ctx context.Context) error { _, err := ordinaryNonUniqueIndexes(ctx, db); return err }},
+		{name: "tables", run: func(ctx context.Context) error { _, err := databaseTableNames(ctx, db); return err }},
+		{name: "table stats", run: func(ctx context.Context) error { _, err := databaseTableStats(ctx, db); return err }},
+		{name: "repository", run: func(ctx context.Context) error { _, err := singleRepository(ctx, db); return err }},
+		{name: "verify repository", run: func(ctx context.Context) error {
+			return verifyRepository(ctx, db, Repository{ID: 1, Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl"})
+		}},
+		{name: "metadata", run: func(ctx context.Context) error {
+			return writeMetadata(ctx, db, map[string]string{"schema": "portable-v1"})
+		}},
+		{name: "pragma", run: func(ctx context.Context) error { _, err := checkPragma(ctx, db, "quick_check"); return err }},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			if err := check.run(); err == nil {
-				t.Fatal("canceled operation succeeded")
+			if err := check.run(context.Background()); err != nil {
+				t.Fatalf("active operation failed: %v", err)
+			}
+			if err := check.run(ctx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled operation error = %v, want context.Canceled", err)
 			}
 		})
 	}

@@ -256,3 +256,16 @@ All HTTP responses are synthetic and local. Production pagination is unchanged.
   and history clients: original failures produced connection EOF; repaired paths
   preserve diagnostics and return HTTP 400. Full Go/static gates, scoped race
   checks, independent review, and PR CI validate synthetic local fixtures only.
+
+## Portable database cancellation fixture
+
+- Replace the incomplete cancellation-only SQLite fixture with the repository
+  and metadata tables required by the tested helpers. Every operation must first
+  succeed with an active context, then return an error wrapping `context.Canceled`.
+- Preserve all eight helper cases. The old generic-error assertion accepted
+  missing-table errors in repository lookup, repository verification, and metadata
+  writes, even when those helpers discarded the caller's context.
+- Temporary production overlays confirm those three mutations pass the original
+  table; all eight context-discarding helper mutations fail the repaired table.
+  Full Go/static gates, portable-package race tests, independent review, and CI
+  validate synthetic temporary databases only. Production behavior is unchanged.
