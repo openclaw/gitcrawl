@@ -31,7 +31,7 @@ strip it before they rewrite rows.
 
 ```bash
 gitcrawl change-contract status [--json]
-gitcrawl change-contract enable [--retention N] [--json]
+gitcrawl change-contract enable [--retention N] [--contract-version 1|2] [--json]
 gitcrawl change-contract bump --reason TEXT [--json]
 gitcrawl change-contract disable [--json]
 ```
@@ -43,6 +43,10 @@ gitcrawl change-contract disable [--json]
   the new bound in the same transaction. Any surviving partial contract (for
   example after an interrupted manual removal) is replaced by a new epoch,
   keeping its retention.
+- `--contract-version 2` moves an existing contract to [version 2](#version-2)
+  or creates a new one at version 2; `--contract-version 1` moves it back.
+  Either change re-arms every table and advances the generation. Without the
+  flag, `enable` keeps the recorded version and creates version 1.
 - `bump` advances the generation after an owner-run rewrite the triggers could
   not observe, forcing every reader to rebuild once.
 - `disable` removes every contract trigger and table. Readers then see no
@@ -93,7 +97,7 @@ They answer "changed since C" but not "which rows".
 
 | Object | Contents |
 | --- | --- |
-| `change_contract_state` | `contract_version` (1), random `epoch`, `generation`, its reason and time |
+| `change_contract_state` | `contract_version` (1 or 2), random `epoch`, `generation`, its reason and time |
 | `change_contract_sequence` | current `value`, `retention`, `next_prune`, `pruned_through` |
 | `change_contract_tables` | `table_id`, `table_name`, `mode`, `key_columns`, `last_seq`, and the exact SQL of its three triggers |
 | `change_contract_families` | source-declared `(family, table_name)` pairs |
@@ -112,13 +116,50 @@ Table identifiers are permanent. New tables receive new identifiers.
 | `history.blobs` | `blobs` |
 | `history.pull_request_review_threads` | `pull_request_review_threads` |
 | `history.thread_revisions` | `thread_revisions` |
+| `reader.checks` | `thread_checks`, `pull_request_detail_fetches`, `pull_request_review_thread_syncs`, `repository_checks`, `analytics_coverage_checks`, `record_evidence_blobs`, `record_check_observations` |
+| `history.pull_request_merge_state_events` | `pull_request_merge_state_events` |
+| `history.analytics_coverage_count_samples` | `analytics_coverage_count_samples` |
 
 ¹ `table` mode. All other tracked tables are `rows` mode.
+
+The check, event and series tables of the
+[record-efficient layout](/record-efficiency/) and
+`pull_request_review_thread_syncs` are tracked with identifiers 38 to 46.
+Enable and every writable-open repair add newly declared families to an
+existing contract. Arming newly tracked tables on an existing contract advances
+its generation once.
 
 Families are a convenience derived from the Clawmmunity reader. A consumer must
 still verify that every table it reads, including tables named by its own
 removal policy, is tracked and armed, and treat any untracked table as "always
 changed".
+
+## Version 2
+
+Version 2 keeps every version 1 object, log format, key and reader rule, and
+adds one guarantee: an `UPDATE` that leaves every column of a tracked row
+unchanged is not journaled. Its update triggers carry a guard,
+
+```sql
+create trigger "change_contract_threads_update"
+after update on "threads"
+when OLD."id" is not NEW."id" or OLD."repo_id" is not NEW."repo_id" or ...
+begin
+	...
+end
+```
+
+over all columns of the table (and `rowid` for a table without a declared key).
+Inserts, deletes and key changes are journaled exactly as in version 1. An
+unchanged rewrite by any writer, including an older binary's unconditional
+upsert, therefore leaves the sequence, `last_seq` and the log untouched.
+
+Because the guard names columns, version 2 triggers must cover the current
+column set: `enable` compares every table's recorded triggers with the triggers
+rendered from its current columns, and the writable-open repair re-arms (and
+advances the generation) when a tracked table gained a column. A reader that
+accepts version 2 needs no other change; a version 1 reader must treat
+version 2 as unknown and rebuild fully, as the reader algorithm requires.
 
 ## Bounded growth
 
@@ -190,7 +231,7 @@ WHERE l.seq > :C_seq AND l.seq <= :seq ORDER BY l.seq;
 ```
 
 ```text
-if contract absent, v != 1, step 2 fails, C missing,
+if contract absent, v not in (1, 2), step 2 fails, C missing,
    (e, g, sv) != (C.epoch, C.generation, C.schema_version), or seq < C.seq:
     full rebuild; store cursor (e, g, sv, seq)
 elif last <= C.seq:
@@ -220,3 +261,6 @@ transaction so commit flushes are excluded
 Each committing transaction that touches tracked tables also dirties the
 sequence page, the table-state page and the log tail page (at most three extra
 WAL pages), plus a prune every 1,024 log entries.
+
+Exact native evidence and append-only check observations use IDs 45 and 46 in
+`reader.checks`. See [reconstruction and cutover](/record-efficiency/#exact-observations-and-reconstruction).

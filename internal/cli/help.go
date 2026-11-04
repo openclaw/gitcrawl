@@ -67,6 +67,7 @@ Core commands:
   cluster              build durable clusters from local thread vectors
   purge-threads        permanently remove selected local threads and exclude collection
   change-contract      report or manage the archive's reader change contract
+  record-checks        report or seed the check tables of a record-efficient archive
   close-thread         locally hide one issue or pull request row
   reopen-thread        clear a local hide for one issue or pull request row
   close-cluster        locally hide one durable cluster
@@ -300,17 +301,41 @@ IDs are refused. Exclusions are permanent; portable publication is unavailable.
 
 Usage:
   gitcrawl change-contract status [--json]
-  gitcrawl change-contract enable [--retention N] [--json]
+  gitcrawl change-contract enable [--retention N] [--contract-version 1|2] [--json]
   gitcrawl change-contract bump --reason TEXT [--json]
   gitcrawl change-contract disable [--json]
 
 enable installs in-store triggers that journal every insert, update and delete
 of tracked tables in the writer's own transaction, including writes by older
 binaries. Re-running enable re-arms tables whose triggers a rebuild removed and
-advances the generation. bump forces every reader to rebuild after an owner-run
+advances the generation. --contract-version 2 moves the contract to version
+2, whose update triggers skip updates that change no column; version 1 stays
+the default and remains selectable. bump forces every reader to rebuild after an owner-run
 rewrite. disable removes the contract. Requires an existing native local
 archive at this binary's schema version; these commands never migrate it. See
 docs/change-contract.md for the reader algorithm.
+`,
+
+	"record-checks": `gitcrawl record-checks manages the record-efficient archive layout.
+
+Usage:
+  gitcrawl record-checks status [--json]
+  gitcrawl record-checks enable [--json]
+  gitcrawl record-checks backfill [--json]
+  gitcrawl record-checks disable [--json]
+
+The layout is opt-in per native archive. Once enabled, content rows (threads,
+pull request details, review threads, repositories, analytics coverage) are
+written only when content changes. Every check is recorded in thread_checks,
+pull_request_detail_fetches, pull_request_review_thread_syncs,
+repository_checks and analytics_coverage_checks; merge state in
+pull_request_merge_state_events and coverage counts in
+analytics_coverage_count_samples. The *_current views return the legacy column
+values. enable creates the tables and views and seeds missing check rows;
+backfill repeats the idempotent seed; disable folds the latest check values
+back into the content rows and removes the views and marker, retaining the
+check and event tables. Content rows are never otherwise modified. See
+docs/record-efficiency.md.
 `,
 
 	"close-thread": `gitcrawl close-thread locally hides one issue or pull request row.

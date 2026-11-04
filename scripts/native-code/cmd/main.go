@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -39,10 +40,28 @@ func readCodeCoreProgress(ctx context.Context, s *store.Store, now time.Time) (c
 	var p codeCoreProgress
 	var complete int
 	var baseline string
+	source := "analytics_coverage"
+	var markerExists int
+	if err := s.DB().QueryRowContext(ctx, "select count(*) from sqlite_schema where type='table' and name='record_efficiency_state'").Scan(&markerExists); err != nil {
+		return p, err
+	}
+	if markerExists != 0 {
+		var version int
+		err := s.DB().QueryRowContext(ctx, "select version from record_efficiency_state where id=1").Scan(&version)
+		if err != nil && err != sql.ErrNoRows {
+			return p, err
+		}
+		if err == nil {
+			if version != 1 {
+				return p, fmt.Errorf("unsupported record efficiency version %d", version)
+			}
+			source = "analytics_coverage_current"
+		}
+	}
 	err := s.DB().QueryRowContext(ctx, `SELECT through,observed_at,complete,
 		coalesce((SELECT value FROM analytics_collection_state
 		WHERE name='core_baseline_verified:openclaw/openclaw'),'')
-		FROM analytics_coverage WHERE repository='openclaw/openclaw'`).Scan(
+		FROM `+source+` WHERE repository='openclaw/openclaw'`).Scan(
 		&p.Through, &p.ObservedAt, &complete, &baseline)
 	if err != nil {
 		return p, fmt.Errorf("core progress receipt required: %w", err)

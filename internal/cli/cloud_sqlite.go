@@ -107,6 +107,10 @@ func sanitizeCloudSQLiteSnapshot(ctx context.Context, db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("strip cloud snapshot change contract: %w", err)
 	}
+	if err := store.StripRecordEfficiency(ctx, tx); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("strip cloud private record evidence: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cloud snapshot change contract strip: %w", err)
 	}

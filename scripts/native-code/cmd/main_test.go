@@ -280,3 +280,50 @@ func TestCodeCoreProgressAdmission(t *testing.T) {
 		t.Fatal("missing receipt accepted")
 	}
 }
+
+func TestCodeCoreProgressSplitCoverage(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "split.db")
+	s, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC()
+	fresh := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	stale := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	if err = s.SetAnalyticsState(ctx, "core_baseline_verified:openclaw/openclaw", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB().Exec("insert into analytics_coverage(repository,through,complete,observed_at) values('openclaw/openclaw',?,1,?)", stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.EnableRecordEfficiency(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, at string
+		accept   bool
+	}{{"fresh_current_frozen_base", fresh, true}, {"stale_current", stale, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err = s.DB().Exec("update analytics_coverage_checks set through=?,observed_at=? where repository='openclaw/openclaw'", tc.at, tc.at); err != nil {
+				t.Fatal(err)
+			}
+			ro, openErr := store.OpenReadOnly(ctx, path)
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			_, err = readCodeCoreProgress(ctx, ro, now)
+			ro.Close()
+			if (err == nil) != tc.accept {
+				t.Fatalf("accept=%v err=%v", tc.accept, err)
+			}
+		})
+	}
+	if _, err = s.DB().Exec("drop view analytics_coverage_current"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readCodeCoreProgress(ctx, s, now); err == nil {
+		t.Fatal("enabled split with missing view fell back")
+	}
+}

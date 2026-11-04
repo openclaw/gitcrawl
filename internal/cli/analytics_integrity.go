@@ -98,12 +98,12 @@ func migrateAnalyticsLanes(ctx context.Context, s *store.Store, repository strin
 		return err
 	}
 	if through == "" {
-		if err = s.DB().QueryRowContext(ctx, "SELECT through FROM analytics_coverage WHERE repository=?", repository).Scan(&through); err != nil {
+		if err = s.DB().QueryRowContext(ctx, "SELECT through FROM "+s.CurrentSource(ctx, "analytics_coverage")+" WHERE repository=?", repository).Scan(&through); err != nil {
 			return fmt.Errorf("verified historical coverage watermark required: %w", err)
 		}
 	}
 	var verifiedThrough string
-	if err = s.DB().QueryRowContext(ctx, "SELECT through FROM analytics_coverage WHERE repository=?", repository).Scan(&verifiedThrough); err != nil {
+	if err = s.DB().QueryRowContext(ctx, "SELECT through FROM "+s.CurrentSource(ctx, "analytics_coverage")+" WHERE repository=?", repository).Scan(&verifiedThrough); err != nil {
 		return err
 	}
 	if _, err = time.Parse(time.RFC3339Nano, verifiedThrough); err != nil {
@@ -186,7 +186,7 @@ func (a *App) analyticsCycle(ctx context.Context, s *store.Store, c *gh.Client, 
 	complete := baseline == "1" && len(failures) == 0
 	var totals [2]int
 	// Preserve last verified totals until this lane obtains a new provider count.
-	_ = s.DB().QueryRowContext(ctx, "SELECT issues,pull_requests FROM analytics_coverage WHERE repository=?", repository).Scan(&totals[0], &totals[1])
+	_ = s.DB().QueryRowContext(ctx, "SELECT issues,pull_requests FROM "+s.CurrentSource(ctx, "analytics_coverage")+" WHERE repository=?", repository).Scan(&totals[0], &totals[1])
 	for i, kind := range []string{"issues", "pullRequests"} {
 		at, e := s.AnalyticsState(ctx, "through:"+repository+":"+kind)
 		if e != nil {

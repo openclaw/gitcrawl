@@ -177,7 +177,7 @@ func (s *Store) upsertThreadRevisionAndFingerprint(ctx context.Context, evidence
 			select coalesce(updated_at_gh, ''),
 				coalesce(evidence_source_updated_at, ''),
 				evidence_observation_sequence
-			from threads
+			from `+s.currentSource(ctx, "threads")+`
 			where id = ?
 		`, evidence.Thread.ID).Scan(
 			&persistedSourceUpdatedAt,

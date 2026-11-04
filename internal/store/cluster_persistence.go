@@ -168,8 +168,8 @@ func (s *Store) reconcilePartialDurableClusterInput(ctx context.Context, repoID 
 	rows, err := s.q().QueryContext(ctx, `
 		select distinct cg.id, cg.stable_key, cg.stable_slug, coalesce(cg.cluster_type, ''),
 			coalesce(cg.representative_thread_id, 0), coalesce(cg.title, '')
-		from cluster_groups cg
-		join cluster_memberships cm on cm.cluster_id = cg.id
+		from cluster_memberships cm indexed by idx_cluster_memberships_thread_state
+		cross join cluster_groups cg on cg.id = cm.cluster_id
 		where cg.repo_id = ?
 			and cg.status = 'active'
 			and cg.closed_at is null

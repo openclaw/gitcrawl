@@ -182,7 +182,7 @@ func (s *Store) ClosedSweepWatermark(ctx context.Context, repoID int64) (time.Ti
 			(`+recordedClosedSweepWatermarkSQL+`),
 			(select min(coalesce(nullif(last_pulled_at, ''), nullif(first_pulled_at, ''),
 			                     nullif(updated_at_gh, ''), updated_at))
-			 from threads where repo_id = ? and state = 'open')
+			 from `+s.currentSource(ctx, "threads")+` where repo_id = ? and state = 'open')
 		)
 	`, repoID, repoID).Scan(&raw)
 	if err != nil {

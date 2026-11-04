@@ -65,7 +65,7 @@ func (s *Store) readClusterAvailability(ctx context.Context, repo string, now ti
 	var pub *int
 	if err := s.q().QueryRowContext(ctx, `SELECT r.id,json_extract(r.raw_json,'$.node_id'),json_extract(r.raw_json,'$.private'),c.through,c.observed_at,c.complete,
  coalesce((SELECT value FROM analytics_collection_state WHERE name='core_baseline_verified:'||r.full_name),'')
- FROM repositories r JOIN analytics_coverage c ON c.repository=r.full_name WHERE r.full_name=?`, repo).Scan(&repoID, &node, &pub, &out.Scope.SourceAsOf.Through, &out.Scope.SourceAsOf.ObservedAt, &complete, &baseline); err != nil {
+ FROM repositories r JOIN `+s.currentSource(ctx, "analytics_coverage")+` c ON c.repository=r.full_name WHERE r.full_name=?`, repo).Scan(&repoID, &node, &pub, &out.Scope.SourceAsOf.Through, &out.Scope.SourceAsOf.ObservedAt, &complete, &baseline); err != nil {
 		return fail("missing repository/core receipt")
 	}
 	if baseline != "1" || node == "" || pub == nil || *pub != 0 || complete < 0 || complete > 1 {
@@ -164,7 +164,7 @@ func (s *Store) readClusterAvailability(ctx context.Context, repo string, now ti
 		h := sha256.Sum256([]byte(p.evidence))
 		binding.EvidenceSHA256 = hex.EncodeToString(h[:])
 		var pulled string
-		e = s.q().QueryRowContext(ctx, `SELECT id,github_id,kind,content_hash,coalesce(updated_at_gh,''),coalesce(last_pulled_at,'') FROM threads WHERE repo_id=? AND number=?`, repoID, p.n).Scan(&binding.ThreadID, &binding.GitHubID, &binding.Kind, &binding.InputHash, &binding.SourceUpdatedAt, &pulled)
+		e = s.q().QueryRowContext(ctx, `SELECT id,github_id,kind,content_hash,coalesce(updated_at_gh,''),coalesce(last_pulled_at,'') FROM `+s.currentSource(ctx, "threads")+` WHERE repo_id=? AND number=?`, repoID, p.n).Scan(&binding.ThreadID, &binding.GitHubID, &binding.Kind, &binding.InputHash, &binding.SourceUpdatedAt, &pulled)
 		if e != nil {
 			if e != sql.ErrNoRows {
 				return out, e

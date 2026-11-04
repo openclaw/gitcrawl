@@ -78,3 +78,14 @@ go test -overlay DELIVERY_OVERLAY -tags native_code_overlay ./scripts/native-cod
 Before live publication, verify the exact reviewed bundle and source receipt,
 then retain a native document/count/hash comparison and deleted-path check for
 the downstream reader owner. Verify ordinary core progress after restoration.
+
+## Record-efficient archive compatibility
+
+Producer artifacts must be built against the qualified record-efficient native
+store, not the pre-split delivery baseline. With the persisted record-efficiency
+marker enabled, core readiness reads `analytics_coverage_current`; legacy archives
+continue to use the base coverage table. Missing split views must fail closed,
+never substitute a frozen content clock. Five-minute freshness, verified baseline,
+repository visibility, completeness semantics and controller/runner handoff guards
+remain unchanged. Existing-writer overlays detect split mode without migration.
+The ordinary collector executable does not change during this helper-only rollout.

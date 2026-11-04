@@ -117,3 +117,16 @@ class IdentityQuarantineTests(Tests):
   with sqlite3.connect(db) as con:
    con.execute('create table analytics_coverage(repository,through,observed_at,complete)');now=datetime.datetime.now(datetime.timezone.utc);con.execute('insert into analytics_coverage values(?,?,?,0)',('openclaw/openclaw',(now-datetime.timedelta(seconds=2)).isoformat(),(now-datetime.timedelta(seconds=1)).isoformat()))
   self.assertTrue(c.source_ready());self.assertEqual(c.state['core']['complete'],0)
+ def test_split_coverage_reads_current_and_never_falls_back(self):
+  import sqlite3,datetime
+  c,p,calls=self.make();db=p/'split.db';c.c['db']=str(db);now=datetime.datetime.now(datetime.timezone.utc);fresh=(now-datetime.timedelta(seconds=1)).isoformat();stale=(now-datetime.timedelta(hours=1)).isoformat()
+  with sqlite3.connect(db) as con:
+   con.executescript('create table analytics_coverage(repository,through,observed_at,complete);create table record_efficiency_state(id,version);insert into record_efficiency_state values(1,1);create table checks(repository,through,observed_at,complete);create view analytics_coverage_current as select * from checks;')
+   con.execute('insert into analytics_coverage values(?,?,?,1)',('openclaw/openclaw',stale,stale));con.execute('insert into checks values(?,?,?,0)',('openclaw/openclaw',fresh,fresh))
+  self.assertTrue(c.source_ready());self.assertEqual(c.state['core']['complete'],0)
+  with sqlite3.connect(db) as con:con.execute('update checks set through=?,observed_at=?',(stale,stale))
+  self.assertFalse(c.source_ready())
+  with sqlite3.connect(db) as con:con.execute('drop view analytics_coverage_current')
+  with self.assertRaises(sqlite3.OperationalError):c.source_ready()
+  with sqlite3.connect(db) as con:con.execute('update record_efficiency_state set version=99')
+  with self.assertRaisesRegex(RuntimeError,'unsupported'):c.source_ready()

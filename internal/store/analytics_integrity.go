@@ -89,7 +89,7 @@ func (s *Store) RecordAnalyticsAttempt(ctx context.Context, a AnalyticsAttempt) 
 			return err
 		}
 		if a.Operation != "review_state" {
-			if _, err = tx.q().ExecContext(ctx, "UPDATE analytics_coverage SET complete=0 WHERE repository=?", a.Repository); err != nil {
+			if _, err = tx.q().ExecContext(ctx, "UPDATE analytics_coverage SET complete=0 WHERE repository=? AND complete IS NOT 0", a.Repository); err != nil {
 				return err
 			}
 		}
@@ -321,7 +321,7 @@ func (s *Store) SeedReviewStateRecovery(ctx context.Context, repository string, 
  json_type(t.raw_json,'$._graphql.reviewThreads.pageInfo.hasNextPage')='false',0) ELSE 0 END,
  t.observation_sequence,coalesce(t.last_pulled_at,''),
  EXISTS(SELECT 1 FROM pull_request_review_thread_syncs x WHERE x.thread_id=t.id AND x.review_thread_ids_json IS NOT NULL)
- FROM threads t JOIN repositories r ON r.id=t.repo_id WHERE t.id>? AND t.id<=? ORDER BY t.id LIMIT ?`, progress.Cursor, progress.Ceiling, limit)
+ FROM `+s.currentSource(ctx, "threads")+` t JOIN repositories r ON r.id=t.repo_id WHERE t.id>? AND t.id<=? ORDER BY t.id LIMIT ?`, progress.Cursor, progress.Ceiling, limit)
 	if err != nil {
 		return progress, err
 	}
@@ -362,7 +362,7 @@ func (s *Store) SeedReviewStateRecovery(ctx context.Context, repository string, 
 				// Materialize only an actual retained complete-empty observation.
 				// CAS checks prevent an older scan from overwriting a live refresh.
 				_, e = tx.q().ExecContext(ctx, `INSERT INTO pull_request_review_thread_syncs(thread_id,fetched_at,review_thread_ids_json)
- SELECT id,last_pulled_at,'[]' FROM threads WHERE id=? AND observation_sequence=? AND last_pulled_at=?
+ SELECT id,last_pulled_at,'[]' FROM `+tx.currentSource(ctx, "threads")+` WHERE id=? AND observation_sequence=? AND last_pulled_at=?
  ON CONFLICT(thread_id) DO UPDATE SET fetched_at=excluded.fetched_at,review_thread_ids_json=excluded.review_thread_ids_json
  WHERE pull_request_review_thread_syncs.review_thread_ids_json IS NULL AND pull_request_review_thread_syncs.fetched_at<=excluded.fetched_at`, v.id, v.sequence, v.pulled)
 				if e != nil {
@@ -403,11 +403,14 @@ func (s *Store) SeedReviewStateRecovery(ctx context.Context, repository string, 
 // Core completeness concerns issue/PR/comment traversal. Review-state enrichment
 // is deliberately independent so existing response/contributor KPIs remain usable.
 func (s *Store) SetAnalyticsCoverageComplete(ctx context.Context, repository string, complete bool) error {
-	_, err := s.q().ExecContext(ctx, "UPDATE analytics_coverage SET complete=? WHERE repository=?", boolInt(complete), repository)
+	_, err := s.q().ExecContext(ctx, "UPDATE analytics_coverage SET complete=? WHERE repository=? AND complete IS NOT ?", boolInt(complete), repository, boolInt(complete))
 	return err
 }
 
 func (s *Store) SaveReviewStateCoverage(ctx context.Context, repository string, progress ReviewStateRecovery) error {
+	if s.recordChecks && s.queries == nil {
+		return s.WithTx(ctx, func(tx *Store) error { return tx.SaveReviewStateCoverage(ctx, repository, progress) })
+	}
 	var pending int
 	if err := s.q().QueryRowContext(ctx, `SELECT count(*) FROM analytics_retries WHERE repository=? AND operation='review_state' AND resolved_at IS NULL`, repository).Scan(&pending); err != nil {
 		return err
@@ -416,7 +419,19 @@ func (s *Store) SaveReviewStateCoverage(ctx context.Context, repository string, 
 	if err != nil {
 		return err
 	}
-	_, err = s.q().ExecContext(ctx, `INSERT INTO analytics_review_state_coverage(repository,cursor,ceiling,scanned,queued,pending_items,scan_complete,complete,observed_at,owner_excluded_items) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(repository) DO UPDATE SET cursor=excluded.cursor,ceiling=excluded.ceiling,scanned=excluded.scanned,queued=excluded.queued,pending_items=excluded.pending_items,scan_complete=excluded.scan_complete,complete=excluded.complete,observed_at=excluded.observed_at,owner_excluded_items=excluded.owner_excluded_items`, repository, progress.Cursor, progress.Ceiling, progress.Scanned, progress.Queued, pending, boolInt(progress.Done), boolInt(progress.Done && pending == 0 && excluded == 0), time.Now().UTC().Format(time.RFC3339Nano), excluded)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	upsert := `INSERT INTO analytics_review_state_coverage(repository,cursor,ceiling,scanned,queued,pending_items,scan_complete,complete,observed_at,owner_excluded_items) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(repository) DO UPDATE SET cursor=excluded.cursor,ceiling=excluded.ceiling,scanned=excluded.scanned,queued=excluded.queued,pending_items=excluded.pending_items,scan_complete=excluded.scan_complete,complete=excluded.complete,observed_at=excluded.observed_at,owner_excluded_items=excluded.owner_excluded_items`
+	if s.recordChecks {
+		// observed_at is check bookkeeping: rewrite the progress row only when
+		// progress changed, and record every observation as a check.
+		upsert += ` WHERE analytics_review_state_coverage.cursor IS NOT excluded.cursor OR analytics_review_state_coverage.ceiling IS NOT excluded.ceiling OR analytics_review_state_coverage.scanned IS NOT excluded.scanned OR analytics_review_state_coverage.queued IS NOT excluded.queued OR analytics_review_state_coverage.pending_items IS NOT excluded.pending_items OR analytics_review_state_coverage.scan_complete IS NOT excluded.scan_complete OR analytics_review_state_coverage.complete IS NOT excluded.complete OR analytics_review_state_coverage.owner_excluded_items IS NOT excluded.owner_excluded_items`
+	}
+	if _, err = s.q().ExecContext(ctx, upsert, repository, progress.Cursor, progress.Ceiling, progress.Scanned, progress.Queued, pending, boolInt(progress.Done), boolInt(progress.Done && pending == 0 && excluded == 0), now, excluded); err != nil {
+		return err
+	}
+	if s.recordChecks {
+		_, err = s.q().ExecContext(ctx, `INSERT INTO analytics_coverage_checks(repository,coverage,observed_at,through) VALUES(?,'analytics_review_state_coverage',?,NULL) ON CONFLICT(repository,coverage) DO UPDATE SET observed_at=excluded.observed_at`, repository, now)
+	}
 	return err
 }
 
@@ -431,7 +446,7 @@ func (s *Store) AnalyticsIntegrityStatus(ctx context.Context, repository string)
 	}
 	var through, observed string
 	var issues, prs, complete int
-	coverageErr := s.q().QueryRowContext(ctx, "SELECT through,issues,pull_requests,complete,observed_at FROM analytics_coverage WHERE repository=?", repository).Scan(&through, &issues, &prs, &complete, &observed)
+	coverageErr := s.q().QueryRowContext(ctx, "SELECT through,issues,pull_requests,complete,observed_at FROM "+s.currentSource(ctx, "analytics_coverage")+" WHERE repository=?", repository).Scan(&through, &issues, &prs, &complete, &observed)
 	if coverageErr == sql.ErrNoRows {
 		out["coverage"] = map[string]any{"state": "not_started", "through": nil, "issues": nil, "pull_requests": nil, "complete": false, "observed_at": nil}
 	} else if coverageErr != nil {

@@ -171,7 +171,7 @@ from thread_revisions`
 		threadColumns = append(threadColumns, "observation_sequence")
 		threadSelect = strings.Replace(
 			threadSelect,
-			"from threads",
+			"\nfrom threads",
 			", observation_sequence\nfrom threads",
 			1,
 		)

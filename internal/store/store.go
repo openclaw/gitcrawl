@@ -41,6 +41,9 @@ type Store struct {
 	portableThreadBodyMetadata  bool
 	portableCommentBodyMetadata bool
 	portableBodyChars           int
+	// recordChecks selects the split write path: content rows change only on
+	// content change and checks go to the check tables.
+	recordChecks bool
 }
 
 type dbQueries interface {
@@ -68,6 +71,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	db := base.DB()
 	st := &Store{db: db, sqlc: storedb.New(db), path: path}
 	if err := st.migrate(ctx); err != nil {
+		_ = base.Close()
+		return nil, err
+	}
+	if err := st.ensureRecordEfficiencySchema(ctx); err != nil {
 		_ = base.Close()
 		return nil, err
 	}
@@ -100,6 +107,7 @@ func OpenWritableWithoutMigration(ctx context.Context, path string) (*Store, err
 		_ = base.Close()
 		return nil, fmt.Errorf("database schema version %d differs from supported version %d; run a migrating writer first", current, schemaVersion)
 	}
+	st.detectRecordChecks(ctx)
 	return st, nil
 }
 
@@ -207,6 +215,7 @@ func (s *Store) withTxOnce(ctx context.Context, fn func(*Store) error) error {
 		portableThreadBodyMetadata:  s.portableThreadBodyMetadata,
 		portableCommentBodyMetadata: s.portableCommentBodyMetadata,
 		portableBodyChars:           s.portableBodyChars,
+		recordChecks:                s.recordChecks,
 	}
 	if err := fn(txStore); err != nil {
 		_ = tx.Rollback()
@@ -327,6 +336,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		if len(structural) == 1 && structural[0] == fmt.Sprintf("schema_version_%d_to_%d", current, schemaVersion) && converged {
 			// Some v14 archives predate the optional analytics extension. These
 			// additive tables/columns are cheap to ensure and require no row scan.
+			if e = s.prepareRecordEfficiencyMigration(ctx); e != nil {
+				return e
+			}
 			if e = s.ensureAnalyticsSourceSchema(ctx); e != nil {
 				return e
 			}
@@ -367,6 +379,9 @@ func (s *Store) migrate(ctx context.Context) error {
 				return s.markObservationSchemaConverged(ctx)
 			}
 		}
+	}
+	if err := s.prepareRecordEfficiencyMigration(ctx); err != nil {
+		return err
 	}
 	if err := s.ensureLegacyPortableColumns(ctx); err != nil {
 		return err

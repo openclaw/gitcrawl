@@ -213,7 +213,7 @@ func (s *Store) threadObservationSequenceValuesNeedRepair(ctx context.Context) (
 	if err := s.q().QueryRowContext(ctx, `
 		select exists(
 			select 1
-			from threads
+			from `+s.currentSource(ctx, "threads")+` threads
 			where observation_sequence < -9223372036854775807
 			limit 1
 		)
@@ -229,7 +229,7 @@ func (s *Store) threadEvidenceObservationSequenceNeedsRepair(ctx context.Context
 	if err := s.q().QueryRowContext(ctx, `
 		select exists(
 			select 1
-			from threads
+			from `+s.currentSource(ctx, "threads")+` threads
 			where (evidence_observation_sequence = 0 or not `+evidenceTupleExists+`)
 				and coalesce((
 				select max(thread_revisions.observation_sequence)
@@ -263,7 +263,7 @@ func (s *Store) threadChildObservationReservationsNeedRepair(ctx context.Context
 		with effective_threads as (
 			select threads.*,
 				`+effectiveEvidenceSequence+` as effective_evidence_observation_sequence
-			from threads
+			from `+s.currentSource(ctx, "threads")+` threads
 		),
 		families(family, pull_request_only) as (
 			values
@@ -311,7 +311,7 @@ func (s *Store) workflowRunObservationReservationsNeedRepair(ctx context.Context
 		with effective_threads as (
 			select threads.id,
 				`+effectiveEvidenceSequence+` as evidence_observation_sequence
-			from threads
+			from `+s.currentSource(ctx, "threads")+` threads
 		),
 		expected(repo_id, head_sha, observation_sequence) as (
 			select
@@ -374,9 +374,9 @@ func (s *Store) threadObservationSequenceNeedsRepair(
 					when observation_sequence < 0 then -observation_sequence
 					else observation_sequence
 				end)
-				from threads
+				from `+s.currentSource(ctx, "threads")+` threads
 			), 0),
-			coalesce((select max(evidence_observation_sequence) from threads), 0),
+			coalesce((select max(evidence_observation_sequence) from `+s.currentSource(ctx, "threads")+` threads), 0),
 			coalesce((select max(observation_sequence) from thread_revisions), 0),
 			coalesce((
 				select max(observation_sequence)

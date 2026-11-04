@@ -538,3 +538,47 @@ func seedClusterAdmission(t *testing.T, s *Store) {
 		}
 	}
 }
+
+func TestNativeClusterSplitCoverageAdmission(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "split.db")
+	s, e := Open(ctx, path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	seedClusterAdmission(t, s)
+	_, e = s.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", GitHubRepoID: "1103012935", RawJSON: `{"private":false,"node_id":"R_FIXTURE"}`, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	now := time.Now().UTC()
+	stale := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	fresh := now.Add(-time.Second).Format(time.RFC3339Nano)
+	if _, e = s.DB().Exec("update analytics_coverage set through=?,observed_at=?", stale, stale); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.EnableRecordEfficiency(ctx, fresh); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.DB().Exec("update analytics_coverage_checks set through=?,observed_at=? where coverage='analytics_coverage'", fresh, fresh); e != nil {
+		t.Fatal(e)
+	}
+	writer, e := OpenNativeProducerWriter(ctx, path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer writer.Close()
+	if !writer.RecordChecksEnabled() {
+		t.Fatal("writer did not detect split mode")
+	}
+	if _, e = writer.ReadClusterAvailability(ctx, "openclaw/openclaw", now); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.DB().Exec("update analytics_coverage_checks set through=?,observed_at=? where coverage='analytics_coverage'", stale, stale); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = writer.ReadClusterAvailability(ctx, "openclaw/openclaw", now); e == nil {
+		t.Fatal("stale current admitted")
+	}
+}

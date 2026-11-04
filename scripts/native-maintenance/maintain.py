@@ -38,7 +38,13 @@ class Cycle:
  def source_ready(self):
   db=self.c['db'];handoff=pathlib.Path(self.c['handoff_state'])/'last-handoff.json';last=json.loads(handoff.read_bytes()).get('restored_at',0) if handoff.exists() else 0
   with closing(sqlite3.connect('file:'+db+'?mode=ro',uri=True,timeout=5)) as con:
-   row=con.execute("select through,observed_at,complete from analytics_coverage where repository='openclaw/openclaw'").fetchone()
+   source='analytics_coverage'
+   if con.execute("select 1 from sqlite_schema where type='table' and name='record_efficiency_state'").fetchone():
+    marker=con.execute('select version from record_efficiency_state where id=1').fetchone()
+    if marker:
+     if marker[0]!=1:raise RuntimeError('unsupported record efficiency version')
+     source='analytics_coverage_current'
+   row=con.execute("select through,observed_at,complete from "+source+" where repository='openclaw/openclaw'").fetchone()
   if not row:return False
   at=datetime.datetime.fromisoformat(row[1].replace('Z','+00:00')).timestamp()
   self.state['core']={'through':row[0],'observed_at':row[1],'complete':row[2]}

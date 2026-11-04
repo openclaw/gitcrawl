@@ -494,7 +494,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		err := s.store.WithTx(ctx, func(st *store.Store) error {
 			// WithTx can retry a busy transaction; only its committed attempt counts.
 			attempt = syncPersistStats{}
-			repoID, err := s.upsertRepository(ctx, st, options, repoRaw)
+			repoID, err := s.ensureRepository(ctx, st, options, repoRaw)
 			if err != nil {
 				return err
 			}
@@ -530,6 +530,11 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			})
 			if err != nil {
 				return err
+			}
+			if payload.hasPullDetails {
+				if err := st.RetainHydrationObservation(ctx, upsert.ID, payload.pullDetails.fetchedAt, observationSequence, map[string]any{"pull": payload.pullDetails.pull, "review_threads": payload.reviewThreads, "review_threads_fetched_at": payload.reviewThreadsFetchedAt}); err != nil {
+					return err
+				}
 			}
 			if !upsert.Applied && !upsert.EvidenceApplied {
 				if workflowRunsEligible {
@@ -759,7 +764,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	}
 	// Partial commits are useful evidence, never a successful list checkpoint.
 	err = s.store.WithTx(ctx, func(st *store.Store) error {
-		repoID, err := s.upsertRepository(ctx, st, options, repoRaw)
+		repoID, err := s.ensureRepository(ctx, st, options, repoRaw)
 		if err != nil {
 			return err
 		}
@@ -806,14 +811,24 @@ func reportSyncProgress(
 }
 
 func (s *Syncer) upsertRepository(ctx context.Context, st *store.Store, options Options, repoRaw map[string]any) (int64, error) {
-	return st.UpsertRepository(ctx, store.Repository{
+	return st.UpsertRepository(ctx, s.repositoryRow(options, repoRaw))
+}
+
+// ensureRepository resolves the repository inside a per-item transaction
+// without recording another repository check; the cycle records one check.
+func (s *Syncer) ensureRepository(ctx context.Context, st *store.Store, options Options, repoRaw map[string]any) (int64, error) {
+	return st.EnsureRepository(ctx, s.repositoryRow(options, repoRaw))
+}
+
+func (s *Syncer) repositoryRow(options Options, repoRaw map[string]any) store.Repository {
+	return store.Repository{
 		Owner:        options.Owner,
 		Name:         options.Repo,
 		FullName:     options.Owner + "/" + options.Repo,
 		GitHubRepoID: jsonID(repoRaw["id"]),
 		RawJSON:      mustJSON(repoRaw),
 		UpdatedAt:    s.now().Format(time.RFC3339Nano),
-	})
+	}
 }
 
 func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw, row map[string]any, number int, syncErr error, operations ...string) error {
@@ -824,7 +839,7 @@ func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw
 	defer cancel()
 	return s.store.WithTx(recordCtx, func(st *store.Store) error {
 		now := s.now().Format(time.RFC3339Nano)
-		repoID, err := s.upsertRepository(recordCtx, st, options, repoRaw)
+		repoID, err := s.ensureRepository(recordCtx, st, options, repoRaw)
 		if err != nil {
 			return err
 		}

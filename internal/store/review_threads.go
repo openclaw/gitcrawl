@@ -59,6 +59,14 @@ func (s *Store) upsertPullRequestReviewThreads(ctx context.Context, threadID int
 	if err != nil {
 		return fmt.Errorf("invalid review-thread observation time: %w", err)
 	}
+	if s.recordChecks {
+		// Keep native raw bytes separately because RawJSON is omitted by JSON encoding.
+		for _, thread := range threads {
+			if err := s.retainRecordCheck(ctx, "pull_request_review_threads", fmt.Sprintf("%d/%s", threadID, thread.ReviewThreadID), fetchedAt, thread.RawJSON, map[string]any{"fetched_at": thread.FetchedAt}); err != nil {
+				return err
+			}
+		}
+	}
 	var previous string
 	err = s.q().QueryRowContext(ctx, "SELECT fetched_at FROM pull_request_review_thread_syncs WHERE thread_id=?", threadID).Scan(&previous)
 	if err != nil && err != sql.ErrNoRows {
@@ -102,6 +110,16 @@ func (s *Store) upsertPullRequestReviewThreads(ctx context.Context, threadID int
 				return err
 			}
 			if applied {
+				continue
+			}
+		}
+		if s.recordChecks {
+			unchanged, err := s.pullRequestReviewThreadUnchanged(ctx, threadID, thread)
+			if err != nil {
+				return err
+			}
+			if unchanged {
+				// The fetch is recorded in pull_request_review_thread_syncs.
 				continue
 			}
 		}
@@ -275,4 +293,38 @@ func (s *Store) PullRequestReviewThreadsFetchedAt(ctx context.Context, threadID 
 		return "", fmt.Errorf("pull request review threads fetched marker: %w", err)
 	}
 	return fetchedAt, nil
+}
+
+// pullRequestReviewThreadUnchanged reports whether the stored review thread
+// equals an incoming observation in every column except fetched_at, which is
+// check bookkeeping recorded per pull request in pull_request_review_thread_syncs.
+func (s *Store) pullRequestReviewThreadUnchanged(ctx context.Context, threadID int64, thread PullRequestReviewThread) (bool, error) {
+	var unchanged bool
+	err := s.q().QueryRowContext(ctx, `
+		select exists(
+			select 1 from pull_request_review_threads
+			where thread_id = ? and review_thread_id = ?
+				and path is ? and line = ? and start_line = ?
+				and is_resolved = ? and is_outdated = ?
+				and viewer_can_resolve = ? and viewer_can_unresolve = ? and viewer_can_reply = ?
+				and first_author_login is ? and first_author_type is ?
+				and first_comment_body is ? and first_comment_url is ?
+				and first_comment_created_at is ? and first_comment_updated_at is ?
+				and comments_json = ? and raw_json = ?
+				and deleted_at is ? and deletion_reason is ?
+		)
+	`, threadID, thread.ReviewThreadID,
+		nullString(thread.Path), thread.Line, thread.StartLine,
+		boolInt(thread.IsResolved), boolInt(thread.IsOutdated),
+		boolInt(thread.ViewerCanResolve), boolInt(thread.ViewerCanUnresolve), boolInt(thread.ViewerCanReply),
+		nullString(thread.FirstAuthorLogin), nullString(thread.FirstAuthorType),
+		nullString(thread.FirstCommentBody), nullString(thread.FirstCommentURL),
+		nullString(thread.FirstCommentCreatedAt), nullString(thread.FirstCommentUpdatedAt),
+		thread.CommentsJSON, thread.RawJSON,
+		nullString(thread.DeletedAt), nullString(thread.DeletionReason),
+	).Scan(&unchanged)
+	if err != nil {
+		return false, fmt.Errorf("compare pull request review thread: %w", err)
+	}
+	return unchanged, nil
 }

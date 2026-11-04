@@ -22,8 +22,9 @@ func (a *App) runChangeContract(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	retentionRaw := fs.String("retention", "", "retained log span in sequence values")
 	reason := fs.String("reason", "", "why every reader must rebuild")
+	versionRaw := fs.String("contract-version", "", "contract version for enable (1 or 2)")
 	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args[1:], map[string]bool{"retention": true, "reason": true})); err != nil {
+	if err := fs.Parse(normalizeCommandArgs(args[1:], map[string]bool{"retention": true, "reason": true, "contract-version": true})); err != nil {
 		return usageErr(err)
 	}
 	if fs.NArg() != 0 {
@@ -40,6 +41,17 @@ func (a *App) runChangeContract(ctx context.Context, args []string) error {
 			return usageErr(fmt.Errorf("--retention must be an integer of at least %d", store.MinChangeContractRetention))
 		}
 		retention = value
+	}
+	var version int64
+	if strings.TrimSpace(*versionRaw) != "" {
+		if action != "enable" {
+			return usageErr(fmt.Errorf("--contract-version applies only to change-contract enable"))
+		}
+		value, err := strconv.ParseInt(strings.TrimSpace(*versionRaw), 10, 64)
+		if err != nil || (value != store.ChangeContractVersion && value != store.ChangeContractVersionGuarded) {
+			return usageErr(fmt.Errorf("--contract-version must be %d or %d", store.ChangeContractVersion, store.ChangeContractVersionGuarded))
+		}
+		version = value
 	}
 	if strings.TrimSpace(*reason) != "" && action != "bump" {
 		return usageErr(fmt.Errorf("--reason applies only to change-contract bump"))
@@ -84,7 +96,7 @@ func (a *App) runChangeContract(ctx context.Context, args []string) error {
 	result := map[string]any{"action": action}
 	switch action {
 	case "enable":
-		repair, err := st.EnableChangeContract(ctx, store.ChangeContractEnableOptions{Retention: retention})
+		repair, err := st.EnableChangeContract(ctx, store.ChangeContractEnableOptions{Retention: retention, Version: version})
 		if err != nil {
 			return err
 		}

@@ -22,8 +22,17 @@ import (
 // the contract. Rewrites the triggers cannot observe drop the triggers or
 // change the schema cookie; readers must treat either as a full rebuild, and
 // the next writable open re-arms the tables and advances the generation.
+//
+// Contract version 2 keeps the version 1 objects and log format and adds one
+// guarantee: an UPDATE that leaves every column of a tracked row unchanged is
+// not journaled. Its update triggers carry a WHEN guard over all columns, so a
+// version 2 trigger set must be re-armed whenever a tracked table gains a
+// column. Version 1 remains the default for new contracts; an existing
+// contract moves between versions only through an explicit enable.
 const (
 	ChangeContractVersion          = 1
+	ChangeContractVersionGuarded   = 2
+	ChangeContractLatestVersion    = ChangeContractVersionGuarded
 	DefaultChangeContractRetention = int64(1_000_000)
 	MinChangeContractRetention     = int64(changeContractPruneInterval)
 	changeContractPruneInterval    = 1024
@@ -91,6 +100,15 @@ var changeContractTableSpecs = []changeContractTableSpec{
 	{35, "cluster_candidate_selection", ChangeContractModeRows},
 	{36, "code_snapshots", ChangeContractModeRows},
 	{37, "code_documents", ChangeContractModeTable},
+	{38, "thread_checks", ChangeContractModeRows},
+	{39, "pull_request_detail_fetches", ChangeContractModeRows},
+	{40, "pull_request_merge_state_events", ChangeContractModeRows},
+	{41, "repository_checks", ChangeContractModeRows},
+	{42, "analytics_coverage_checks", ChangeContractModeRows},
+	{43, "analytics_coverage_count_samples", ChangeContractModeRows},
+	{44, "pull_request_review_thread_syncs", ChangeContractModeRows},
+	{45, "record_evidence_blobs", ChangeContractModeRows},
+	{46, "record_check_observations", ChangeContractModeRows},
 }
 
 // Families name the tables each Clawmmunity reader family reads. A consumer
@@ -119,6 +137,12 @@ var changeContractFamilies = map[string][]string{
 	"reader.code": {
 		"repositories", "code_snapshots", "code_documents", "thread_exclusions",
 	},
+	"reader.checks": {
+		"thread_checks", "pull_request_detail_fetches", "pull_request_review_thread_syncs",
+		"repository_checks", "analytics_coverage_checks", "record_evidence_blobs", "record_check_observations",
+	},
+	"history.pull_request_merge_state_events":  {"pull_request_merge_state_events"},
+	"history.analytics_coverage_count_samples": {"analytics_coverage_count_samples"},
 	"history.blobs":                       {"blobs"},
 	"history.pull_request_review_threads": {"pull_request_review_threads"},
 	"history.thread_revisions":            {"thread_revisions"},
@@ -224,12 +248,17 @@ type ChangeContractFamily struct {
 type ChangeContractEnableOptions struct {
 	Retention int64
 	Now       time.Time
+	// Version selects the contract version. Zero keeps an existing contract's
+	// version and creates new contracts at ChangeContractVersion.
+	Version int64
 }
 
 // ChangeContractRepair reports what a repair changed.
 type ChangeContractRepair struct {
 	Enabled    bool     `json:"enabled"`
 	Created    bool     `json:"created"`
+	Version    int64    `json:"contract_version,omitempty"`
+	Upgraded   bool     `json:"version_changed,omitempty"`
 	Rearmed    []string `json:"rearmed,omitempty"`
 	Generation int64    `json:"generation,omitempty"`
 }
@@ -265,6 +294,9 @@ func (s *Store) EnableChangeContract(ctx context.Context, options ChangeContract
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	if options.Version != 0 && options.Version != ChangeContractVersion && options.Version != ChangeContractVersionGuarded {
+		return ChangeContractRepair{}, fmt.Errorf("unsupported change contract version %d", options.Version)
+	}
 	var result ChangeContractRepair
 	err := s.WithTx(ctx, func(tx *Store) error {
 		q := tx.q()
@@ -286,6 +318,11 @@ func (s *Store) EnableChangeContract(ctx context.Context, options ChangeContract
 						retention = kept
 					}
 				}
+				if options.Version == 0 {
+					if kept, ok := changeContractStoredVersionIfPresent(ctx, q); ok {
+						options.Version = kept
+					}
+				}
 				if _, err := StripChangeContract(ctx, q); err != nil {
 					return err
 				}
@@ -293,11 +330,24 @@ func (s *Store) EnableChangeContract(ctx context.Context, options ChangeContract
 			}
 		}
 		if !present {
-			if err := createChangeContract(ctx, q, retention, now); err != nil {
+			version := options.Version
+			if version == 0 {
+				version = ChangeContractVersion
+			}
+			if err := createChangeContractVersion(ctx, q, retention, now, version); err != nil {
 				return err
 			}
 			result.Created = true
-		} else if options.Retention != 0 {
+		} else if options.Version != 0 {
+			current := changeContractStoredVersion(ctx, q)
+			if current != options.Version {
+				if _, err := q.ExecContext(ctx, `update change_contract_state set contract_version = ? where id = 1`, options.Version); err != nil {
+					return fmt.Errorf("set change contract version: %w", err)
+				}
+				result.Upgraded = true
+			}
+		}
+		if present && options.Retention != 0 {
 			// Apply a changed bound to the existing log immediately.
 			if _, err := q.ExecContext(ctx, `
 				update change_contract_sequence
@@ -311,13 +361,21 @@ func (s *Store) EnableChangeContract(ctx context.Context, options ChangeContract
 				return fmt.Errorf("apply change contract retention: %w", err)
 			}
 		}
+		if err := syncChangeContractFamilies(ctx, q); err != nil {
+			return err
+		}
 		rearmed, err := armChangeContract(ctx, q)
 		if err != nil {
 			return err
 		}
 		result.Rearmed = rearmed
-		if !result.Created && len(rearmed) > 0 {
-			if err := bumpChangeContractGeneration(ctx, q, "rearmed: "+strings.Join(rearmed, ","), now); err != nil {
+		result.Version = changeContractStoredVersion(ctx, q)
+		if !result.Created && (len(rearmed) > 0 || result.Upgraded) {
+			reason := "rearmed: " + strings.Join(rearmed, ",")
+			if result.Upgraded {
+				reason = fmt.Sprintf("contract version %d; ", result.Version) + reason
+			}
+			if err := bumpChangeContractGeneration(ctx, q, reason, now); err != nil {
 				return err
 			}
 		}
@@ -345,6 +403,11 @@ func (s *Store) repairChangeContract(ctx context.Context) (ChangeContractRepair,
 	armed := false
 	if complete {
 		if armed, err = changeContractArmed(ctx, s.q()); err != nil {
+			return ChangeContractRepair{}, err
+		}
+	}
+	if armed && changeContractStoredVersion(ctx, s.q()) == ChangeContractVersionGuarded {
+		if armed, err = changeContractGuardsCurrent(ctx, s.q()); err != nil {
 			return ChangeContractRepair{}, err
 		}
 	}
@@ -463,6 +526,53 @@ func changeContractComplete(ctx context.Context, q changeContractExec) (bool, er
 }
 
 func createChangeContract(ctx context.Context, q changeContractExec, retention int64, now time.Time) error {
+	return createChangeContractVersion(ctx, q, retention, now, ChangeContractVersion)
+}
+
+// changeContractStoredVersion returns the recorded contract version, or
+// version 1 when it cannot be read.
+func changeContractStoredVersion(ctx context.Context, q changeContractExec) int64 {
+	var version int64
+	if err := q.QueryRowContext(ctx, `select contract_version from change_contract_state where id = 1`).Scan(&version); err != nil {
+		return ChangeContractVersion
+	}
+	return version
+}
+
+func changeContractStoredVersionIfPresent(ctx context.Context, q changeContractExec) (int64, bool) {
+	present, err := changeContractTablePresent(ctx, q, "change_contract_state")
+	if err != nil || !present {
+		return 0, false
+	}
+	var version int64
+	if err := q.QueryRowContext(ctx, `select contract_version from change_contract_state where id = 1`).Scan(&version); err != nil {
+		return 0, false
+	}
+	if version != ChangeContractVersion && version != ChangeContractVersionGuarded {
+		return 0, false
+	}
+	return version, true
+}
+
+// syncChangeContractFamilies records the declared families. Families are a
+// source-declared convenience, so an existing contract adopts new families.
+func syncChangeContractFamilies(ctx context.Context, q changeContractExec) error {
+	families := make([]string, 0, len(changeContractFamilies))
+	for family := range changeContractFamilies {
+		families = append(families, family)
+	}
+	sort.Strings(families)
+	for _, family := range families {
+		for _, table := range changeContractFamilies[family] {
+			if _, err := q.ExecContext(ctx, `insert or ignore into change_contract_families(family, table_name) values(?, ?)`, family, table); err != nil {
+				return fmt.Errorf("record change contract family %s: %w", family, err)
+			}
+		}
+	}
+	return nil
+}
+
+func createChangeContractVersion(ctx context.Context, q changeContractExec, retention int64, now time.Time, version int64) error {
 	if _, err := q.ExecContext(ctx, changeContractSchemaSQL); err != nil {
 		return fmt.Errorf("create change contract schema: %w", err)
 	}
@@ -472,7 +582,7 @@ func createChangeContract(ctx context.Context, q changeContractExec, retention i
 	}
 	stamp := now.UTC().Format(timeLayout)
 	if _, err := q.ExecContext(ctx, `insert into change_contract_state(id, contract_version, epoch, generation, generation_reason, generation_at, enabled_at) values(1, ?, ?, 1, 'enabled', ?, ?)`,
-		ChangeContractVersion, hex.EncodeToString(raw[:]), stamp, stamp); err != nil {
+		version, hex.EncodeToString(raw[:]), stamp, stamp); err != nil {
 		return fmt.Errorf("create change contract state: %w", err)
 	}
 	if _, err := q.ExecContext(ctx, `insert into change_contract_sequence(id, value, retention, next_prune, pruned_through) values(1, 0, ?, ?, 0)`, retention, changeContractPruneInterval); err != nil {
@@ -516,6 +626,7 @@ func armChangeContract(ctx context.Context, q changeContractExec) ([]string, err
 	if err := q.QueryRowContext(ctx, `select count(*) from sqlite_schema where type = 'trigger' and name = 'change_contract_log_prune'`).Scan(&count); err != nil {
 		return nil, err
 	}
+	version := changeContractStoredVersion(ctx, q)
 	var rearmed []string
 	if count == 0 {
 		if _, err := q.ExecContext(ctx, changeContractPruneTriggerSQL); err != nil {
@@ -536,13 +647,19 @@ func armChangeContract(ctx context.Context, q changeContractExec) ([]string, err
 			return nil, err
 		}
 		keyJSON, _ := json.Marshal(keys)
-		triggers := changeContractTriggers(spec, keys)
-		var recordedKeys sql.NullString
-		err = q.QueryRowContext(ctx, `select key_columns from change_contract_tables where table_id = ? and table_name = ? and mode = ?`, spec.id, spec.name, spec.mode).Scan(&recordedKeys)
+		triggers, err := changeContractExpectedTriggers(ctx, q, spec, keys, version)
+		if err != nil {
+			return nil, err
+		}
+		var recordedKeys, recordedInsert, recordedUpdate, recordedDelete sql.NullString
+		err = q.QueryRowContext(ctx, `select key_columns, insert_trigger, update_trigger, delete_trigger from change_contract_tables where table_id = ? and table_name = ? and mode = ?`, spec.id, spec.name, spec.mode).Scan(&recordedKeys, &recordedInsert, &recordedUpdate, &recordedDelete)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		armed := err == nil && recordedKeys.String == string(keyJSON)
+		armed := err == nil && recordedKeys.String == string(keyJSON) &&
+			recordedInsert.String == sqliteStoredCreateSQL(triggers[0].sql) &&
+			recordedUpdate.String == sqliteStoredCreateSQL(triggers[1].sql) &&
+			recordedDelete.String == sqliteStoredCreateSQL(triggers[2].sql)
 		if armed {
 			armed, err = changeContractTableArmed(ctx, q, spec.name)
 			if err != nil {
@@ -706,6 +823,98 @@ func changeContractKeyChangedSQL(keys []string) string {
 		parts[i] = "OLD." + c + " is not NEW." + c
 	}
 	return "(" + strings.Join(parts, " or ") + ")"
+}
+
+// changeContractExpectedTriggers renders the triggers a table should carry at
+// the given contract version.
+func changeContractExpectedTriggers(ctx context.Context, q changeContractExec, spec changeContractTableSpec, keys []string, version int64) ([]changeContractTrigger, error) {
+	if version != ChangeContractVersionGuarded {
+		return changeContractTriggers(spec, keys), nil
+	}
+	columns, err := changeContractColumns(ctx, q, spec.name)
+	if err != nil {
+		return nil, err
+	}
+	return changeContractGuardedTriggers(spec, keys, columns), nil
+}
+
+// changeContractGuardsCurrent reports whether every armed version 2 update
+// trigger still guards the table's current column set.
+func changeContractGuardsCurrent(ctx context.Context, q changeContractExec) (bool, error) {
+	for _, spec := range changeContractTableSpecs {
+		present, err := changeContractTablePresent(ctx, q, spec.name)
+		if err != nil {
+			return false, err
+		}
+		if !present {
+			continue
+		}
+		keys, err := changeContractKeyColumns(ctx, q, spec.name)
+		if err != nil {
+			return false, err
+		}
+		triggers, err := changeContractExpectedTriggers(ctx, q, spec, keys, ChangeContractVersionGuarded)
+		if err != nil {
+			return false, err
+		}
+		var recorded sql.NullString
+		err = q.QueryRowContext(ctx, `select update_trigger from change_contract_tables where table_id = ?`, spec.id).Scan(&recorded)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && recorded.String != sqliteStoredCreateSQL(triggers[1].sql) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// sqliteStoredCreateSQL renders a CREATE statement as SQLite stores it in
+// sqlite_schema: the leading CREATE keyword and object type are upper-cased.
+func sqliteStoredCreateSQL(statement string) string {
+	for _, kind := range []string{"trigger", "view", "table", "index"} {
+		prefix := "create " + kind + " "
+		if strings.HasPrefix(strings.ToLower(statement), prefix) {
+			return "CREATE " + strings.ToUpper(kind) + " " + statement[len(prefix):]
+		}
+	}
+	return statement
+}
+
+func changeContractColumns(ctx context.Context, q changeContractExec, table string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `select name from pragma_table_info(?) order by cid`, table)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	columns := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		columns = append(columns, name)
+	}
+	return columns, rows.Err()
+}
+
+// changeContractGuardedTriggers renders version 2 triggers: identical to
+// version 1 except that the update trigger fires only when a column changed.
+func changeContractGuardedTriggers(spec changeContractTableSpec, keys, columns []string) []changeContractTrigger {
+	triggers := changeContractTriggers(spec, keys)
+	parts := make([]string, 0, len(columns)+1)
+	for _, column := range columns {
+		c := sqliteQuotedIdentifier(column)
+		parts = append(parts, "OLD."+c+" is not NEW."+c)
+	}
+	if len(keys) == 0 {
+		parts = append(parts, "OLD.rowid is not NEW.rowid")
+	}
+	guard := "when " + strings.Join(parts, " or ") + "\n"
+	update := triggers[1].sql
+	update = strings.Replace(update, "\nbegin\n", "\n"+guard+"begin\n", 1)
+	triggers[1].sql = update
+	return triggers
 }
 
 func changeContractTriggers(spec changeContractTableSpec, keys []string) []changeContractTrigger {

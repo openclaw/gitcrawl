@@ -405,7 +405,7 @@ func (s *Store) archiveRevisionCoverage(ctx context.Context, repoID int64) (Enri
 			select case when tr.id is null then 0 else 1 end,
 				coalesce(tr.created_at, ''),
 				case when tr.id is not null and (`+revisionFresh+`) then 1 else 0 end
-			from threads t
+			from `+s.currentSource(ctx, "threads")+` t
 				left join thread_revisions tr on tr.id = (
 					select latest.id
 					from thread_revisions latest
@@ -473,7 +473,7 @@ func (s *Store) archiveRevisionChildCoverage(ctx context.Context, repoID int64, 
 			select case when child.id is null then 0 else 1 end,
 				coalesce(child.created_at, ''),
 				case when child.id is not null and (`+revisionFresh+`) then 1 else 0 end
-			from threads t
+			from `+s.currentSource(ctx, "threads")+` t
 				left join thread_revisions tr on tr.id = (
 					select latest.id
 					from thread_revisions latest
@@ -558,7 +558,7 @@ func (s *Store) archiveClusterCoverage(ctx context.Context, repoID int64) (Enric
 				  and cm.last_seen_run_id = (select id from latest_run)
 			) then 1 else 0 end), 0),
 			coalesce((select finished_at from latest_run), '')
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		where t.repo_id = ? and `+openThread+`
 	`, repoID, repoID)
 }
@@ -598,8 +598,8 @@ func (s *Store) archivePRDetailCoverage(ctx context.Context, repoID int64) (Enri
 			`+reservationPresent+`,
 			`+reservationSourceUpdatedAt+`,
 			`+reservationObservationSequence+`
-		from threads t
-		left join pull_request_details prd on prd.thread_id = t.id
+		from `+s.currentSource(ctx, "threads")+` t
+		left join `+s.currentSource(ctx, "pull_request_details")+` prd on prd.thread_id = t.id
 		`+reservationJoin+`
 		where t.repo_id = ? and t.kind = 'pull_request'
 	`, repoID)
@@ -709,7 +709,7 @@ func (s *Store) archivePRFileCoverage(
 		reservationObservationSequence = "coalesce(reservation.observation_sequence, 0)"
 	}
 	persistedEvidenceJoin := `
-		left join pull_request_details prd on prd.thread_id = t.id
+		left join ` + s.currentSource(ctx, "pull_request_details") + ` prd on prd.thread_id = t.id
 		left join (
 			select thread_id,
 				count(*) as file_count,
@@ -731,7 +731,7 @@ func (s *Store) archivePRFileCoverage(
 			coalesce(prf.latest_fetched_at, ''),
 			`+acceptedSourceUpdatedAt+`,
 			`+acceptedObservationSequence+`
-		from threads t
+		from `+s.currentSource(ctx, "threads")+` t
 		`+reservationJoin+`
 		`+persistedEvidenceJoin+`
 		where t.repo_id = ? and t.kind = 'pull_request'
