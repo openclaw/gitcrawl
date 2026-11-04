@@ -177,28 +177,6 @@ func (s *Store) UpsertPullRequestCacheFamilies(
 	})
 }
 
-func (s *Store) UpsertPullRequestCacheAndDocument(ctx context.Context, detail PullRequestDetail, files []PullRequestFile, commits []PullRequestCommit, checks []PullRequestCheck, runs []WorkflowRun, document Document) error {
-	persist := func(st *Store) error {
-		if err := st.upsertPullRequestCacheFamilies(
-			ctx,
-			detail,
-			files,
-			commits,
-			checks,
-			runs,
-			allPullRequestHydrationFamilies,
-		); err != nil {
-			return err
-		}
-		_, err := st.UpsertDocument(ctx, document)
-		return err
-	}
-	if s.queries == nil {
-		return s.WithTx(ctx, persist)
-	}
-	return persist(s)
-}
-
 func (s *Store) upsertPullRequestCacheFamilies(
 	ctx context.Context,
 	detail PullRequestDetail,

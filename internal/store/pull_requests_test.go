@@ -611,7 +611,7 @@ func TestOpenMigratesLegacyPullRequestFilesToPositionKey(t *testing.T) {
 	}
 }
 
-func TestPullRequestCacheAndDocumentRollsBackTogether(t *testing.T) {
+func TestPullRequestCacheTransactionRollsBackOnDocumentFailure(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
 	if err != nil {
@@ -620,18 +620,23 @@ func TestPullRequestCacheAndDocumentRollsBackTogether(t *testing.T) {
 	defer st.Close()
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
 	threadID := threadIDs[1]
-	err = st.UpsertPullRequestCacheAndDocument(ctx,
-		PullRequestDetail{
-			ThreadID: threadID, RepoID: repoID, Number: 302,
-			RawJSON: "{}", FetchedAt: "2026-05-05T10:00:00Z", UpdatedAt: "2026-05-05T10:00:00Z",
-		},
-		[]PullRequestFile{{ThreadID: threadID, Path: "cache.go", RawJSON: "{}", FetchedAt: "2026-05-05T10:00:00Z"}},
-		nil, nil, nil,
-		Document{
+	err = st.WithTx(ctx, func(tx *Store) error {
+		if err := tx.UpsertPullRequestCacheFamilies(ctx,
+			PullRequestDetail{
+				ThreadID: threadID, RepoID: repoID, Number: 302,
+				RawJSON: "{}", FetchedAt: "2026-05-05T10:00:00Z", UpdatedAt: "2026-05-05T10:00:00Z",
+			},
+			[]PullRequestFile{{ThreadID: threadID, Path: "cache.go", RawJSON: "{}", FetchedAt: "2026-05-05T10:00:00Z"}},
+			nil, nil, nil, allPullRequestHydrationFamilies,
+		); err != nil {
+			return err
+		}
+		_, err := tx.UpsertDocument(ctx, Document{
 			ThreadID: threadID + 999, Title: "invalid", RawText: "invalid",
 			DedupeText: "invalid", UpdatedAt: "2026-05-05T10:00:00Z",
-		},
-	)
+		})
+		return err
+	})
 	if err == nil {
 		t.Fatal("invalid document unexpectedly succeeded")
 	}
