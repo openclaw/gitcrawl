@@ -52,7 +52,7 @@ func (a *App) runCluster(ctx context.Context, args []string) error {
 	}
 	maxClusterSize, fanout, crossKindThreshold, err := parseClusterShapeOptions("cluster", *maxClusterSizeRaw, *fanoutRaw, *crossKindThresholdRaw)
 	if err != nil {
-		return err
+		return usageErr(err)
 	}
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {
