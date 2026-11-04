@@ -211,3 +211,17 @@ No production graph behavior or archive schema changed.
   request's thread ID and cursor checks, and all successful pagination tests.
 
 All HTTP responses are synthetic and local. Production pagination is unchanged.
+
+## Provider HTTP fixture failures
+
+- Replaced 43 fatal request assertions in GitHub/OpenAI HTTP fixture callbacks
+  with nonfatal errors, HTTP 400, and immediate returns. Every request condition,
+  diagnostic, successful response, pagination count, vector check, and root-test
+  assertion remains intact.
+- Changed two fatal response-encoding assertions (including the shared rate-limit
+  fixture writer) to nonfatal errors and returns. A failed response write may
+  already have committed headers, so these paths do not attempt a second response.
+- Forced GitHub authorization, embedding dimensions, and summary path failures
+  reproduce connection EOF before the fix and retain their diagnostics with
+  HTTP 400 afterward. Full Go/static gates, provider race tests, independent
+  review, and PR CI validate synthetic local fixtures; no live APIs or releases.
