@@ -80,7 +80,7 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	}
 	maxClusterSize, fanout, crossKindThreshold, err := parseClusterShapeOptions("refresh", *maxClusterSizeRaw, *fanoutRaw, *crossKindThresholdRaw)
 	if err != nil {
-		return err
+		return usageErr(err)
 	}
 
 	result := refreshResult{

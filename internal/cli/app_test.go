@@ -5305,6 +5305,10 @@ func TestMainHelpListsNeighbors(t *testing.T) {
 func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 	configPath := filepath.Join(dir, "config.toml")
 	dbPath := filepath.Join(dir, "gitcrawl.db")
 
@@ -5355,6 +5359,9 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 		{"cluster", "--unknown"},
 		{"cluster", "openclaw/openclaw", "--threshold", "2"},
 		{"cluster", "openclaw/openclaw", "--cross-kind-threshold", "2"},
+		{"cluster", "openclaw/openclaw", "--k", "bad"},
+		{"refresh", "openclaw/openclaw", "--max-cluster-size", "bad"},
+		{"refresh", "openclaw/openclaw", "--cross-kind-threshold", "2"},
 		{"embed", "--unknown"},
 		{"embed", "openclaw/openclaw", "--number", "bad"},
 		{"clusters", "--unknown"},
@@ -5392,6 +5399,54 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 		{"portable", "unknown"},
 		{"portable", "prune", "--unknown"},
 		{"portable", "prune", "extra"},
+		{"--format", "yaml", "status"},
+		{"unknown"},
+		{"configure", "--bad"},
+		{"metadata", "extra"},
+		{"status", "extra"},
+		{"portable", "prune", "--body-chars", "bad"},
+		{"threads"},
+		{"threads", "bad-repo"},
+		{"threads", "openclaw/openclaw", "--numbers", "bad"},
+		{"threads", "openclaw/openclaw", "--limit", "bad"},
+		{"runs"},
+		{"runs", "openclaw/openclaw", "--limit", "bad"},
+		{"cluster-detail", "openclaw/openclaw", "--id", "bad"},
+		{"reopen-thread", "openclaw/openclaw", "--number", "bad"},
+		{"reopen-cluster", "openclaw/openclaw", "--id", "bad"},
+		{"include-cluster-member", "openclaw/openclaw", "--id", "bad", "--number", "1"},
+		{"set-cluster-canonical", "openclaw/openclaw", "--id", "1", "--number", "bad"},
+		{"sync", "openclaw/openclaw", "--with", "bad"},
+		{"refresh"},
+		{"refresh", "bad-repo"},
+		{"refresh", "openclaw/openclaw", "--limit", "bad"},
+		{"refresh", "openclaw/openclaw", "--threshold", "bad"},
+		{"refresh", "openclaw/openclaw", "--threshold", "2"},
+		{"refresh", "openclaw/openclaw", "--min-size", "bad"},
+		{"refresh", "openclaw/openclaw", "--k", "bad"},
+		{"search"},
+		{"search", "bad-repo", "--query", "x"},
+		{"search", "openclaw/openclaw", "--query", "x", "--limit", "bad"},
+		{"search", "openclaw/openclaw", "--query", "x", "--mode", "bad"},
+		{"neighbors"},
+		{"neighbors", "bad-repo"},
+		{"neighbors", "openclaw/openclaw", "--number", "bad"},
+		{"neighbors", "openclaw/openclaw", "--number", "1", "--limit", "bad"},
+		{"neighbors", "openclaw/openclaw", "--number", "1", "--threshold", "bad"},
+		{"cluster"},
+		{"cluster", "bad-repo"},
+		{"cluster", "openclaw/openclaw", "--threshold", "bad"},
+		{"cluster", "openclaw/openclaw", "--min-size", "bad"},
+		{"cluster", "openclaw/openclaw", "--max-cluster-size", "bad"},
+		{"cluster", "openclaw/openclaw", "--limit", "bad"},
+		{"embed"},
+		{"embed", "bad-repo"},
+		{"embed", "openclaw/openclaw", "--limit", "bad"},
+		{"summarize", "bad-repo"},
+		{"summarize", "openclaw/openclaw", "--number", "bad"},
+		{"summarize", "openclaw/openclaw", "--limit", "bad"},
+		{"tui", "one", "two"},
+		{"tui", "--sort", "bad"},
 	}
 	for _, args := range errorCases {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -5400,8 +5455,8 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for %v", args)
 			}
-			if ExitCode(err) == 0 {
-				t.Fatalf("expected nonzero exit for %v", args)
+			if got := ExitCode(err); got != 2 {
+				t.Fatalf("exit code = %d for %v, want usage error (2): %v", got, args, err)
 			}
 			if err.Error() == "" {
 				t.Fatalf("empty error for %v", args)
