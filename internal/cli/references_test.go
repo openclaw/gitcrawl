@@ -16,7 +16,7 @@ import (
 
 func TestCloseThreadRejectsCrossRepositoryReference(t *testing.T) {
 	ctx := context.Background()
-	configPath := seedGHShimRepo(t, ctx)
+	configPath := seedCLICommandArchive(t, ctx)
 	app := New()
 	app.Stdout = &bytes.Buffer{}
 	err := app.Run(ctx, []string{"--config", configPath, "close-thread", "openclaw/openclaw", "--number", "https://github.com/other/repo/issues/10"})

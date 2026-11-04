@@ -105,3 +105,20 @@ No terminal layout, mouse behavior, archive data, or release artifacts changed.
   injected-failure tests already use the options-aware implementation.
 
 No portable schema, pruning, rollback, or release behavior changed.
+
+## Control output smoke consolidation
+
+- Replaced the shallow `TestCLIAppHumanAndLogOutputE2E`; it runs the app in
+  process, not an executable or provider workflow. Keep it named as a control
+  output integration test and require command headers plus decoded payloads.
+- Metadata must identify gitcrawl; status and doctor must reflect the two-thread,
+  one-repository synthetic archive. Doctor log output must retain those counts,
+  rather than satisfying the old single `=` assertion.
+- Consolidated version and portable-help routes into the existing output-mode
+  table; retain both JSON flag forms and require the actual version value.
+  Existing TUI-help and configure-log checks replace their weaker duplicates.
+- Renamed the archive fixture helper: it seeds SQLite and installs no GH shim.
+  Isolate HOME and XDG config/cache/data/state roots before init; remove the
+  later cache-path override now that initialization is already isolated.
+
+No CLI formatting, provider, archive, or release behavior changed.

@@ -5335,9 +5335,12 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 		want string
 	}{
 		{name: "version flag text", args: []string{"--version"}, want: "dev"},
-		{name: "version command json", args: []string{"--json", "version"}, want: `"version"`},
+		{name: "version command text", args: []string{"version"}, want: version},
+		{name: "version command json", args: []string{"--json", "version"}, want: fmt.Sprintf(`"version": %q`, version)},
+		{name: "version explicit json", args: []string{"--format", "json", "version"}, want: fmt.Sprintf(`"version": %q`, version)},
 		{name: "version command log fallback", args: []string{"--format", "log", "version"}, want: "dev"},
 		{name: "help tui", args: []string{"help", "tui"}, want: "cluster browser"},
+		{name: "help portable", args: []string{"help", "portable"}, want: "--include-sync-failures"},
 		{name: "configure creates config", args: []string{"--config", filepath.Join(dir, "configure.toml"), "--format", "log", "configure"}, want: "configure="},
 		{name: "doctor default json", args: []string{"--config", filepath.Join(dir, "missing.toml"), "--json", "doctor"}, want: `"config_exists": false`},
 	} {
