@@ -86,7 +86,7 @@ func (s *Store) listRuns(ctx context.Context, repoID int64, kind string, limit i
 		}
 		out := make([]RunRecord, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, summaryRunRecordFromDB(kind, row))
+			out = append(out, runRecordFromDB(kind, storedb.SyncRun(row)))
 		}
 		return out, nil
 	case "embedding":
@@ -96,7 +96,7 @@ func (s *Store) listRuns(ctx context.Context, repoID int64, kind string, limit i
 		}
 		out := make([]RunRecord, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, embeddingRunRecordFromDB(kind, row))
+			out = append(out, runRecordFromDB(kind, storedb.SyncRun(row)))
 		}
 		return out, nil
 	case "cluster":
@@ -106,7 +106,7 @@ func (s *Store) listRuns(ctx context.Context, repoID int64, kind string, limit i
 		}
 		out := make([]RunRecord, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, clusterRunRecordFromDB(kind, row))
+			out = append(out, runRecordFromDB(kind, storedb.SyncRun(row)))
 		}
 		return out, nil
 	default:
