@@ -21,14 +21,17 @@ func writeRateLimits(t *testing.T, w http.ResponseWriter, resetAt time.Time, cor
 		"core":    map[string]any{"limit": 5000, "remaining": coreRemaining, "reset": resetAt.Unix()},
 		"graphql": map[string]any{"limit": 5000, "remaining": graphqlRemaining, "reset": resetAt.Unix()},
 	}}); err != nil {
-		t.Fatalf("encode rate limits: %v", err)
+		t.Errorf("encode rate limits: %v", err)
+		return
 	}
 }
 
 func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token" {
-			t.Fatalf("auth header mismatch: present=%t length=%d", got != "", len(got))
+			t.Errorf("auth header mismatch: present=%t length=%d", got != "", len(got))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		switch r.URL.Query().Get("page") {
 		case "":
@@ -37,7 +40,9 @@ func TestListRepositoryIssuesPaginatesAndLimits(t *testing.T) {
 		case "2":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 3}})
 		default:
-			t.Fatalf("unexpected page: %s", r.URL.RawQuery)
+			t.Errorf("unexpected page: %s", r.URL.RawQuery)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -79,7 +84,9 @@ func TestListRepositoryIssuesUsesExpectedTotalWhenNoLastLink(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(rows)
 		default:
-			t.Fatalf("unexpected page: %s", r.URL.RawQuery)
+			t.Errorf("unexpected page: %s", r.URL.RawQuery)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -109,7 +116,9 @@ func TestPaginateRaisesTotalWhenActualExceedsHint(t *testing.T) {
 		case "2":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 2}})
 		default:
-			t.Fatalf("unexpected page: %s", r.URL.RawQuery)
+			t.Errorf("unexpected page: %s", r.URL.RawQuery)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -158,7 +167,9 @@ func TestClientSingleResourceAndCollectionEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests[r.URL.Path]++
 		if r.Header.Get("Accept") != "application/vnd.github+json" {
-			t.Fatalf("accept header = %q", r.Header.Get("Accept"))
+			t.Errorf("accept header = %q", r.Header.Get("Accept"))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		switch r.URL.Path {
 		case "/repos/openclaw/gitcrawl":
@@ -180,7 +191,9 @@ func TestClientSingleResourceAndCollectionEndpoints(t *testing.T) {
 		case "/repos/openclaw/gitcrawl/actions/runs/99":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99})
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -239,7 +252,9 @@ func TestCheckRunsAndWorkflowRunsPaginate(t *testing.T) {
 			case "2":
 				_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{"name": "test-3"}}})
 			default:
-				t.Fatalf("unexpected check-runs page: %s", r.URL.RawQuery)
+				t.Errorf("unexpected check-runs page: %s", r.URL.RawQuery)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 		case "/repos/openclaw/gitcrawl/actions/runs":
 			switch page {
@@ -249,10 +264,14 @@ func TestCheckRunsAndWorkflowRunsPaginate(t *testing.T) {
 			case "2":
 				_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 3}, {"id": 4}}})
 			default:
-				t.Fatalf("unexpected workflow-runs page: %s", r.URL.RawQuery)
+				t.Errorf("unexpected workflow-runs page: %s", r.URL.RawQuery)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -281,13 +300,19 @@ func TestCheckRunsAndWorkflowRunsPaginate(t *testing.T) {
 func TestListPullReviewThreadsDecodesGraphQLEnvelope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/graphql" {
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s", r.Method)
+			t.Errorf("method = %s", r.Method)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
-			t.Fatalf("content-type = %q", r.Header.Get("Content-Type"))
+			t.Errorf("content-type = %q", r.Header.Get("Content-Type"))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 			"reviewThreads": map[string]any{
@@ -343,10 +368,14 @@ func TestListPullReviewThreadsRetriesWithBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body graphqlEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode graphql request %d: %v", atomic.LoadInt32(&calls)+1, err)
+			t.Errorf("decode graphql request %d: %v", atomic.LoadInt32(&calls)+1, err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if body.Query == "" || body.Variables["owner"] != "openclaw" || body.Variables["repo"] != "gitcrawl" {
-			t.Fatalf("graphql request body = %+v", body)
+			t.Errorf("graphql request body = %+v", body)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if atomic.AddInt32(&calls, 1) == 1 {
 			w.Header().Set("Retry-After", "1")
@@ -376,16 +405,22 @@ func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.URL.Path != "/graphql" {
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		var body graphqlEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		switch calls {
 		case 1:
 			if body.Variables["threadID"] != nil {
-				t.Fatalf("first request should fetch review threads, variables=%+v", body.Variables)
+				t.Errorf("first request should fetch review threads, variables=%+v", body.Variables)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 				"reviewThreads": map[string]any{
@@ -402,7 +437,9 @@ func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
 			}}}})
 		case 2:
 			if body.Variables["threadID"] != "PRRT_1" || body.Variables["cursor"] != "comment-cursor-1" {
-				t.Fatalf("comment page variables = %+v", body.Variables)
+				t.Errorf("comment page variables = %+v", body.Variables)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
 				"node": map[string]any{
@@ -413,7 +450,9 @@ func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
 				},
 			}})
 		default:
-			t.Fatalf("unexpected graphql call %d", calls)
+			t.Errorf("unexpected graphql call %d", calls)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -488,12 +527,16 @@ func TestListPullReviewThreadsPaginatesReviewThreads(t *testing.T) {
 		calls++
 		var body graphqlEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		switch calls {
 		case 1:
 			if body.Variables["cursor"] != nil {
-				t.Fatalf("first request should omit cursor, variables=%+v", body.Variables)
+				t.Errorf("first request should omit cursor, variables=%+v", body.Variables)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 				"reviewThreads": map[string]any{
@@ -503,7 +546,9 @@ func TestListPullReviewThreadsPaginatesReviewThreads(t *testing.T) {
 			}}}})
 		case 2:
 			if body.Variables["cursor"] != "thread-cursor-1" {
-				t.Fatalf("second request cursor = %+v", body.Variables)
+				t.Errorf("second request cursor = %+v", body.Variables)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 				"reviewThreads": map[string]any{
@@ -512,7 +557,9 @@ func TestListPullReviewThreadsPaginatesReviewThreads(t *testing.T) {
 				},
 			}}}})
 		default:
-			t.Fatalf("unexpected graphql call %d", calls)
+			t.Errorf("unexpected graphql call %d", calls)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -550,11 +597,15 @@ func TestListPullReviewThreadsRejectsInvalidCommentEndCursor(t *testing.T) {
 				}
 				var body graphqlEnvelope
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Fatalf("decode request: %v", err)
+					t.Errorf("decode request: %v", err)
+					http.Error(w, "invalid test request", http.StatusBadRequest)
+					return
 				}
 				if call == 1 {
 					if body.Variables["threadID"] != nil {
-						t.Fatalf("first request should fetch review threads, variables=%+v", body.Variables)
+						t.Errorf("first request should fetch review threads, variables=%+v", body.Variables)
+						http.Error(w, "invalid test request", http.StatusBadRequest)
+						return
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 						"reviewThreads": map[string]any{
@@ -571,7 +622,9 @@ func TestListPullReviewThreadsRejectsInvalidCommentEndCursor(t *testing.T) {
 					return
 				}
 				if body.Variables["threadID"] != "PRRT_1" || body.Variables["cursor"] != tc.cursor {
-					t.Fatalf("comment page variables = %+v", body.Variables)
+					t.Errorf("comment page variables = %+v", body.Variables)
+					http.Error(w, "invalid test request", http.StatusBadRequest)
+					return
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
 					"node": map[string]any{
@@ -642,7 +695,9 @@ func TestClientErrorAndHelperBranches(t *testing.T) {
 		case "/repos/openclaw/gitcrawl/issues":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 1}, {"number": 2}, {"number": 3}})
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.String())
+			t.Errorf("unexpected path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -692,7 +747,9 @@ func TestGetRateLimitsDecodesCoreAndGraphQLResources(t *testing.T) {
 	resetAt := time.Now().Add(time.Hour).Unix()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/rate_limit" {
-			t.Fatalf("path = %q, want /rate_limit", r.URL.Path)
+			t.Errorf("path = %q, want /rate_limit", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
 			"core":    map[string]any{"limit": 5000, "remaining": 101, "reset": resetAt},
@@ -1177,7 +1234,9 @@ func TestRateLimitReserveTracksGraphQLSeparately(t *testing.T) {
 			return
 		}
 		if r.URL.Path != "/graphql" {
-			t.Fatalf("path = %q, want /graphql", r.URL.Path)
+			t.Errorf("path = %q, want /graphql", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("X-RateLimit-Limit", "5000")
 		w.Header().Set("X-RateLimit-Remaining", "10")

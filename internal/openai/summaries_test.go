@@ -15,17 +15,25 @@ import (
 func TestSummarizeUsesResponsesOutputText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
-			t.Fatalf("path = %q", r.URL.Path)
+			t.Errorf("path = %q", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
-			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			t.Errorf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		var request summaryRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if request.Model != "summary-test" || request.Input != "thread evidence" || request.Store {
-			t.Fatalf("request = %+v", request)
+			t.Errorf("request = %+v", request)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"output": []map[string]any{{

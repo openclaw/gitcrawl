@@ -42,10 +42,14 @@ func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request embeddingRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if request.Dimensions != 1024 {
-			t.Fatalf("dimensions = %d, want 1024", request.Dimensions)
+			t.Errorf("dimensions = %d, want 1024", request.Dimensions)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		response := embeddingResponse{}
 		for index := range request.Input {
@@ -60,7 +64,8 @@ func TestEmbedAcceptsLargeBatchResponse(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
-			t.Fatalf("encode response: %v", err)
+			t.Errorf("encode response: %v", err)
+			return
 		}
 	}))
 	defer server.Close()
@@ -86,13 +91,19 @@ func TestEmbedCapsOversizedInputsBeforeRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request embeddingRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if len(request.Input) != 1 {
-			t.Fatalf("inputs = %d, want 1", len(request.Input))
+			t.Errorf("inputs = %d, want 1", len(request.Input))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if got := len([]rune(request.Input[0])); got != maxEmbeddingInputRunes {
-			t.Fatalf("input runes = %d, want %d", got, maxEmbeddingInputRunes)
+			t.Errorf("input runes = %d, want %d", got, maxEmbeddingInputRunes)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(embeddingResponse{Data: []struct {
 			Index     int       `json:"index"`
@@ -115,20 +126,30 @@ func TestEmbedCapsTokenDenseInputsByBytesBeforeRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request embeddingRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if len(request.Input) != 1 {
-			t.Fatalf("inputs = %d, want 1", len(request.Input))
+			t.Errorf("inputs = %d, want 1", len(request.Input))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		input := request.Input[0]
 		if got := len([]byte(input)); got > maxEmbeddingInputBytes {
-			t.Fatalf("input bytes = %d, want <= %d", got, maxEmbeddingInputBytes)
+			t.Errorf("input bytes = %d, want <= %d", got, maxEmbeddingInputBytes)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if !utf8.ValidString(input) {
-			t.Fatal("input was truncated in the middle of a UTF-8 rune")
+			t.Error("input was truncated in the middle of a UTF-8 rune")
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if got := len([]rune(input)); got >= maxEmbeddingInputRunes {
-			t.Fatalf("input runes = %d, want byte cap to apply before rune cap %d", got, maxEmbeddingInputRunes)
+			t.Errorf("input runes = %d, want byte cap to apply before rune cap %d", got, maxEmbeddingInputRunes)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(embeddingResponse{Data: []struct {
 			Index     int       `json:"index"`
