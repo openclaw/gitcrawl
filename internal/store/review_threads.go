@@ -137,25 +137,6 @@ func (s *Store) upsertPullRequestReviewThreads(ctx context.Context, threadID int
 	return nil
 }
 
-func (s *Store) TombstonePullRequestReviewThread(ctx context.Context, threadID int64, reviewThreadID, deletedAt, reason string) (bool, error) {
-	if err := validateTombstone(deletedAt, reason); err != nil {
-		return false, fmt.Errorf("tombstone pull request review thread: %w", err)
-	}
-	if deletedAt == "" {
-		return false, fmt.Errorf("tombstone pull request review thread: deleted_at is required")
-	}
-	if s.queries == nil {
-		var applied bool
-		err := s.WithTx(ctx, func(tx *Store) error {
-			var err error
-			applied, err = tx.tombstonePullRequestReviewThread(ctx, threadID, reviewThreadID, deletedAt, reason)
-			return err
-		})
-		return applied, err
-	}
-	return s.tombstonePullRequestReviewThread(ctx, threadID, reviewThreadID, deletedAt, reason)
-}
-
 func (s *Store) tombstonePullRequestReviewThread(ctx context.Context, threadID int64, reviewThreadID, deletedAt, reason string) (bool, error) {
 	result, err := s.q().ExecContext(ctx, `
 		update pull_request_review_threads

@@ -91,26 +91,6 @@ func (s *Store) upsertComment(ctx context.Context, comment Comment) (int64, erro
 	return id, nil
 }
 
-func (s *Store) TombstoneComment(ctx context.Context, threadID int64, commentType, githubID, deletedAt, reason string) (bool, error) {
-	if err := validateTombstone(deletedAt, reason); err != nil {
-		return false, fmt.Errorf("tombstone comment: %w", err)
-	}
-	if deletedAt == "" {
-		return false, fmt.Errorf("tombstone comment: deleted_at is required")
-	}
-	if s.queries == nil {
-		var applied bool
-		err := s.WithTx(ctx, func(tx *Store) error {
-			var err error
-			_, applied, err = tx.tombstoneComment(ctx, threadID, commentType, githubID, deletedAt, reason)
-			return err
-		})
-		return applied, err
-	}
-	_, applied, err := s.tombstoneComment(ctx, threadID, commentType, githubID, deletedAt, reason)
-	return applied, err
-}
-
 func (s *Store) tombstoneComment(ctx context.Context, threadID int64, commentType, githubID, deletedAt, reason string) (int64, bool, error) {
 	var id int64
 	err := s.q().QueryRowContext(ctx, `
