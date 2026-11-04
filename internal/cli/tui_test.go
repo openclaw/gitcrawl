@@ -2016,10 +2016,10 @@ func TestTUIJumpAndSortHelpersCoverStoreBackedBranches(t *testing.T) {
 		Clusters:   nil,
 	})
 	model.jumpToThreadNumber(202)
-	if model.currentClusterID() != clusterID || model.memberIndex < 0 {
-		t.Fatalf("jump did not load cluster/member: cluster=%d memberIndex=%d status=%q", model.currentClusterID(), model.memberIndex, model.status)
+	if cluster, ok := model.selectedCluster(); !ok || cluster.ID != clusterID || model.memberIndex < 0 {
+		t.Fatalf("jump did not load cluster/member: cluster=%d memberIndex=%d status=%q", cluster.ID, model.memberIndex, model.status)
 	}
-	if _, ok := model.clusterFromWorkingSet(clusterID); !ok {
+	if _, ok := model.clusterSummaryFromWorkingSet(store.ClusterSummary{ID: clusterID}); !ok {
 		t.Fatalf("cluster %d not added to working set", clusterID)
 	}
 	model.sortMembersFromHeader(1)
@@ -2676,20 +2676,6 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 		}},
 	}}
 
-	model.loadSelectedThreadNeighbors(10, 0.2)
-
-	neighbors := model.neighborCache[targetID]
-	if len(neighbors) != 1 || neighbors[0].Thread.ID != neighborID {
-		t.Fatalf("neighbors = %+v, want related thread %d", neighbors, neighborID)
-	}
-	if model.focus != focusDetail {
-		t.Fatalf("focus = %s, want detail", model.focus)
-	}
-	if !strings.Contains(strings.Join(model.detailLines(80), "\n"), "Related issue") {
-		t.Fatalf("detail does not render loaded neighbors")
-	}
-
-	delete(model.neighborCache, targetID)
 	model.focus = focusMembers
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	model = updated.(clusterBrowserModel)
@@ -2698,8 +2684,14 @@ func TestTUILoadNeighborsFromStore(t *testing.T) {
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(clusterBrowserModel)
-	if len(model.neighborCache[targetID]) != 1 {
-		t.Fatalf("keyboard shortcut did not reload neighbors: %+v", model.neighborCache[targetID])
+	if neighbors := model.neighborCache[targetID]; len(neighbors) != 1 || neighbors[0].Thread.ID != neighborID {
+		t.Fatalf("keyboard shortcut neighbors = %+v, want related thread %d", neighbors, neighborID)
+	}
+	if model.focus != focusDetail {
+		t.Fatalf("focus = %s, want detail", model.focus)
+	}
+	if !strings.Contains(strings.Join(model.detailLines(80), "\n"), "Related issue") {
+		t.Fatalf("detail does not render loaded neighbors")
 	}
 
 	delete(model.neighborCache, targetID)
@@ -2817,7 +2809,12 @@ func TestTUILoadNeighborsUsesConfiguredBackend(t *testing.T) {
 		return []vector.Neighbor{{ThreadID: neighborID, Score: 0.91}}, nil
 	}
 
-	model.loadSelectedThreadNeighbors(10, 0.2)
+	cmd := model.requestSelectedThreadNeighbors(10, 0.2)
+	if cmd == nil {
+		t.Fatal("neighbor load did not return a command")
+	}
+	updated, _ := model.Update(cmd())
+	model = updated.(clusterBrowserModel)
 
 	if !called {
 		t.Fatal("queryNeighbors was not called")
@@ -4505,14 +4502,14 @@ func TestTUISelectVisibleClusterID(t *testing.T) {
 	})
 
 	targetID := clusters[1].ID
-	if !model.selectVisibleClusterID(targetID) {
-		t.Fatal("selectVisibleClusterID returned false for visible cluster")
+	if !model.selectVisibleCluster(store.ClusterSummary{ID: targetID}) {
+		t.Fatal("selectVisibleCluster returned false for visible cluster")
 	}
 	if model.payload.Clusters[model.selected].ID != targetID {
 		t.Fatalf("selected cluster = %d, want %d", model.payload.Clusters[model.selected].ID, targetID)
 	}
-	if model.selectVisibleClusterID(999) {
-		t.Fatal("selectVisibleClusterID returned true for missing cluster")
+	if model.selectVisibleCluster(store.ClusterSummary{ID: 999}) {
+		t.Fatal("selectVisibleCluster returned true for missing cluster")
 	}
 }
 

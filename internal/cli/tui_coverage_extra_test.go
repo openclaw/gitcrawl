@@ -109,21 +109,21 @@ func TestTUIRemainingHelperBranches(t *testing.T) {
 			{ID: 1, Status: "active", RepresentativeNumber: 101, MemberCount: 1, UpdatedAt: "2026-05-08T00:00:00Z"},
 		},
 	})
-	if model.currentClusterID() != 1 {
-		t.Fatalf("current cluster id = %d", model.currentClusterID())
+	if cluster, ok := model.selectedCluster(); !ok || cluster.ID != 1 {
+		t.Fatalf("current cluster id = %d", cluster.ID)
 	}
 	if model.clusterRefreshLimit() != 1 {
 		t.Fatalf("cluster refresh limit = %d", model.clusterRefreshLimit())
 	}
 	model.ensureClusterInWorkingSet(store.ClusterSummary{ID: 2, Status: "closed", ClosedAt: "2026-05-08T00:00:00Z", MemberCount: 2})
-	if !model.selectClusterIDForJump(2) || !model.showClosed || model.minSize != 1 {
+	if !model.selectClusterForJump(store.ClusterSummary{ID: 2}) || !model.showClosed || model.minSize != 1 {
 		t.Fatalf("jump selection showClosed=%v minSize=%d selected=%d", model.showClosed, model.minSize, model.selected)
 	}
 	model.payload.Clusters = nil
-	if model.currentClusterID() != 0 || model.clusterSignature() != "" {
-		t.Fatalf("empty cluster helpers id=%d sig=%q", model.currentClusterID(), model.clusterSignature())
+	if cluster, ok := model.selectedCluster(); ok || model.clusterSignature() != "" {
+		t.Fatalf("empty cluster helpers id=%d sig=%q", cluster.ID, model.clusterSignature())
 	}
-	if _, ok := model.clusterFromWorkingSet(999); ok {
+	if _, ok := model.clusterSummaryFromWorkingSet(store.ClusterSummary{ID: 999}); ok {
 		t.Fatal("missing working-set cluster should not resolve")
 	}
 	model.applyClusterRefresh(nil, "")

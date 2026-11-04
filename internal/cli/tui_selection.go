@@ -60,14 +60,6 @@ func (m *clusterBrowserModel) jumpToThreadNumber(number int) {
 	m.status = fmt.Sprintf("Jumped to cluster %d; #%d is outside loaded members", cluster.ID, number)
 }
 
-func (m clusterBrowserModel) findLoadedClusterIDForThreadNumber(number int) int64 {
-	cluster, ok := m.findLoadedClusterForThreadNumber(number)
-	if !ok {
-		return 0
-	}
-	return cluster.ID
-}
-
 func (m clusterBrowserModel) findLoadedClusterForThreadNumber(number int) (store.ClusterSummary, bool) {
 	if m.hasDetail {
 		for _, member := range m.detail.Members {
@@ -103,10 +95,6 @@ func (m *clusterBrowserModel) ensureClusterInWorkingSet(cluster store.ClusterSum
 	m.allClusters = append(m.allClusters, cluster)
 }
 
-func (m *clusterBrowserModel) selectClusterIDForJump(clusterID int64) bool {
-	return m.selectClusterForJump(store.ClusterSummary{ID: clusterID})
-}
-
 func (m *clusterBrowserModel) selectClusterForJump(cluster store.ClusterSummary) bool {
 	if m.selectVisibleCluster(cluster) {
 		return true
@@ -129,10 +117,6 @@ func (m *clusterBrowserModel) selectClusterForJump(cluster store.ClusterSummary)
 	return m.selectVisibleCluster(cluster)
 }
 
-func (m *clusterBrowserModel) selectVisibleClusterID(clusterID int64) bool {
-	return m.selectVisibleCluster(store.ClusterSummary{ID: clusterID})
-}
-
 func (m *clusterBrowserModel) selectVisibleCluster(target store.ClusterSummary) bool {
 	for index, cluster := range m.payload.Clusters {
 		if sameClusterSummary(cluster, target) {
@@ -142,10 +126,6 @@ func (m *clusterBrowserModel) selectVisibleCluster(target store.ClusterSummary) 
 		}
 	}
 	return false
-}
-
-func (m clusterBrowserModel) clusterFromWorkingSet(clusterID int64) (store.ClusterSummary, bool) {
-	return m.clusterSummaryFromWorkingSet(store.ClusterSummary{ID: clusterID})
 }
 
 func (m clusterBrowserModel) clusterSummaryFromWorkingSet(target store.ClusterSummary) (store.ClusterSummary, bool) {

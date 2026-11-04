@@ -67,13 +67,6 @@ func clusterSummariesSignature(clusters []store.ClusterSummary) string {
 	return strings.Join(parts, "|")
 }
 
-func (m clusterBrowserModel) currentClusterID() int64 {
-	if len(m.payload.Clusters) == 0 || m.selected < 0 || m.selected >= len(m.payload.Clusters) {
-		return 0
-	}
-	return m.payload.Clusters[m.selected].ID
-}
-
 func (m clusterBrowserModel) currentClusterKey() string {
 	if len(m.payload.Clusters) == 0 || m.selected < 0 || m.selected >= len(m.payload.Clusters) {
 		return ""
