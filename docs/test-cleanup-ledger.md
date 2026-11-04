@@ -241,3 +241,18 @@ All HTTP responses are synthetic and local. Production pagination is unchanged.
   code review, and PR CI validate the branch. Local checks after the baseline
   probes use temporary homes/configs/caches and SQLite archives; no live providers
   or releases.
+
+## History and coverage fixture failures
+
+- Return errors from the shared coverage-row mapper instead of invoking fatal
+  assertions from HTTP handler goroutines. Both publish fixtures report the error,
+  return HTTP 400, and stop before assigning the decoded coverage datasets.
+- Keep all coverage columns, numeric conversions, counts, completeness checks,
+  and successful publish/resume assertions. The mapper no longer needs a test
+  context or a nested assertion closure.
+- Replace two fatal history request-decoder assertions with nonfatal errors,
+  HTTP 400, and immediate returns; retain successful payloads and root assertions.
+- Temporary malformed-row and request overlays exercise the real publish, resume,
+  and history clients: original failures produced connection EOF; repaired paths
+  preserve diagnostics and return HTTP 400. Full Go/static gates, scoped race
+  checks, independent review, and PR CI validate synthetic local fixtures only.

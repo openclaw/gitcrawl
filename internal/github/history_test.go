@@ -33,7 +33,9 @@ func TestGraphQLHistoryBatchNoRESTAndExactIDs(t *testing.T) {
 		}
 		var request graphqlEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
+			t.Error(err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		data := map[string]any{"rateLimit": map[string]any{"cost": 1, "remaining": 19999 - calls, "resetAt": "2099-01-01T01:00:00Z"}}
 		if strings.Contains(request.Query, "issueOrPullRequest") {
@@ -323,7 +325,9 @@ func TestGraphQLHistoryTransientRetriesKeepQueryAndAccountEveryAttempt(t *testin
 				calls++
 				var req graphqlEnvelope
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Fatal(err)
+					t.Error(err)
+					http.Error(w, "invalid test request", http.StatusBadRequest)
+					return
 				}
 				queries = append(queries, req.Query)
 				if calls < 3 {

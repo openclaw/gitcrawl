@@ -1348,7 +1348,13 @@ func testCloudPublishSendsLocalRows(t *testing.T, archiveAdmission bool) {
 				http.Error(w, "coverage activation mismatch", http.StatusBadRequest)
 				return
 			}
-			publishedDatasets = testGitcrawlDatasetCoverageRows(t, body.Rows)
+			datasets, err := testGitcrawlDatasetCoverageRows(body.Rows)
+			if err != nil {
+				t.Error(err)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
+			}
+			publishedDatasets = datasets
 			for _, row := range body.Rows {
 				if row[len(row)-1] != body.MutationToken {
 					http.Error(w, "coverage token mismatch", http.StatusBadRequest)
@@ -2092,7 +2098,13 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					return
 				}
 				mutationToken = body.MutationToken
-				stagedDatasets = testGitcrawlDatasetCoverageRows(t, body.Rows)
+				datasets, err := testGitcrawlDatasetCoverageRows(body.Rows)
+				if err != nil {
+					t.Error(err)
+					http.Error(w, "invalid test request", http.StatusBadRequest)
+					return
+				}
+				stagedDatasets = datasets
 				if got := fmt.Sprint(body.Rows[0][5]); got == concurrentDatasetGeneratedAt {
 					t.Errorf("loser generation unexpectedly equals independent winner generation %q", got)
 					http.Error(w, "invalid test request", http.StatusBadRequest)
@@ -2296,45 +2308,39 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 	}
 }
 
-func testGitcrawlDatasetCoverageRows(
-	t *testing.T,
-	rows [][]any,
-) []crawlremote.DatasetCoverage {
-	t.Helper()
+func testGitcrawlDatasetCoverageRows(rows [][]any) ([]crawlremote.DatasetCoverage, error) {
 	datasets := make([]crawlremote.DatasetCoverage, 0, len(rows))
 	for _, row := range rows {
 		if len(row) != len(gitcrawlCloudCoverageColumns) {
-			t.Fatalf("coverage row columns = %d, want %d", len(row), len(gitcrawlCloudCoverageColumns))
-		}
-		number := func(value any) int64 {
-			t.Helper()
-			switch typed := value.(type) {
-			case float64:
-				return int64(typed)
-			case int64:
-				return typed
-			default:
-				t.Fatalf("coverage count type = %T", value)
-				return 0
-			}
+			return nil, fmt.Errorf("coverage row columns = %d, want %d", len(row), len(gitcrawlCloudCoverageColumns))
 		}
 		complete, ok := row[6].(bool)
 		if !ok {
-			t.Fatalf("coverage complete type = %T", row[6])
+			return nil, fmt.Errorf("coverage complete type = %T", row[6])
 		}
-		covered := number(row[3])
+		var counts [3]int64
+		for index, value := range row[1:4] {
+			switch typed := value.(type) {
+			case float64:
+				counts[index] = int64(typed)
+			case int64:
+				counts[index] = typed
+			default:
+				return nil, fmt.Errorf("coverage count type = %T", value)
+			}
+		}
 		datasets = append(datasets, crawlremote.DatasetCoverage{
 			Dataset:            fmt.Sprint(row[0]),
-			RowCount:           number(row[1]),
-			EligibleCount:      number(row[2]),
-			CoveredCount:       covered,
-			FreshCount:         covered,
+			RowCount:           counts[0],
+			EligibleCount:      counts[1],
+			CoveredCount:       counts[2],
+			FreshCount:         counts[2],
 			MaxSourceAt:        fmt.Sprint(row[4]),
 			DatasetGeneratedAt: fmt.Sprint(row[5]),
 			Complete:           complete,
 		})
 	}
-	return datasets
+	return datasets, nil
 }
 
 func TestCloudPublishRejectsIncompleteHydrationBeforeRemoteMutation(t *testing.T) {
