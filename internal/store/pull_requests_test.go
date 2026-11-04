@@ -68,14 +68,6 @@ func TestPullRequestCacheRoundTripAndWorkflowFilters(t *testing.T) {
 	if len(cache.Checks) != 2 || cache.Checks[0].Name != "a-check" || cache.Checks[1].Conclusion != "success" {
 		t.Fatalf("checks = %+v", cache.Checks)
 	}
-	apiChecks, err := st.PullRequestChecksAPIOrder(ctx, threadID)
-	if err != nil {
-		t.Fatalf("api-order checks: %v", err)
-	}
-	if len(apiChecks) != 2 || apiChecks[0].Name != "z-check" || apiChecks[1].Name != "a-check" {
-		t.Fatalf("api-order checks = %+v", apiChecks)
-	}
-
 	mainRuns, err := st.ListWorkflowRuns(ctx, repoID, WorkflowRunListOptions{Branch: "main", HeadSHA: "head", Limit: 5})
 	if err != nil {
 		t.Fatalf("list filtered runs: %v", err)

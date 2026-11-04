@@ -137,21 +137,21 @@ func TestSyncCheckRunPageOverlap(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		beforeChecks, err = st.PullRequestChecksAPIOrder(ctx, before.Detail.ThreadID)
+		beforeChecks, err = st.PullRequestChecks(ctx, before.Detail.ThreadID)
 		if err != nil || len(beforeChecks) != 4 {
 			t.Fatalf("stored check count: %+v err=%v", beforeChecks, err)
 		}
-		check := beforeChecks[0]
+		check := beforeChecks[3]
 		if check.Name != "test" || check.Status != "completed" || check.Conclusion != "success" ||
 			check.WorkflowName != "CI" || check.FetchedAt != now.Format(time.RFC3339Nano) ||
 			!strings.Contains(check.RawJSON, `"new":true`) || strings.Contains(check.RawJSON, `"old"`) {
 			t.Fatalf("later fetched check not retained: %+v", check)
 		}
 		requireRawProviderID(t, check.RawJSON, "9007199254740992", "id")
-		requireRawProviderID(t, beforeChecks[1].RawJSON, "9007199254740993", "id")
-		if beforeChecks[1].Name != "other" || beforeChecks[2].Name != "anonymous" || beforeChecks[3].Name != "anonymous" ||
+		requireRawProviderID(t, beforeChecks[2].RawJSON, "9007199254740993", "id")
+		if beforeChecks[0].Name != "anonymous" || beforeChecks[1].Name != "anonymous" || beforeChecks[2].Name != "other" ||
 			len(before.Files) != 2 || before.Files[0].Status != "removed" || before.Files[1].Status != "added" || len(before.Commits) != 1 {
-			t.Fatalf("API order or sibling identities changed: checks=%+v files=%+v commits=%+v", beforeChecks, before.Files, before.Commits)
+			t.Fatalf("check identities or sibling order changed: checks=%+v files=%+v commits=%+v", beforeChecks, before.Files, before.Commits)
 		}
 		assertChildReservation(t, ctx, st, before.Detail.ThreadID, store.ThreadChildPullRequestChecks, int64(pass))
 		if pass == 1 {
@@ -180,7 +180,7 @@ func TestSyncCheckRunPageOverlap(t *testing.T) {
 	}
 	unchangedChecks := func() {
 		t.Helper()
-		got, err := st.PullRequestChecksAPIOrder(ctx, before.Detail.ThreadID)
+		got, err := st.PullRequestChecks(ctx, before.Detail.ThreadID)
 		if err != nil || !reflect.DeepEqual(got, beforeChecks) {
 			t.Fatalf("unselected or failed check snapshot changed: %+v err=%v", got, err)
 		}
