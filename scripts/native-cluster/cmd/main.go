@@ -293,27 +293,6 @@ func durable(path string, value any, replace bool) error {
 	return d.Sync()
 }
 
-func checkIdentityConflict(dir string, snap store.NativeClusterSnapshot) error {
-	b, e := os.ReadFile(filepath.Join(dir, "identity-conflict.json"))
-	if os.IsNotExist(e) {
-		return nil
-	}
-	if e != nil {
-		return e
-	}
-	if len(b) > 4096 {
-		return fmt.Errorf("identity-conflict proof exceeds bound")
-	}
-	var r cacheReceipt
-	if e = json.Unmarshal(b, &r); e != nil {
-		return e
-	}
-	if r.InputSHA256 == snap.InputSHA256 && r.StateSHA256 == snap.StateSHA256 {
-		return fmt.Errorf("partial_identity_conflict: unchanged input/curation; operator resolution required")
-	}
-	return nil
-}
-
 func readRetainedPlan(path string) ([]byte, error) {
 	f, e := os.Open(path)
 	if e != nil {

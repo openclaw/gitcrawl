@@ -162,3 +162,16 @@ No archive schema or production save-mode semantics changed.
   admission, quarantine, rollback, and recovery proofs; no test is weakened.
 
 No live archives, producer deployment, controller operation, or release changes.
+
+## Obsolete native identity conflict checks
+
+- Removed `checkIdentityConflict` and its dedicated test: production never
+  called this receipt reader, so the test did not prove unchanged-graph skipping.
+- Removed the test-only `NativeCheckClusterPlan` preflight API. The subset fixture
+  now calls the actual `NativePlanClusters` path and requires ambiguous selected
+  IDs and both prior identities to be quarantined with no publication targets.
+  Independent candidates must remain publishable.
+- Keep the actual publication, quarantine, rollback, and recovery proofs, along
+  with conflict diagnostic writing recognized by historical maintenance clients.
+
+No archive schema, controller, deployment, or active publication behavior changed.
