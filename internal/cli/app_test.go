@@ -2094,7 +2094,9 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 				mutationToken = body.MutationToken
 				stagedDatasets = testGitcrawlDatasetCoverageRows(t, body.Rows)
 				if got := fmt.Sprint(body.Rows[0][5]); got == concurrentDatasetGeneratedAt {
-					t.Fatalf("loser generation unexpectedly equals independent winner generation %q", got)
+					t.Errorf("loser generation unexpectedly equals independent winner generation %q", got)
+					http.Error(w, "invalid test request", http.StatusBadRequest)
+					return
 				}
 				for index := range stagedDatasets {
 					stagedDatasets[index].DatasetGeneratedAt = concurrentDatasetGeneratedAt
@@ -4045,7 +4047,9 @@ func TestSyncCreatesLocalDatabaseBelowUnrelatedGitMetadata(t *testing.T) {
 		case "/repos/openclaw/openclaw/issues/101":
 			_ = json.NewEncoder(w).Encode(githubIssueJSON(101, "issue", "Git metadata regression"))
 		default:
-			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+			t.Errorf("unexpected GitHub path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -6188,16 +6192,22 @@ func TestCommandFlowCoversSearchEmbedNeighborsClusterDetailRunsAndRefresh(t *tes
 
 	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/embeddings" {
-			t.Fatalf("unexpected OpenAI path: %s", r.URL.Path)
+			t.Errorf("unexpected OpenAI path: %s", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-openai-key" {
-			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			t.Errorf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		var payload struct {
 			Input []string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode embeddings request: %v", err)
+			t.Errorf("decode embeddings request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		data := make([]map[string]any, 0, len(payload.Input))
 		for index, text := range payload.Input {
@@ -6414,17 +6424,23 @@ func TestNeighborsBackfillsMissingAndStaleTargetEmbedding(t *testing.T) {
 	var calls atomic.Int64
 	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/embeddings" {
-			t.Fatalf("unexpected OpenAI path: %s", r.URL.Path)
+			t.Errorf("unexpected OpenAI path: %s", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		calls.Add(1)
 		var payload struct {
 			Input []string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode embeddings request: %v", err)
+			t.Errorf("decode embeddings request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if len(payload.Input) != 1 {
-			t.Fatalf("neighbors backfill should embed one row, got %d inputs", len(payload.Input))
+			t.Errorf("neighbors backfill should embed one row, got %d inputs", len(payload.Input))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{{"index": 0, "embedding": []float64{1, 0}}},
@@ -6640,7 +6656,9 @@ func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
-			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			t.Errorf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		switch r.URL.Path {
 		case "/repos/openclaw/openclaw":
@@ -6660,7 +6678,9 @@ func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T)
 		case "/repos/openclaw/openclaw/pulls/102/comments":
 			_ = json.NewEncoder(w).Encode([]map[string]any{githubCommentJSON(1004, "review line")})
 		default:
-			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+			t.Errorf("unexpected GitHub path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -6819,7 +6839,9 @@ func testFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T, tokenComma
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+expectedToken {
-			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			t.Errorf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("X-RateLimit-Limit", "5000")
 		w.Header().Set("X-RateLimit-Remaining", "4990")
@@ -6870,11 +6892,15 @@ func testFillPRDetailsHydratesMissingPullRequestDetails(t *testing.T, tokenComma
 			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://example.invalid/check"}}})
 		case "/repos/openclaw/gitcrawl/actions/runs":
 			if r.URL.Query().Get("head_sha") != "head-sha" {
-				t.Fatalf("workflow runs query = %s", r.URL.RawQuery)
+				t.Errorf("workflow runs query = %s", r.URL.RawQuery)
+				http.Error(w, "invalid test request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{{"id": 99, "run_number": 7, "head_sha": "head-sha", "status": "completed", "conclusion": "success", "name": "CI", "html_url": "https://example.invalid/run", "created_at": now, "updated_at": now}}})
 		default:
-			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+			t.Errorf("unexpected GitHub path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer server.Close()
@@ -6963,7 +6989,9 @@ func TestFillPRDetailsDefaultRateLimitFloorUsesLiveSharedQuota(t *testing.T) {
 	var rateStatusCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/rate_limit" {
-			t.Fatalf("unexpected request after low shared quota: %s", r.URL.Path)
+			t.Errorf("unexpected request after low shared quota: %s", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		rateStatusCalls.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{
@@ -7075,7 +7103,9 @@ func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.
 	var coreCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-gh-token" {
-			t.Fatalf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			t.Errorf("authorization mismatch: present=%t length=%d", got != "", len(got))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if r.URL.Path == "/rate_limit" {
 			remaining := 12 - int(rateStatusCalls.Add(1))
@@ -7096,7 +7126,9 @@ func TestFillPRDetailsReserveRateLimitStopsBeforeCrossingDuringBatch(t *testing.
 			return
 		}
 		if r.URL.Path != "/repos/openclaw/gitcrawl" {
-			t.Fatalf("first guarded request path = %q", r.URL.Path)
+			t.Errorf("first guarded request path = %q", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345, "full_name": "openclaw/gitcrawl"})
 	}))
@@ -7246,20 +7278,26 @@ func TestRefreshRunsSyncEmbedAndClusterWithLocalServers(t *testing.T) {
 				"reviewThreads": map[string]any{"nodes": []map[string]any{}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}},
 			}}}})
 		default:
-			t.Fatalf("unexpected GitHub path: %s", r.URL.String())
+			t.Errorf("unexpected GitHub path: %s", r.URL.String())
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 	}))
 	defer githubServer.Close()
 
 	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/embeddings" {
-			t.Fatalf("unexpected OpenAI path: %s", r.URL.Path)
+			t.Errorf("unexpected OpenAI path: %s", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		var payload struct {
 			Input []string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode embeddings request: %v", err)
+			t.Errorf("decode embeddings request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		data := make([]map[string]any, 0, len(payload.Input))
 		for index := range payload.Input {
@@ -7394,7 +7432,9 @@ func TestEmbedRunPartialOnSomeFailedBatches(t *testing.T) {
 			Input []string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode: %v", err)
+			t.Errorf("decode: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		// First input is permanently bad — return non-retryable 400.
 		if len(payload.Input) == 1 && strings.Contains(payload.Input[0], "Gateway websocket stalls") {
@@ -9300,13 +9340,17 @@ func TestRefreshEmbedsAndClustersWithoutSync(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/embeddings" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		var request struct {
 			Input []string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		response := struct {
 			Data []struct {
@@ -9326,7 +9370,8 @@ func TestRefreshEmbedsAndClustersWithoutSync(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
-			t.Fatalf("encode response: %v", err)
+			t.Errorf("encode response: %v", err)
+			return
 		}
 	}))
 	defer server.Close()

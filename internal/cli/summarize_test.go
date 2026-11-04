@@ -80,16 +80,22 @@ func TestSummarizeCommandPersistsCurrentRevisionSummary(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.URL.Path != "/responses" {
-			t.Fatalf("path = %q", r.URL.Path)
+			t.Errorf("path = %q", r.URL.Path)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		var payload struct {
 			Input string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if !strings.Contains(payload.Input, "Gateway reconnect loop") {
-			t.Fatalf("input = %q", payload.Input)
+			t.Errorf("input = %q", payload.Input)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"output": []map[string]any{{
@@ -233,7 +239,9 @@ func TestSummarizeCommandRecordsPartialAPIResults(t *testing.T) {
 			Input string `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
 		}
 		if failAll || strings.Contains(payload.Input, "number: #43") {
 			w.WriteHeader(http.StatusBadRequest)

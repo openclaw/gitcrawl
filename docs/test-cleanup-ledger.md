@@ -225,3 +225,19 @@ All HTTP responses are synthetic and local. Production pagination is unchanged.
   reproduce connection EOF before the fix and retain their diagnostics with
   HTTP 400 afterward. Full Go/static gates, provider race tests, independent
   review, and PR CI validate synthetic local fixtures; no live APIs or releases.
+
+## CLI HTTP fixture failures
+
+- Replaced 29 fatal request assertions in CLI HTTP fixture callbacks with
+  nonfatal errors, HTTP 400, and immediate returns. Preserve every request
+  condition, diagnostic, successful response, persisted archive check, and
+  root-test fatal assertion.
+- Report the response-encoding failure nonfatally and return without attempting
+  another response, since headers may already be committed. A forced write error
+  confirms the real refresh handler now returns while retaining its diagnostic.
+- Forced refresh, summarize, and stale-cache search failures reproduce EOF
+  before the fix and keep their original diagnostics with HTTP 400 afterward.
+  Race checks cover all 15 affected CLI tests; full Go/static gates, independent
+  code review, and PR CI validate the branch. Local checks after the baseline
+  probes use temporary homes/configs/caches and SQLite archives; no live providers
+  or releases.
