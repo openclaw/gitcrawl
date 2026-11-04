@@ -164,26 +164,5 @@ func sqliteStoreHealthWithOpen(ctx context.Context, path string, open func(conte
 		return err
 	}
 	defer st.Close()
-	rows, err := st.DB().QueryContext(ctx, `pragma quick_check`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var problems []string
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			return err
-		}
-		if strings.TrimSpace(line) != "ok" {
-			problems = append(problems, line)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(problems) > 0 {
-		return fmt.Errorf("sqlite quick_check failed: %s", strings.Join(problems, "; "))
-	}
-	return nil
+	return sqliteQuickCheck(ctx, st.DB())
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -121,7 +122,7 @@ func sqliteLockDiagnostic(ctx context.Context, dbPath string) lockDiagnostic {
 		return out
 	}
 	out.ReadOnlyOpen = "ok"
-	if err := sqliteQuickCheck(ctx, st); err != nil {
+	if err := sqliteQuickCheck(ctx, st.DB()); err != nil {
 		out.QuickCheck = "error"
 		out.ArchiveHealth = "error"
 		out.Error = err.Error()
@@ -136,8 +137,8 @@ func sqliteLockDiagnostic(ctx context.Context, dbPath string) lockDiagnostic {
 	return out
 }
 
-func sqliteQuickCheck(ctx context.Context, st *crawlstore.Store) error {
-	rows, err := st.DB().QueryContext(ctx, `pragma quick_check`)
+func sqliteQuickCheck(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `pragma quick_check`)
 	if err != nil {
 		return err
 	}
