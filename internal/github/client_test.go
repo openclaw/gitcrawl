@@ -439,65 +439,46 @@ func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
 	}
 }
 
-func TestListPullReviewThreadsRejectsEmptyEndCursor(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) > 8 {
-			http.Error(w, "stuck pagination", http.StatusInternalServerError)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-			"reviewThreads": map[string]any{
-				"nodes":    []map[string]any{{"id": "PRRT_1"}},
-				"pageInfo": map[string]any{"hasNextPage": true, "endCursor": ""},
-			},
-		}}}})
-	}))
-	defer server.Close()
+func TestListPullReviewThreadsRejectsInvalidEndCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cursor    string
+		wantError string
+		wantCalls int32
+	}{
+		{name: "empty", wantError: "review threads page missing endCursor", wantCalls: 1},
+		{name: "repeated", cursor: "thread-cursor-1", wantError: "review threads page repeated endCursor", wantCalls: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) > 8 {
+					http.Error(w, "stuck pagination", http.StatusInternalServerError)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+					"reviewThreads": map[string]any{
+						"nodes":    []map[string]any{{"id": "PRRT_1"}},
+						"pageInfo": map[string]any{"hasNextPage": true, "endCursor": tc.cursor},
+					},
+				}}}})
+			}))
+			defer server.Close()
 
-	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err := client.ListPullReviewThreads(ctx, "openclaw", "gitcrawl", 8, nil)
-	if err == nil {
-		t.Fatal("expected empty endCursor error")
-	}
-	if !strings.Contains(err.Error(), "missing endCursor") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("calls = %d, want 1", got)
-	}
-}
-
-func TestListPullReviewThreadsRejectsRepeatedEndCursor(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) > 8 {
-			http.Error(w, "stuck pagination", http.StatusInternalServerError)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-			"reviewThreads": map[string]any{
-				"nodes":    []map[string]any{{"id": "PRRT_1"}},
-				"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "thread-cursor-1"},
-			},
-		}}}})
-	}))
-	defer server.Close()
-
-	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err := client.ListPullReviewThreads(ctx, "openclaw", "gitcrawl", 8, nil)
-	if err == nil {
-		t.Fatal("expected repeated endCursor error")
-	}
-	if !strings.Contains(err.Error(), "repeated endCursor") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("calls = %d, want 2", got)
+			client := New(Options{BaseURL: server.URL, PageDelay: -1})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, err := client.ListPullReviewThreads(ctx, "openclaw", "gitcrawl", 8, nil)
+			if err == nil {
+				t.Fatal("expected invalid endCursor error")
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v", err)
+			}
+			if got := calls.Load(); got != tc.wantCalls {
+				t.Fatalf("calls = %d, want %d", got, tc.wantCalls)
+			}
+		})
 	}
 }
 
@@ -549,62 +530,74 @@ func TestListPullReviewThreadsPaginatesReviewThreads(t *testing.T) {
 	}
 }
 
-func TestListPullReviewThreadsRejectsRepeatedCommentEndCursor(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := calls.Add(1)
-		if call > 8 {
-			http.Error(w, "stuck pagination", http.StatusInternalServerError)
-			return
-		}
-		var body graphqlEnvelope
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if call == 1 {
-			if body.Variables["threadID"] != nil {
-				t.Fatalf("first request should fetch review threads, variables=%+v", body.Variables)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-				"reviewThreads": map[string]any{
-					"nodes": []map[string]any{{
-						"id": "PRRT_1",
-						"comments": map[string]any{
-							"nodes":    []map[string]any{{"id": "PRRC_1"}},
-							"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "comment-cursor-1"},
+func TestListPullReviewThreadsRejectsInvalidCommentEndCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cursor    string
+		wantError string
+		wantCalls int32
+	}{
+		{name: "empty", wantError: "review thread PRRT_1 comments page missing endCursor", wantCalls: 1},
+		{name: "repeated", cursor: "comment-cursor-1", wantError: "review thread PRRT_1 comments page repeated endCursor", wantCalls: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				call := calls.Add(1)
+				if call > 8 {
+					http.Error(w, "stuck pagination", http.StatusInternalServerError)
+					return
+				}
+				var body graphqlEnvelope
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if call == 1 {
+					if body.Variables["threadID"] != nil {
+						t.Fatalf("first request should fetch review threads, variables=%+v", body.Variables)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+						"reviewThreads": map[string]any{
+							"nodes": []map[string]any{{
+								"id": "PRRT_1",
+								"comments": map[string]any{
+									"nodes":    []map[string]any{{"id": "PRRC_1"}},
+									"pageInfo": map[string]any{"hasNextPage": true, "endCursor": tc.cursor},
+								},
+							}},
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
 						},
-					}},
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-				},
-			}}}})
-			return
-		}
-		if body.Variables["threadID"] != "PRRT_1" || body.Variables["cursor"] != "comment-cursor-1" {
-			t.Fatalf("comment page variables = %+v", body.Variables)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-			"node": map[string]any{
-				"comments": map[string]any{
-					"nodes":    []map[string]any{{"id": "PRRC_2"}},
-					"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "comment-cursor-1"},
-				},
-			},
-		}})
-	}))
-	defer server.Close()
+					}}}})
+					return
+				}
+				if body.Variables["threadID"] != "PRRT_1" || body.Variables["cursor"] != tc.cursor {
+					t.Fatalf("comment page variables = %+v", body.Variables)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+					"node": map[string]any{
+						"comments": map[string]any{
+							"nodes":    []map[string]any{{"id": "PRRC_2"}},
+							"pageInfo": map[string]any{"hasNextPage": true, "endCursor": tc.cursor},
+						},
+					},
+				}})
+			}))
+			defer server.Close()
 
-	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err := client.ListPullReviewThreads(ctx, "openclaw", "gitcrawl", 8, nil)
-	if err == nil {
-		t.Fatal("expected repeated comment endCursor error")
-	}
-	if !strings.Contains(err.Error(), "repeated endCursor") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("calls = %d, want 2", got)
+			client := New(Options{BaseURL: server.URL, PageDelay: -1})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, err := client.ListPullReviewThreads(ctx, "openclaw", "gitcrawl", 8, nil)
+			if err == nil {
+				t.Fatal("expected invalid comment endCursor error")
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v", err)
+			}
+			if got := calls.Load(); got != tc.wantCalls {
+				t.Fatalf("calls = %d, want %d", got, tc.wantCalls)
+			}
+		})
 	}
 }
 
