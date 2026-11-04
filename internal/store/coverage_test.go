@@ -583,17 +583,17 @@ func TestDurableClusterLifecycleAndClosedSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third thread: %v", err)
 	}
-	if _, err := st.SaveDurableClusters(ctx, 0, nil); err == nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, 0, nil); err == nil {
 		t.Fatal("missing repo id should fail")
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{Members: []DurableClusterMemberInput{{ThreadID: threadIDs[0]}}}}); err == nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{Members: []DurableClusterMemberInput{{ThreadID: threadIDs[0]}}}}); err == nil {
 		t.Fatal("missing stable key should fail")
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{StableKey: "bad", Members: []DurableClusterMemberInput{{ThreadID: 0}}}}); err == nil {
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{StableKey: "bad", Members: []DurableClusterMemberInput{{ThreadID: 0}}}}); err == nil {
 		t.Fatal("invalid member id should fail")
 	}
 	score := 0.91
-	result, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
+	result, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey:              "cluster-key",
 		StableSlug:             "cluster-slug",
 		Title:                  "Cluster title",
@@ -683,7 +683,7 @@ func TestDurableClusterLifecycleAndClosedSummaries(t *testing.T) {
 	if reopened.Cluster.Status != "active" || reopened.Cluster.ClosedAt != "" {
 		t.Fatalf("reopened cluster = %+v", reopened.Cluster)
 	}
-	result, err = st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
+	result, err = st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey:              "cluster-key",
 		RepresentativeThreadID: threadIDs[0],
 		Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0], Role: "canonical"}, {ThreadID: threadIDs[1], Role: "member"}},
@@ -954,7 +954,7 @@ func TestClosedStoreErrorBranches(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t, ctx)
 	repoID, threadIDs := seedVectorThreads(t, ctx, st)
-	if _, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
 		StableKey:              "closed-store",
 		RepresentativeThreadID: threadIDs[0],
 		Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0]}, {ThreadID: threadIDs[1]}},
@@ -999,7 +999,7 @@ func TestClosedStoreErrorBranches(t *testing.T) {
 			return st.ReopenClusterLocally(ctx, repoID, 1)
 		}},
 		{"save durable", func() error {
-			_, err := st.SaveDurableClusters(ctx, repoID, []DurableClusterInput{{
+			_, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
 				StableKey:              "after-close",
 				RepresentativeThreadID: threadIDs[0],
 				Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0]}},

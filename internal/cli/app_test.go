@@ -7643,7 +7643,7 @@ func TestClusterLocalOverrideCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if _, err := st.SaveDurableClusters(ctx, repoID, []store.DurableClusterInput{{
+	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []store.DurableClusterInput{{
 		StableKey:              "cli-cluster",
 		StableSlug:             "cli-cluster",
 		RepresentativeThreadID: firstID,

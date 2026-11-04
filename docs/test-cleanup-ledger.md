@@ -135,3 +135,17 @@ No CLI formatting, provider, archive, or release behavior changed.
   binary decoding, thread-ID lookup, and scope-count coverage.
 
 No query implementation, archive schema, or CLI behavior changed.
+
+## Cluster save modes
+
+- Removed the test-only `SaveDurableClusters` API and its unused combination of
+  member pruning without cluster retirement. Move the 24 fixture calls to the
+  active complete-save API, with the omission-preservation call using partial.
+- Collapse the shared writer's coupled pruning/retirement flags into one
+  completeness flag. Complete, partial, subset, and scoped callers retain their
+  existing behavior and legacy-preservation choices.
+- Keep override replay, representative selection, legacy cleanup, retirement,
+  rejection/rollback, closed-store, and CLI/TUI proofs. Extend the existing
+  partial-member fixture to require removal on a subsequent complete save.
+
+No archive schema or production save-mode semantics changed.

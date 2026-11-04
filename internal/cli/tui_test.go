@@ -4025,7 +4025,7 @@ func seedTUIDurableStore(t *testing.T) (*store.Store, int64, int64) {
 	if err != nil {
 		t.Fatalf("seed second thread: %v", err)
 	}
-	result, err := st.SaveDurableClusters(ctx, repoID, []store.DurableClusterInput{{
+	result, err := st.SaveCompleteDurableClusters(ctx, repoID, []store.DurableClusterInput{{
 		StableKey:              "local-actions-key",
 		StableSlug:             "local-actions",
 		ClusterType:            "duplicate_candidate",
