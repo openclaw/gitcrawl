@@ -467,16 +467,6 @@ func (s *Store) PullRequestCommits(ctx context.Context, threadID int64) ([]PullR
 	return out, nil
 }
 
-func (s *Store) TombstonePullRequestCommit(ctx context.Context, threadID int64, sha, deletedAt, reason string) (bool, error) {
-	if err := validateTombstone(deletedAt, reason); err != nil {
-		return false, fmt.Errorf("tombstone pull request commit: %w", err)
-	}
-	if deletedAt == "" {
-		return false, fmt.Errorf("tombstone pull request commit: deleted_at is required")
-	}
-	return s.tombstonePullRequestCommit(ctx, threadID, sha, deletedAt, reason)
-}
-
 func (s *Store) tombstonePullRequestCommit(ctx context.Context, threadID int64, sha, deletedAt, reason string) (bool, error) {
 	result, err := s.q().ExecContext(ctx, `
 		update pull_request_commits
