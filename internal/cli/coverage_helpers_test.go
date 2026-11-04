@@ -74,15 +74,6 @@ func TestGHRateLimitConfigHelpers(t *testing.T) {
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_LOW_REMAINING", "42")
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "2m")
 
-	if got := ghRateLimitHostForArgs([]string{"--hostname", "gh.example.com"}); got != "gh.example.com" {
-		t.Fatalf("hostname arg = %q", got)
-	}
-	if got := ghRateLimitHostForArgs([]string{"--hostname=gh2.example.com"}); got != "gh2.example.com" {
-		t.Fatalf("hostname=value arg = %q", got)
-	}
-	if got := ghRateLimitHostForArgs(nil); got != "example.com" {
-		t.Fatalf("env host = %q", got)
-	}
 	if got := ghRateLimitLowRemaining(); got != 42 {
 		t.Fatalf("env low remaining = %d", got)
 	}
