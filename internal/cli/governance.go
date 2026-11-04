@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 func (a *App) runCloseThread(ctx context.Context, args []string) error {
@@ -189,108 +191,38 @@ func (a *App) runReopenCluster(ctx context.Context, args []string) error {
 }
 
 func (a *App) runExcludeClusterMember(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("exclude-cluster-member", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	idRaw := fs.String("id", "", "cluster id")
-	numberRaw := fs.String("number", "", "issue or pull request number")
-	reason := fs.String("reason", "CLI manual exclude", "local override reason")
-	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "number": true, "reason": true})); err != nil {
-		return usageErr(err)
-	}
-	a.applyCommandJSON(*jsonOut)
-	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("exclude-cluster-member requires owner/repo"))
-	}
-	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
-	if err != nil {
-		return usageErr(err)
-	}
-	clusterID, number, err := parseClusterMemberCommandIDs("exclude-cluster-member", *idRaw, *numberRaw, owner+"/"+repoName)
-	if err != nil {
-		return usageErr(err)
-	}
-	rt, err := a.openLocalRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer rt.Store.Close()
-	repo, err := rt.repository(ctx, owner, repoName)
-	if err != nil {
-		return err
-	}
-	override, err := rt.Store.ExcludeClusterMemberLocally(ctx, repo.ID, int64(clusterID), number, *reason)
-	if err != nil {
-		return err
-	}
-	return a.writeOutput("exclude-cluster-member", map[string]any{
-		"repository": repo.FullName,
-		"override":   override,
-		"excluded":   true,
-	}, true)
+	return a.runClusterMemberCommand(ctx, args, "exclude-cluster-member", "CLI manual exclude", "excluded", (*store.Store).ExcludeClusterMemberLocally)
 }
 
 func (a *App) runIncludeClusterMember(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("include-cluster-member", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	idRaw := fs.String("id", "", "cluster id")
-	numberRaw := fs.String("number", "", "issue or pull request number")
-	reason := fs.String("reason", "CLI manual include", "local override reason")
-	jsonOut := fs.Bool("json", false, "write JSON output")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "number": true, "reason": true})); err != nil {
-		return usageErr(err)
-	}
-	a.applyCommandJSON(*jsonOut)
-	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("include-cluster-member requires owner/repo"))
-	}
-	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
-	if err != nil {
-		return usageErr(err)
-	}
-	clusterID, number, err := parseClusterMemberCommandIDs("include-cluster-member", *idRaw, *numberRaw, owner+"/"+repoName)
-	if err != nil {
-		return usageErr(err)
-	}
-	rt, err := a.openLocalRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer rt.Store.Close()
-	repo, err := rt.repository(ctx, owner, repoName)
-	if err != nil {
-		return err
-	}
-	override, err := rt.Store.IncludeClusterMemberLocally(ctx, repo.ID, int64(clusterID), number, *reason)
-	if err != nil {
-		return err
-	}
-	return a.writeOutput("include-cluster-member", map[string]any{
-		"repository": repo.FullName,
-		"override":   override,
-		"included":   true,
-	}, true)
+	return a.runClusterMemberCommand(ctx, args, "include-cluster-member", "CLI manual include", "included", (*store.Store).IncludeClusterMemberLocally)
 }
 
 func (a *App) runSetClusterCanonical(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("set-cluster-canonical", flag.ContinueOnError)
+	return a.runClusterMemberCommand(ctx, args, "set-cluster-canonical", "CLI manual canonical", "canonical", (*store.Store).SetClusterCanonicalLocally)
+}
+
+func (a *App) runClusterMemberCommand(ctx context.Context, args []string, command, defaultReason, resultKey string,
+	mutate func(*store.Store, context.Context, int64, int64, int, string) (store.ClusterMemberOverride, error),
+) error {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	idRaw := fs.String("id", "", "cluster id")
 	numberRaw := fs.String("number", "", "issue or pull request number")
-	reason := fs.String("reason", "CLI manual canonical", "local override reason")
+	reason := fs.String("reason", defaultReason, "local override reason")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"id": true, "number": true, "reason": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
 	if fs.NArg() != 1 {
-		return usageErr(fmt.Errorf("set-cluster-canonical requires owner/repo"))
+		return usageErr(fmt.Errorf("%s requires owner/repo", command))
 	}
 	owner, repoName, err := parseOwnerRepo(fs.Arg(0))
 	if err != nil {
 		return usageErr(err)
 	}
-	clusterID, number, err := parseClusterMemberCommandIDs("set-cluster-canonical", *idRaw, *numberRaw, owner+"/"+repoName)
+	clusterID, number, err := parseClusterMemberCommandIDs(command, *idRaw, *numberRaw, owner+"/"+repoName)
 	if err != nil {
 		return usageErr(err)
 	}
@@ -303,13 +235,13 @@ func (a *App) runSetClusterCanonical(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	override, err := rt.Store.SetClusterCanonicalLocally(ctx, repo.ID, int64(clusterID), number, *reason)
+	override, err := mutate(rt.Store, ctx, repo.ID, int64(clusterID), number, *reason)
 	if err != nil {
 		return err
 	}
-	return a.writeOutput("set-cluster-canonical", map[string]any{
+	return a.writeOutput(command, map[string]any{
 		"repository": repo.FullName,
 		"override":   override,
-		"canonical":  true,
+		resultKey:    true,
 	}, true)
 }

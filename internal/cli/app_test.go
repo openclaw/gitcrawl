@@ -8032,7 +8032,8 @@ func TestClusterMemberOverrideCommands(t *testing.T) {
 	if err := run.Run(ctx, []string{"--config", configPath, "include-cluster-member", "openclaw/openclaw", "--id", "81", "--number", "81", "--json"}); err != nil {
 		t.Fatalf("include-cluster-member: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"included": true`) {
+	if !strings.Contains(stdout.String(), `"included": true`) ||
+		!strings.Contains(stdout.String(), `"reason": "CLI manual include"`) {
 		t.Fatalf("include-cluster-member output = %q", stdout.String())
 	}
 	stdout.Reset()
@@ -8041,7 +8042,8 @@ func TestClusterMemberOverrideCommands(t *testing.T) {
 	if err := run.Run(ctx, []string{"--config", configPath, "set-cluster-canonical", "openclaw/openclaw", "--id", "81", "--number", "82", "--json"}); err != nil {
 		t.Fatalf("set-cluster-canonical: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"canonical": true`) {
+	if !strings.Contains(stdout.String(), `"canonical": true`) ||
+		!strings.Contains(stdout.String(), `"reason": "CLI manual canonical"`) {
 		t.Fatalf("set-cluster-canonical output = %q", stdout.String())
 	}
 	st, err = store.Open(ctx, dbPath)
