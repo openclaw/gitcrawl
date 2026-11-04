@@ -85,8 +85,19 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           # Release binaries are built with this experiment, so test everything they ship.
-          GOEXPERIMENT=simd go test ./...
-          GOEXPERIMENT=simd GODEBUG=simd=0 go test ./internal/vector ./internal/cli
+          set -euo pipefail
+          (
+            GOEXPERIMENT=simd go test ./... 2>&1 | sed 's/^/[simd] /'
+          ) &
+          simd_pid=$!
+          (
+            GOEXPERIMENT=simd GODEBUG=simd=0 go test ./internal/vector ./internal/cli 2>&1 | sed 's/^/[fallback] /'
+          ) &
+          fallback_pid=$!
+          result=0
+          wait "$simd_pid" || result=1
+          wait "$fallback_pid" || result=1
+          exit "$result"
 
       - name: Compare durable cluster output across SIMD modes
         if: ${{ matrix.os == 'ubuntu-latest' }}

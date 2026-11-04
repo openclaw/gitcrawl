@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run SIMD and forced-fallback CI suites concurrently, preserving both test commands and failing validation if either suite fails.
+
 - Stop advertising the unimplemented `sync-status` stub as a legacy alias in launcher metadata. Use the supported `status --json` command.
 
 - Return usage exit code 2 for invalid `cluster` and `refresh` clustering-shape options, matching other invalid CLI arguments.
