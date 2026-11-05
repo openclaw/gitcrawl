@@ -535,3 +535,17 @@ checks, independent review and platform CI using temporary state only.
 - Validate the existing purge cases against temporary SQLite archives with the
   race detector, static checks, independent review and PR CI. No production
   code, live archives, deployment or releases change.
+
+## Native-cluster SQL fixture and assertion errors
+
+- Check all nine previously ignored fixture mutations and eight assertion-query
+  results in the native cluster publication and combined-overlay tests. Failed
+  clock/backend updates must not skip their intended scenarios, and failed
+  run-count reads must not reuse a prior value.
+- Preserve every SQL literal, fixture, expected value, replay/rollback check and
+  policy/curation refusal. Keep the optional measured-volume test unchanged.
+- Disposable Go overlays reproduce clock/backend mutation and retained-count
+  false greens, then verify targeted failures. Validate healthy real SQLite
+  cases with the race detector, the native overlay suite, static checks,
+  independent review and PR CI. No production code, live archives, deployment
+  or releases change.
