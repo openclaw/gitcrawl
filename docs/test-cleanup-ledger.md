@@ -509,3 +509,18 @@ checks, independent review and platform CI using temporary state only.
   with the race detector and verify the repository-ordering regression still
   fails after fixture removal. Run static checks, independent review and PR CI.
   No production code, live archives, deployment or releases change.
+
+## Review-sync fixture identities and preservation reads
+
+- Remove two redundant identity readbacks, JSON parsing and fallback handling
+  from the review-only sync test. Use the same PR8/R1 identities already written
+  by its fixture, and always exercise the wrong-node rejection assertion.
+- Check all seven retained-data assertion queries and snapshot column/iteration
+  errors. Failed reads must not reuse membership or resolution values, compare
+  two default revision counts, or certify incomplete canonical snapshots.
+- Keep the real temporary SQLite sync path, six snapshot tables, partial-response
+  and cancellation cases, repository rejection and transactional rollback checks.
+  Disposable race-enabled Go overlays reproduce failed-read false greens and
+  verify node-identity and canonical-mutation regressions are still rejected.
+  Run static checks, independent review and PR CI. No production code, live
+  archives, deployment or releases change.
