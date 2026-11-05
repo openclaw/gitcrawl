@@ -325,3 +325,14 @@ Built-CLI checks reproduce false success before the fix; the new regression
 fails on the original guard. Validate corrected CLI behavior, embedding and
 custom-vector race tests, static checks, independent review and full platform CI
 with temporary archives and synthetic credentials only.
+
+## Maintenance suite collection
+
+Move shared cycle setup into a fixture-only mixin so each of the 18 maintenance
+test methods is collected once. Discovery previously ran 46 cases by inheriting
+seven base tests into four other classes. Preserve every method body and helper.
+
+Move the direct runner after all classes: it previously stopped before five
+availability/quarantine tests were defined. Both direct and discovery runners
+now execute the same 18 unique cases. Validate the complete maintenance Python
+suite, static checks, independent review and CI with temporary fixtures only.
