@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the synthetic native producer and graph tests with their store overlay."""
+"""Run synthetic native cluster and code tests with their separate store overlays."""
 
 import json
 import os
@@ -10,36 +10,27 @@ import sys
 import tempfile
 
 
-def main():
-    root = Path(__file__).resolve().parents[2]
-    native = root / "scripts/native-cluster"
+def run_overlay(root, native, store_sources, tag, packages, experiments=()):
     store_tests = sorted(native.glob("*_test.go"))
-    sources = [native / "native_bridge.go", native / "native_cluster.go", *store_tests]
+    sources = [*(native / name for name in store_sources), *store_tests]
     replacements = {
         str(root / "internal/store" / ("native_overlay_" + source.name)): str(source)
         for source in sources
     }
     tests = set()
-    experiments = {
-        "TestPreparedCPU", "TestNativeClusterMeasuredCommit", "TestNativeProducerMeasuredCommit",
-    }
     for source in [*store_tests, *sorted((native / "cmd").glob("*_test.go"))]:
-        package = "internal/store" if source.parent == native else "scripts/native-cluster/cmd"
+        package = "internal/store" if source.parent == native else str(source.parent.relative_to(root))
         names = re.findall(r"(?m)^func (Test[A-Za-z0-9_]+)\(", source.read_text())
         tests.update(("github.com/openclaw/gitcrawl/" + package, name) for name in names if name not in experiments)
     if not tests:
         raise RuntimeError("no native overlay tests found")
     selector = "^(" + "|".join(sorted({name for _, name in tests})) + ")$"
-    packages = [
-        "./internal/store", "./scripts/native-cluster/cmd",
-        "./scripts/native-cluster/exportcmd", "./scripts/native-cluster/readercmd",
-    ]
     with tempfile.TemporaryDirectory(prefix="gitcrawl-native-overlay-") as scratch:
         overlay = Path(scratch) / "overlay.json"
         overlay.write_text(json.dumps({"Replace": replacements}))
         result = subprocess.run(
             [
-                "go", "test", "-json", "-count=1", "-tags=native_cluster_overlay",
+                "go", "test", "-json", "-count=1", "-tags=" + tag,
                 "-overlay=" + str(overlay), "-run=" + selector,
                 *packages,
             ],
@@ -75,8 +66,25 @@ def main():
         if missing_packages:
             print("native packages did not complete: " + ", ".join(missing_packages), file=sys.stderr)
         return result.returncode or 1
-    print(f"{len(tests)} native overlay tests passed; exporter and reader compiled")
+    print(f"{len(tests)} {native.name} overlay tests passed; all consumer packages compiled")
     return 0
+
+
+def main():
+    root = Path(__file__).resolve().parents[2]
+    result = run_overlay(
+        root, root / "scripts/native-cluster", ["native_bridge.go", "native_cluster.go"],
+        "native_cluster_overlay",
+        ["./internal/store", "./scripts/native-cluster/cmd",
+         "./scripts/native-cluster/exportcmd", "./scripts/native-cluster/readercmd"],
+        {"TestPreparedCPU", "TestNativeClusterMeasuredCommit", "TestNativeProducerMeasuredCommit"},
+    )
+    if result:
+        return result
+    return run_overlay(
+        root, root / "scripts/native-code", ["native_store.go"], "native_code_overlay",
+        ["./internal/store", "./scripts/native-code/cmd"],
+    )
 
 
 if __name__ == "__main__":

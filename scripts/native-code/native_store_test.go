@@ -38,7 +38,9 @@ func TestNativeProducerCodeNoopAndRollback(t *testing.T) {
 	}
 	docs[0].Language = "go"
 	// Inject cancellation after a real document insert; old generation must survive.
-	s.DB().Exec("CREATE TRIGGER fail_fixture_code BEFORE INSERT ON code_documents WHEN NEW.path='reject.go' BEGIN SELECT RAISE(ABORT,'synthetic interruption'); END")
+	if _, e := s.DB().Exec("CREATE TRIGGER fail_fixture_code BEFORE INSERT ON code_documents WHEN NEW.path='reject.go' BEGIN SELECT RAISE(ABORT,'synthetic interruption'); END"); e != nil {
+		t.Fatal(e)
+	}
 	next := append(append([]CodeDocument{}, docs...), CodeDocument{Path: "reject.go", Language: "go", ContentHash: "h2", Text: "next", ByteSize: 4, UpdatedAt: snap.IndexedAt})
 	snap.FileCount = 2
 	snap.ByteCount = 8
@@ -66,10 +68,18 @@ func TestNativeProducerExistingWriterNeverMigrates(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.DB().Exec("update thread_observation_sequence set value=123 where id=1")
-	s.DB().Exec("update observation_schema_convergence set checked_observation_sequence=0 where id=1")
-	s.Close()
-	os.Chmod(p, 0640)
+	if _, e := s.DB().Exec("update thread_observation_sequence set value=123 where id=1"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := s.DB().Exec("update observation_schema_convergence set checked_observation_sequence=0 where id=1"); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Chmod(p, 0640); e != nil {
+		t.Fatal(e)
+	}
 	w, e := OpenNativeProducerWriter(ctx, p)
 	if e != nil {
 		t.Fatal(e)
@@ -79,7 +89,9 @@ func TestNativeProducerExistingWriterNeverMigrates(t *testing.T) {
 		t.Fatal(e)
 	}
 	var checked, allocated int64
-	w.DB().QueryRow("select c.checked_observation_sequence,s.value from observation_schema_convergence c join thread_observation_sequence s on s.id=c.id where c.id=1").Scan(&checked, &allocated)
+	if e := w.DB().QueryRow("select c.checked_observation_sequence,s.value from observation_schema_convergence c join thread_observation_sequence s on s.id=c.id where c.id=1").Scan(&checked, &allocated); e != nil {
+		t.Fatal(e)
+	}
 	if checked != 0 || allocated != 123 {
 		t.Fatal("writer performed convergence repair")
 	}
@@ -108,16 +120,24 @@ func TestNativeCodeWriterFlushAndObsoleteReplacement(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.Close()
+	if e := s.Close(); e != nil {
+		t.Fatal(e)
+	}
 	s, e = OpenNativeProducerWriter(ctx, p)
 	if e != nil {
 		t.Fatal(e)
 	}
 	defer s.Close()
 	var level, full, checkpoint int
-	s.DB().QueryRow("pragma synchronous").Scan(&level)
-	s.DB().QueryRow("pragma fullfsync").Scan(&full)
-	s.DB().QueryRow("pragma checkpoint_fullfsync").Scan(&checkpoint)
+	if e := s.DB().QueryRow("pragma synchronous").Scan(&level); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("pragma fullfsync").Scan(&full); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("pragma checkpoint_fullfsync").Scan(&checkpoint); e != nil {
+		t.Fatal(e)
+	}
 	if level < 2 || runtime.GOOS == "darwin" && (full != 1 || checkpoint != 1) {
 		t.Fatalf("writer durability %d %d %d", level, full, checkpoint)
 	}
@@ -133,8 +153,12 @@ func TestNativeCodeWriterFlushAndObsoleteReplacement(t *testing.T) {
 		t.Fatal(e)
 	}
 	var old, foreign int
-	s.DB().QueryRow("select count(*) from code_documents where path='old.go'").Scan(&old)
-	s.DB().QueryRow("select count(*) from code_documents where snapshot_id!=?", id).Scan(&foreign)
+	if e := s.DB().QueryRow("select count(*) from code_documents where path='old.go'").Scan(&old); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("select count(*) from code_documents where snapshot_id!=?", id).Scan(&foreign); e != nil {
+		t.Fatal(e)
+	}
 	if old != 0 || foreign != 0 {
 		t.Fatal("obsolete generation retained in current code index")
 	}
