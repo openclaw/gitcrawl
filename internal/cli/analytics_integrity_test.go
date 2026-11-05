@@ -124,7 +124,9 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 				if _, err = s.DB().Exec("DELETE FROM analytics_coverage"); err != nil {
 					t.Fatal(err)
 				}
-				s.SetAnalyticsState(ctx, "through:fixture/repo", "")
+				if e := s.SetAnalyticsState(ctx, "through:fixture/repo", ""); e != nil {
+					t.Fatal(e)
+				}
 				receipt, _ := json.Marshal(map[string]any{"repository": "fixture/repo", "phase": "complete", "discovery": []map[string]any{{"kind": "issues", "done": 1, "total": 1, "updated_at": baseline}, {"kind": "pullRequests", "done": 1, "total": 1, "updated_at": baseline}}})
 				if err = os.WriteFile(filepath.Join(dir, "status.json"), receipt, 0600); err != nil {
 					t.Fatal(err)
@@ -141,21 +143,29 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 				t.Fatal(err)
 			}
 			var count int
-			s.DB().QueryRow("SELECT count(*) FROM threads WHERE number=2").Scan(&count)
+			if e := s.DB().QueryRow("SELECT count(*) FROM threads WHERE number=2").Scan(&count); e != nil {
+				t.Fatal(e)
+			}
 			if count != 1 {
 				t.Fatal("independent PR never persisted")
 			}
-			s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&count)
+			if e := s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&count); e != nil {
+				t.Fatal(e)
+			}
 			if count != 0 {
 				t.Fatal("poison item hidden by complete=true")
 			}
 			if !brokenDiscovery {
 				var before, after int
-				s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=1 AND operation='graphql_history'").Scan(&before)
+				if e := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=1 AND operation='graphql_history'").Scan(&before); e != nil {
+					t.Fatal(e)
+				}
 				if err = a.analyticsCycle(ctx, s, client, "fixture", "repo"); !errors.Is(err, errAnalyticsIncomplete) {
 					t.Fatalf("unexpected repeat outcome %v", err)
 				}
-				s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=1 AND operation='graphql_history'").Scan(&after)
+				if e := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=1 AND operation='graphql_history'").Scan(&after); e != nil {
+					t.Fatal(e)
+				}
 				if before != after {
 					t.Fatal("review-only failure bypassed core retry backoff repeatedly")
 				}
@@ -179,11 +189,15 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 			if err = s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&count); err != nil || count != 1 {
 				t.Fatalf("verified core baseline did not recover: complete=%d err=%v", count, err)
 			}
-			s.DB().QueryRow("SELECT count(*) FROM threads").Scan(&count)
+			if e := s.DB().QueryRow("SELECT count(*) FROM threads").Scan(&count); e != nil {
+				t.Fatal(e)
+			}
 			if count != 2 {
 				t.Fatalf("wrong recovered content count %d", count)
 			}
-			s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE status='failed'").Scan(&count)
+			if e := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE status='failed'").Scan(&count); e != nil {
+				t.Fatal(e)
+			}
 			if count < 1 {
 				t.Fatal("failure history erased")
 			}
@@ -196,7 +210,9 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 				t.Fatal(err)
 			}
 			var body string
-			s.DB().QueryRow("SELECT body FROM threads WHERE number=2").Scan(&body)
+			if e := s.DB().QueryRow("SELECT body FROM threads WHERE number=2").Scan(&body); e != nil {
+				t.Fatal(e)
+			}
 			if body != "fresh core body" {
 				t.Fatal("review recovery backoff hid a newly discovered core update")
 			}
@@ -215,8 +231,12 @@ func TestAnalyticsLaneMigrationRetainsInflightCursorAndLegacyReceipt(t *testing.
 	if err = s.SaveAnalyticsCoverage(ctx, "fixture/repo", "2026-01-01T11:00:00Z", 10, 20); err != nil {
 		t.Fatal(err)
 	}
-	s.SetAnalyticsState(ctx, "through:fixture/repo", "2026-01-01T11:00:00Z")
-	s.SetAnalyticsState(ctx, "updates:fixture/repo", legacy)
+	if e := s.SetAnalyticsState(ctx, "through:fixture/repo", "2026-01-01T11:00:00Z"); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.SetAnalyticsState(ctx, "updates:fixture/repo", legacy); e != nil {
+		t.Fatal(e)
+	}
 	if err = migrateAnalyticsLanes(ctx, s, "fixture/repo"); err != nil {
 		t.Fatal(err)
 	}
@@ -231,19 +251,30 @@ func TestAnalyticsLaneMigrationRetainsInflightCursorAndLegacyReceipt(t *testing.
 	if cp.Cursor != "opaque-provider-cursor" || cp.Since != "2026-01-01T10:55:00Z" {
 		t.Fatal("in-flight provider cursor reset")
 	}
-	total, _ := s.AnalyticsState(ctx, "total:fixture/repo:issues")
+	total, err := s.AnalyticsState(ctx, "total:fixture/repo:issues")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if total != "10" {
 		t.Fatalf("completed lane total lost: %s", total)
 	}
-	old, _ := s.AnalyticsState(ctx, "updates:fixture/repo")
+	old, err := s.AnalyticsState(ctx, "updates:fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if old != legacy {
 		t.Fatal("legacy evidence overwritten")
 	}
-	s.SetAnalyticsState(ctx, "updates:fixture/repo:pullRequests", "new-progress")
+	if e := s.SetAnalyticsState(ctx, "updates:fixture/repo:pullRequests", "new-progress"); e != nil {
+		t.Fatal(e)
+	}
 	if err = migrateAnalyticsLanes(ctx, s, "fixture/repo"); err != nil {
 		t.Fatal(err)
 	}
-	value, _ = s.AnalyticsState(ctx, "updates:fixture/repo:pullRequests")
+	value, err = s.AnalyticsState(ctx, "updates:fixture/repo:pullRequests")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if value != "new-progress" {
 		t.Fatal("restart reseeded an existing checkpoint")
 	}
@@ -277,7 +308,9 @@ func TestAnalyticsDiscoveryLeavesDueItemsToBoundedRetryScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	var attempts int
-	s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts").Scan(&attempts)
+	if e := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts").Scan(&attempts); e != nil {
+		t.Fatal(e)
+	}
 	if attempts != 24 {
 		t.Fatal("discovery bypassed the retry scheduler")
 	}
