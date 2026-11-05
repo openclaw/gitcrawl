@@ -90,8 +90,12 @@ func TestAnalyticsFailureRecoveryRetainsReceiptsAndFairRetryTimes(t *testing.T) 
 		t.Fatal(err)
 	}
 	var receipts, resolved int
-	s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts").Scan(&receipts)
-	s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=7 AND resolved_at IS NOT NULL").Scan(&resolved)
+	if err := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts").Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=7 AND resolved_at IS NOT NULL").Scan(&resolved); err != nil {
+		t.Fatal(err)
+	}
 	if receipts != 4 || resolved != 1 {
 		t.Fatalf("history lost receipts=%d resolved=%d", receipts, resolved)
 	}
@@ -137,9 +141,15 @@ INSERT INTO threads(id,repo_id,github_id,number,kind,state,title,html_url,labels
 	}
 	var revisions, retained int
 	var membership string
-	s.DB().QueryRow("SELECT count(*) FROM pull_request_review_thread_revisions WHERE thread_id=1").Scan(&revisions)
-	s.DB().QueryRow("SELECT count(*) FROM pull_request_review_threads WHERE thread_id=1 AND deleted_at IS NULL").Scan(&retained)
-	s.DB().QueryRow("SELECT review_thread_ids_json FROM pull_request_review_thread_syncs WHERE thread_id=1").Scan(&membership)
+	if err := s.DB().QueryRow("SELECT count(*) FROM pull_request_review_thread_revisions WHERE thread_id=1").Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("SELECT count(*) FROM pull_request_review_threads WHERE thread_id=1 AND deleted_at IS NULL").Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("SELECT review_thread_ids_json FROM pull_request_review_thread_syncs WHERE thread_id=1").Scan(&membership); err != nil {
+		t.Fatal(err)
+	}
 	if revisions != 2 || retained != 1 || membership != "[]" {
 		t.Fatalf("absence became deletion or history lost: %d %d %s", revisions, retained, membership)
 	}
@@ -148,14 +158,18 @@ INSERT INTO threads(id,repo_id,github_id,number,kind,state,title,html_url,labels
 			t.Fatal("invalid membership was certified")
 		}
 	}
-	s.DB().QueryRow("SELECT review_thread_ids_json FROM pull_request_review_thread_syncs WHERE thread_id=1").Scan(&membership)
+	if err := s.DB().QueryRow("SELECT review_thread_ids_json FROM pull_request_review_thread_syncs WHERE thread_id=1").Scan(&membership); err != nil {
+		t.Fatal(err)
+	}
 	if membership != "[]" {
 		t.Fatal("rejected input changed prior membership")
 	}
 	if err = s.UpsertPullRequestReviewThreads(ctx, 1, "2026-01-01T00:00:00Z", threads); err != nil {
 		t.Fatal(err)
 	}
-	s.DB().QueryRow("SELECT review_thread_ids_json,fetched_at FROM pull_request_review_thread_syncs WHERE thread_id=1").Scan(&membership, &observed)
+	if err := s.DB().QueryRow("SELECT review_thread_ids_json,fetched_at FROM pull_request_review_thread_syncs WHERE thread_id=1").Scan(&membership, &observed); err != nil {
+		t.Fatal(err)
+	}
 	if membership != "[]" || observed != "2026-01-04T00:00:00Z" {
 		t.Fatalf("older observation overwrote newer membership: %s %s", membership, observed)
 	}
@@ -188,8 +202,12 @@ func TestAnalyticsV14MigrationPreservesReceiptsAndCoverageWatermark(t *testing.T
 	defer s.Close()
 	var version, complete int
 	var through string
-	s.DB().QueryRow("PRAGMA user_version").Scan(&version)
-	s.DB().QueryRow("SELECT through,complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&through, &complete)
+	if err := s.DB().QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("SELECT through,complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&through, &complete); err != nil {
+		t.Fatal(err)
+	}
 	cp, err := s.AnalyticsState(ctx, "updates:fixture/repo")
 	if err != nil || version != schemaVersion || through != "2026-01-01T00:00:00Z" || complete != 1 || cp != `{"kind":1,"cursor":"provider-cursor"}` {
 		t.Fatalf("migration changed evidence: %d %s %d %s %v", version, through, complete, cp, err)
@@ -214,8 +232,12 @@ func TestReviewStateFailuresDoNotInvalidateVerifiedCoreCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	var core, review int
-	s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&core)
-	s.DB().QueryRow("SELECT complete FROM analytics_review_state_coverage WHERE repository='fixture/repo'").Scan(&review)
+	if err := s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&core); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("SELECT complete FROM analytics_review_state_coverage WHERE repository='fixture/repo'").Scan(&review); err != nil {
+		t.Fatal(err)
+	}
 	if core != 1 || review != 0 {
 		t.Fatalf("enrichment invalidated core: core=%d review=%d", core, review)
 	}
@@ -226,7 +248,9 @@ func TestReviewStateFailuresDoNotInvalidateVerifiedCoreCoverage(t *testing.T) {
 	if err = s.RecordAnalyticsAttempt(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&core)
+	if err := s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&core); err != nil {
+		t.Fatal(err)
+	}
 	if core != 0 {
 		t.Fatal("core failure left core coverage complete")
 	}
@@ -239,7 +263,6 @@ func TestAnalyticsStatusSelectsRepositoryBeforeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.SaveAnalyticsCoverage(ctx, "fixture/repo", "2026-01-01T00:00:00Z", 1, 2)
 	a := AnalyticsAttempt{Repository: "fixture/repo", Number: 1, Operation: "graphql_history", StartedAt: "2026-01-01T00:00:00Z", FinishedAt: "2026-01-01T00:00:01Z", Status: "success", Evidence: json.RawMessage(`{}`)}
 	if err = s.RecordAnalyticsAttempt(ctx, a); err != nil {
 		t.Fatal(err)
@@ -275,7 +298,9 @@ func TestAnalyticsStatusBeforeCollectionIsUnknown(t *testing.T) {
 		t.Fatalf("invented coverage: %+v", coverage)
 	}
 	var n int
-	s.DB().QueryRow("SELECT count(*) FROM analytics_coverage").Scan(&n)
+	if err := s.DB().QueryRow("SELECT count(*) FROM analytics_coverage").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Fatal("read-only status wrote a baseline")
 	}
@@ -348,7 +373,9 @@ func TestAnalyticsRecoveryRequiresAnAcceptedMembershipObservation(t *testing.T) 
 		t.Fatal(err)
 	}
 	var status, class string
-	s.DB().QueryRow("SELECT status,error_class FROM analytics_fetch_attempts ORDER BY id DESC LIMIT 1").Scan(&status, &class)
+	if err := s.DB().QueryRow("SELECT status,error_class FROM analytics_fetch_attempts ORDER BY id DESC LIMIT 1").Scan(&status, &class); err != nil {
+		t.Fatal(err)
+	}
 	if status != "failed" || class != "unapplied_review_state" {
 		t.Fatal("fetch success certified missing membership")
 	}
@@ -431,12 +458,16 @@ func TestReviewRetryFairShareAndExplicitUnavailableBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status string
-	s.DB().QueryRow("select status from analytics_fetch_attempts order by id desc limit 1").Scan(&status)
+	if err := s.DB().QueryRow("select status from analytics_fetch_attempts order by id desc limit 1").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
 	if status != "success" {
 		t.Fatal("review success not proven", status)
 	}
 	var unresolved int
-	s.DB().QueryRow("select count(*) from analytics_retries where operation='graphql_history' and resolved_at is null").Scan(&unresolved)
+	if err := s.DB().QueryRow("select count(*) from analytics_retries where operation='graphql_history' and resolved_at is null").Scan(&unresolved); err != nil {
+		t.Fatal(err)
+	}
 	if unresolved != 1 {
 		t.Fatal("review-only success cleared core failure")
 	}
