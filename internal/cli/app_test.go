@@ -5682,7 +5682,7 @@ func TestGlobalCommandBranches(t *testing.T) {
 		{args: []string{"--bad"}, wantErr: true, exitCode: 2},
 		{args: []string{"--format", "bad", "version"}, wantErr: true, exitCode: 2},
 		{args: []string{"serve"}, wantErr: true, exitCode: 2},
-		{args: []string{"completion"}, wantErr: true, exitCode: 1},
+		{args: []string{"completion"}, wantErr: true, exitCode: 2},
 		{args: []string{"unknown"}, wantErr: true, exitCode: 2},
 		{args: []string{"cluster-explain"}, wantErr: true, exitCode: 2},
 	}

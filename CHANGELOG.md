@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject unavailable command names such as `completion` and `sync-status` as unknown commands with usage exit code 2 instead of a runtime placeholder error.
+
 - Run SIMD and forced-fallback CI suites concurrently, preserving both test commands and failing validation if either suite fails.
 
 - Stop advertising the unimplemented `sync-status` stub as a legacy alias in launcher metadata. Use the supported `status --json` command.
