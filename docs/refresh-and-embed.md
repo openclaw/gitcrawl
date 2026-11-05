@@ -37,7 +37,8 @@ Disable any stage with `--no-sync`, `--no-embed`, `--no-cluster`. The remaining 
 | embed | `--limit` |
 | cluster | `--threshold` (0.80), `--min-size` (1), `--max-cluster-size` (40), `--k` (16), `--cross-kind-threshold` (0.93), `--strict-vectors` |
 
-`--include-code` is accepted but currently a no-op.
+Code hydration is unavailable. `--include-code` is rejected; remove it from
+existing invocations.
 
 The cluster stage excludes stale configured vectors and reports incomplete coverage as partial without retiring unprocessed clusters. When no fresh configured vectors exist, the default keeps the established compatible fallback to existing vectors. Use `--strict-vectors` to fail before mutation unless configured coverage is complete, run `gitcrawl embed owner/repo` to repair coverage, or use `--no-cluster` when intentionally refreshing only upstream stages.
 
