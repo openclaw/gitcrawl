@@ -18,14 +18,7 @@ import (
 func TestOpenMigratesFamilyTombstonesLosslessly(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open seed store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl", RawJSON: "{}", UpdatedAt: "2026-07-18T00:00:00Z"})
-	if err != nil {
-		t.Fatalf("seed repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-18T00:00:00Z")
 	threadID, err := st.UpsertThread(ctx, Thread{
 		RepoID: repoID, GitHubID: "17", Number: 17, Kind: "pull_request", State: "open",
 		Title: "legacy family rows", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/17",
@@ -1608,18 +1601,7 @@ func seedMigrationPullRequest(t *testing.T, headSHA string, sequence int64) (str
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open seed store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		_ = st.Close()
-		t.Fatalf("seed repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: headSHA, Number: 101, Kind: "pull_request", State: "open",
 		Title: "migration seed", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/101",

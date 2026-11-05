@@ -704,17 +704,7 @@ func TestOpenMigrationPreservesClocklessStaleRevision(t *testing.T) {
 func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: "sequence-floor", Number: 102, Kind: "issue", State: "open",
 		Title: "sequence floor", Body: "reconcile once during migration",
@@ -798,17 +788,7 @@ func TestMigrationReconcilesThreadObservationSequenceOnce(t *testing.T) {
 func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: "evidence-migration", Number: 103, Kind: "issue", State: "open",
 		Title: "evidence migration", Body: "backfill durable reservation",
@@ -899,17 +879,7 @@ func TestMigrationBackfillsThreadEvidenceObservationSequence(t *testing.T) {
 func TestMigrationPreservesParentEvidenceClockForImmediateChildRefresh(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: "evidence-clock-migration", Number: 105,
 		Kind: "issue", State: "open", Title: "stable parent",
@@ -1010,17 +980,7 @@ func TestMigrationPreservesParentEvidenceClockForImmediateChildRefresh(t *testin
 func TestMigrationBackfillsActualThreadEvidenceTuple(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: "evidence-tuple", Number: 104, Kind: "issue", State: "open",
 		Title: "evidence tuple", Body: "preserve one actual revision order",
@@ -1112,17 +1072,7 @@ func TestMigrationBackfillsActualThreadEvidenceTuple(t *testing.T) {
 func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	upsert, err := st.UpsertThreadObservation(ctx, Thread{
 		RepoID: repoID, GitHubID: "104", Number: 104, Kind: "pull_request", State: "open",
 		Title: "v9 evidence", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/104",
@@ -1203,17 +1153,7 @@ func TestMigrationBackfillsV9CompleteEvidenceFamilies(t *testing.T) {
 func TestMigrationBackfillsLegacyV10WorkflowRunReservation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	upsert, err := st.UpsertThreadObservation(ctx, Thread{
 		RepoID: repoID, GitHubID: "105", Number: 105, Kind: "pull_request", State: "open",
 		Title: "v10 workflow fence", HTMLURL: "https://github.com/openclaw/gitcrawl/pull/105",
@@ -2288,18 +2228,7 @@ func TestPrunePortablePayloads(t *testing.T) {
 func TestHydrationRefreshesPortableBodyMetadata(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-29T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repo: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-29T00:00:00Z")
 	threadID, err := st.UpsertThread(ctx, Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "full cloud archive", Body: "old",
