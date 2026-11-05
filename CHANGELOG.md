@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject unsupported embedding bases before task selection so empty repositories no longer report successful embedding for unsupported configurations. External vector bases remain available for clustering.
+
 - Reject unavailable command names such as `completion` and `sync-status` as unknown commands with usage exit code 2 instead of a runtime placeholder error.
 
 - Run SIMD and forced-fallback CI suites concurrently, preserving both test commands and failing validation if either suite fails.

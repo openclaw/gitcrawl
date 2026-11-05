@@ -313,3 +313,15 @@ Temporary JSON writer overlays adding a non-JSON prefix or a second document
 pass the original rows; each is rejected by all three repaired rows under the
 race detector. Built-CLI checks, focused race/static gates, independent review
 and platform CI validate isolated temporary configuration only.
+
+## Unsupported empty embedding bases
+
+Replace the legacy-only embedding guard with the store's supported-basis check.
+Move the weak legacy-basis error assertion into a focused empty-repository test
+covering all three supported bases, the legacy name and an external vector basis.
+Clustering with external vectors remains supported; empty runs make no API calls.
+
+Built-CLI checks reproduce false success before the fix; the new regression
+fails on the original guard. Validate corrected CLI behavior, embedding and
+custom-vector race tests, static checks, independent review and full platform CI
+with temporary archives and synthetic credentials only.
