@@ -65,11 +65,24 @@ func TestPairCacheRejectsShapeAndInvalidatesIdentity(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	raw, _ := os.ReadFile(filepath.Join(dir, id+".json"))
-	for _, bad := range []string{"partial", "pair_count", "endpoint", "score"} {
+	raw, e := os.ReadFile(filepath.Join(dir, id+".json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, parent, e := loadPairs(dir, s); e != nil || parent != id {
+		t.Fatalf("load healthy cache: parent=%q err=%v", parent, e)
+	}
+	for _, bad := range []struct{ name, wantError string }{
+		{"partial", "pair-cache completeness/lineage invalid"},
+		{"pair_count", "pair-cache completeness/lineage invalid"},
+		{"endpoint", "pair-cache edge shape invalid"},
+		{"score", "pair-cache edge shape invalid"},
+	} {
 		var f pairCacheFile
-		json.Unmarshal(raw, &f)
-		switch bad {
+		if e := json.Unmarshal(raw, &f); e != nil {
+			t.Fatal(e)
+		}
+		switch bad.name {
 		case "partial":
 			f.Complete = false
 		case "pair_count":
@@ -87,24 +100,42 @@ func TestPairCacheRejectsShapeAndInvalidatesIdentity(t *testing.T) {
 				break
 			}
 		}
-		b, _ := json.Marshal(f)
+		b, e := json.Marshal(f)
+		if e != nil {
+			t.Fatal(e)
+		}
 		sum := sha256.Sum256(b)
 		hash := hex.EncodeToString(sum[:])
-		os.WriteFile(filepath.Join(dir, hash+".json"), b, 0600)
-		pointer, _ := json.Marshal(hash)
-		os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600)
-		if _, _, e = loadPairs(dir, s); e == nil {
-			t.Fatal("accepted malformed cache", bad)
+		if e := os.WriteFile(filepath.Join(dir, hash+".json"), b, 0600); e != nil {
+			t.Fatal(e)
+		}
+		pointer, e := json.Marshal(hash)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e := os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600); e != nil {
+			t.Fatal(e)
+		}
+		if _, _, e = loadPairs(dir, s); e == nil || e.Error() != bad.wantError {
+			t.Fatalf("%s: rejection = %v, want %q", bad.name, e, bad.wantError)
 		}
 	}
-	pointer, _ := json.Marshal(id)
-	os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600)
+	pointer, e := json.Marshal(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600); e != nil {
+		t.Fatal(e)
+	}
 	s.Source.ConsumerExclusionsSHA256 = "changed"
 	fresh, _, e := loadPairs(dir, s)
 	if e != nil || len(fresh.fingerprints) != 0 {
 		t.Fatal("new exclusion reused old cache")
 	}
-	entries, _ := os.ReadDir(dir)
+	entries, e := os.ReadDir(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
 	if len(entries) != 0 {
 		t.Fatal("exclusive old cache capability retained")
 	}
