@@ -432,3 +432,15 @@ checks, independent review and platform CI using temporary state only.
   then verify failure after the fix and healthy race-enabled vector tests.
   Validate static checks, independent review, and CI. No production behavior,
   provider calls, live archives, or releases change.
+
+## Cluster edge parity rejects NaN
+
+- Require score deviation to be within tolerance instead of only rejecting
+  deviations above it. NaN satisfies neither comparison; the old check silently
+  accepted NaN edge scores despite the finite scalar oracle.
+- Preserve all 96 synthetic nodes, special input vectors, five thresholds,
+  edge-count and endpoint assertions, scalar oracle, and the 1e-12 tolerance.
+- A temporary overlay replacing observed scores with NaN passes before the
+  change and fails afterward. Validate the normal parity case with the race
+  detector, static checks, independent review, and CI. No production behavior,
+  provider calls, live archives, or releases change.
