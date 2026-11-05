@@ -562,3 +562,17 @@ checks, independent review and platform CI using temporary state only.
   setup false greens, with positive-count and checkpoint-write controls. Validate
   healthy cases, static checks, independent review and PR CI. No production
   code, live archives, provider calls, deployment or releases change.
+
+## Native code producer fixture errors and CI coverage
+
+- Check six native code-store assertion reads, three SQL fixture mutations, the
+  permission setup and both explicit store handoff closes. Failed reads must
+  not masquerade as empty obsolete-document or foreign-generation counts.
+- Reuse the native overlay harness for a separate code-store/command pass in
+  Linux and macOS CI. Keep the cluster pass, compile-only consumers and measured
+  experiment exclusions; the code and cluster writers require separate overlays.
+- Preserve every SQL literal, fixture value, rollback/no-op, migration-refusal,
+  durability, permission and replacement assertion. Use disposable fault probes
+  for false greens, controls and code-test harness admission; run healthy race
+  cases, static checks, independent review and PR CI. No production code, live
+  archives, provider calls, deployment or releases change.

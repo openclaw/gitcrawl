@@ -69,11 +69,16 @@ never roll the live database backward.
 Focused checks use synthetic repositories and databases:
 
 ```
+python3 -B scripts/native-cluster/test_overlay.py
 go test ./internal/codeindex -run TestScanCommit
 python3 -m unittest discover -s scripts/native-code -p 'test_*.py'
 go test -overlay DELIVERY_OVERLAY -tags native_code_overlay ./internal/store -run 'TestNativeProducerCodeNoopAndRollback|TestNativeProducerExistingWriterNeverMigrates|TestNativeCodeWriterFlushAndObsoleteReplacement'
 go test -overlay DELIVERY_OVERLAY -tags native_code_overlay ./scripts/native-code/cmd -run TestCodeCommitGate
 ```
+
+The shared overlay harness runs both native cluster and native code store/command
+tests in separate Go invocations. Linux and macOS CI run this harness, including
+the code commit-gate and core-progress admission cases.
 
 Before live publication, verify the exact reviewed bundle and source receipt,
 then retain a native document/count/hash comparison and deleted-path check for
