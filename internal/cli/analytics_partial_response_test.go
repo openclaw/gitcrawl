@@ -143,8 +143,12 @@ func TestAnalyticsPairedPartialRejectionIsolatesPeerAndPreservesUnavailableHisto
 		t.Fatal("unavailable PR history changed")
 	}
 	var unknown, complete int
-	s.DB().QueryRow("SELECT count(*) FROM pull_request_review_thread_syncs WHERE thread_id=(SELECT id FROM threads WHERE number=16944)").Scan(&unknown)
-	s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&complete)
+	if e := s.DB().QueryRow("SELECT count(*) FROM pull_request_review_thread_syncs WHERE thread_id=(SELECT id FROM threads WHERE number=16944)").Scan(&unknown); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("SELECT complete FROM analytics_coverage WHERE repository='fixture/repo'").Scan(&complete); e != nil {
+		t.Fatal(e)
+	}
 	if unknown != 0 || complete != 1 {
 		t.Fatalf("fabricated membership or invalidated core: %d %d", unknown, complete)
 	}
@@ -156,11 +160,19 @@ func TestAnalyticsPairedPartialRejectionIsolatesPeerAndPreservesUnavailableHisto
 		t.Fatal("missing or unsafe durable cause", evidence)
 	}
 	var pending, peerResolved, success int
-	s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=16944 AND operation='review_state' AND resolved_at IS NULL AND attempts=2").Scan(&pending)
-	s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=16945 AND operation='review_state' AND resolved_at IS NOT NULL").Scan(&peerResolved)
-	s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=16945 AND operation='review_state' AND status='success'").Scan(&success)
+	if e := s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=16944 AND operation='review_state' AND resolved_at IS NULL AND attempts=2").Scan(&pending); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=16945 AND operation='review_state' AND resolved_at IS NOT NULL").Scan(&peerResolved); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts WHERE number=16945 AND operation='review_state' AND status='success'").Scan(&success); e != nil {
+		t.Fatal(e)
+	}
 	var membership, body string
-	s.DB().QueryRow("SELECT x.review_thread_ids_json,t.body FROM threads t JOIN pull_request_review_thread_syncs x ON x.thread_id=t.id WHERE t.number=16945").Scan(&membership, &body)
+	if e := s.DB().QueryRow("SELECT x.review_thread_ids_json,t.body FROM threads t JOIN pull_request_review_thread_syncs x ON x.thread_id=t.id WHERE t.number=16945").Scan(&membership, &body); e != nil {
+		t.Fatal(e)
+	}
 	if pending != 1 || peerResolved != 1 || success != 1 || membership != "[]" || body != "retained original" {
 		t.Fatalf("isolation/retry proof failed: %d %d %d %s %s", pending, peerResolved, success, membership, body)
 	}

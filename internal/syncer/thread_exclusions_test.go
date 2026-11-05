@@ -91,7 +91,9 @@ func TestOwnerExcludedSelectionNeverReachesProviderOrRetryLedger(t *testing.T) {
 	}
 	for _, table := range []string{"analytics_fetch_attempts", "analytics_retries"} {
 		var n int
-		s.DB().QueryRow("select count(*) from " + table + " where number=10").Scan(&n)
+		if e := s.DB().QueryRow("select count(*) from " + table + " where number=10").Scan(&n); e != nil {
+			t.Fatal(e)
+		}
 		if n != 0 {
 			t.Fatal("owner exclusion turned into retry/success", table, n)
 		}
