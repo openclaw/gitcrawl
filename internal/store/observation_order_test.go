@@ -899,18 +899,7 @@ func TestUpsertThreadObservationCompletesNewerSourceBelowEvidenceSequence(t *tes
 func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	result, err := st.UpsertThreadObservation(ctx, Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "metadata", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -958,18 +947,7 @@ func TestUpsertThreadObservationStartsIncompletePayloadWithoutEvidenceGeneration
 func TestPortableReopenPreservesIncompleteObservationGeneration(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	result, err := st.UpsertThreadObservation(ctx, Thread{
 		RepoID: repoID, GitHubID: "1", Number: 1, Kind: "issue", State: "open",
 		Title: "metadata", HTMLURL: "https://github.com/openclaw/gitcrawl/issues/1",
@@ -1059,7 +1037,15 @@ func TestUpsertThreadObservationRejectsAmbiguousMalformedClocks(t *testing.T) {
 
 func openObservationRepository(t *testing.T, ctx context.Context, updatedAt string) (*Store, int64) {
 	t.Helper()
-	st := openTestStore(t, ctx)
+	return openObservationRepositoryAt(t, ctx, filepath.Join(t.TempDir(), "gitcrawl.db"), updatedAt)
+}
+
+func openObservationRepositoryAt(t *testing.T, ctx context.Context, dbPath, updatedAt string) (*Store, int64) {
+	t.Helper()
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
 	repoID, err := st.UpsertRepository(ctx, Repository{
 		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
 		RawJSON: "{}", UpdatedAt: updatedAt,

@@ -575,18 +575,7 @@ func TestRevisionConsumersRequireAcceptedEvidenceGenerationAfterNewerFetch(t *te
 func TestRevisionConsumersRejectChildClockMaskingStaleParentAfterReopen(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: "masked-parent", Number: 92, Kind: "issue", State: "open",
 		Title: "Stable parent content", Body: "Only the parent observation clock changes.",
@@ -750,18 +739,7 @@ func TestRevisionConsumersRejectChildClockMaskingStaleParentAfterReopen(t *testi
 func TestRevisionConsumersRemainFreshAfterReopenWithNewerSourceLowerSequence(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	repoID, err := st.UpsertRepository(ctx, Repository{
-		Owner: "openclaw", Name: "gitcrawl", FullName: "openclaw/gitcrawl",
-		RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
+	st, repoID := openObservationRepositoryAt(t, ctx, dbPath, "2026-07-12T00:00:00Z")
 	thread := Thread{
 		RepoID: repoID, GitHubID: "fresh-reopen", Number: 91, Kind: "issue", State: "open",
 		Title: "stable content", Body: "stable body",
