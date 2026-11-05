@@ -47,8 +47,6 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 	if _, err = s.DB().Exec("update repositories set raw_json=json_set(raw_json,'$.node_id','R1') where id=?", repo.ID); err != nil {
 		t.Fatal(err)
 	}
-	s.DB().QueryRow("select raw_json from threads where id=?", head.ID).Scan(&head.RawJSON)
-	s.DB().QueryRow("select raw_json from repositories where id=?", repo.ID).Scan(&repo.RawJSON)
 	if err = s.UpsertThreadVector(ctx, store.ThreadVector{ThreadID: head.ID, Basis: "title_original", Model: "fixture", Dimensions: 2, ContentHash: head.ContentHash, Vector: []float64{1, 2}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +58,11 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 			if e != nil {
 				t.Fatal(e)
 			}
-			cols, _ := rows.Columns()
+			cols, e := rows.Columns()
+			if e != nil {
+				rows.Close()
+				t.Fatal(e)
+			}
 			for rows.Next() {
 				v := make([]any, len(cols))
 				p := make([]any, len(v))
@@ -72,22 +74,17 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 				}
 				out[table] = append(out[table], v)
 			}
+			e = rows.Err()
 			rows.Close()
+			if e != nil {
+				t.Fatal(e)
+			}
 		}
 		b, _ := json.Marshal(out)
 		return string(b)
 	}
 	before := snapshot()
-	var raw map[string]any
-	json.Unmarshal([]byte(head.RawJSON), &raw)
-	nodeID := stringValue(raw["node_id"])
-	if nodeID == "" {
-		nodeID = "PR8"
-	}
-	// Fixture repo supplies its retained database identity to the targeted path.
-	var repoRaw map[string]any
-	json.Unmarshal([]byte(repo.RawJSON), &repoRaw)
-	item := gh.ReviewStateItem{Number: 8, NodeID: nodeID, RepositoryID: repo.GitHubRepoID, RepositoryNodeID: stringValue(repoRaw["node_id"]), UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Threads: []map[string]any{{"id": "RT1", "isResolved": true, "isOutdated": true, "path": "file.go", "line": 3, "comments": map[string]any{"nodes": []any{map[string]any{"id": "RC1", "body": "inline body", "url": "https://github.com/openclaw/gitcrawl/pull/8#r1", "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z", "author": map[string]any{"login": "fixture", "__typename": "User"}, "replyTo": map[string]any{"id": "RC0"}}}}}}}
+	item := gh.ReviewStateItem{Number: 8, NodeID: "PR8", RepositoryID: repo.GitHubRepoID, RepositoryNodeID: "R1", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Threads: []map[string]any{{"id": "RT1", "isResolved": true, "isOutdated": true, "path": "file.go", "line": 3, "comments": map[string]any{"nodes": []any{map[string]any{"id": "RC1", "body": "inline body", "url": "https://github.com/openclaw/gitcrawl/pull/8#r1", "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z", "author": map[string]any{"login": "fixture", "__typename": "User"}, "replyTo": map[string]any{"id": "RC0"}}}}}}}
 	f := reviewOnlyFixture{items: []gh.ReviewStateItem{item}}
 	opts.GraphQLHistory = true
 	opts.ReviewStateOnly = true
@@ -104,8 +101,12 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 	}
 	var membership, body, login, comments, url, created, updated, authorType string
 	var resolved, outdated int
-	s.DB().QueryRow("select review_thread_ids_json from pull_request_review_thread_syncs where thread_id=?", head.ID).Scan(&membership)
-	s.DB().QueryRow("select first_comment_body,first_author_login,comments_json,is_resolved,is_outdated,first_comment_url,first_comment_created_at,first_comment_updated_at,first_author_type from pull_request_review_threads where thread_id=?", head.ID).Scan(&body, &login, &comments, &resolved, &outdated, &url, &created, &updated, &authorType)
+	if err := s.DB().QueryRow("select review_thread_ids_json from pull_request_review_thread_syncs where thread_id=?", head.ID).Scan(&membership); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("select first_comment_body,first_author_login,comments_json,is_resolved,is_outdated,first_comment_url,first_comment_created_at,first_comment_updated_at,first_author_type from pull_request_review_threads where thread_id=?", head.ID).Scan(&body, &login, &comments, &resolved, &outdated, &url, &created, &updated, &authorType); err != nil {
+		t.Fatal(err)
+	}
 	if membership != `["RT1"]` || body != "inline body" || login != "fixture" || resolved != 1 || outdated != 1 {
 		t.Fatal("review contract lost", membership, body, login)
 	}
@@ -118,8 +119,12 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 		if _, err = New(f, s).Sync(ctx, opts); err == nil {
 			t.Fatal("failure accepted")
 		}
-		s.DB().QueryRow("select review_thread_ids_json from pull_request_review_thread_syncs where thread_id=?", head.ID).Scan(&membership)
-		s.DB().QueryRow("select comments_json from pull_request_review_threads where thread_id=?", head.ID).Scan(&comments)
+		if err := s.DB().QueryRow("select review_thread_ids_json from pull_request_review_thread_syncs where thread_id=?", head.ID).Scan(&membership); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB().QueryRow("select comments_json from pull_request_review_threads where thread_id=?", head.ID).Scan(&comments); err != nil {
+			t.Fatal(err)
+		}
 		if saved != membership+comments || before != snapshot() {
 			t.Fatal("failed observation overwrote retained data")
 		}
@@ -131,10 +136,8 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 	}
 	f.items[0] = item
 	f.items[0].NodeID = "wrong"
-	if stringValue(raw["node_id"]) != "" {
-		if _, err = New(f, s).Sync(ctx, opts); err == nil {
-			t.Fatal("wrong node accepted")
-		}
+	if _, err = New(f, s).Sync(ctx, opts); err == nil {
+		t.Fatal("wrong node accepted")
 	}
 	// A later identity failure rolls back earlier state/history in the batch.
 	f.items = []gh.ReviewStateItem{item, item}
@@ -142,12 +145,18 @@ func TestReviewOnlyNeverOverwritesCanonicalContentHistoryOrVectors(t *testing.T)
 	f.items[0].Threads[0]["isResolved"] = false
 	opts.Numbers = []int{8, 9}
 	var revisionsBefore, revisionsAfter int
-	s.DB().QueryRow("select count(*) from pull_request_review_thread_revisions").Scan(&revisionsBefore)
+	if err := s.DB().QueryRow("select count(*) from pull_request_review_thread_revisions").Scan(&revisionsBefore); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = New(f, s).Sync(ctx, opts); err == nil {
 		t.Fatal("missing parent accepted")
 	}
-	s.DB().QueryRow("select count(*) from pull_request_review_thread_revisions").Scan(&revisionsAfter)
-	s.DB().QueryRow("select is_resolved from pull_request_review_threads where thread_id=?", head.ID).Scan(&resolved)
+	if err := s.DB().QueryRow("select count(*) from pull_request_review_thread_revisions").Scan(&revisionsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("select is_resolved from pull_request_review_threads where thread_id=?", head.ID).Scan(&resolved); err != nil {
+		t.Fatal(err)
+	}
 	if resolved != 1 || revisionsAfter != revisionsBefore || before != snapshot() {
 		t.Fatal("partial batch publication or canonical mutation")
 	}
