@@ -371,3 +371,15 @@ Close both pipes in the cleanup path and run the new unittest discovery command
 in Linux/macOS CI alongside the existing overlay check. Validate the regression,
 all native script suites, overlay tests, static checks and independent review.
 Fixtures use temporary state only; no deployed controller or archive is used.
+
+## Maintenance SQLite cleanup
+
+Use an explicit closing scope for read-only vector verification. A SQLite
+transaction context commits or rolls back without closing its connection. Close
+the synthetic coverage fixture connection too, preserving its commit scope.
+
+Add one parameterized real-SQLite case for matching and changed vector bindings.
+Verify success/checkpoint metadata and mismatch rejection before checking that
+the actual connection rejects further queries. Both closure checks fail before
+the fix. Validate native Python suites with ResourceWarnings enabled, static
+checks, independent review and platform CI using temporary state only.

@@ -122,7 +122,7 @@ class Cycle:
   path,receipt=self.record_for(pending)
   if not receipt:return False
   req=json.loads((self.base/pending['request']).read_bytes());outputs={x['task_id']:x for x in result['results']}
-  with sqlite3.connect('file:'+self.c['db']+'?mode=ro',uri=True,timeout=5) as con:
+  with closing(sqlite3.connect('file:'+self.c['db']+'?mode=ro',uri=True,timeout=5)) as con:
    for t in req['tasks']:
     v=outputs[t['task_id']];row=con.execute('select content_hash,dimensions,vector_json from thread_vectors where thread_id=? and basis=? and model=?',(t['thread_binding']['thread_id'],req['basis'],req['model'])).fetchone()
     if v['input_sha256']!=t['input_sha256'] or not row or row[0]!=t['native_content_hash'] or row[1]!=1536 or json.loads(row[2])!=v['vector']:raise RuntimeError('durable import no longer matches current native vector; owner review required')
