@@ -4535,11 +4535,7 @@ func TestTUIApplyClusterFiltersPreservesClusterSource(t *testing.T) {
 	}
 }
 
-// TestTUIDetailViewportScrollsWithKeyboard guards the regression where the
-// detail pane could not be scrolled by any input. detailView.SetContent was
-// only called from renderDetail (a View() value-receiver copy), so the
-// persistent viewport never had content and LineUp/LineDown/wheel were no-ops.
-func TestTUIDetailViewportScrollsWithKeyboard(t *testing.T) {
+func newOverflowingDetailTestModel() clusterBrowserModel {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
 		Sort:       "recent",
@@ -4561,6 +4557,15 @@ func TestTUIDetailViewportScrollsWithKeyboard(t *testing.T) {
 	}
 	model.hasDetail = true
 	model.sortMembers()
+	return model
+}
+
+// TestTUIDetailViewportScrollsWithKeyboard guards the regression where the
+// detail pane could not be scrolled by any input. detailView.SetContent was
+// only called from renderDetail (a View() value-receiver copy), so the
+// persistent viewport never had content and LineUp/LineDown/wheel were no-ops.
+func TestTUIDetailViewportScrollsWithKeyboard(t *testing.T) {
+	model := newOverflowingDetailTestModel()
 
 	// Small terminal so detail content overflows its viewport, then focus the
 	// detail pane (clusters -> members -> detail).
@@ -4592,27 +4597,7 @@ func TestTUIDetailViewportScrollsWithKeyboard(t *testing.T) {
 }
 
 func TestTUISyncComponentsClampsDetailViewportAfterResize(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters: []store.ClusterSummary{
-			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
-		},
-	})
-	model.detail = store.ClusterDetail{
-		Cluster: model.payload.Clusters[0],
-		Members: []store.ClusterMemberDetail{
-			{
-				Thread: store.Thread{
-					ID: 10, Number: 10, Kind: "issue", State: "open",
-					Title: strings.Repeat("a long detail title that wraps many times ", 40),
-				},
-				BodySnippet: strings.Repeat("body line\n", 60),
-			},
-		},
-	}
-	model.hasDetail = true
-	model.sortMembers()
+	model := newOverflowingDetailTestModel()
 	model.width = 120
 	model.height = 16
 	model.syncComponents()
@@ -4632,27 +4617,7 @@ func TestTUISyncComponentsClampsDetailViewportAfterResize(t *testing.T) {
 }
 
 func TestTUISyncComponentsResetsDetailViewportWhenContentModeChanges(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters: []store.ClusterSummary{
-			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
-		},
-	})
-	model.detail = store.ClusterDetail{
-		Cluster: model.payload.Clusters[0],
-		Members: []store.ClusterMemberDetail{
-			{
-				Thread: store.Thread{
-					ID: 10, Number: 10, Kind: "issue", State: "open",
-					Title: strings.Repeat("a long detail title that wraps many times ", 40),
-				},
-				BodySnippet: strings.Repeat("body line\n", 60),
-			},
-		},
-	}
-	model.hasDetail = true
-	model.sortMembers()
+	model := newOverflowingDetailTestModel()
 	model.width = 120
 	model.height = 16
 	model.syncComponents()
@@ -4677,27 +4642,7 @@ func TestTUISyncComponentsResetsDetailViewportWhenContentModeChanges(t *testing.
 }
 
 func TestTUIUpdateSyncsDetailViewportAfterMenuKey(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters: []store.ClusterSummary{
-			{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
-		},
-	})
-	model.detail = store.ClusterDetail{
-		Cluster: model.payload.Clusters[0],
-		Members: []store.ClusterMemberDetail{
-			{
-				Thread: store.Thread{
-					ID: 10, Number: 10, Kind: "issue", State: "open",
-					Title: strings.Repeat("a long detail title that wraps many times ", 40),
-				},
-				BodySnippet: strings.Repeat("body line\n", 60),
-			},
-		},
-	}
-	model.hasDetail = true
-	model.sortMembers()
+	model := newOverflowingDetailTestModel()
 	model.width = 120
 	model.height = 16
 	model.syncComponents()
@@ -4724,27 +4669,7 @@ func TestTUIUpdateSyncsDetailViewportAfterMenuKey(t *testing.T) {
 
 func TestTUIUpdateSyncsDetailViewportAfterSearchJumpShortcuts(t *testing.T) {
 	newModel := func() clusterBrowserModel {
-		model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-			Repository: "openclaw/openclaw",
-			Sort:       "recent",
-			Clusters: []store.ClusterSummary{
-				{ID: 1, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"},
-			},
-		})
-		model.detail = store.ClusterDetail{
-			Cluster: model.payload.Clusters[0],
-			Members: []store.ClusterMemberDetail{
-				{
-					Thread: store.Thread{
-						ID: 10, Number: 10, Kind: "issue", State: "open",
-						Title: strings.Repeat("a long detail title that wraps many times ", 40),
-					},
-					BodySnippet: strings.Repeat("body line\n", 60),
-				},
-			},
-		}
-		model.hasDetail = true
-		model.sortMembers()
+		model := newOverflowingDetailTestModel()
 		model.width = 120
 		model.height = 8
 		model.showHelp = true
