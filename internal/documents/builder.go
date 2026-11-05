@@ -16,14 +16,6 @@ const (
 	maxCommitSubjects   = 100
 )
 
-func Build(thread store.Thread) store.Document {
-	return BuildWithComments(thread, nil)
-}
-
-func BuildWithComments(thread store.Thread, comments []store.Comment) store.Document {
-	return BuildWithContext(thread, comments, nil, nil)
-}
-
 func BuildWithContext(thread store.Thread, comments []store.Comment, files []store.PullRequestFile, commits []store.PullRequestCommit) store.Document {
 	labels := LabelNames(thread.LabelsJSON)
 	sections := []string{

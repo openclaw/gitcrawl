@@ -107,7 +107,10 @@ func TestPreparedQueryMatchesOriginal(t *testing.T) {
 		return want[i].Score > want[j].Score
 	})
 	want = want[:20]
-	got := Query(items, query, 20, items[0].ThreadID)
+	got, err := QueryWithOptions(t.Context(), items, query, QueryOptions{Limit: 20, ExcludeThreadID: items[0].ThreadID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != len(want) {
 		t.Fatalf("neighbors: %d want %d", len(got), len(want))
 	}
@@ -160,9 +163,14 @@ func BenchmarkPreparedCosine(b *testing.B) {
 
 func BenchmarkQueryExact20000(b *testing.B) {
 	items := benchmarkItems(20000, config.Default().OpenAI.EmbedDimensions)
+	ctx := b.Context()
+	var err error
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		benchmarkNeighbors = Query(items, items[0].Vector, 20, items[0].ThreadID)
+		benchmarkNeighbors, err = QueryWithOptions(ctx, items, items[0].Vector, QueryOptions{Limit: 20, ExcludeThreadID: items[0].ThreadID})
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }

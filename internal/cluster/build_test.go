@@ -3,13 +3,13 @@ package cluster
 import "testing"
 
 func TestBuildConnectedComponents(t *testing.T) {
-	clusters := Build([]Node{
+	clusters := BuildWithOptions([]Node{
 		{ThreadID: 1, Number: 10},
 		{ThreadID: 2, Number: 11},
 		{ThreadID: 3, Number: 1},
 	}, []Edge{
 		{LeftThreadID: 1, RightThreadID: 2, Score: 0.9},
-	})
+	}, Options{})
 	if len(clusters) != 2 {
 		t.Fatalf("clusters: got %d want 2", len(clusters))
 	}
@@ -57,7 +57,7 @@ func TestBuildIgnoresEdgesWithMissingEndpoints(t *testing.T) {
 		{LeftThreadID: 99, RightThreadID: 2, Score: 0.99},
 	}
 	for name, clusters := range map[string][]Cluster{
-		"unbounded": Build(nodes, edges),
+		"unbounded": BuildWithOptions(nodes, edges, Options{}),
 		"bounded":   BuildWithOptions(nodes, edges, Options{MaxSize: 2}),
 	} {
 		if len(clusters) != 2 {

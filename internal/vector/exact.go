@@ -29,11 +29,6 @@ type QueryOptions struct {
 
 const maxTurboVecTieCandidates = 16 * 1024
 
-func Query(items []Item, query []float64, limit int, excludeThreadID int64) []Neighbor {
-	neighbors, _ := queryExact(context.Background(), items, query, limit, excludeThreadID)
-	return neighbors
-}
-
 func QueryWithOptions(ctx context.Context, items []Item, query []float64, opts QueryOptions) ([]Neighbor, error) {
 	backend := crawlvector.SearchBackend(strings.ToLower(strings.TrimSpace(opts.Backend)))
 	if backend == "" {
