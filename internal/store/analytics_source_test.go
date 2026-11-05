@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -71,7 +70,6 @@ func TestPublicationRepairPreservesSourceEvidence(t *testing.T) {
 	if n != 2 {
 		t.Fatal("login reuse merged identities")
 	}
-	_, _ = json.Marshal(nodes)
 }
 
 func TestAnalyticsQueuesNewUnresolvedSourceIdentities(t *testing.T) {
