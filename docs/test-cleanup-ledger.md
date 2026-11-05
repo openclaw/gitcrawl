@@ -482,3 +482,16 @@ checks, independent review and platform CI using temporary state only.
   the old false greens and targeted failures after the change. Validate healthy
   cases with the race detector, the native overlay suite, static checks,
   independent review and PR CI. No production or live archive changes; no releases.
+
+## Owner-purge SQL assertion errors
+
+- Check all 20 previously ignored assertion-query results in the owner-purge
+  tests before comparing retained evidence, empty tables, rollback state or
+  coverage. Failed reads must not masquerade as empty results or equal strings.
+- Preserve every SQL literal, purge/refusal/migration fixture, mutation and
+  expected value. Keep assertion-query errors local so expected purge errors
+  are not overwritten.
+- Disposable Go overlays inject broken empty-result and before/after reads to
+  reproduce the false greens, then verify targeted failures. Validate healthy
+  real SQLite cases with the race detector, static checks, independent review
+  and PR CI. No production code, live archives, deployment or releases change.
