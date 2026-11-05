@@ -549,3 +549,16 @@ checks, independent review and platform CI using temporary state only.
   cases with the race detector, the native overlay suite, static checks,
   independent review and PR CI. No production code, live archives, deployment
   or releases change.
+
+## Analytics CLI fixture and assertion errors
+
+- Check all eight previously ignored SQL assertion reads and four analytics
+  state writes, plus the three state reads that discarded their errors. Failed
+  reads must not compare as equal retry counts or reuse a prior content count;
+  failed setup must not leave the completed-update watermark in place.
+- Preserve every SQL literal, state key/value, local HTTP fixture, real analytics
+  entry point, process-reopen retry, migration and bounded-scheduler assertion.
+- Disposable race-enabled Go overlays reproduce retry/history-read and watermark
+  setup false greens, with positive-count and checkpoint-write controls. Validate
+  healthy cases, static checks, independent review and PR CI. No production
+  code, live archives, provider calls, deployment or releases change.
