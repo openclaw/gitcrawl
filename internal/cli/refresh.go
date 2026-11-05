@@ -31,7 +31,6 @@ func (a *App) runRefresh(ctx context.Context, args []string) error {
 	force := fs.Bool("force", false, "download selected sync data even when issue comments are unchanged")
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, workflow runs, and review threads")
 	withRaw := fs.String("with", "", "additional sync hydration: pr-metadata, pr-details")
-	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	since := fs.String("since", "", "GitHub since timestamp")
 	state := fs.String("state", "", "GitHub issue state: open|closed|all; default open")
 	limitRaw := fs.String("limit", "", "maximum sync or embedding rows")

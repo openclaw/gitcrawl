@@ -246,7 +246,8 @@ same hydration flags after resolving the reported cause.
 Older binaries can read these archives but do not honor the retry checkpoint
 when writing. Do not downgrade the writer to resume a partially completed sync.
 
-`--include-code` is accepted for compatibility but is currently a no-op.
+Code hydration is unavailable. `--include-code` is rejected; remove it from
+existing invocations.
 
 ## Machine-readable progress
 

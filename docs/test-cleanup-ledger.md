@@ -383,3 +383,15 @@ Verify success/checkpoint metadata and mismatch rejection before checking that
 the actual connection rejects further queries. Both closure checks fail before
 the fix. Validate native Python suites with ResourceWarnings enabled, static
 checks, independent review and platform CI using temporary state only.
+
+## Unimplemented code hydration flags
+
+- Remove the discarded `include-code` flag registrations from sync and refresh.
+  Neither command implemented code hydration; accepting the option silently
+  ignored its requested behavior. Document the required invocation cleanup.
+- One CLI regression exercises both commands with bare, true, and false forms.
+  Reject with usage exit 2 before configuration, credential lookup, runtime
+  files, or stage output. All six cases fail on the old registrations.
+- Preserve supported sync hydration and refresh stages. Validate with focused
+  CLI race tests, module/static checks, independent review, real CLI argument
+  rejection, and CI; synthetic paths only, no providers or releases.

@@ -31,7 +31,6 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, and workflow runs")
 	withRaw := fs.String("with", "", "extra hydration: pr-metadata, pr-details")
 	progressFile := fs.String("progress-file", "", "write an atomic sanitized sync progress snapshot")
-	fs.Bool("include-code", false, "accepted for compatibility; code hydration is not implemented yet")
 	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"numbers": true, "since": true, "state": true, "limit": true, "with": true, "progress-file": true})); err != nil {
 		return usageErr(err)
 	}
