@@ -347,3 +347,15 @@ all test bodies unchanged; each suite runs in its own Python process.
 Validate both suites with isolated temporary home/config/cache directories and
 local Git fixtures, then run static checks, independent review and platform CI.
 No provider, deployed lifecycle controller or live archive is used by the tests.
+
+## Native producer pipe cleanup
+
+Strengthen the existing wrong-SHA lifecycle case to check both an already-exited
+producer and one still waiting for its commit gate. Inspect real subprocess pipe
+handles directly instead of relying on garbage-collection ResourceWarnings.
+Both cases fail on the original controller because stdout remains open.
+
+Close stdout and stderr in the producer cleanup path, preserving termination,
+binding rejection and owner restoration. Validate all native-code cases with
+isolated home/config/cache state and local Git fixtures, static checks,
+independent review and platform CI. No deployed controller or live archive runs.

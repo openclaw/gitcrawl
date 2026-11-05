@@ -51,10 +51,28 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(json.loads((p/'last-code-result.json').read_bytes()),{'old':True})
 
     def test_prepared_wrong_sha_refused_before_settlement(self):
-        p,c,calls,state,source,proof=self.fixture(bad_binding=True)
-        with patch.object(m.SourceCache,'capture',return_value=(source,proof)):
-            with self.assertRaisesRegex(RuntimeError,'binding mismatch'):c.update()
-        self.assertEqual(calls,[]);self.assertTrue(state['loaded'])
+        popen = m.subprocess.Popen
+        for phase in ('unchanged', 'prepared'):
+            with self.subTest(phase=phase):
+                p,c,calls,state,source,proof=self.fixture(phase=phase, bad_binding=True)
+                children = []
+                def spawn(*args, **kwargs):
+                    child = popen(*args, **kwargs)
+                    children.append(child)
+                    self.addCleanup(child.stdout.close)
+                    self.addCleanup(child.stderr.close)
+                    if phase == 'unchanged':
+                        # Exercise an exited producer as well as one waiting for its gate.
+                        child.wait(timeout=5)
+                    return child
+                with patch.object(m.SourceCache,'capture',return_value=(source,proof)), \
+                        patch.object(m.subprocess,'Popen',side_effect=spawn):
+                    with self.assertRaisesRegex(RuntimeError,'binding mismatch'):c.update()
+                self.assertEqual(calls,[]);self.assertTrue(state['loaded'])
+                self.assertEqual(len(children), 1)
+                self.assertIsNotNone(children[0].poll())
+                self.assertTrue(children[0].stdout.closed)
+                self.assertTrue(children[0].stderr.closed)
 
     def test_failed_atomic_write_restores_original_owner(self):
         p,c,calls,state,source,proof=self.fixture(phase='prepared')
