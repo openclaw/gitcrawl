@@ -71,7 +71,9 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 		t.Fatalf("plan=%+v", plan)
 	}
 	var retained string
-	s.DB().QueryRow("SELECT raw_json FROM pull_request_details WHERE thread_id=2").Scan(&retained)
+	if err := s.DB().QueryRow("SELECT raw_json FROM pull_request_details WHERE thread_id=2").Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
 	result, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "owner-request-fixture")
 	if err != nil || !result.Applied {
 		t.Fatalf("%+v %v", result, err)
@@ -83,7 +85,9 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 		}
 	}
 	var after string
-	s.DB().QueryRow("SELECT raw_json FROM pull_request_details WHERE thread_id=2").Scan(&after)
+	if err := s.DB().QueryRow("SELECT raw_json FROM pull_request_details WHERE thread_id=2").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
 	if after != retained {
 		t.Fatal("peer evidence changed")
 	}
@@ -92,12 +96,16 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 		t.Fatalf("FTS leaked removed document: %d %v", fts, err)
 	}
 	var profiles int
-	s.DB().QueryRow("SELECT count(*) FROM actor_profiles").Scan(&profiles)
+	if err := s.DB().QueryRow("SELECT count(*) FROM actor_profiles").Scan(&profiles); err != nil {
+		t.Fatal(err)
+	}
 	if profiles != 1 {
 		t.Fatal("shared actor removed")
 	}
 	var remaining string
-	s.DB().QueryRow("SELECT evidence_json FROM analytics_fetch_attempts WHERE number=20").Scan(&remaining)
+	if err := s.DB().QueryRow("SELECT evidence_json FROM analytics_fetch_attempts WHERE number=20").Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(remaining, `"numbers":[10,20]`) {
 		t.Fatal("unrelated mixed receipt changed")
 	}
@@ -118,7 +126,9 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 	}
 	for _, q := range []string{"SELECT count(*) FROM analytics_fetch_attempts WHERE number=10", "SELECT count(*) FROM analytics_retries WHERE number=10", "SELECT count(*) FROM actor_identity_evidence WHERE node_id='node10'", "SELECT count(*) FROM analytics_pending_nodes WHERE node_id='node10'"} {
 		var n int
-		s.DB().QueryRow(q).Scan(&n)
+		if err := s.DB().QueryRow(q).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
 		if n != 0 {
 			t.Fatal("excluded evidence recreated", q, n)
 		}
@@ -132,8 +142,12 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 		t.Fatal(err)
 	}
 	var complete, pending, excluded, core int
-	s.DB().QueryRow("SELECT complete,pending_items,owner_excluded_items FROM analytics_review_state_coverage").Scan(&complete, &pending, &excluded)
-	s.DB().QueryRow("SELECT complete FROM analytics_coverage").Scan(&core)
+	if err := s.DB().QueryRow("SELECT complete,pending_items,owner_excluded_items FROM analytics_review_state_coverage").Scan(&complete, &pending, &excluded); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("SELECT complete FROM analytics_coverage").Scan(&core); err != nil {
+		t.Fatal(err)
+	}
 	if complete != 0 || pending != 0 || excluded != 1 || core != 1 {
 		t.Fatalf("false recovery: review=%d pending=%d excluded=%d core=%d", complete, pending, excluded, core)
 	}
@@ -154,7 +168,9 @@ func TestOwnerPurgeRejectsTailAndRollsBack(t *testing.T) {
 		t.Fatalf("tail admitted: %v", err)
 	}
 	var n int
-	s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&n)
+	if err := s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Fatal("tail failure wrote policy")
 	}
@@ -173,12 +189,16 @@ func TestOwnerPurgeRejectsTailAndRollsBack(t *testing.T) {
 		t.Fatal("failure accepted")
 	}
 	for _, q := range []string{"SELECT count(*) FROM threads WHERE id=1", "SELECT count(*) FROM actor_identity_evidence WHERE node_id='node10'", "SELECT count(*) FROM analytics_retries WHERE number=10"} {
-		s.DB().QueryRow(q).Scan(&n)
+		if err := s.DB().QueryRow(q).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
 		if n != 1 {
 			t.Fatal("partial purge", q, n)
 		}
 	}
-	s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&n)
+	if err := s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Fatal("rollback left exclusion")
 	}
@@ -209,8 +229,12 @@ func TestOwnerExclusionV15MigrationIsAdditive(t *testing.T) {
 	}
 	defer s.Close()
 	var version, count int
-	s.DB().QueryRow("pragma user_version").Scan(&version)
-	s.DB().QueryRow("select count(*) from comments").Scan(&count)
+	if err := s.DB().QueryRow("pragma user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow("select count(*) from comments").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
 	if version != 16 || count != 2 {
 		t.Fatalf("migration altered data: %d %d", version, count)
 	}
@@ -241,13 +265,19 @@ func TestOwnerPurgeRefusesBlobBackedTargetsWithoutMutation(t *testing.T) {
 			}
 			result, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "blob-fixture")
 			var count, threads int
-			s.DB().QueryRow("SELECT count(*) FROM blobs WHERE id=1").Scan(&count)
-			s.DB().QueryRow("SELECT count(*) FROM threads WHERE id=1").Scan(&threads)
+			if err := s.DB().QueryRow("SELECT count(*) FROM blobs WHERE id=1").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DB().QueryRow("SELECT count(*) FROM threads WHERE id=1").Scan(&threads); err != nil {
+				t.Fatal(err)
+			}
 			if err == nil || result.Applied || !strings.Contains(err.Error(), "blob-backed") || count != 1 || threads != 1 {
 				t.Fatalf("unsupported blob target was altered: %+v %v count=%d threads=%d", result, err, count, threads)
 			}
 			var policy int
-			s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&policy)
+			if err := s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&policy); err != nil {
+				t.Fatal(err)
+			}
 			if policy != 0 {
 				t.Fatal("refusal installed an exclusion")
 			}
@@ -289,7 +319,9 @@ func TestOwnerPurgeCanonicalRepositoryMatchesCaseVariantReceipts(t *testing.T) {
 		}
 	}
 	var complete, excluded int
-	s.DB().QueryRow("SELECT complete,owner_excluded_items FROM analytics_review_state_coverage WHERE repository='Fixture/Repo'").Scan(&complete, &excluded)
+	if err := s.DB().QueryRow("SELECT complete,owner_excluded_items FROM analytics_review_state_coverage WHERE repository='Fixture/Repo'").Scan(&complete, &excluded); err != nil {
+		t.Fatal(err)
+	}
 	if complete != 0 || excluded != 1 {
 		t.Fatal("variant coverage falsely complete", complete, excluded)
 	}
@@ -297,7 +329,9 @@ func TestOwnerPurgeCanonicalRepositoryMatchesCaseVariantReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n int
-	s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=10").Scan(&n)
+	if err := s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE number=10").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Fatal("variant requeued")
 	}
@@ -324,12 +358,16 @@ func TestOwnerPurgeRefusesWorkflowEvidenceAndKeepsUnrelatedReservations(t *testi
 			}
 			result, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "workflow-fixture")
 			var n int
-			s.DB().QueryRow("SELECT count(*) FROM threads WHERE id=1").Scan(&n)
+			if err := s.DB().QueryRow("SELECT count(*) FROM threads WHERE id=1").Scan(&n); err != nil {
+				t.Fatal(err)
+			}
 			if mode == "unrelated" {
 				if err != nil || !result.Applied || n != 0 {
 					t.Fatalf("unrelated reservation blocked target: %+v %v", result, err)
 				}
-				s.DB().QueryRow("SELECT count(*) FROM workflow_run_observation_reservations WHERE head_sha='peer-sha'").Scan(&n)
+				if err := s.DB().QueryRow("SELECT count(*) FROM workflow_run_observation_reservations WHERE head_sha='peer-sha'").Scan(&n); err != nil {
+					t.Fatal(err)
+				}
 				if n != 1 {
 					t.Fatal("peer reservation lost")
 				}
@@ -337,7 +375,9 @@ func TestOwnerPurgeRefusesWorkflowEvidenceAndKeepsUnrelatedReservations(t *testi
 				if err == nil || !strings.Contains(err.Error(), "workflow") || result.Applied || n != 1 {
 					t.Fatalf("workflow evidence ignored: %+v %v count=%d", result, err, n)
 				}
-				s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&n)
+				if err := s.DB().QueryRow("SELECT count(*) FROM thread_exclusions").Scan(&n); err != nil {
+					t.Fatal(err)
+				}
 				if n != 0 {
 					t.Fatal("refusal wrote policy")
 				}
