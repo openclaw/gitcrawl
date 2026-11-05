@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run the native code and maintenance Python regression suites in Linux and macOS CI, alongside the existing cluster overlay check.
+
 - Reject unsupported embedding bases before task selection so empty repositories no longer report successful embedding for unsupported configurations. External vector bases remain available for clustering.
 
 - Reject unavailable command names such as `completion` and `sync-status` as unknown commands with usage exit code 2 instead of a runtime placeholder error.
