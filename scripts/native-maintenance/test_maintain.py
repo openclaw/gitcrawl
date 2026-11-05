@@ -1,12 +1,14 @@
 import importlib.util,json,pathlib,tempfile,unittest,os
 spec=importlib.util.spec_from_file_location('maintain',pathlib.Path(__file__).with_name('maintain.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-class Tests(unittest.TestCase):
+class _CycleFixture:
  def make(self):
   t=tempfile.TemporaryDirectory();self.addCleanup(t.cleanup);p=pathlib.Path(t.name);calls=[]
   def call(argv,data=None,timeout=90):calls.append(argv);return b'{}'
   c=m.Cycle({'state_dir':str(p),'handoff_state':str(p/'handoff'),'broker':['fixture-broker'],'db':str(p/'absent'),'cluster_invocation':['fixture-cluster'],'import_invocation':['fixture-import'],'combined_invocation':['fixture-combined']},call);c.validate_pending=lambda p:None;c.retirement_scope=lambda:None;c.await_core_boundary=lambda:{};c.controller_idle=lambda:True;c.archive_superseded=lambda:{'archived':[]};return c,p,calls
  def pending(self,c,p):
   raw=b'{"scope":{"max_tasks":2000},"source_binding":{"consumer_exclusions_sha256":"policy"},"tasks":[{"task_id":"t","input":"native","thread_binding":{"thread_id":"1"}}]}';(p/'request.json').write_bytes(raw);c.state['pending']={'request':'request.json','sha256':m.sha(raw),'export':{'tasks':1},'inspect':{'tasks':1},'submit':{'status':'submitted'}};c.checkpoint();c.policy_refresh=lambda:'policy'
+
+class Tests(_CycleFixture,unittest.TestCase):
  def test_pending_resumed_before_export_or_submit(self):
   c,p,calls=self.make();self.pending(c,p);c.new_packet=lambda:self.fail('exported despite pending');c.broker=lambda mode,raw:({'status':'pending','pending':1,'failed':1} if mode=='result' else self.fail('resubmitted'))
   self.assertEqual(c.run()['status'],'provider_failure');self.assertIn('pending',c.state);self.assertEqual(calls,[])
@@ -39,7 +41,7 @@ class Tests(unittest.TestCase):
    self.assertEqual(c.state['retained'][0]['sha256'],old);newraw=b'{"new":true,"source_binding":{"consumer_exclusions_sha256":"policy"},"tasks":[]}';(p/'new.json').write_bytes(newraw);c.state['pending']={'request':'new.json','sha256':m.sha(newraw),'inspect':{},'submit':{}};c.checkpoint();return True
   c.broker=broker;c.call=call;c.new_packet=new;self.assertEqual(c.run()['status'],'provider_failure');self.assertEqual(len(c.state['retained']),1);self.assertTrue((p/'request.json').exists())
 
-class RecoveryTests(Tests):
+class RecoveryTests(_CycleFixture,unittest.TestCase):
  def test_crash_exactly_after_release_before_checkpoint(self):
   c,p,calls=self.make();self.pending(c,p);x=c.state['pending'];result=b'{"results":[]}';(p/'result.json').write_bytes(result);native=p/'native.json';m.save(native,{'request_sha256':x['sha256'],'response_sha256':m.sha(result),'imported':1,'unchanged':0,'committed_at':'t'})
   x.update({'result':'result.json','result_sha256':m.sha(result),'native_receipt':str(native),'native_receipt_sha256':m.sha(native.read_bytes()),'matched':1});c.checkpoint();released=[]
@@ -73,7 +75,7 @@ class RecoveryTests(Tests):
   self.assertRaises(RuntimeError,c.run);self.assertEqual(c.state['pending']['sha256'],before);self.assertTrue((p/'request.json').exists());self.assertEqual(c.state['retained'],[])
 
 
-class CapTests(Tests):
+class CapTests(_CycleFixture,unittest.TestCase):
  def test_halved_cap_uses_vector_catchup(self):
   c,p,calls=self.make();binary=p/'exporter';binary.write_bytes(b'native');c.c['binary']=str(binary);c.c['binary_sha256']=m.sha(b'native');c.policy_refresh=lambda:'policy';attempts=[]
   def call(argv,data=None,timeout=90):
@@ -86,9 +88,8 @@ class CapTests(Tests):
   c.call=call;self.assertTrue(c.new_packet());self.assertEqual(attempts,[2000,1000]);self.assertEqual(c.state['pending']['export']['task_cap'],1000)
   c.broker=lambda mode,raw:{'status':'complete','results':[]};c.source_ready=lambda:True;verified=iter([False,True]);c.verify_import=lambda pending,result:(pending.update({'matched':1000}) or next(verified));c.finish=lambda p:None
   self.assertEqual(c.run()['status'],'catchup_imported')
-if __name__=='__main__':unittest.main()
 
-class AvailabilityTests(Tests):
+class AvailabilityTests(_CycleFixture,unittest.TestCase):
  def test_changed_availability_replaces_before_broker(self):
   c,p,calls=self.make();self.pending(c,p);digest=c.state['pending']['sha256']
   c.validate_pending=lambda pending:(_ for _ in ()).throw(RuntimeError('native availability changed'))
@@ -101,7 +102,7 @@ class AvailabilityTests(Tests):
   c.broker=lambda *args:self.fail('provider admission with unqualified failure')
   self.assertEqual(c.run()['status'],'waiting_scope');self.assertIn('pending',c.state);self.assertEqual(c.state['retained'],[])
 
-class IdentityQuarantineTests(Tests):
+class IdentityQuarantineTests(_CycleFixture,unittest.TestCase):
  def test_retained_only_noop_is_not_publication_or_full_retirement(self):
   c,p,calls=self.make();c.state['retained']=[{'sha256':'old','request':'old.json'}];(p/'old.json').write_text('{}');c.new_packet=lambda:False;c.source_ready=lambda:True
   def call(argv,data=None,timeout=90):
@@ -117,3 +118,5 @@ class IdentityQuarantineTests(Tests):
   with sqlite3.connect(db) as con:
    con.execute('create table analytics_coverage(repository,through,observed_at,complete)');now=datetime.datetime.now(datetime.timezone.utc);con.execute('insert into analytics_coverage values(?,?,?,0)',('openclaw/openclaw',(now-datetime.timedelta(seconds=2)).isoformat(),(now-datetime.timedelta(seconds=1)).isoformat()))
   self.assertTrue(c.source_ready());self.assertEqual(c.state['core']['complete'],0)
+
+if __name__=='__main__':unittest.main()
