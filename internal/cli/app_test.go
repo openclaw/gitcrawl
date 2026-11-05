@@ -5667,18 +5667,14 @@ func TestEmbedUsesConfiguredBaseURL(t *testing.T) {
 func TestGlobalCommandBranches(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
-		args      []string
-		wantErr   bool
-		wantOut   string
-		exitCode  int
-		jsonShape bool
+		args     []string
+		wantErr  bool
+		wantOut  string
+		exitCode int
 	}{
 		{args: []string{"--help"}, wantOut: "Usage:"},
 		{args: []string{"help"}, wantOut: "Usage:"},
 		{args: []string{"help", "sync"}, wantOut: "gitcrawl sync"},
-		{args: []string{"--version"}, wantOut: "dev"},
-		{args: []string{"version"}, wantOut: "dev"},
-		{args: []string{"--json", "version"}, wantOut: `"version"`},
 		{args: []string{"--bad"}, wantErr: true, exitCode: 2},
 		{args: []string{"--format", "bad", "version"}, wantErr: true, exitCode: 2},
 		{args: []string{"serve"}, wantErr: true, exitCode: 2},

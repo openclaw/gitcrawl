@@ -70,11 +70,10 @@ func TestDurabilityAcceptsSQLiteDSNsAndPreservesAccess(t *testing.T) {
 	for _, tc := range []struct {
 		name, dsn string
 		want      int
-		readOnly  bool
 	}{
-		{"memory", ":memory:", 2, false},
-		{"plain-query", filepath.Join(t.TempDir(), "plain.db") + "?mode=ro&_pragma=synchronous(NORMAL)", 2, false},
-		{"extra", "file:" + filepath.Join(t.TempDir(), "extra.db") + "?_pragma=synchronous(EXTRA)", 3, false},
+		{"memory", ":memory:", 2},
+		{"plain-query", filepath.Join(t.TempDir(), "plain.db") + "?mode=ro&_pragma=synchronous(NORMAL)", 2},
+		{"extra", "file:" + filepath.Join(t.TempDir(), "extra.db") + "?_pragma=synchronous(EXTRA)", 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := sql.Open("sqlite", tc.dsn)

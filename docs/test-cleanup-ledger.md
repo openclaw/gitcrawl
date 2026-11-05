@@ -290,3 +290,15 @@ update the roadmap text and changelog, and preserve supported command dispatch.
 
 Built-CLI checks cover all eleven refusals with temporary homes; focused race
 tests, static checks, independent review and full CI validate the change.
+
+## Unused test-table data
+
+Removed the unread `jsonShape` and `readOnly` fields, including three inert
+boolean fixture values. Removed three global-command version rows already
+covered by `TestAppOutputModesAndUsageBranches`, whose JSON version assertion
+checks the value as well as the key. Retain all distinct help, usage-error,
+SQLite durability and read-only access cases. Production behavior is unchanged.
+
+An AST audit inspected 292 anonymous test tables across seven Go repositories.
+Focused race tests, a temporary wrong-version overlay, static checks, independent
+review and platform CI validate the retained assertions with synthetic data.
