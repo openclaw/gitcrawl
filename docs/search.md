@@ -82,9 +82,11 @@ Recognized flags in this mode:
 | `--state open\|closed\|all` | Issue state filter |
 | `--json` | Comma-separated field list (gh-compatible) |
 | `--limit` / `-L` | Maximum rows |
-| `--match` | Accepted for parity; the local FTS index already covers documents |
-| `--sort` / `--order` | Accepted for parity |
 | `--sync-if-stale <duration>` | Run one metadata sync first if the local mirror is older than the duration |
+
+`--match`, `--sort`, and `--order` are unsupported in this mode and are
+rejected with usage exit code 2. Remove them from migrated invocations; earlier
+versions accepted these options without applying them.
 
 The output shape matches `gh search issues|prs --json ...` exactly so you can pipe into the same `jq` filters you already have.
 

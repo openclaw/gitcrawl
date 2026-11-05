@@ -395,3 +395,15 @@ checks, independent review and platform CI using temporary state only.
 - Preserve supported sync hydration and refresh stages. Validate with focused
   CLI race tests, module/static checks, independent review, real CLI argument
   rejection, and CI; synthetic paths only, no providers or releases.
+
+## Ignored gh-style search options
+
+- Remove the discarded match, sort, and order registrations and normalization
+  mappings from gh-style search. Reject unsupported requests instead of silently
+  claiming parity; document removal from existing invocations.
+- Add six rows to the existing usage table, reusing its seeded SQLite archive
+  and exit-code assertions. All six report success before the fix, then reject
+  with usage exit 2. No new test harness or fixtures.
+- Preserve supported local search controls and native cluster sorting. Validate
+  with focused CLI race tests, real CLI rejection, static checks, independent
+  review, and CI; synthetic data only, no providers or releases.
