@@ -524,3 +524,14 @@ checks, independent review and platform CI using temporary state only.
   verify node-identity and canonical-mutation regressions are still rejected.
   Run static checks, independent review and PR CI. No production code, live
   archives, deployment or releases change.
+
+## Purge helper inputs
+
+- Remove the ignored reason-label argument from the purge test helper and all
+  seven callers. These labels never reached the purge plan or mutation.
+- Remove its testing handle and inert Helper call: the helper neither reports
+  test failures nor passes the handle onward. Keep plan creation, error returns
+  and plan-ID-based application unchanged, with every fixture and assertion.
+- Validate the existing purge cases against temporary SQLite archives with the
+  race detector, static checks, independent review and PR CI. No production
+  code, live archives, deployment or releases change.
