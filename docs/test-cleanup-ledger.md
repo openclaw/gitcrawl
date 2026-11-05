@@ -336,3 +336,14 @@ Move the direct runner after all classes: it previously stopped before five
 availability/quarantine tests were defined. Both direct and discovery runners
 now execute the same 18 unique cases. Validate the complete maintenance Python
 suite, static checks, independent review and CI with temporary fixtures only.
+
+## Native script CI coverage
+
+Add native code and maintenance unittest discovery to the existing native-script
+CI step on Linux and macOS. The 10 code lifecycle/upstream cases and 60 maintenance
+cases previously had no workflow invocation. Keep the cluster overlay check and
+all test bodies unchanged; each suite runs in its own Python process.
+
+Validate both suites with isolated temporary home/config/cache directories and
+local Git fixtures, then run static checks, independent review and platform CI.
+No provider, deployed lifecycle controller or live archive is used by the tests.
