@@ -100,8 +100,8 @@ func (a *App) embedRepository(ctx context.Context, owner, repoName string, optio
 	if err != nil {
 		return embedResult{}, err
 	}
-	if rt.Config.EmbeddingBasis == "title_summary" {
-		return embedResult{}, fmt.Errorf("embedding basis %q needs summarize support, which is not implemented yet; use `gitcrawl configure --embedding-basis title_original`", rt.Config.EmbeddingBasis)
+	if !store.SupportsEmbeddingBasis(rt.Config.EmbeddingBasis) {
+		return embedResult{}, fmt.Errorf("embedding basis %q is not supported; use title_original, dedupe_text, or llm_key_summary", rt.Config.EmbeddingBasis)
 	}
 	token := config.ResolveOpenAIKey(rt.Config)
 	if token.Value == "" {

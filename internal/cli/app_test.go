@@ -7378,14 +7378,7 @@ func TestEmbedErrorBranchesRecordFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	cfg.EmbeddingBasis = "title_summary"
-	if err := config.Save(configPath, cfg); err != nil {
-		t.Fatalf("save title summary config: %v", err)
-	}
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
-	if err := New().Run(ctx, []string{"--config", configPath, "embed", "openclaw/openclaw"}); err == nil {
-		t.Fatal("title_summary embed should fail")
-	}
 
 	cfg.EmbeddingBasis = "title_original"
 	cfg.OpenAI.BatchSize = 0
