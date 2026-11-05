@@ -5384,6 +5384,12 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	}
 	seedCommandFlowStore(t, dbPath)
 	errorCases := [][]string{
+		{"search", "issues", "-R", "openclaw/openclaw", "--match", "title"},
+		{"search", "issues", "-R", "openclaw/openclaw", "--sort", "created"},
+		{"search", "issues", "-R", "openclaw/openclaw", "--order", "asc"},
+		{"search", "prs", "-R", "openclaw/openclaw", "--match", "title"},
+		{"search", "prs", "-R", "openclaw/openclaw", "--sort", "created"},
+		{"search", "prs", "-R", "openclaw/openclaw", "--order", "asc"},
 		{"--format", "xml", "version"},
 		{"help", "unknown"},
 		{"serve"},
