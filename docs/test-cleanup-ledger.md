@@ -495,3 +495,17 @@ checks, independent review and platform CI using temporary state only.
   reproduce the false greens, then verify targeted failures. Validate healthy
   real SQLite cases with the race detector, static checks, independent review
   and PR CI. No production code, live archives, deployment or releases change.
+
+## Analytics-integrity SQL assertion errors
+
+- Check all 16 previously ignored assertion-query results before comparing
+  recovery history, membership, migration evidence or coverage. Failed reads
+  must not reuse a prior membership value or masquerade as an empty result.
+- Remove the unrelated coverage fixture from the repository-before-limit test;
+  preserve its scoped receipt and 60 newer receipts from another repository.
+  Keep every SQL literal, remaining fixture, mutation and expected value.
+- Disposable Go overlays reproduce false greens for rejected-membership,
+  incomplete-review and read-only empty-coverage reads. Confirm healthy cases
+  with the race detector and verify the repository-ordering regression still
+  fails after fixture removal. Run static checks, independent review and PR CI.
+  No production code, live archives, deployment or releases change.
