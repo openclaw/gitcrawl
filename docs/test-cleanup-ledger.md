@@ -590,3 +590,13 @@ checks, independent review and platform CI using temporary state only.
   positive-evidence controls. Run healthy cases, static checks, independent
   review and PR CI. No production code, live archives, provider calls,
   deployment or releases change.
+
+## Remove discarded source-fixture serialization
+
+- Remove a trailing JSON marshal whose bytes and error were both discarded,
+  plus its otherwise-unused import. The source fixture contains only built-in
+  map, slice and string values; serialization exercised no app behavior.
+- Keep all three source-evidence tests, real temporary SQLite writes, publication
+  repair/replay checks and actor-identity assertions unchanged.
+- Validate the existing cases with the race detector, static checks, independent
+  review and platform CI. No production code or releases change.
