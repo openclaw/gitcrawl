@@ -8,13 +8,13 @@ import (
 )
 
 func TestBuildIncludesTitleBodyAndLabels(t *testing.T) {
-	doc := BuildWithComments(store.Thread{
+	doc := BuildWithContext(store.Thread{
 		ID:         12,
 		Title:      "Download stalls",
 		Body:       "Large downloads hang near the end.",
 		LabelsJSON: `[{"name":"bug"},{"name":"downloads"}]`,
 		UpdatedAt:  "2026-04-26T00:00:00Z",
-	}, []store.Comment{{AuthorLogin: "vincentkoc", Body: "same failure here"}})
+	}, []store.Comment{{AuthorLogin: "vincentkoc", Body: "same failure here"}}, nil, nil)
 	if doc.ThreadID != 12 {
 		t.Fatalf("thread id: got %d want 12", doc.ThreadID)
 	}
@@ -30,14 +30,14 @@ func TestBuildIncludesTitleBodyAndLabels(t *testing.T) {
 }
 
 func TestBuildToleratesBadLabelJSON(t *testing.T) {
-	doc := Build(store.Thread{Title: "A", LabelsJSON: `nope`})
+	doc := BuildWithContext(store.Thread{Title: "A", LabelsJSON: `nope`}, nil, nil, nil)
 	if doc.DedupeText != "a" {
 		t.Fatalf("dedupe text: %q", doc.DedupeText)
 	}
 }
 
 func TestBuildSupportsLegacyStringLabels(t *testing.T) {
-	doc := Build(store.Thread{Title: "A", LabelsJSON: `["bug","help wanted"]`})
+	doc := BuildWithContext(store.Thread{Title: "A", LabelsJSON: `["bug","help wanted"]`}, nil, nil, nil)
 	if doc.DedupeText != "a bug help wanted" {
 		t.Fatalf("dedupe text: %q", doc.DedupeText)
 	}

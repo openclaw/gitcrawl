@@ -26,10 +26,6 @@ type Options struct {
 	MaxSize int
 }
 
-func Build(nodes []Node, edges []Edge) []Cluster {
-	return BuildWithOptions(nodes, edges, Options{})
-}
-
 func BuildWithOptions(nodes []Node, edges []Edge, options Options) []Cluster {
 	uf := newUnionFind()
 	nodeIDs := make(map[int64]struct{}, len(nodes))

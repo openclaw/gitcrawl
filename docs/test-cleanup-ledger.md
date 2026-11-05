@@ -407,3 +407,16 @@ checks, independent review and platform CI using temporary state only.
 - Preserve supported local search controls and native cluster sorting. Validate
   with focused CLI race tests, real CLI rejection, static checks, independent
   review, and CI; synthetic data only, no providers or releases.
+
+## Test-maintained forwarding APIs
+
+- Remove document Build/BuildWithComments, cluster Build, and vector Query:
+  internal forwarding APIs retained only by tests and a benchmark. Production
+  and native-script consumers use BuildWithContext, BuildWithOptions, and
+  QueryWithOptions instead.
+- Move the existing callers onto those implementations with the same default
+  inputs. Keep every fixture and behavioral assertion; vector tests and the
+  benchmark now fail on returned errors instead of silently discarding them.
+- Preserve native code/cluster APIs and the independent scalar Cosine oracle.
+  Validate affected packages with race tests, module/static checks, independent
+  review, and CI. No public module API, providers, live archives, or releases.
