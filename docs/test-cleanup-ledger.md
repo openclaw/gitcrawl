@@ -456,3 +456,16 @@ checks, independent review and platform CI using temporary state only.
 - Validate the same 27 real temporary-SQLite cases before and after with the
   race detector, static checks, independent review, and CI. No public module
   API, providers, live archives, or releases change.
+
+## Native cache rejection reasons
+
+- Require the four malformed pair-cache cases to reach their intended
+  completeness or edge-shape rejection. Previously any error, including a
+  missing file or invalid JSON fixture, counted as successful validation.
+- Check the saved healthy cache and all setup reads, encodes, writes and final
+  directory listing in that test. Preserve the graph fixture, four mutations,
+  exclusion invalidation and cache-removal assertions; no production change.
+- Temporary Go overlays demonstrate the false greens before the change and
+  rejection afterward. Validate healthy cases with the race detector, the
+  native overlay suite, static checks, independent review and PR CI. No live
+  archives, provider calls, deployment or releases.
