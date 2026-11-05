@@ -444,3 +444,15 @@ checks, independent review and platform CI using temporary state only.
   change and fails afterward. Validate the normal parity case with the race
   detector, static checks, independent review, and CI. No production behavior,
   provider calls, live archives, or releases change.
+
+## Test-only repository scope forwarding method
+
+- Remove RestrictPortableRepository, an internal forwarding method used only
+  by eight test calls. Point those calls at RestrictPortableRepositoryWithOptions
+  with the same zero-value options; keep strict foreign-key validation enabled.
+- Preserve all fixtures, assertions, cancellation, rollback, future-schema and
+  candidate-generation checks. Only calls change in the three test files;
+  the production scoping implementation is unchanged.
+- Validate the same 27 real temporary-SQLite cases before and after with the
+  race detector, static checks, independent review, and CI. No public module
+  API, providers, live archives, or releases change.

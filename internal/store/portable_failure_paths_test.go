@@ -218,7 +218,10 @@ func TestPortableStoreHelpersPropagateCancellation(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{name: "repository scope", run: func() error { _, err := st.RestrictPortableRepository(canceled, "openclaw/gitcrawl"); return err }},
+		{name: "repository scope", run: func() error {
+			_, err := st.RestrictPortableRepositoryWithOptions(canceled, "openclaw/gitcrawl", PortableRepositoryScopeOptions{})
+			return err
+		}},
 		{name: "table names", run: func() error { _, err := portableTableNames(canceled, st.DB()); return err }},
 		{name: "column set", run: func() error { _, err := portableTableColumnSet(canceled, st.DB(), "threads"); return err }},
 		{name: "foreign key count", run: func() error { _, err := portableForeignKeyViolationCount(canceled, st.DB()); return err }},
@@ -441,7 +444,7 @@ func TestRestrictPortableRepositoryRollsBackFutureSchemaDeleteFailure(t *testing
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.RestrictPortableRepository(ctx, "openclaw/keep")
+	_, err = st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/keep", PortableRepositoryScopeOptions{})
 	if err == nil || !strings.Contains(err.Error(), "delete out-of-scope portable rows from future_guarded") {
 		t.Fatalf("future schema delete error = %v", err)
 	}
@@ -474,7 +477,7 @@ func TestRestrictPortableRepositoryReportsRetainedForeignKeyViolation(t *testing
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.RestrictPortableRepository(ctx, "openclaw/keep")
+	_, err = st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/keep", PortableRepositoryScopeOptions{})
 	if err == nil || !strings.Contains(err.Error(), "left 1 foreign-key violations") {
 		t.Fatalf("retained foreign-key violation error = %v", err)
 	}
@@ -520,7 +523,7 @@ func TestRestrictPortableRepositoryRejectsIncompleteFutureSchemas(t *testing.T) 
 				t.Fatal(err)
 			}
 			st := &Store{db: db, path: "incomplete.db"}
-			_, err = st.RestrictPortableRepository(ctx, "openclaw/keep")
+			_, err = st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/keep", PortableRepositoryScopeOptions{})
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("incomplete schema error = %v, want %q", err, test.wantError)
 			}
@@ -549,7 +552,7 @@ func TestRestrictPortableRepositoryRejectsNullIdentityWithoutMutation(t *testing
 		t.Fatal(err)
 	}
 	st := &Store{db: db, path: "null-identity.db"}
-	_, err = st.RestrictPortableRepository(ctx, "openclaw/keep")
+	_, err = st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/keep", PortableRepositoryScopeOptions{})
 	if err == nil || !strings.Contains(err.Error(), "read portable target repository") {
 		t.Fatalf("null repository identity error = %v", err)
 	}

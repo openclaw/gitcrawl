@@ -276,7 +276,7 @@ func TestPortableRepositoryScopeDropsCandidateGenerations(t *testing.T) {
 	if _, err := st.UpsertRepository(ctx, Repository{Owner: "openclaw", Name: "other", FullName: "openclaw/other", RawJSON: "{}", UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RestrictPortableRepository(ctx, "openclaw/other"); err != nil {
+	if _, err := st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/other", PortableRepositoryScopeOptions{}); err != nil {
 		t.Fatalf("restrict a snapshot holding another repository's generations: %v", err)
 	}
 	var remaining int

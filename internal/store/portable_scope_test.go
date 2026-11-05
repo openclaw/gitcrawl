@@ -33,7 +33,7 @@ func TestRestrictPortableRepositoryRemovesDependentCurrentSchemaRows(t *testing.
 			t.Fatalf("seed portable scope with %q: %v", statement, err)
 		}
 	}
-	result, err := st.RestrictPortableRepository(ctx, "openclaw/keep")
+	result, err := st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/keep", PortableRepositoryScopeOptions{})
 	if err != nil {
 		t.Fatalf("restrict repository: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRestrictPortableRepositoryMissingTargetDoesNotMutate(t *testing.T) {
 	if _, err := st.DB().ExecContext(ctx, `insert into repositories(id, owner, name, full_name, raw_json, updated_at) values(1, 'openclaw', 'keep', 'openclaw/keep', '{}', '2026-08-08T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RestrictPortableRepository(ctx, "openclaw/missing"); err == nil {
+	if _, err := st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/missing", PortableRepositoryScopeOptions{}); err == nil {
 		t.Fatal("missing repository restriction succeeded")
 	}
 	var count int

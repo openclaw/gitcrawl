@@ -18,13 +18,9 @@ type PortableRepositoryScopeOptions struct {
 	DeferForeignKeyValidation bool
 }
 
-// RestrictPortableRepository reduces a disposable portable snapshot to one
-// repository. It combines current foreign-key cascades with column-aware
+// RestrictPortableRepositoryWithOptions reduces a disposable portable snapshot to
+// one repository. It combines current foreign-key cascades with column-aware
 // deletion so repository-owned rows remain covered as the schema evolves.
-func (s *Store) RestrictPortableRepository(ctx context.Context, fullName string) (PortableRepositoryScope, error) {
-	return s.RestrictPortableRepositoryWithOptions(ctx, fullName, PortableRepositoryScopeOptions{})
-}
-
 func (s *Store) RestrictPortableRepositoryWithOptions(ctx context.Context, fullName string, options PortableRepositoryScopeOptions) (PortableRepositoryScope, error) {
 	var result PortableRepositoryScope
 	conn, err := s.db.Conn(ctx)
