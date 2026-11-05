@@ -74,7 +74,7 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 	if err := s.DB().QueryRow("SELECT raw_json FROM pull_request_details WHERE thread_id=2").Scan(&retained); err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "owner-request-fixture")
+	result, err := applyPurge(s, ctx, "fixture/repo", []int{10})
 	if err != nil || !result.Applied {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -164,7 +164,7 @@ func TestOwnerPurgeRemovesExactClosureAndPreventsReintroduction(t *testing.T) {
 func TestOwnerPurgeRejectsTailAndRollsBack(t *testing.T) {
 	s := exclusionFixture(t)
 	ctx := context.Background()
-	if _, err := applyPurge(t, s, ctx, "fixture/repo", []int{20}, "tail"); err == nil || !strings.Contains(err.Error(), "ID reuse") {
+	if _, err := applyPurge(s, ctx, "fixture/repo", []int{20}); err == nil || !strings.Contains(err.Error(), "ID reuse") {
 		t.Fatalf("tail admitted: %v", err)
 	}
 	var n int
@@ -185,7 +185,7 @@ func TestOwnerPurgeRejectsTailAndRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = applyPurge(t, s, ctx, "fixture/repo", []int{10}, "rollback"); err == nil {
+	if _, err = applyPurge(s, ctx, "fixture/repo", []int{10}); err == nil {
 		t.Fatal("failure accepted")
 	}
 	for _, q := range []string{"SELECT count(*) FROM threads WHERE id=1", "SELECT count(*) FROM actor_identity_evidence WHERE node_id='node10'", "SELECT count(*) FROM analytics_retries WHERE number=10"} {
@@ -263,7 +263,7 @@ func TestOwnerPurgeRefusesBlobBackedTargetsWithoutMutation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "blob-fixture")
+			result, err := applyPurge(s, ctx, "fixture/repo", []int{10})
 			var count, threads int
 			if err := s.DB().QueryRow("SELECT count(*) FROM blobs WHERE id=1").Scan(&count); err != nil {
 				t.Fatal(err)
@@ -289,7 +289,7 @@ func TestOwnerPurgeRefusesBlobBackedTargetsWithoutMutation(t *testing.T) {
 func TestOwnerPurgePublicationCannotDiscardPolicy(t *testing.T) {
 	s := exclusionFixture(t)
 	ctx := context.Background()
-	if _, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "private-owner-reference"); err != nil {
+	if _, err := applyPurge(s, ctx, "fixture/repo", []int{10}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 1}); err == nil || !strings.Contains(err.Error(), "local owner exclusions") {
@@ -308,7 +308,7 @@ func TestOwnerPurgeCanonicalRepositoryMatchesCaseVariantReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyPurge(t, s, ctx, "FIXTURE/REPO", []int{10}, "case-fixture")
+	result, err := applyPurge(s, ctx, "FIXTURE/REPO", []int{10})
 	if err != nil || result.Counts["analytics_fetch_attempts"] != 1 || result.Counts["analytics_retries"] != 1 {
 		t.Fatalf("variant not planned: %+v %v", result, err)
 	}
@@ -356,7 +356,7 @@ func TestOwnerPurgeRefusesWorkflowEvidenceAndKeepsUnrelatedReservations(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := applyPurge(t, s, ctx, "fixture/repo", []int{10}, "workflow-fixture")
+			result, err := applyPurge(s, ctx, "fixture/repo", []int{10})
 			var n int
 			if err := s.DB().QueryRow("SELECT count(*) FROM threads WHERE id=1").Scan(&n); err != nil {
 				t.Fatal(err)
@@ -386,8 +386,7 @@ func TestOwnerPurgeRefusesWorkflowEvidenceAndKeepsUnrelatedReservations(t *testi
 	}
 }
 
-func applyPurge(t *testing.T, s *Store, ctx context.Context, repository string, numbers []int, _ string) (ThreadPurgePlan, error) {
-	t.Helper()
+func applyPurge(s *Store, ctx context.Context, repository string, numbers []int) (ThreadPurgePlan, error) {
 	plan, err := s.PlanThreadPurge(ctx, repository, numbers)
 	if err != nil {
 		return plan, err
