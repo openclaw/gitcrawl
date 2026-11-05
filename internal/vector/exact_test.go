@@ -170,8 +170,6 @@ func TestTurboVecHelperProcess(t *testing.T) {
 	if os.Getenv("CRAWLKIT_TEST_TURBOVEC_HELPER") != "1" {
 		return
 	}
-	defer os.Exit(0)
-
 	var request struct {
 		Dimensions int         `json:"dimensions"`
 		Limit      int         `json:"limit"`
@@ -200,4 +198,5 @@ func TestTurboVecHelperProcess(t *testing.T) {
 	if err := json.NewEncoder(os.Stdout).Encode(response); err != nil {
 		panic(err)
 	}
+	os.Exit(0)
 }

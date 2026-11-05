@@ -420,3 +420,15 @@ checks, independent review and platform CI using temporary state only.
 - Preserve native code/cluster APIs and the independent scalar Cosine oracle.
   Validate affected packages with race tests, module/static checks, independent
   review, and CI. No public module API, providers, live archives, or releases.
+
+## Vector helper process failure status
+
+- Move the helper's success exit from a defer to its normal completion path.
+  A panic after writing valid JSON must fail the process and its parent bridge
+  test; the deferred success exit previously concealed that failure.
+- Preserve request validation, the response, and every existing test body.
+  Healthy completion still exits before the test runner can append output.
+- Reproduce the false-green parent test with a temporary post-response panic,
+  then verify failure after the fix and healthy race-enabled vector tests.
+  Validate static checks, independent review, and CI. No production behavior,
+  provider calls, live archives, or releases change.
