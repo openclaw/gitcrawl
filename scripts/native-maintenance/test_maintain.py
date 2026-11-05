@@ -1,4 +1,5 @@
 import importlib.util,json,pathlib,tempfile,unittest,os
+from contextlib import closing
 spec=importlib.util.spec_from_file_location('maintain',pathlib.Path(__file__).with_name('maintain.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class _CycleFixture:
  def make(self):
@@ -115,8 +116,42 @@ class IdentityQuarantineTests(_CycleFixture,unittest.TestCase):
  def test_partial_core_receipt_is_ready_without_complete_fiction(self):
   import sqlite3,datetime,time
   c,p,calls=self.make();db=p/'source.db';c.c['db']=str(db)
-  with sqlite3.connect(db) as con:
+  with closing(sqlite3.connect(db)) as con,con:
    con.execute('create table analytics_coverage(repository,through,observed_at,complete)');now=datetime.datetime.now(datetime.timezone.utc);con.execute('insert into analytics_coverage values(?,?,?,0)',('openclaw/openclaw',(now-datetime.timedelta(seconds=2)).isoformat(),(now-datetime.timedelta(seconds=1)).isoformat()))
   self.assertTrue(c.source_ready());self.assertEqual(c.state['core']['complete'],0)
+
+class ImportVerificationTests(_CycleFixture,unittest.TestCase):
+ def test_import_verification_closes_database_on_match_and_mismatch(self):
+  import sqlite3
+  from unittest.mock import patch
+  connect=sqlite3.connect
+  for matches in (True,False):
+   with self.subTest(matches=matches):
+    c,p,calls=self.make();db=p/'vectors.db';c.c['db']=str(db)
+    vector=[1.0]+[0.0]*1535;native_hash=m.sha(b'native content');input_hash=m.sha(b'synthetic embedding input')
+    with closing(connect(db)) as con,con:
+     con.execute('create table thread_vectors(thread_id integer,basis text,model text,content_hash text,dimensions integer,vector_json text)')
+     con.execute('insert into thread_vectors values(?,?,?,?,?,?)',(1,'dedupe_text','text-embedding-3-small',native_hash if matches else m.sha(b'changed content'),1536,json.dumps(vector)))
+    request={'basis':'dedupe_text','model':'text-embedding-3-small','tasks':[{'task_id':'t','input_sha256':input_hash,'native_content_hash':native_hash,'thread_binding':{'thread_id':'1'}}]}
+    m.save(p/'request.json',request)
+    pending={'request':'request.json','sha256':m.sha((p/'request.json').read_bytes()),'native_receipt':str(p/'native.json')}
+    receipt={'format':'gitcrawl.combined-producer.v1','request_sha256':pending['sha256'],'committed_at':'2026-01-01T00:00:20Z','imported':1,'unchanged':0}
+    m.save(p/'native.json',receipt);c.state['pending']=pending;c.checkpoint();before=c.statepath.read_bytes()
+    result={'results':[{'task_id':'t','input_sha256':input_hash,'vector':vector}]}
+    connections=[]
+    def tracked_connect(*args,**kwargs):
+     con=connect(*args,**kwargs);connections.append(con);self.addCleanup(con.close);return con
+    with patch.object(m.sqlite3,'connect',side_effect=tracked_connect):
+     if matches:
+      self.assertTrue(c.verify_import(pending,result));self.assertEqual(pending['matched'],1)
+      self.assertEqual(pending['native_receipt_sha256'],m.sha((p/'native.json').read_bytes()))
+      self.assertEqual(json.loads(c.statepath.read_bytes())['pending']['native_publication'],receipt)
+     else:
+      with self.assertRaisesRegex(RuntimeError,'durable import no longer matches'):
+       c.verify_import(pending,result)
+      self.assertNotIn('matched',pending);self.assertEqual(c.statepath.read_bytes(),before)
+    self.assertEqual(calls,[]);self.assertEqual(len(connections),1)
+    with self.assertRaisesRegex(sqlite3.ProgrammingError,'closed database'):
+     connections[0].execute('select 1')
 
 if __name__=='__main__':unittest.main()
