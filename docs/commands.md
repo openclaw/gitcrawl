@@ -159,7 +159,7 @@ octopool gh api repos/openclaw/openclaw/pulls/123
 
 ## Not yet implemented
 
-These appear in `SPEC.md` but currently return a "not implemented" error. They are reserved for future versions:
+These command ideas appear in `SPEC.md` but are not available in the CLI. Invoking them returns an unknown-command usage error (exit code 2):
 
 `key-summaries`, `merge-clusters`, `split-cluster`, `export-sync`, `import-sync`, `validate-sync`, `portable-size`, `sync-status`, `optimize`, `completion`
 

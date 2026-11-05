@@ -280,3 +280,13 @@ existing filter table, each requiring one exact ID instead of the default two.
 Temporary flag-discarding overlays pass the original golden suite and fail
 the corresponding new rows. Focused race/static checks, review and full CI
 validate synthetic archives only. Production neighbor behavior is unchanged.
+
+## Unimplemented command stubs
+
+Removed eleven unavailable command-name mappings, their error-formatting helper,
+and its invented-command unit test. The normal unknown-command usage path now
+handles those names with exit code 2. Keep the existing global-command assertion,
+update the roadmap text and changelog, and preserve supported command dispatch.
+
+Built-CLI checks cover all eleven refusals with temporary homes; focused race
+tests, static checks, independent review and full CI validate the change.
