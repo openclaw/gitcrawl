@@ -46,7 +46,9 @@ func TestAnalyticsOwnerCancellationPreservesRetryDeadline(t *testing.T) {
 		}
 	}
 	var receipts int
-	s.DB().QueryRow("select count(*) from analytics_fetch_attempts").Scan(&receipts)
+	if e := s.DB().QueryRow("select count(*) from analytics_fetch_attempts").Scan(&receipts); e != nil {
+		t.Fatal(e)
+	}
 	if receipts != 9 {
 		t.Fatalf("lost receipts: %d", receipts)
 	}
@@ -112,7 +114,9 @@ func TestAnalyticsCancellationClassificationAndNewObligation(t *testing.T) {
 			if next != "2026-10-20T19:00:31Z" || attempts != want {
 				t.Fatalf("new obligation: %s attempts=%d", next, attempts)
 			}
-			s.DB().QueryRow("select complete from analytics_coverage").Scan(&complete)
+			if e := s.DB().QueryRow("select complete from analytics_coverage").Scan(&complete); e != nil {
+				t.Fatal(e)
+			}
 			if complete != 0 {
 				t.Fatal("cancellation claimed complete")
 			}

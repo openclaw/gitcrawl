@@ -576,3 +576,17 @@ checks, independent review and platform CI using temporary state only.
   for false greens, controls and code-test harness admission; run healthy race
   cases, static checks, independent review and PR CI. No production code, live
   archives, provider calls, deployment or releases change.
+
+## Analytics absence assertions require successful reads
+
+- Check nine ignored SQL reads in partial-response, owner-exclusion and owner
+  cancellation tests. Failed reads must not certify unknown review membership,
+  empty exclusion receipt/retry ledgers or incomplete cancellation coverage.
+- Keep the local HTTP/SQLite fixtures, retained-history snapshots, peer-isolation
+  assertions, exclusion filtering, cancellation classes and retry deadlines.
+  Preserve every SQL literal and expected value; keep query errors local so
+  expected provider failures remain intact.
+- Disposable race-enabled overlays reproduce each false green and retain
+  positive-evidence controls. Run healthy cases, static checks, independent
+  review and PR CI. No production code, live archives, provider calls,
+  deployment or releases change.
