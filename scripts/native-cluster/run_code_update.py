@@ -90,10 +90,15 @@ class Lifecycle:
    atomic(self.state/'last-failure.json',{'at':time.time(),'error':str(e),'phase':record['phase'] if record else 'prepare','run_id':runid})
    raise
   finally:
-   if child is not None and child.poll() is None:
-    child.terminate()
-    try:child.wait(timeout=5)
-    except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
+   if child is not None:
+    try:
+     if child.poll() is None:
+      child.terminate()
+      try:child.wait(timeout=5)
+      except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
+    finally:
+     child.stdout.close()
+     child.stderr.close()
    if gate.exists():gate.unlink()
    if record is not None:self.restore(record)
 
