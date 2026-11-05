@@ -273,9 +273,14 @@ func TestSendSnapshotIngestDatasetFlushesBeforeEncodedByteLimit(t *testing.T) {
 	}
 }
 
-func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
-	var requests []crawlremote.IngestRequest
-	var encodedSizes []int
+type byteBoundedIngestRecorder struct {
+	requests []crawlremote.IngestRequest
+	bodies   [][]byte
+}
+
+func newByteBoundedIngestTestClient(t *testing.T) (*crawlremote.Client, *byteBoundedIngestRecorder) {
+	t.Helper()
+	recorded := &byteBoundedIngestRecorder{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -291,17 +296,17 @@ func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		requests = append(requests, request)
-		encodedSizes = append(encodedSizes, len(body))
+		recorded.bodies = append(recorded.bodies, body)
+		recorded.requests = append(recorded.requests, request)
 		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
 			Table:         request.Table,
 			SnapshotID:    request.Manifest.SnapshotID,
-			MutationToken: fmt.Sprintf("mutation-%d", len(requests)),
+			MutationToken: fmt.Sprintf("mutation-%d", len(recorded.requests)),
 			RowsAccepted:  int64(len(request.Rows)),
 			Complete:      request.Final,
 		})
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	client, err := crawlremote.NewClient(crawlremote.Options{
 		Endpoint:      server.URL,
 		HTTPClient:    server.Client(),
@@ -310,6 +315,12 @@ func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remote client: %v", err)
 	}
+	return client, recorded
+}
+
+func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
+	client, recorded := newByteBoundedIngestTestClient(t)
+
 	value := strings.Repeat("x", int(gitcrawlCloudIngestRequestMaxBytes/2))
 	progress, err := sendSnapshotIngestRows(
 		context.Background(),
@@ -333,18 +344,18 @@ func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
 	if progress.RowsAccepted != 3 || progress.MutationToken != "mutation-3" {
 		t.Fatalf("progress mismatch: rows_accepted=%d mutation_token_present=%t mutation_token_length=%d", progress.RowsAccepted, progress.MutationToken != "", len(progress.MutationToken))
 	}
-	if len(requests) != 3 {
-		t.Fatalf("requests = %d, want one per large row", len(requests))
+	if len(recorded.requests) != 3 {
+		t.Fatalf("requests = %d, want one per large row", len(recorded.requests))
 	}
-	for index := range requests {
-		if len(requests[index].Rows) != 1 {
-			t.Fatalf("request %d rows = %d, want 1", index, len(requests[index].Rows))
+	for index := range recorded.requests {
+		if len(recorded.requests[index].Rows) != 1 {
+			t.Fatalf("request %d rows = %d, want 1", index, len(recorded.requests[index].Rows))
 		}
-		if int64(encodedSizes[index]) > gitcrawlCloudIngestRequestMaxBytes {
+		if int64(len(recorded.bodies[index])) > gitcrawlCloudIngestRequestMaxBytes {
 			t.Fatalf(
 				"request %d encoded bytes = %d, limit %d",
 				index,
-				encodedSizes[index],
+				len(recorded.bodies[index]),
 				gitcrawlCloudIngestRequestMaxBytes,
 			)
 		}
@@ -352,11 +363,11 @@ func TestSendSnapshotIngestRowsFlushesBeforeEncodedByteLimit(t *testing.T) {
 		if index > 0 {
 			wantCursor = fmt.Sprint(index)
 		}
-		if requests[index].Cursor != wantCursor {
-			t.Fatalf("request %d cursor = %q, want %q", index, requests[index].Cursor, wantCursor)
+		if recorded.requests[index].Cursor != wantCursor {
+			t.Fatalf("request %d cursor = %q, want %q", index, recorded.requests[index].Cursor, wantCursor)
 		}
-		if requests[index].Final != (index == len(requests)-1) {
-			t.Fatalf("request %d final = %v", index, requests[index].Final)
+		if recorded.requests[index].Final != (index == len(recorded.requests)-1) {
+			t.Fatalf("request %d final = %v", index, recorded.requests[index].Final)
 		}
 	}
 }
@@ -454,42 +465,7 @@ func TestIngestBatchingMatchesCrawlkitEscapingAtByteBoundary(t *testing.T) {
 		SourceSHA256:  strings.Repeat("a", 64),
 	}
 	columns := []string{"value"}
-	var bodies [][]byte
-	var requests []crawlremote.IngestRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if int64(len(body)) > gitcrawlCloudIngestRequestMaxBytes {
-			http.Error(w, "encoded request exceeded byte budget", http.StatusRequestEntityTooLarge)
-			return
-		}
-		var request crawlremote.IngestRequest
-		if err := json.Unmarshal(body, &request); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		bodies = append(bodies, body)
-		requests = append(requests, request)
-		_ = json.NewEncoder(w).Encode(crawlremote.IngestResult{
-			Table:         request.Table,
-			SnapshotID:    request.Manifest.SnapshotID,
-			MutationToken: fmt.Sprintf("mutation-%d", len(requests)),
-			RowsAccepted:  int64(len(request.Rows)),
-			Complete:      request.Final,
-		})
-	}))
-	defer server.Close()
-	client, err := crawlremote.NewClient(crawlremote.Options{
-		Endpoint:      server.URL,
-		HTTPClient:    server.Client(),
-		TokenProvider: crawlremote.StaticToken("publisher-token"),
-	})
-	if err != nil {
-		t.Fatalf("remote client: %v", err)
-	}
+	client, recorded := newByteBoundedIngestTestClient(t)
 
 	fitRows, oversizedRows := escapedIngestBoundaryValues(
 		t,
@@ -512,9 +488,9 @@ func TestIngestBatchingMatchesCrawlkitEscapingAtByteBoundary(t *testing.T) {
 	); err != nil {
 		t.Fatalf("send escaped in-memory boundary row: %v", err)
 	}
-	assertCrawlkitWireSizeParity(t, requests[0], bodies[0])
-	assertEscapedIngestWireFragments(t, bodies[0])
-	requestCount := len(requests)
+	assertCrawlkitWireSizeParity(t, recorded.requests[0], recorded.bodies[0])
+	assertEscapedIngestWireFragments(t, recorded.bodies[0])
+	requestCount := len(recorded.requests)
 	if _, err := sendSnapshotIngestRows(
 		context.Background(),
 		client,
@@ -529,8 +505,8 @@ func TestIngestBatchingMatchesCrawlkitEscapingAtByteBoundary(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "encoded request") {
 		t.Fatalf("escaped in-memory oversized row error = %v", err)
 	}
-	if len(requests) != requestCount {
-		t.Fatalf("escaped in-memory oversized row sent %d requests", len(requests)-requestCount)
+	if len(recorded.requests) != requestCount {
+		t.Fatalf("escaped in-memory oversized row sent %d requests", len(recorded.requests)-requestCount)
 	}
 
 	db, err := sql.Open("sqlite", ":memory:")
@@ -569,9 +545,9 @@ func TestIngestBatchingMatchesCrawlkitEscapingAtByteBoundary(t *testing.T) {
 	); err != nil {
 		t.Fatalf("send escaped stream boundary row: %v", err)
 	}
-	assertCrawlkitWireSizeParity(t, requests[requestCount], bodies[requestCount])
-	assertEscapedIngestWireFragments(t, bodies[requestCount])
-	requestCount = len(requests)
+	assertCrawlkitWireSizeParity(t, recorded.requests[requestCount], recorded.bodies[requestCount])
+	assertEscapedIngestWireFragments(t, recorded.bodies[requestCount])
+	requestCount = len(recorded.requests)
 	if _, err := db.Exec(`update rows set value = ?`, oversizedStream); err != nil {
 		t.Fatalf("seed escaped stream oversized row: %v", err)
 	}
@@ -587,8 +563,8 @@ func TestIngestBatchingMatchesCrawlkitEscapingAtByteBoundary(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "encoded ingest request") {
 		t.Fatalf("escaped stream oversized row error = %v", err)
 	}
-	if len(requests) != requestCount {
-		t.Fatalf("escaped stream oversized row sent %d requests", len(requests)-requestCount)
+	if len(recorded.requests) != requestCount {
+		t.Fatalf("escaped stream oversized row sent %d requests", len(recorded.requests)-requestCount)
 	}
 }
 
