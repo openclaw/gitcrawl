@@ -359,3 +359,15 @@ Close stdout and stderr in the producer cleanup path, preserving termination,
 binding rejection and owner restoration. Validate all native-code cases with
 isolated home/config/cache state and local Git fixtures, static checks,
 independent review and platform CI. No deployed controller or live archive runs.
+
+## Cluster producer pipe cleanup
+
+Cover early receipt rejection in the sibling cluster lifecycle controller with
+real temporary producer subprocesses. Both exited and running children leave
+stdout and stderr open before the fix. Check process exit, both closed handles,
+no owner-lifecycle calls and the preserved failure receipt.
+
+Close both pipes in the cleanup path and run the new unittest discovery command
+in Linux/macOS CI alongside the existing overlay check. Validate the regression,
+all native script suites, overlay tests, static checks and independent review.
+Fixtures use temporary state only; no deployed controller or archive is used.

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Close native code producer output pipes when rejecting prepared receipts, including producers that have already exited.
+- Close native code and cluster producer output pipes when rejecting prepared receipts, including producers that have already exited.
 
 - Run the native code and maintenance Python regression suites in Linux and macOS CI, alongside the existing cluster overlay check.
 
