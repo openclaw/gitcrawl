@@ -469,3 +469,16 @@ checks, independent review and platform CI using temporary state only.
   rejection afterward. Validate healthy cases with the race detector, the
   native overlay suite, static checks, independent review and PR CI. No live
   archives, provider calls, deployment or releases.
+
+## Native bridge SQL assertion errors
+
+- Check all six native bridge assertion-query results before comparing counts,
+  timestamps or convergence state. Empty-table and before/after checks previously
+  accepted zero values after failed reads, hiding a broken SQL oracle.
+- Pass the active test to the shared empty-table assertion so failures belong
+  to the calling subtest. Preserve all real SQLite fixtures, import mutations,
+  preview/no-write, idempotency, writer and large-packet checks.
+- Disposable Go overlays inject missing-table and missing-column reads to show
+  the old false greens and targeted failures after the change. Validate healthy
+  cases with the race detector, the native overlay suite, static checks,
+  independent review and PR CI. No production or live archive changes; no releases.
