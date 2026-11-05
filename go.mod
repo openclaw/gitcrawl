@@ -5,7 +5,7 @@ go 1.27.2
 toolchain go1.27.3
 
 require (
-	github.com/alecthomas/kong v1.16.1
+	github.com/alecthomas/kong v1.17.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -15,7 +15,7 @@ require (
 	github.com/openclaw/crawlkit v0.17.3
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.49.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (

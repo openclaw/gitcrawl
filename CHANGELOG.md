@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update Kong to v1.17.0 and SQLite to v1.61.1, retaining the matching SQLite runtime and Go 1.27.2 minimum.
+
 - Reject ignored `--match`, `--sort`, and `--order` options in `search issues|prs` with usage exit code 2. Remove these options from migrated invocations; they never changed local search results.
 
 - Reject the inert `--include-code` option on `sync` and `refresh` with usage exit code 2 before loading configuration or starting a stage. Remove this option from existing invocations; code hydration was never performed.
