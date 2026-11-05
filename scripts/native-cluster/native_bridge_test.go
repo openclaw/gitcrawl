@@ -179,9 +179,12 @@ func TestNativeProducerImportFences(t *testing.T) {
 		}{task.TaskID, task.InputSHA256, vector})
 	}
 	response, _ := json.Marshal(res)
-	assertEmpty := func() {
+	assertEmpty := func(t *testing.T) {
+		t.Helper()
 		var n int
-		s.DB().QueryRow("select count(*) from thread_vectors").Scan(&n)
+		if e := s.DB().QueryRow("select count(*) from thread_vectors").Scan(&n); e != nil {
+			t.Fatal(e)
+		}
 		if n != 0 {
 			t.Fatal("failed/preview import wrote vectors")
 		}
@@ -190,7 +193,7 @@ func TestNativeProducerImportFences(t *testing.T) {
 	if e != nil || preview.Imported != 2 || preview.CommittedAt != "" {
 		t.Fatalf("preview %+v %v", preview, e)
 	}
-	assertEmpty()
+	assertEmpty(t)
 	for _, tc := range []string{"raw_hash", "dimension", "duplicate", "zero", "consumer", "clock"} {
 		t.Run(tc, func(t *testing.T) {
 			var bad NativeEmbeddingResponse
@@ -214,7 +217,7 @@ func TestNativeProducerImportFences(t *testing.T) {
 			if _, e := s.ImportNativeEmbeddingResponse(ctx, raw, b, p); e == nil {
 				t.Fatal("invalid response/binding accepted")
 			}
-			assertEmpty()
+			assertEmpty(t)
 			if tc == "clock" {
 				s.DB().Exec("update threads set updated_at='2026-01-01T00:00:00Z' where id=2")
 			}
@@ -225,13 +228,17 @@ func TestNativeProducerImportFences(t *testing.T) {
 		t.Fatalf("import %+v %v", receipt, e)
 	}
 	var before string
-	s.DB().QueryRow("select updated_at from thread_vectors where thread_id=1").Scan(&before)
+	if e := s.DB().QueryRow("select updated_at from thread_vectors where thread_id=1").Scan(&before); e != nil {
+		t.Fatal(e)
+	}
 	receipt, e = s.ImportNativeEmbeddingResponse(ctx, raw, response, policy)
 	if e != nil || receipt.Imported != 0 || receipt.Unchanged != 2 {
 		t.Fatalf("idempotency %+v %v", receipt, e)
 	}
 	var after string
-	s.DB().QueryRow("select updated_at from thread_vectors where thread_id=1").Scan(&after)
+	if e := s.DB().QueryRow("select updated_at from thread_vectors where thread_id=1").Scan(&after); e != nil {
+		t.Fatal(e)
+	}
 	if before != after {
 		t.Fatal("repeat import clock churn")
 	}
@@ -313,7 +320,9 @@ func TestNativeProducerExistingWriterNeverMigrates(t *testing.T) {
 		t.Fatal(e)
 	}
 	var checked, allocated int64
-	w.DB().QueryRow("select c.checked_observation_sequence,s.value from observation_schema_convergence c join thread_observation_sequence s on s.id=c.id where c.id=1").Scan(&checked, &allocated)
+	if e := w.DB().QueryRow("select c.checked_observation_sequence,s.value from observation_schema_convergence c join thread_observation_sequence s on s.id=c.id where c.id=1").Scan(&checked, &allocated); e != nil {
+		t.Fatal(e)
+	}
 	if checked != 0 || allocated != 123 {
 		t.Fatal("writer performed convergence repair")
 	}
@@ -437,7 +446,9 @@ func TestNativeProducerLargePacketPreview(t *testing.T) {
 	}
 	t.Logf("2000-task preview seconds=%.3f", time.Since(start).Seconds())
 	var n int
-	s.DB().QueryRow("select count(*) from thread_vectors").Scan(&n)
+	if e := s.DB().QueryRow("select count(*) from thread_vectors").Scan(&n); e != nil {
+		t.Fatal(e)
+	}
 	if n != 0 {
 		t.Fatal("preview wrote")
 	}
@@ -447,7 +458,9 @@ func TestNativeProducerLargePacketPreview(t *testing.T) {
 	if _, e = s.ImportNativeEmbeddingResponse(ctx, raw, response, policy); e == nil {
 		t.Fatal("last-key repair accepted")
 	}
-	s.DB().QueryRow("select count(*) from thread_vectors").Scan(&n)
+	if e := s.DB().QueryRow("select count(*) from thread_vectors").Scan(&n); e != nil {
+		t.Fatal(e)
+	}
 	if n != 0 {
 		t.Fatal("partial import")
 	}
