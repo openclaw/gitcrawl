@@ -600,3 +600,16 @@ checks, independent review and platform CI using temporary state only.
   repair/replay checks and actor-identity assertions unchanged.
 - Validate the existing cases with the race detector, static checks, independent
   review and platform CI. No production code or releases change.
+
+## Native rollback assertions require successful reads
+
+- Check ten ignored SQL reads in subset and quarantine recovery tests. Failed
+  reads must not certify empty rollback vectors, unchanged provider coverage
+  or a retained retry count left over from an earlier assertion.
+- Keep every SQL literal, expected value, trigger, snapshot, recovery transition
+  and optional synthetic fixture export. Check metadata reads before exporting
+  timestamps or run status. No production behavior changes.
+- Disposable race-enabled overlays reproduce four false greens before the fix;
+  verify rejection after the fix, healthy exports and retained count controls.
+  Run the native harness, static checks, independent review and platform CI.
+  No live archives, provider calls, deployment or releases change.

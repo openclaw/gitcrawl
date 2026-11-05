@@ -98,11 +98,15 @@ func TestNativeQuarantineWriterRollbackAnalysisAndRecovery(t *testing.T) {
 		t.Fatal("indirect quarantine write not rolled back", e)
 	}
 	var count int
-	s.DB().QueryRow("select count(*) from thread_vectors").Scan(&count)
+	if e := s.DB().QueryRow("select count(*) from thread_vectors").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != 0 {
 		t.Fatal("vector escaped rollback")
 	}
-	s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count)
+	if e := s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != int(old.RunID) {
 		t.Fatal("run escaped rollback")
 	}
@@ -139,7 +143,9 @@ func TestNativeQuarantineWriterRollbackAnalysisAndRecovery(t *testing.T) {
 			t.Fatal(e)
 		}
 		var start, end, status string
-		s.DB().QueryRow("select started_at,finished_at,status from cluster_runs where id=?", run).Scan(&start, &end, &status)
+		if e := s.DB().QueryRow("select started_at,finished_at,status from cluster_runs where id=?", run).Scan(&start, &end, &status); e != nil {
+			t.Fatal(e)
+		}
 		if r.Analysis == nil || NativeSHA256([]byte(proofs[name])) != r.Analysis.ClusterScope.Quarantine.ProofSHA256 {
 			t.Fatal("emitted proof binding differs", name)
 		}

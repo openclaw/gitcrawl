@@ -90,7 +90,9 @@ func TestNativeAvailableSubsetAtomicRecoveryNoop(t *testing.T) {
 		t.Fatal("injected failure ignored")
 	}
 	var count int
-	s.DB().QueryRow("SELECT count(*) FROM thread_vectors").Scan(&count)
+	if e := s.DB().QueryRow("SELECT count(*) FROM thread_vectors").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != 0 {
 		t.Fatal("vector write escaped rollback")
 	}
@@ -105,22 +107,32 @@ func TestNativeAvailableSubsetAtomicRecoveryNoop(t *testing.T) {
 	}
 	partialScope := *scope
 	var partialStarted, partialFinished string
-	s.DB().QueryRow("SELECT started_at,finished_at FROM cluster_runs WHERE id=?", published.RunID).Scan(&partialStarted, &partialFinished)
-	s.DB().QueryRow("SELECT count(*) FROM cluster_groups WHERE stable_key='legacy'").Scan(&count)
+	if e := s.DB().QueryRow("SELECT started_at,finished_at FROM cluster_runs WHERE id=?", published.RunID).Scan(&partialStarted, &partialFinished); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.DB().QueryRow("SELECT count(*) FROM cluster_groups WHERE stable_key='legacy'").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != 1 {
 		t.Fatal("partial legacy cleanup")
 	}
 	var marker int64
-	s.DB().QueryRow("SELECT last_seen_run_id FROM cluster_memberships WHERE thread_id=?", unknown).Scan(&marker)
+	if e := s.DB().QueryRow("SELECT last_seen_run_id FROM cluster_memberships WHERE thread_id=?", unknown).Scan(&marker); e != nil {
+		t.Fatal(e)
+	}
 	if marker != old.RunID {
 		t.Fatal("unknown membership relabelled")
 	}
 	var complete int
-	s.DB().QueryRow("SELECT complete FROM analytics_coverage").Scan(&complete)
+	if e := s.DB().QueryRow("SELECT complete FROM analytics_coverage").Scan(&complete); e != nil {
+		t.Fatal(e)
+	}
 	if complete != 0 {
 		t.Fatal("provider coverage changed")
 	}
-	s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE resolved_at IS NULL").Scan(&count)
+	if e := s.DB().QueryRow("SELECT count(*) FROM analytics_retries WHERE resolved_at IS NULL").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != 1 {
 		t.Fatal("retry removed")
 	}
@@ -169,7 +181,9 @@ func TestNativeAvailableSubsetAtomicRecoveryNoop(t *testing.T) {
 		t.Fatal("full recovery scope", e)
 	}
 	var fullStarted, fullFinished string
-	s.DB().QueryRow("SELECT started_at,finished_at FROM cluster_runs WHERE id=?", full.RunID).Scan(&fullStarted, &fullFinished)
+	if e := s.DB().QueryRow("SELECT started_at,finished_at FROM cluster_runs WHERE id=?", full.RunID).Scan(&fullStarted, &fullFinished); e != nil {
+		t.Fatal(e)
+	}
 	if path := os.Getenv("GITCRAWL_SCOPE_FIXTURE"); path != "" {
 		raw, e := json.MarshalIndent(map[string]any{"synthetic_only": true, "partial": partialScope, "partial_started_at": partialStarted, "partial_finished_at": partialFinished, "full": scope, "full_started_at": fullStarted, "full_finished_at": fullFinished}, "", "  ")
 		if e != nil {
