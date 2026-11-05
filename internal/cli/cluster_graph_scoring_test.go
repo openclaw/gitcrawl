@@ -27,7 +27,7 @@ func TestPreparedClusterEdgesMatchOriginal(t *testing.T) {
 			actual, ok := got[pair]
 			deviation := math.Abs(actual.Score - expected.Score)
 			maxDeviation = max(maxDeviation, deviation)
-			if !ok || actual.LeftThreadID != expected.LeftThreadID || actual.RightThreadID != expected.RightThreadID || deviation > 1e-12 {
+			if !ok || actual.LeftThreadID != expected.LeftThreadID || actual.RightThreadID != expected.RightThreadID || !(deviation <= 1e-12) {
 				t.Fatalf("threshold %g pair %s: %+v want %+v", threshold, pair, actual, expected)
 			}
 		}
