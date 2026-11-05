@@ -5340,19 +5340,20 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 	dbPath := filepath.Join(dir, "gitcrawl.db")
 
 	for _, tc := range []struct {
-		name string
-		args []string
-		want string
+		name     string
+		args     []string
+		want     string
+		wantJSON map[string]any
 	}{
 		{name: "version flag text", args: []string{"--version"}, want: "dev"},
 		{name: "version command text", args: []string{"version"}, want: version},
-		{name: "version command json", args: []string{"--json", "version"}, want: fmt.Sprintf(`"version": %q`, version)},
-		{name: "version explicit json", args: []string{"--format", "json", "version"}, want: fmt.Sprintf(`"version": %q`, version)},
+		{name: "version command json", args: []string{"--json", "version"}, wantJSON: map[string]any{"version": version}},
+		{name: "version explicit json", args: []string{"--format", "json", "version"}, wantJSON: map[string]any{"version": version}},
 		{name: "version command log fallback", args: []string{"--format", "log", "version"}, want: "dev"},
 		{name: "help tui", args: []string{"help", "tui"}, want: "cluster browser"},
 		{name: "help portable", args: []string{"help", "portable"}, want: "--include-sync-failures"},
 		{name: "configure creates config", args: []string{"--config", filepath.Join(dir, "configure.toml"), "--format", "log", "configure"}, want: "configure="},
-		{name: "doctor default json", args: []string{"--config", filepath.Join(dir, "missing.toml"), "--json", "doctor"}, want: `"config_exists": false`},
+		{name: "doctor default json", args: []string{"--config", filepath.Join(dir, "missing.toml"), "--json", "doctor"}, wantJSON: map[string]any{"config_exists": false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app := New()
@@ -5361,7 +5362,17 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 			if err := app.Run(ctx, tc.args); err != nil {
 				t.Fatalf("run: %v", err)
 			}
-			if !strings.Contains(stdout.String(), tc.want) {
+			if tc.wantJSON != nil {
+				var payload map[string]any
+				if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+					t.Fatalf("decode JSON output %q: %v", stdout.String(), err)
+				}
+				for key, want := range tc.wantJSON {
+					if got := payload[key]; got != want {
+						t.Errorf("%s = %v, want %v", key, got, want)
+					}
+				}
+			} else if !strings.Contains(stdout.String(), tc.want) {
 				t.Fatalf("output = %q, want %q", stdout.String(), tc.want)
 			}
 		})

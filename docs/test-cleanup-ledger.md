@@ -302,3 +302,14 @@ SQLite durability and read-only access cases. Production behavior is unchanged.
 An AST audit inspected 292 anonymous test tables across seven Go repositories.
 Focused race tests, a temporary wrong-version overlay, static checks, independent
 review and platform CI validate the retained assertions with synthetic data.
+
+## CLI JSON document assertions
+
+Replace substring-only checks in the three JSON output-mode rows with complete
+JSON decoding and expected value checks. Keep the same commands and all text,
+log and usage-error cases. No production change or new fixture is needed.
+
+Temporary JSON writer overlays adding a non-JSON prefix or a second document
+pass the original rows; each is rejected by all three repaired rows under the
+race detector. Built-CLI checks, focused race/static gates, independent review
+and platform CI validate isolated temporary configuration only.
