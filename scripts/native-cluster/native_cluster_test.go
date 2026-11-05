@@ -50,8 +50,12 @@ func TestNativeClusterSnapshotAndPublish(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.DB().Exec("update threads set updated_at='tick',observation_sequence=observation_sequence+1")
-	s.DB().Exec("update thread_vectors set updated_at='tick'")
+	if _, e := s.DB().Exec("update threads set updated_at='tick',observation_sequence=observation_sequence+1"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := s.DB().Exec("update thread_vectors set updated_at='tick'"); e != nil {
+		t.Fatal(e)
+	}
 	tick, e := s.NativeClusterSnapshot(ctx, policy)
 	if e != nil || tick.InputSHA256 != before.InputSHA256 || tick.StateSHA256 != before.StateSHA256 {
 		t.Fatal("observation clock churn invalidated semantic signature", e)
@@ -72,19 +76,27 @@ func TestNativeClusterSnapshotAndPublish(t *testing.T) {
 		t.Fatal("old state replay accepted")
 	}
 	var n int
-	s.DB().QueryRow("select count(*) from cluster_runs").Scan(&n)
+	if e := s.DB().QueryRow("select count(*) from cluster_runs").Scan(&n); e != nil {
+		t.Fatal(e)
+	}
 	if n != 1 {
 		t.Fatal("duplicate run")
 	}
-	s.DB().Exec("update threads set body='new reference #42' where id=3")
+	if _, e := s.DB().Exec("update threads set body='new reference #42' where id=3"); e != nil {
+		t.Fatal(e)
+	}
 	if _, _, e = s.NativePublishClusters(ctx, after, policy, inputs); e == nil {
 		t.Fatal("stale repaired input accepted")
 	}
-	s.DB().QueryRow("select count(*) from cluster_runs").Scan(&n)
+	if e := s.DB().QueryRow("select count(*) from cluster_runs").Scan(&n); e != nil {
+		t.Fatal(e)
+	}
 	if n != 1 {
 		t.Fatal("partial run persisted")
 	}
-	s.DB().Exec("update threads set body='body' where id=3")
+	if _, e := s.DB().Exec("update threads set body='body' where id=3"); e != nil {
+		t.Fatal(e)
+	}
 	excluded := []byte(`{"format":"gitcrawl.embedding.exclusions.v1","dataset":"gitcrawl/history/threads","excluded_thread_ids":["2"]}`)
 	if _, e = s.NativeClusterSnapshot(ctx, excluded); e == nil {
 		t.Fatal("consumer excluded input accepted")
@@ -103,7 +115,9 @@ func TestNativeClusterSnapshotAndPublish(t *testing.T) {
 		t.Fatal(e)
 	}
 	var stateText string
-	s.DB().QueryRow("select state from cluster_memberships where thread_id=2").Scan(&stateText)
+	if e := s.DB().QueryRow("select state from cluster_memberships where thread_id=2").Scan(&stateText); e != nil {
+		t.Fatal(e)
+	}
 	if stateText != "excluded" {
 		t.Fatal("protected native override lost")
 	}
@@ -220,7 +234,9 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 	if e != nil || snap.Eligible != 2 {
 		t.Fatal("overlay", e)
 	}
-	s.DB().Exec("update threads set observation_sequence=observation_sequence+1,updated_at='tick'")
+	if _, e := s.DB().Exec("update threads set observation_sequence=observation_sequence+1,updated_at='tick'"); e != nil {
+		t.Fatal(e)
+	}
 	if _, e = s.NativeCombinedSnapshot(ctx, policy, req, res); e == nil {
 		t.Fatal("stale clocks accepted")
 	}
@@ -231,22 +247,32 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 	}
 	snap = fresh
 	inputs := []DurableClusterInput{{StableKey: "pair", StableSlug: "pair", ClusterType: "duplicate_candidate", RepresentativeThreadID: 1, Title: "native", Members: []DurableClusterMemberInput{{ThreadID: 1, Role: "canonical"}, {ThreadID: 2, Role: "related"}}}}
-	s.DB().Exec("create trigger fail_combined before insert on cluster_groups begin select raise(abort,'injected cluster failure'); end")
+	if _, e := s.DB().Exec("create trigger fail_combined before insert on cluster_groups begin select raise(abort,'injected cluster failure'); end"); e != nil {
+		t.Fatal(e)
+	}
 	if _, _, _, e = s.NativeCombinedPublish(ctx, snap, policy, req, res, inputs); e == nil {
 		t.Fatal("failure accepted")
 	}
 	var hash string
-	s.DB().QueryRow("select content_hash from thread_vectors where thread_id=1").Scan(&hash)
+	if e := s.DB().QueryRow("select content_hash from thread_vectors where thread_id=1").Scan(&hash); e != nil {
+		t.Fatal(e)
+	}
 	var count int
-	s.DB().QueryRow("select count(*) from thread_vectors").Scan(&count)
+	if e := s.DB().QueryRow("select count(*) from thread_vectors").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if hash != "stale" || count != 1 {
 		t.Fatal("partial vector import escaped rollback")
 	}
-	s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count)
+	if e := s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != 0 {
 		t.Fatal("partial cluster run")
 	}
-	s.DB().Exec("drop trigger fail_combined")
+	if _, e := s.DB().Exec("drop trigger fail_combined"); e != nil {
+		t.Fatal(e)
+	}
 	imported, clusters, state, e := s.NativeCombinedPublish(ctx, snap, policy, req, res, inputs)
 	if e != nil || imported.Imported != 2 || clusters.MemberCount != 2 {
 		t.Fatalf("combined %+v %+v %v", imported, clusters, e)
@@ -256,7 +282,9 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 		t.Fatal("overlay differs from actual post-import native values", e)
 	}
 	var backend string
-	s.DB().QueryRow("select vector_backend from thread_vectors where thread_id=1").Scan(&backend)
+	if e := s.DB().QueryRow("select vector_backend from thread_vectors where thread_id=1").Scan(&backend); e != nil {
+		t.Fatal(e)
+	}
 	if backend != "exact" {
 		t.Fatal("native importer metadata projection changed")
 	}
@@ -268,11 +296,15 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 	if e != nil || r.Imported != 0 || r.Unchanged != 2 || g.RunID != clusters.RunID {
 		t.Fatal("combined replay churn", e)
 	}
-	s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count)
+	if e := s.DB().QueryRow("select count(*) from cluster_runs").Scan(&count); e != nil {
+		t.Fatal(e)
+	}
 	if count != 1 {
 		t.Fatal("duplicate graph history")
 	}
-	s.DB().Exec("update thread_vectors set vector_backend='legacy-backend' where thread_id=1")
+	if _, e := s.DB().Exec("update thread_vectors set vector_backend='legacy-backend' where thread_id=1"); e != nil {
+		t.Fatal(e)
+	}
 	overlayNoop, e := s.NativeCombinedSnapshot(ctx, policy, req, res)
 	if e != nil {
 		t.Fatal(e)
@@ -281,7 +313,9 @@ func TestNativeCombinedAtomicOverlayAndClocks(t *testing.T) {
 	if e != nil || overlayNoop.InputSHA256 != nativeNoop.InputSHA256 || overlayNoop.PreviewReceipt.Imported != 0 {
 		t.Fatal("no-op overlay metadata differs", e)
 	}
-	s.DB().Exec("update thread_vectors set vector_backend='exact' where thread_id=1")
+	if _, e := s.DB().Exec("update thread_vectors set vector_backend='exact' where thread_id=1"); e != nil {
+		t.Fatal(e)
+	}
 	excluded := []byte(`{"format":"gitcrawl.embedding.exclusions.v1","dataset":"gitcrawl/history/threads","excluded_thread_ids":["2"]}`)
 	if _, _, _, e = s.NativeCombinedPublish(ctx, again, excluded, req, res, inputs); e == nil {
 		t.Fatal("policy exclusion accepted")
