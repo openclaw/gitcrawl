@@ -18,63 +18,9 @@ import (
 
 func TestSummarizeCommandPersistsCurrentRevisionSummary(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	dbPath := filepath.Join(dir, "gitcrawl.db")
-	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	st, err := store.Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, store.Repository{
-		Owner:     "openclaw",
-		Name:      "openclaw",
-		FullName:  "openclaw/openclaw",
-		RawJSON:   "{}",
-		UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
-	thread := store.Thread{
-		RepoID:          repoID,
-		GitHubID:        "42",
-		Number:          42,
-		Kind:            "issue",
-		State:           "open",
-		Title:           "Gateway reconnect loop",
-		Body:            "Reconnect loops after websocket timeout.",
-		HTMLURL:         "https://github.com/openclaw/openclaw/issues/42",
-		LabelsJSON:      "[]",
-		AssigneesJSON:   "[]",
-		RawJSON:         "{}",
-		ContentHash:     "thread",
-		UpdatedAtGitHub: "2026-07-12T00:00:00Z",
-		UpdatedAt:       "2026-07-12T00:00:00Z",
-	}
-	threadID, err := st.UpsertThread(ctx, thread)
-	if err != nil {
-		t.Fatalf("thread: %v", err)
-	}
-	thread.ID = threadID
-	if _, err := st.UpsertDocument(ctx, store.Document{
-		ThreadID:   threadID,
-		Title:      thread.Title,
-		Body:       thread.Body,
-		RawText:    thread.Title + "\n\n" + thread.Body,
-		DedupeText: thread.Title + " " + thread.Body,
-		UpdatedAt:  thread.UpdatedAt,
-	}); err != nil {
-		t.Fatalf("document: %v", err)
-	}
-	if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, store.ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z"); err != nil {
-		t.Fatalf("enrichment: %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
+	configPath, dbPath, repoID := seedSummaryCommandArchive(t,
+		store.Thread{Number: 42, Title: "Gateway reconnect loop", Body: "Reconnect loops after websocket timeout.", ContentHash: "thread"},
+	)
 
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +72,7 @@ func TestSummarizeCommandPersistsCurrentRevisionSummary(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 
-	st, err = store.Open(ctx, dbPath)
+	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -173,65 +119,10 @@ func TestSummaryInputIncludesThreadIdentity(t *testing.T) {
 
 func TestSummarizeCommandRecordsPartialAPIResults(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	dbPath := filepath.Join(dir, "gitcrawl.db")
-	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	st, err := store.Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repoID, err := st.UpsertRepository(ctx, store.Repository{
-		Owner:     "openclaw",
-		Name:      "openclaw",
-		FullName:  "openclaw/openclaw",
-		RawJSON:   "{}",
-		UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
-	for _, number := range []int{42, 43} {
-		thread := store.Thread{
-			RepoID:          repoID,
-			GitHubID:        fmt.Sprintf("%d", number),
-			Number:          number,
-			Kind:            "issue",
-			State:           "open",
-			Title:           fmt.Sprintf("Summary case %d", number),
-			Body:            "Distinct evidence.",
-			HTMLURL:         fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
-			LabelsJSON:      "[]",
-			AssigneesJSON:   "[]",
-			RawJSON:         "{}",
-			ContentHash:     fmt.Sprintf("thread-%d", number),
-			UpdatedAtGitHub: "2026-07-12T00:00:00Z",
-			UpdatedAt:       "2026-07-12T00:00:00Z",
-		}
-		threadID, err := st.UpsertThread(ctx, thread)
-		if err != nil {
-			t.Fatalf("thread %d: %v", number, err)
-		}
-		thread.ID = threadID
-		if _, err := st.UpsertDocument(ctx, store.Document{
-			ThreadID:   threadID,
-			Title:      thread.Title,
-			Body:       thread.Body,
-			RawText:    thread.Title + "\n\n" + thread.Body,
-			DedupeText: thread.Title + " " + thread.Body,
-			UpdatedAt:  thread.UpdatedAt,
-		}); err != nil {
-			t.Fatalf("document %d: %v", number, err)
-		}
-		if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, store.ThreadEvidence{Thread: thread}, "2026-07-12T00:00:00Z"); err != nil {
-			t.Fatalf("enrichment %d: %v", number, err)
-		}
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
+	configPath, dbPath, repoID := seedSummaryCommandArchive(t,
+		store.Thread{Number: 42, Title: "Summary case 42", Body: "Distinct evidence.", ContentHash: "thread-42"},
+		store.Thread{Number: 43, Title: "Summary case 43", Body: "Distinct evidence.", ContentHash: "thread-43"},
+	)
 
 	failAll := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +168,7 @@ func TestSummarizeCommandRecordsPartialAPIResults(t *testing.T) {
 		t.Fatalf("failure metadata = %+v", result.Failures)
 	}
 
-	st, err = store.Open(ctx, dbPath)
+	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -331,45 +222,15 @@ func TestSummaryFailurePreservesGenericErrors(t *testing.T) {
 
 func TestSummarizeCancelsWorkersAfterPersistenceFailure(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	dbPath := filepath.Join(dir, "gitcrawl.db")
-	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
-		t.Fatalf("init: %v", err)
-	}
+	configPath, dbPath, _ := seedSummaryCommandArchive(t,
+		store.Thread{Number: 42, Title: "Persistence failure 42", Body: "evidence", ContentHash: "thread-42"},
+		store.Thread{Number: 43, Title: "Persistence failure 43", Body: "evidence", ContentHash: "thread-43"},
+	)
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	repoID, err := st.UpsertRepository(ctx, store.Repository{
-		Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: "2026-07-12T00:00:00Z",
-	})
-	if err != nil {
-		t.Fatalf("repository: %v", err)
-	}
-	for _, number := range []int{42, 43} {
-		thread := store.Thread{
-			RepoID: repoID, GitHubID: fmt.Sprintf("%d", number), Number: number, Kind: "issue", State: "open",
-			Title: fmt.Sprintf("Persistence failure %d", number), Body: "evidence",
-			HTMLURL:    fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", number),
-			LabelsJSON: "[]", AssigneesJSON: "[]", RawJSON: "{}", ContentHash: fmt.Sprintf("thread-%d", number),
-			UpdatedAtGitHub: "2026-07-12T00:00:00Z", UpdatedAt: "2026-07-12T00:00:00Z",
-		}
-		thread.ID, err = st.UpsertThread(ctx, thread)
-		if err != nil {
-			t.Fatalf("thread %d: %v", number, err)
-		}
-		if _, err := st.UpsertDocument(ctx, store.Document{
-			ThreadID: thread.ID, Title: thread.Title, Body: thread.Body,
-			RawText: thread.Title + "\n\n" + thread.Body, DedupeText: thread.Title + " " + thread.Body,
-			UpdatedAt: thread.UpdatedAt,
-		}); err != nil {
-			t.Fatalf("document %d: %v", number, err)
-		}
-		if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, store.ThreadEvidence{Thread: thread}, thread.UpdatedAt); err != nil {
-			t.Fatalf("enrichment %d: %v", number, err)
-		}
-	}
+
 	if _, err := st.DB().ExecContext(ctx, `
 		create trigger reject_summary_insert
 		before insert on thread_key_summaries
@@ -420,4 +281,57 @@ func TestSummarizeCancelsWorkersAfterPersistenceFailure(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("blocked summary worker was not cancelled and joined")
 	}
+}
+
+func seedSummaryCommandArchive(t *testing.T, threads ...store.Thread) (string, string, int64) {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "gitcrawl.db")
+	if err := New().Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	updatedAt := "2026-07-12T00:00:00Z"
+	repoID, err := st.UpsertRepository(ctx, store.Repository{
+		Owner: "openclaw", Name: "openclaw", FullName: "openclaw/openclaw", RawJSON: "{}", UpdatedAt: updatedAt,
+	})
+	if err != nil {
+		t.Fatalf("repository: %v", err)
+	}
+	for _, thread := range threads {
+		thread.RepoID = repoID
+		thread.GitHubID = fmt.Sprintf("%d", thread.Number)
+		thread.Kind = "issue"
+		thread.State = "open"
+		thread.HTMLURL = fmt.Sprintf("https://github.com/openclaw/openclaw/issues/%d", thread.Number)
+		thread.LabelsJSON = "[]"
+		thread.AssigneesJSON = "[]"
+		thread.RawJSON = "{}"
+		thread.UpdatedAtGitHub = updatedAt
+		thread.UpdatedAt = updatedAt
+		thread.ID, err = st.UpsertThread(ctx, thread)
+		if err != nil {
+			t.Fatalf("thread %d: %v", thread.Number, err)
+		}
+		if _, err := st.UpsertDocument(ctx, store.Document{
+			ThreadID: thread.ID, Title: thread.Title, Body: thread.Body,
+			RawText: thread.Title + "\n\n" + thread.Body, DedupeText: thread.Title + " " + thread.Body,
+			UpdatedAt: thread.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("document %d: %v", thread.Number, err)
+		}
+		if _, err := st.UpsertThreadRevisionAndFingerprint(ctx, store.ThreadEvidence{Thread: thread}, updatedAt); err != nil {
+			t.Fatalf("enrichment %d: %v", thread.Number, err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	return configPath, dbPath, repoID
 }
