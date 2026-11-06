@@ -63,16 +63,28 @@ func portableTestCommit(t *testing.T, root string) {
 	portableTestGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-m", "fixture generation")
 }
 
-func portableTestManifest(t *testing.T, path, relative string, compressed bool) {
+func portableTestReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read fixture %q: %v", path, err)
 	}
+	return data
+}
+
+func portableTestSHA256(t *testing.T, path string) [32]byte {
+	t.Helper()
 	digest, err := fileSHA256(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("hash fixture %q: %v", path, err)
 	}
+	return digest
+}
+
+func portableTestManifest(t *testing.T, path, relative string, compressed bool) {
+	t.Helper()
+	data := portableTestReadFile(t, path)
+	digest := portableTestSHA256(t, path)
 	manifest := portableDBManifest{Schema: "gitcrawl-portable-sync-v2", OutputPath: relative, OutputBytes: int64(len(data)), SHA256: fmt.Sprintf("%x", digest), QuickCheck: "ok"}
 	if compressed {
 		var archive bytes.Buffer
@@ -86,10 +98,7 @@ func portableTestManifest(t *testing.T, path, relative string, compressed bool) 
 		if err := os.WriteFile(path+".gz", archive.Bytes(), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		archiveSHA, err := fileSHA256(path + ".gz")
-		if err != nil {
-			t.Fatal(err)
-		}
+		archiveSHA := portableTestSHA256(t, path+".gz")
 		manifest.Compression, manifest.ArchivePath = "gzip", filepath.Base(path)+".gz"
 		manifest.ArchiveBytes, manifest.ArchiveSHA256 = int64(archive.Len()), fmt.Sprintf("%x", archiveSHA)
 		if err := os.Remove(path); err != nil {
@@ -201,7 +210,7 @@ func TestPortableInitGzipRepeatedAndTransition(t *testing.T) {
 
 func TestPortableInitValidatesBeforeGitAndPreservesConfig(t *testing.T) {
 	fixture := newPortableRefreshFixture(t, true)
-	before, _ := os.ReadFile(fixture.configPath)
+	before := portableTestReadFile(t, fixture.configPath)
 	head := portableTestGit(t, fixture.checkout, "rev-parse", "HEAD")
 	fixture.advance(t, true)
 	for _, path := range []string{"../escape.db", "/absolute.db", "data/../archive.db", "C:\\archive.db", ".git/config", "data//archive.db"} {
@@ -224,7 +233,7 @@ func TestPortableInitValidatesBeforeGitAndPreservesConfig(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"--config", fixture.configPath, "init", "--portable-store", fixture.remote, "--store-dir", fixture.checkout, "--portable-db", fixture.relative}); err == nil {
 		t.Fatal("invalid artifact accepted")
 	}
-	after, _ := os.ReadFile(fixture.configPath)
+	after := portableTestReadFile(t, fixture.configPath)
 	if !bytes.Equal(before, after) {
 		t.Fatal("failed init replaced config")
 	}
@@ -236,7 +245,7 @@ func TestPortableRefreshSuccessNoopAndLocalMirror(t *testing.T) {
 	if err != nil || initial.Result != "no-op" || initial.MirrorResult != "promoted" {
 		t.Fatalf("initial: %+v %v", initial, err)
 	}
-	beforeConfig, _ := os.ReadFile(fixture.configPath)
+	beforeConfig := portableTestReadFile(t, fixture.configPath)
 	fixture.advance(t, true)
 	updated, err := fixture.refresh(t, "--store-dir", fixture.checkout, "--portable-db", fixture.relative)
 	if err != nil || updated.Result != "updated" || updated.BeforeCommit == updated.AfterCommit || updated.SHA256 == "" {
@@ -249,16 +258,16 @@ func TestPortableRefreshSuccessNoopAndLocalMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPortableThread(t, fixture.mirror, 3, "local writable runtime state")
-	localSHA, _ := fileSHA256(fixture.mirror)
+	localSHA := portableTestSHA256(t, fixture.mirror)
 	result, err := fixture.refresh(t)
 	if err != nil || result.Result != "no-op" || result.MirrorResult != "preserved-local" {
 		t.Fatalf("local: %+v %v", result, err)
 	}
-	afterSHA, _ := fileSHA256(fixture.mirror)
+	afterSHA := portableTestSHA256(t, fixture.mirror)
 	if localSHA != afterSHA {
 		t.Fatal("local runtime changed")
 	}
-	afterConfig, _ := os.ReadFile(fixture.configPath)
+	afterConfig := portableTestReadFile(t, fixture.configPath)
 	if !bytes.Equal(beforeConfig, afterConfig) {
 		t.Fatal("refresh rewrote config")
 	}
@@ -338,8 +347,8 @@ func TestPortableRefreshRefusalsPreserveLastGood(t *testing.T) {
 			}
 			head := portableTestGit(t, fixture.checkout, "rev-parse", "HEAD")
 			tracking := portableTestGit(t, fixture.checkout, "rev-parse", "refs/remotes/origin/main")
-			mirrorSHA, _ := fileSHA256(fixture.mirror)
-			configSHA, _ := fileSHA256(fixture.configPath)
+			mirrorSHA := portableTestSHA256(t, fixture.mirror)
+			configSHA := portableTestSHA256(t, fixture.configPath)
 			if name == "timeout" {
 				// A deadline can expire during read-only flag validation, before
 				// the structured operation starts.
@@ -357,13 +366,16 @@ func TestPortableRefreshRefusalsPreserveLastGood(t *testing.T) {
 			if portableTestGit(t, fixture.checkout, "rev-parse", "HEAD") != head || portableTestGit(t, fixture.checkout, "rev-parse", "refs/remotes/origin/main") != tracking {
 				t.Fatal("refusal changed refs")
 			}
-			if sha, _ := fileSHA256(fixture.mirror); sha != mirrorSHA {
+			if sha := portableTestSHA256(t, fixture.mirror); sha != mirrorSHA {
 				t.Fatal("refusal changed mirror")
 			}
-			if sha, _ := fileSHA256(fixture.configPath); sha != configSHA {
+			if sha := portableTestSHA256(t, fixture.configPath); sha != configSHA {
 				t.Fatal("refusal changed config")
 			}
-			staging, _ := filepath.Glob(filepath.Join(filepath.Dir(fixture.mirror), ".gitcrawl-refresh-*"))
+			staging, err := filepath.Glob(filepath.Join(filepath.Dir(fixture.mirror), ".gitcrawl-refresh-*"))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(staging) != 0 {
 				t.Fatalf("owned staging leaked: %v", staging)
 			}
