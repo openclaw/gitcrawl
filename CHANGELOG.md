@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage and durable SIMD parity checks concurrently while preserving both failure gates and the macOS coverage sequence.
 
 ## 0.18.0 - 2026-11-05

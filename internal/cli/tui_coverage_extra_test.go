@@ -51,32 +51,37 @@ func TestTUIRemainingActionAndErrorBranches(t *testing.T) {
 	}
 
 	t.Setenv("PATH", "")
-	errorActions := []string{
-		"open-cluster-representative",
-		"copy-cluster-url",
-		"copy-thread-detail",
-		"copy-body-preview",
-		"copy-summaries",
-		"copy-neighbors",
-		"copy-cluster-id",
-		"copy-cluster-name",
-		"copy-cluster-title",
-		"copy-member-list",
-		"copy-cluster",
-		"copy-visible-clusters",
-		"copy-reference-links",
-		"open",
-		"copy-url",
-		"copy-markdown",
-		"copy-title",
-		"open-first-link",
-		"copy-first-link",
+	errorActions := []struct {
+		action string
+		prefix string
+	}{
+		{"open-cluster-representative", "open URL:"},
+		{"copy-cluster-url", "copy text:"},
+		{"copy-thread-detail", "copy text:"},
+		{"copy-body-preview", "copy text:"},
+		{"copy-summaries", "copy text:"},
+		{"copy-neighbors", "copy text:"},
+		{"copy-cluster-id", "copy text:"},
+		{"copy-cluster-name", "copy text:"},
+		{"copy-cluster-title", "copy text:"},
+		{"copy-member-list", "copy text:"},
+		{"copy-cluster", "copy text:"},
+		{"copy-visible-clusters", "copy text:"},
+		{"copy-reference-links", "copy text:"},
+		{"open", "open URL:"},
+		{"copy-url", "copy text:"},
+		{"copy-markdown", "copy text:"},
+		{"copy-title", "copy text:"},
+		{"open-first-link", "open URL:"},
+		{"copy-first-link", "copy text:"},
+		{"open-picked-link", "open URL:"},
+		{"copy-picked-link", "copy text:"},
 	}
 	for _, action := range errorActions {
 		model.status = ""
-		handled := model.runMenuItem(tuiMenuItem{label: action, action: action, value: "https://example.com/docs"})
-		if !handled || model.status == "" {
-			t.Fatalf("error action %s handled=%v status=%q", action, handled, model.status)
+		handled := model.runMenuItem(tuiMenuItem{label: action.action, action: action.action, value: "https://example.com/docs"})
+		if !handled || !strings.HasPrefix(model.status, action.prefix) {
+			t.Fatalf("error action %s handled=%v status=%q, want prefix %q", action.action, handled, model.status, action.prefix)
 		}
 	}
 	model.openReferenceLinkMenu("copy")
@@ -84,8 +89,6 @@ func TestTUIRemainingActionAndErrorBranches(t *testing.T) {
 	if model.menuTitle != "Actions" {
 		t.Fatalf("back to actions failed title=%q", model.menuTitle)
 	}
-	model.runMenuItem(tuiMenuItem{label: "Open picked", action: "open-picked-link", value: "https://example.com/docs"})
-	model.runMenuItem(tuiMenuItem{label: "Copy picked", action: "copy-picked-link", value: "https://example.com/docs"})
 
 	for _, action := range []struct {
 		name string
