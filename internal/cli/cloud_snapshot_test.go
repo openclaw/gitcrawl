@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	crawlstore "github.com/openclaw/gitcrawl/internal/store"
@@ -499,5 +500,18 @@ func TestLatestRFC3339QueryValueRejectsInvalidTimestamp(t *testing.T) {
 		`select value from timestamps`,
 	); err == nil {
 		t.Fatal("invalid RFC3339 timestamp was accepted")
+	}
+}
+
+func TestSanitizeCloudSQLiteSnapshotRejectsClosedDatabase(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sanitizeCloudSQLiteSnapshot(context.Background(), db); err == nil || !strings.Contains(err.Error(), "database is closed") {
+		t.Fatalf("sanitize closed database = %v", err)
 	}
 }
