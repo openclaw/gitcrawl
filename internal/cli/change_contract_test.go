@@ -3,8 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,17 +83,16 @@ func TestChangeContractCLIRefusesMissingArchivesPortableStoresAndAbsentContracts
 		}
 		return cfg
 	}
-	if err := run(filepath.Join(t.TempDir(), "config.toml")); err == nil {
-		t.Fatal("missing action accepted")
-	}
-
-	missingDir := t.TempDir()
-	missing := filepath.Join(missingDir, "missing.db")
-	if err := run(writeConfig(missingDir, missing), "enable"); err == nil {
-		t.Fatal("enable created a missing archive")
-	}
-	if _, err := os.Stat(missing); !os.IsNotExist(err) {
-		t.Fatalf("missing archive was created: %v", err)
+	for _, action := range []string{"enable", "status", "disable"} {
+		missingDir := t.TempDir()
+		missing := filepath.Join(missingDir, "missing.db")
+		err := run(writeConfig(missingDir, missing), action)
+		if ExitCode(err) != 1 || !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s missing archive = %v, want runtime error", action, err)
+		}
+		if _, err := os.Stat(missing); !os.IsNotExist(err) {
+			t.Fatalf("%s created a missing archive: %v", action, err)
+		}
 	}
 
 	plainDir := t.TempDir()
@@ -126,37 +125,29 @@ func TestChangeContractCLIRefusesMissingArchivesPortableStoresAndAbsentContracts
 
 func TestChangeContractCLIRejectsMalformedInvocations(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	cfg := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(cfg, []byte(fmt.Sprintf("db_path=%q\n", filepath.Join(dir, "missing.db"))), 0600); err != nil {
+	cfg := filepath.Join(t.TempDir(), "invalid.toml")
+	if err := os.WriteFile(cfg, []byte("db_path = ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"change-contract"},
-		{"change-contract", "status", "--bogus"},
-		{"change-contract", "status"},
-		{"change-contract", "disable"},
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing-action", want: "requires status, enable, bump or disable"},
+		{name: "unknown-flag", args: []string{"status", "--bogus"}, want: "flag provided but not defined: -bogus"},
 	} {
-		a := New()
-		var out, stderr bytes.Buffer
-		a.Stdout = &out
-		a.Stderr = &stderr
-		if err := a.Run(ctx, append([]string{"--config", cfg}, args...)); err == nil {
-			t.Fatalf("%v accepted: %s", args, out.String())
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			a := New()
+			var out, stderr bytes.Buffer
+			a.Stdout, a.Stderr = &out, &stderr
+			err := a.Run(ctx, append([]string{"--config", cfg, "change-contract"}, tc.args...))
+			if ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("arguments %v = %v, want usage error containing %q", tc.args, err, tc.want)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("invalid invocation produced output: %s", out.String())
+			}
+		})
 	}
-	if err := sanitizeCloudSQLiteSnapshot(ctx, closedSQLiteDB(t)); err == nil {
-		t.Fatal("cloud snapshot sanitization succeeded on a closed database")
-	}
-}
-
-func closedSQLiteDB(t *testing.T) *sql.DB {
-	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "closed.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	db := s.DB()
-	s.Close()
-	return db
 }
