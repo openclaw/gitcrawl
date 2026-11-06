@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -44,22 +45,39 @@ func TestNativeProducerCodeNoopAndRollback(t *testing.T) {
 		t.Fatal("language change missed")
 	}
 	docs[0].Language = "go"
-	// Inject cancellation after a real document insert; old generation must survive.
-	s.DB().Exec("CREATE TRIGGER fail_fixture_code BEFORE INSERT ON code_documents WHEN NEW.path='reject.go' BEGIN SELECT RAISE(ABORT,'synthetic interruption'); END")
+	// Abort the second insert; the previous generation must survive.
+	if _, e := s.DB().Exec("CREATE TRIGGER fail_fixture_code BEFORE INSERT ON code_documents WHEN NEW.path='reject.go' BEGIN SELECT RAISE(ABORT,'synthetic interruption'); END"); e != nil {
+		t.Fatal(e)
+	}
 	next := append(append([]CodeDocument{}, docs...), CodeDocument{Path: "reject.go", Language: "go", ContentHash: "h2", Text: "next", ByteSize: 4, UpdatedAt: snap.IndexedAt})
 	snap.FileCount = 2
 	snap.ByteCount = 8
-	if _, e = s.ReplaceCodeSnapshot(ctx, snap, next); e == nil {
-		t.Fatal("synthetic failure ignored")
+	if _, e = s.ReplaceCodeSnapshot(ctx, snap, next); e == nil || !strings.Contains(e.Error(), "synthetic interruption") {
+		t.Fatalf("expected synthetic insert failure, got %v", e)
 	}
 	latest, e := s.LatestCodeSnapshot(ctx, repo)
 	if e != nil || latest.ID != id || latest.FileCount != 1 {
 		t.Fatal("partial replacement visible")
 	}
+	if _, e := s.DB().Exec("DROP TRIGGER fail_fixture_code"); e != nil {
+		t.Fatal(e)
+	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, e = s.ReplaceCodeSnapshot(cancelled, snap, next); e == nil {
-		t.Fatal("cancelled write succeeded")
+	if _, e = s.ReplaceCodeSnapshot(cancelled, snap, next); !errors.Is(e, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", e)
+	}
+	latest, e = s.LatestCodeSnapshot(ctx, repo)
+	if e != nil || latest.ID != id || latest.FileCount != 1 {
+		t.Fatalf("cancelled replacement changed generation: %+v, %v", latest, e)
+	}
+	id2, e = s.ReplaceCodeSnapshot(ctx, snap, next)
+	if e != nil {
+		t.Fatalf("healthy replacement after cancellation: %v", e)
+	}
+	matchedID, same, e := s.NativeCodeSnapshotMatches(ctx, snap, next)
+	if e != nil || !same || matchedID != id2 {
+		t.Fatalf("healthy replacement mismatch: %d %v %v", matchedID, same, e)
 	}
 }
 func TestNativeProducerExportConsumerFence(t *testing.T) {
