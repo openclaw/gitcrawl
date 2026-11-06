@@ -61,6 +61,10 @@ func TestDoctorLocksJSONReportsSQLiteHealth(t *testing.T) {
 }
 
 func TestDoctorLocksUsesPortableRuntimeDB(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
 	ctx := context.Background()
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote")
@@ -69,16 +73,9 @@ func TestDoctorLocksUsesPortableRuntimeDB(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(remoteDir, "data"), 0o755); err != nil {
 		t.Fatalf("mkdir remote data: %v", err)
 	}
-	if err := runGit(ctx, remoteDir, "init", "-b", "main"); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
+	portableTestGit(t, remoteDir, "init", "-b", "main")
 	seedPortableThread(t, filepath.Join(remoteDir, dbRel), 1, "portable issue")
-	if err := runGit(ctx, remoteDir, "add", dbRel); err != nil {
-		t.Fatalf("git add seed: %v", err)
-	}
-	if err := runGit(ctx, remoteDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "seed store"); err != nil {
-		t.Fatalf("git commit seed: %v", err)
-	}
+	portableTestCommit(t, remoteDir)
 	if _, err := syncPortableStore(ctx, remoteDir, checkoutDir); err != nil {
 		t.Fatalf("clone portable store: %v", err)
 	}
