@@ -133,6 +133,10 @@ func TestCodeCommitGatePinsSourceAndReplacesAtomically(t *testing.T) {
 			if !ok || progress["coverage_complete"] != !tc.incomplete || progress["through"] != clock {
 				t.Fatal("prepare receipt lost truthful core progress")
 			}
+			// Drain the final receipt while the producer writes it, before waiting for completion.
+			var committed map[string]any
+			committedRead := make(chan error, 1)
+			go func() { committedRead <- decoder.Decode(&committed) }()
 			if tc.stale || tc.regressed {
 				s, err := store.Open(context.Background(), dbpath)
 				if err != nil {
@@ -166,6 +170,7 @@ func TestCodeCommitGatePinsSourceAndReplacesAtomically(t *testing.T) {
 			case <-time.After(15 * time.Second):
 				t.Fatal("native commit did not settle")
 			}
+			committedErr := <-committedRead
 			os.Stdout = stdout
 			if (e != nil) != fail {
 				t.Fatalf("commit error=%v want_failure=%v", e, fail)
@@ -202,9 +207,8 @@ func TestCodeCommitGatePinsSourceAndReplacesAtomically(t *testing.T) {
 				if snap.GitSHA != sha || snap.WorktreeDirty || path != "current.go" || text != "package captured\n" {
 					t.Fatal("publication mixed captured and later commit")
 				}
-				var committed map[string]any
-				if err := decoder.Decode(&committed); err != nil {
-					t.Fatal(err)
+				if committedErr != nil {
+					t.Fatal(committedErr)
 				}
 				progress, ok := committed["core_progress_at_commit"].(map[string]any)
 				if !ok || progress["coverage_complete"] != !tc.incomplete || progress["through"] != clock {
@@ -212,13 +216,15 @@ func TestCodeCommitGatePinsSourceAndReplacesAtomically(t *testing.T) {
 				}
 				if tc.incomplete {
 					// No-op needs neither another gate nor another publication.
+					var noop map[string]any
+					noopRead := make(chan error, 1)
+					go func() { noopRead <- decoder.Decode(&noop) }()
 					os.Stdout = writer
 					if err := codeRun([]string{"--db", dbpath, "--source", repo, "--commit", sha, "--upstream-receipt", proof, "--commit-gate", gate}); err != nil {
 						t.Fatal(err)
 					}
 					os.Stdout = stdout
-					var noop map[string]any
-					if err := decoder.Decode(&noop); err != nil {
+					if err := <-noopRead; err != nil {
 						t.Fatal(err)
 					}
 					if noop["phase"] != "unchanged" || noop["snapshot_id"] != float64(snap.ID) {
