@@ -28,7 +28,9 @@ func TestPublicationRepairPreservesSourceEvidence(t *testing.T) {
 		t.Fatal(e)
 	}
 	var originalRecorded string
-	s.db.QueryRow("SELECT recorded_at FROM comment_revisions").Scan(&originalRecorded)
+	if err := s.db.QueryRow("SELECT recorded_at FROM comment_revisions").Scan(&originalRecorded); err != nil {
+		t.Fatalf("read source revision baseline: %v", err)
+	}
 	preview, e := s.RepairPublication(ctx, false)
 	if e != nil || preview.WouldChange != 2 || preview.Changed != 0 {
 		t.Fatalf("dry-run %+v %v", preview, e)
@@ -42,13 +44,17 @@ func TestPublicationRepairPreservesSourceEvidence(t *testing.T) {
 		t.Fatalf("replay %+v %v", r, e)
 	}
 	var published, submitted, created, stored string
-	s.db.QueryRow("SELECT publication_at_gh,submitted_at_gh,created_at_gh,raw_json FROM comments WHERE id=?", id).Scan(&published, &submitted, &created, &stored)
+	if err := s.db.QueryRow("SELECT publication_at_gh,submitted_at_gh,created_at_gh,raw_json FROM comments WHERE id=?", id).Scan(&published, &submitted, &created, &stored); err != nil {
+		t.Fatalf("read repaired source evidence: %v", err)
+	}
 	if published != "2026-01-03T12:34:56Z" || submitted != published || created != "2026-01-01T00:00:00Z" || stored != raw {
 		t.Fatalf("source timestamps/evidence changed incorrectly")
 	}
 	var n int
 	var recorded string
-	s.db.QueryRow("SELECT count(*),min(recorded_at) FROM comment_revisions").Scan(&n, &recorded)
+	if err := s.db.QueryRow("SELECT count(*),min(recorded_at) FROM comment_revisions").Scan(&n, &recorded); err != nil {
+		t.Fatalf("read source revision count and timestamp: %v", err)
+	}
 	if n != 1 || recorded != originalRecorded {
 		t.Fatal("repair manufactured a source revision")
 	}
@@ -66,7 +72,9 @@ func TestPublicationRepairPreservesSourceEvidence(t *testing.T) {
 	if e = s.SaveActorEvidence(ctx, nodes, "2026-01-01T00:00:00Z"); e != nil {
 		t.Fatal(e)
 	}
-	s.db.QueryRow("SELECT count(distinct actor_node_id) FROM actor_identity_evidence").Scan(&n)
+	if err := s.db.QueryRow("SELECT count(distinct actor_node_id) FROM actor_identity_evidence").Scan(&n); err != nil {
+		t.Fatalf("read distinct actor identities: %v", err)
+	}
 	if n != 2 {
 		t.Fatal("login reuse merged identities")
 	}
