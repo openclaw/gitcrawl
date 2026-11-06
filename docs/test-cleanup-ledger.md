@@ -76,6 +76,7 @@ that every test is E2E.
 | [Guarded core-request serialization](https://github.com/openclaw/gitcrawl/pull/381) | Make fake quota follow dispatched requests and assert that the in-flight request holds the reserve lock. Retain threshold outcomes and probe/request counts; keep the distinct rate-status lock test. |
 | [Duplicate GraphQL review-thread fixtures](https://github.com/openclaw/gitcrawl/pull/382) | Remove three overlapping happy-path fixtures after transferring HTTP and exact comment-slice checks to nested pagination and provider-ID coverage. Keep enterprise, retry-body and invalid-cursor cases. |
 | [Retry cancellation readiness](https://github.com/openclaw/gitcrawl/pull/384) | Cancel on the observed retry decision and require a real request. Retain the overflow deadline, exact cap and request-count checks with a five-second bound instead of 50 ms. |
+| [Production Darwin flush default](https://github.com/openclaw/gitcrawl/pull/385) | Keep the test-binary opt-out check and run a plain executable against in-memory SQLite on Darwin. Verify both flush flags without forcing the policy; retain reconnect and read-only tests. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,

@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriterDurabilitySurvivesConnectionReplacement(t *testing.T) {
@@ -194,9 +196,21 @@ func TestDurabilityHookLeavesNonDatabaseErrorsToCaller(t *testing.T) {
 	}
 }
 
+func TestDarwinFullFlushDisabledInTestBinaries(t *testing.T) {
+	if darwinFullFlush.Load() {
+		t.Fatal("Darwin full flush must be disabled by default in test binaries")
+	}
+}
+
 func TestDarwinFullFlushIsProductionDefault(t *testing.T) {
-	// Test binaries opt out for speed; every non-test binary enables the flags.
-	if darwinFullFlush.Load() != !testing.Testing() {
-		t.Fatalf("darwinFullFlush=%v, want %v", darwinFullFlush.Load(), !testing.Testing())
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin flush policy")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", "./testdata/darwin-flush-default")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("non-test flush policy: %v\n%s", err, output)
 	}
 }
