@@ -106,20 +106,53 @@ func TestCodeIndexAndScopedSearch(t *testing.T) {
 }
 
 func TestCodeCommandValidation(t *testing.T) {
-	ctx := context.Background()
-	for _, args := range [][]string{
-		{"code"},
-		{"code", "unknown"},
-		{"code", "index"},
-		{"code", "index", "badrepo"},
-		{"code", "index", "openclaw/gitcrawl", "--max-files", "0"},
-		{"code", "index", "openclaw/gitcrawl", "--max-total-bytes", "0"},
-		{"search", "openclaw/gitcrawl", "--query", "x", "--scope", "bad"},
-		{"search", "openclaw/gitcrawl", "--query", "x", "--scope", "code", "--mode", "semantic"},
+	for _, test := range []struct {
+		name      string
+		args      []string
+		wantError string
+	}{
+		{name: "missing subcommand", args: []string{"code"}, wantError: "code requires a subcommand"},
+		{name: "unknown subcommand", args: []string{"code", "unknown"}, wantError: `unknown code subcommand "unknown"`},
+		{name: "missing repository", args: []string{"code", "index"}, wantError: "code index requires owner/repo"},
+		{name: "invalid repository", args: []string{"code", "index", "badrepo"}, wantError: `expected owner/repo, got "badrepo"`},
+		{name: "zero max files", args: []string{"code", "index", "openclaw/gitcrawl", "--max-files", "0"}, wantError: "code index requires positive --max-files"},
+		{name: "zero max file bytes", args: []string{"code", "index", "openclaw/gitcrawl", "--max-file-bytes", "0"}, wantError: "code index requires positive --max-file-bytes"},
+		{name: "zero max total bytes", args: []string{"code", "index", "openclaw/gitcrawl", "--max-total-bytes", "0"}, wantError: "code index requires positive --max-total-bytes"},
+		{name: "invalid search scope", args: []string{"search", "openclaw/gitcrawl", "--query", "x", "--scope", "bad"}, wantError: `unsupported search scope "bad"`},
+		{name: "semantic code search", args: []string{"search", "openclaw/gitcrawl", "--query", "x", "--scope", "code", "--mode", "semantic"}, wantError: "code search currently supports --mode keyword only"},
 	} {
-		if err := New().Run(ctx, args); err == nil {
-			t.Fatalf("args unexpectedly succeeded: %#v", args)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			t.Setenv("USERPROFILE", dir)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+			t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+			t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			t.Setenv("GITCRAWL_DB_PATH", filepath.Join(dir, "archive.db"))
+			t.Setenv("GITHUB_TOKEN", "")
+			t.Setenv("GH_TOKEN", "")
+			app := New()
+			var stdout, stderr bytes.Buffer
+			app.Stdout, app.Stderr = &stdout, &stderr
+			lookups := 0
+			app.githubAuthTokenLookup = func(context.Context) (string, error) {
+				lookups++
+				return "", nil
+			}
+			args := append([]string{"--config", filepath.Join(dir, "missing.toml"), "--json"}, test.args...)
+			err := app.Run(context.Background(), args)
+			if err == nil || ExitCode(err) != 2 || err.Error() != test.wantError {
+				t.Fatalf("code validation = %v (exit %d), want %q with usage exit 2", err, ExitCode(err), test.wantError)
+			}
+			if lookups != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+				t.Fatalf("invalid command performed credential lookup or output: lookups=%d stdout=%q stderr=%q", lookups, stdout.String(), stderr.String())
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("invalid command created runtime files: entries=%v err=%v", entries, err)
+			}
+		})
 	}
 }
 
