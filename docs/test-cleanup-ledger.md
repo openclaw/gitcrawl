@@ -25,6 +25,7 @@ that every test is E2E.
 | [Keyboard and menu sort fixtures](https://github.com/openclaw/gitcrawl/pull/402) | Share both entry paths and cached detail setup. Require size mode and reordered rows while preserving selected cluster/member checks. |
 | [Test-only pull request cache wrapper](https://github.com/openclaw/gitcrawl/pull/319) | Removed all-family forwarding writer. Retained replacement, tombstone, ordering, migration and transactional checks. |
 | [Shared deterministic reference-edge fixture](https://github.com/openclaw/gitcrawl/pull/320) | Consolidated two standalone fixtures into ten scope cases with exact issue/PR membership and orthogonal vectors. |
+| [Lock-doctor Git fixture](https://github.com/openclaw/gitcrawl/pull/403) | Reuse maintenance-disabled Git setup and unsigned fixture commits. Clear inherited signing configuration inputs while retaining portable mirror and process-detection assertions. |
 | [Review pagination cursor fixtures](https://github.com/openclaw/gitcrawl/pull/321) | Consolidated cursor rejection fixtures. Retained HTTP requests, deadlines, exact counts and nested pagination diagnostics. |
 | [Provider HTTP fixture failures](https://github.com/openclaw/gitcrawl/pull/322) | Replaced fatal assertions in handler goroutines with nonfatal diagnostics and HTTP rejection. Retained successful provider fixtures. |
 | [CLI HTTP fixture failures](https://github.com/openclaw/gitcrawl/pull/323) | Repaired handler failure reporting without EOF masking. Retained persisted archive and root assertions. |
