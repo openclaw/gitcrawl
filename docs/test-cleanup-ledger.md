@@ -6,6 +6,7 @@ that every test is E2E.
 
 | Change | Outcome and retained coverage |
 | --- | --- |
+| [Sync state contract owners](https://github.com/openclaw/gitcrawl/pull/407) | Move explicit all-state and initial open/closed request assertions into existing reconciliation fixtures. Remove two duplicate store fixtures and their now-unused capture client; retain rollback and checkpoint coverage. |
 | [Test-only CLI helpers](https://github.com/openclaw/gitcrawl/pull/293) | Removed unused CLI/TUI helpers. Retained active link extraction, palette and command checks. |
 | [Invalid CLI arguments](https://github.com/openclaw/gitcrawl/pull/288) | Consolidated 13 duplicate invocations. Retained 101 unique cases and required usage exit 2 with valid temp config. Fixed clustering parse classification. |
 | [Launcher status mapping](https://github.com/openclaw/gitcrawl/pull/292) | Removed advertised but unimplemented sync-status alias. Retained supported read-only status mapping. |

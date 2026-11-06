@@ -1095,18 +1095,6 @@ func (f *sinceCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, re
 	return nil, nil
 }
 
-type stateCaptureGitHub struct {
-	fakeGitHub
-	state  string
-	states []string
-}
-
-func (f *stateCaptureGitHub) ListRepositoryIssues(ctx context.Context, owner, repo string, options gh.ListIssuesOptions, reporter gh.Reporter) ([]map[string]any, error) {
-	f.state = options.State
-	f.states = append(f.states, options.State)
-	return nil, nil
-}
-
 type closedSweepGitHub struct {
 	fakeGitHub
 }
@@ -3934,42 +3922,6 @@ func TestSyncRejectsInvalidSince(t *testing.T) {
 	s := New(nil, nil)
 	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "yesterday"}); err == nil || !strings.Contains(err.Error(), "invalid --since \"yesterday\"") {
 		t.Fatalf("sync error = %v, want invalid since rejection", err)
-	}
-}
-
-func TestSyncPassesRequestedState(t *testing.T) {
-	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	client := &stateCaptureGitHub{}
-	s := New(client, st)
-	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", State: "all"}); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if client.state != "all" {
-		t.Fatalf("state = %q, want all", client.state)
-	}
-}
-
-func TestSyncDefaultsToOpenState(t *testing.T) {
-	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	client := &stateCaptureGitHub{}
-	s := New(client, st)
-	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl"}); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if len(client.states) != 2 || client.states[0] != "open" || client.states[1] != "closed" {
-		t.Fatalf("default states = %v, want open then closed reconciliation", client.states)
 	}
 }
 

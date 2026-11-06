@@ -57,6 +57,9 @@ func TestDefaultClosedSweepPreservesOfflineCoverageAndFailureCheckpoint(t *testi
 	if _, err := s.Sync(ctx, opts); err != nil {
 		t.Fatal(err)
 	}
+	if len(client.requests) != 2 || client.requests[0].State != "open" || client.requests[1].State != "closed" {
+		t.Fatalf("initial default listings = %+v, want open then closed reconciliation", client.requests)
+	}
 	repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +227,9 @@ func TestClosedSweepPreservesExplicitScopeContracts(t *testing.T) {
 			case "limited", "all":
 				if len(client.requests) != 1 || client.requests[0].Since != "" {
 					t.Fatalf("listing changed=%+v", client.requests)
+				}
+				if tc.name == "all" && client.requests[0].State != "all" {
+					t.Fatalf("all-state listing = %+v, want state all", client.requests[0])
 				}
 			case "number":
 				if len(client.requests) != 0 {
