@@ -119,10 +119,23 @@ func TestQuarantineAnalysisNamespaces(t *testing.T) {
 }
 func TestQuarantineMalformedBlockedScopeRefused(t *testing.T) {
 	s := quarantineReaderFixture(t, false, false, false)
-	s.DB().Exec("update cluster_runs set finished_at='2025-01-01T00:00:00Z' where id=11")
-	for _, source := range []string{"", ClusterSourceDurable, ClusterSourceRun} {
-		if _, e := s.ClusterReadSelection(context.Background(), 1, source); e == nil {
-			t.Fatal("invalid blocked admission admitted", source)
+	ctx := context.Background()
+	sources := []string{"", ClusterSourceDurable, ClusterSourceRun}
+	for _, source := range sources {
+		if _, err := s.ClusterReadSelection(ctx, 1, source); err != nil {
+			t.Fatalf("valid blocked scope for source %q: %v", source, err)
+		}
+	}
+	result, err := s.DB().Exec("update cluster_runs set finished_at='2025-01-01T00:00:00Z' where id=11")
+	if err != nil {
+		t.Fatalf("invalidate blocked scope admission: %v", err)
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		t.Fatalf("invalidate blocked scope rows = %d, error = %v, want 1", count, err)
+	}
+	for _, source := range sources {
+		if _, err := s.ClusterReadSelection(ctx, 1, source); err == nil || err.Error() != "v2 analysis status/admission mismatch" {
+			t.Fatalf("invalid blocked scope for source %q: %v, want status/admission mismatch", source, err)
 		}
 	}
 }
