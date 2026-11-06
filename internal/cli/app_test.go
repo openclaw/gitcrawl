@@ -7985,7 +7985,7 @@ func TestClustersDefaultShowsActivePrimaryMembers(t *testing.T) {
 	run := New()
 	var stdout bytes.Buffer
 	run.Stdout = &stdout
-	if err := run.Run(ctx, []string{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--sort", "size", "--min-size", "1"}); err != nil {
+	if err := run.Run(ctx, []string{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--sort", "oldest", "--min-size", "1"}); err != nil {
 		t.Fatalf("clusters: %v", err)
 	}
 	var active struct {

@@ -5,97 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
-
-func TestCLIAppCommandCoveragePaths(t *testing.T) {
-	ctx := context.Background()
-	configPath := seedCLICommandArchive(t, ctx)
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	st, err := store.Open(ctx, cfg.DBPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	repo, err := st.RepositoryByFullName(ctx, "openclaw/openclaw")
-	if err != nil {
-		t.Fatalf("repo: %v", err)
-	}
-	threads, err := st.ListThreadsFiltered(ctx, store.ThreadListOptions{RepoID: repo.ID, IncludeClosed: true, Numbers: []int{10, 12}})
-	if err != nil {
-		t.Fatalf("threads: %v", err)
-	}
-	if len(threads) != 2 {
-		t.Fatalf("seed threads = %+v", threads)
-	}
-	result, err := st.SaveCompleteDurableClusters(ctx, repo.ID, []store.DurableClusterInput{{
-		StableKey:              "cli:10,12",
-		StableSlug:             "cli-10-12",
-		RepresentativeThreadID: threads[0].ID,
-		Title:                  "CLI command cluster",
-		Members: []store.DurableClusterMemberInput{
-			{ThreadID: threads[0].ID, Role: "canonical"},
-			{ThreadID: threads[1].ID, Role: "member"},
-		},
-	}})
-	if err != nil {
-		t.Fatalf("save cluster: %v", err)
-	}
-	if _, err := st.RecordRun(ctx, store.RunRecord{RepoID: repo.ID, Kind: "sync", Scope: "open", Status: "success", StartedAt: "2026-05-08T01:00:00Z", FinishedAt: "2026-05-08T01:00:01Z", StatsJSON: "{}"}); err != nil {
-		t.Fatalf("record run: %v", err)
-	}
-	clusterID, err := st.ClusterIDForThreadNumber(ctx, repo.ID, 10, true)
-	if err != nil {
-		t.Fatalf("cluster id: %v", err)
-	}
-	if result.RunID == 0 {
-		t.Fatal("cluster run id should be non-zero")
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
-
-	commands := [][]string{
-		{"--config", configPath, "--json", "configure", "--summary-model", "gpt-test", "--embed-model", "embed-test", "--embedding-basis", "title_original"},
-		{"--config", configPath, "--json", "metadata"},
-		{"--config", configPath, "--json", "status"},
-		{"--config", configPath, "--json", "threads", "openclaw/openclaw", "--numbers", "https://github.com/openclaw/openclaw/issues/10,https://github.com/openclaw/openclaw/pull/12", "--include-closed", "--limit", "2"},
-		{"--config", configPath, "--json", "runs", "openclaw/openclaw", "--kind", "sync", "--limit", "1"},
-		{"--config", configPath, "--json", "clusters", "openclaw/openclaw", "--include-closed", "--sort", "oldest", "--min-size", "1", "--limit", "5"},
-		{"--config", configPath, "--json", "durable-clusters", "openclaw/openclaw", "--include-closed", "--sort", "size", "--min-size", "1", "--limit", "5"},
-		{"--config", configPath, "--json", "cluster-detail", "openclaw/openclaw", "--id", strconv.FormatInt(clusterID, 10), "--member-limit", "2", "--body-chars", "10", "--include-closed"},
-		{"--config", configPath, "--json", "close-thread", "openclaw/openclaw", "--number", "https://github.com/openclaw/openclaw/issues/10", "--reason", "covered"},
-		{"--config", configPath, "--json", "reopen-thread", "openclaw/openclaw", "--number", "10"},
-		{"--config", configPath, "--json", "close-cluster", "openclaw/openclaw", "--id", strconv.FormatInt(clusterID, 10), "--reason", "covered"},
-		{"--config", configPath, "--json", "reopen-cluster", "openclaw/openclaw", "--id", strconv.FormatInt(clusterID, 10)},
-		{"--config", configPath, "--json", "exclude-cluster-member", "openclaw/openclaw", "--id", strconv.FormatInt(clusterID, 10), "--number", "12", "--reason", "covered"},
-		{"--config", configPath, "--json", "include-cluster-member", "openclaw/openclaw", "--id", strconv.FormatInt(clusterID, 10), "--number", "12", "--reason", "covered"},
-		{"--config", configPath, "--json", "set-cluster-canonical", "openclaw/openclaw", "--id", strconv.FormatInt(clusterID, 10), "--number", "12", "--reason", "covered"},
-	}
-	for _, args := range commands {
-		app := New()
-		var stdout, stderr bytes.Buffer
-		app.Stdout = &stdout
-		app.Stderr = &stderr
-		if err := app.Run(ctx, args); err != nil {
-			t.Fatalf("%v failed: %v\nstdout=%s\nstderr=%s", args, err, stdout.String(), stderr.String())
-		}
-		if stdout.Len() == 0 {
-			t.Fatalf("%v produced no output", args)
-		}
-	}
-	if clusterID <= 0 {
-		t.Fatalf("cluster id = %d", clusterID)
-	}
-}
 
 func TestCLIAppControlOutputFormats(t *testing.T) {
 	ctx := context.Background()

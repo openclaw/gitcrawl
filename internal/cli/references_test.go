@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,5 +119,40 @@ func TestExplicitEmptyThreadSelectionIsRejected(t *testing.T) {
 				t.Errorf("%s %s %q: error=%v, want usage error before runtime access", command, flag, value, err)
 			}
 		}
+	}
+}
+
+func TestThreadsSelectsURLReferences(t *testing.T) {
+	ctx := context.Background()
+	configPath := seedCLICommandArchive(t, ctx)
+	for _, tc := range []struct {
+		name, references string
+		want             []int
+	}{
+		{name: "pull-request", references: "https://github.com/openclaw/openclaw/pull/12", want: []int{12}},
+		{name: "issue-and-pull-request", references: "https://github.com/openclaw/openclaw/issues/10,https://github.com/openclaw/openclaw/pull/12", want: []int{10, 12}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			app.Stdout = &stdout
+			if err := app.Run(ctx, []string{"--config", configPath, "--json", "threads", "openclaw/openclaw", "--numbers", tc.references, "--include-closed", "--limit", "2"}); err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				Threads []struct{ Number int } `json:"threads"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+				t.Fatalf("decode threads: %v", err)
+			}
+			var numbers []int
+			for _, thread := range payload.Threads {
+				numbers = append(numbers, thread.Number)
+			}
+			slices.Sort(numbers)
+			if !slices.Equal(numbers, tc.want) {
+				t.Fatalf("selected thread numbers = %v, want %v", numbers, tc.want)
+			}
+		})
 	}
 }
