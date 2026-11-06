@@ -111,32 +111,6 @@ on conflict(repo_id, kind, number) do update set
   updated_at=excluded.updated_at
 returning id;
 
--- name: MarkOpenThreadClosedFromGitHub :execrows
-update threads
-set github_id = sqlc.arg(github_id),
-  state = sqlc.arg(state),
-  title = sqlc.arg(title),
-  body = sqlc.narg(body),
-  author_login = sqlc.narg(author_login),
-  author_type = sqlc.narg(author_type),
-  author_association = sqlc.narg(author_association),
-  html_url = sqlc.arg(html_url),
-  labels_json = sqlc.arg(labels_json),
-  assignees_json = sqlc.arg(assignees_json),
-  raw_json = sqlc.arg(raw_json),
-  content_hash = sqlc.arg(content_hash),
-  created_at_gh = sqlc.narg(created_at_gh),
-  updated_at_gh = sqlc.narg(updated_at_gh),
-  closed_at_gh = sqlc.narg(closed_at_gh),
-  merged_at_gh = sqlc.narg(merged_at_gh),
-  last_pulled_at = sqlc.narg(last_pulled_at),
-  updated_at = sqlc.arg(updated_at)
-where repo_id = sqlc.arg(repo_id)
-  and kind = sqlc.arg(kind)
-  and number = sqlc.arg(number)
-  and state = 'open'
-  and closed_at_local is null;
-
 -- name: ListThreadsCurrentSchema :many
 select id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, author_association, html_url,
   labels_json, assignees_json, coalesce(raw_json, '') as raw_json, content_hash, is_draft, created_at_gh, updated_at_gh,

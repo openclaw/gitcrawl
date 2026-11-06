@@ -215,15 +215,6 @@ func TestGeneratedQueriesRoundTrip(t *testing.T) {
 	if rows, err := q.ReopenThreadLocally(ctx, storedb.ReopenThreadLocallyParams{UpdatedAt: later, RepoID: repoID, Number: 19}); err != nil || rows != 1 {
 		t.Fatalf("reopen thread locally rows = %d, %v", rows, err)
 	}
-	if rows, err := q.MarkOpenThreadClosedFromGitHub(ctx, storedb.MarkOpenThreadClosedFromGitHubParams{
-		GithubID: "T_1", State: "closed", Title: "sqlc refactor", Body: ns("body"), AuthorLogin: ns("codex"), AuthorType: ns("Bot"),
-		HtmlUrl: "https://github.com/openclaw/gitcrawl/pull/19", LabelsJson: `["refactor"]`, AssigneesJson: `[]`, RawJson: `{"thread":true}`,
-		ContentHash: "hash-2", CreatedAtGh: ns(now), UpdatedAtGh: ns(later), ClosedAtGh: ns(later), LastPulledAt: ns(later),
-		UpdatedAt: later, RepoID: repoID, Kind: "pull_request", Number: 19,
-	}); err != nil || rows != 1 {
-		t.Fatalf("mark thread closed rows = %d, %v", rows, err)
-	}
-
 	if err := q.DeletePullRequestChecks(ctx, threadID); err != nil {
 		t.Fatalf("delete pr checks: %v", err)
 	}
