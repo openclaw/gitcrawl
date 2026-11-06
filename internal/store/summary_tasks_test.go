@@ -137,8 +137,8 @@ func TestListSummaryTasksSkipsCurrentSummaryAndSupportsForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list forced tasks: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("forced tasks = %+v", tasks)
+	if len(tasks) != 1 || tasks[0].ThreadID != threadID || tasks[0].RevisionID != enrichment.RevisionID {
+		t.Fatalf("forced tasks = %+v, want summarized thread %d revision %d", tasks, threadID, enrichment.RevisionID)
 	}
 
 	thread.UpdatedAtGitHub = "2026-07-13T00:00:00Z"
