@@ -6,6 +6,7 @@ that every test is E2E.
 
 | Change | Outcome and retained coverage |
 | --- | --- |
+| [Populated-menu smoke owners](https://github.com/openclaw/gitcrawl/pull/416) | Remove the mixed-action smoke with only final status/quit checks. Extend the focused view-controls owner across size, sort and member-sort variants; keep six independent empty-content guards and the existing selection, desktop, local-action and quit owners. |
 | [Keyboard smoke contract owners](https://github.com/openclaw/gitcrawl/pull/415) | Replace the unchecked mixed-key sequence with explicit resize and keyboard-quit checks, including Ctrl+C. Keep focused sort, movement, filtering, layout, menu-boundary and detail-viewport owners; remove a repeated detail flag assignment. |
 | [Desktop failure diagnostics](https://github.com/openclaw/gitcrawl/pull/414) | Require opener or clipboard error prefixes for every existing desktop failure action and the two picked-link actions. Fix representative URL opening to surface its opener error instead of reporting success. |
 | [Empty-menu selection diagnostics](https://github.com/openclaw/gitcrawl/pull/413) | Move nine empty-selection menu actions into independent named cases with fresh models and exact missing-cluster or missing-thread diagnostics. Retain handled-action assertions and the broader populated-menu fixture. |
