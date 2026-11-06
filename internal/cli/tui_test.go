@@ -1633,15 +1633,32 @@ func TestTUIRunMenuItemCoversNonExternalActions(t *testing.T) {
 	if model.status == "" {
 		t.Fatal("menu actions should update status")
 	}
+}
 
-	empty := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{Repository: "openclaw/openclaw"})
-	for _, action := range []string{"copy-cluster-id", "copy-cluster-name", "copy-cluster-title", "open", "copy-url", "copy-markdown", "copy-title", "open-first-link", "copy-first-link"} {
-		if !empty.runMenuItem(tuiMenuItem{action: action}) {
-			t.Fatalf("empty action %s should be handled", action)
-		}
-		if empty.status == "" {
-			t.Fatalf("empty action %s should set status", action)
-		}
+func TestTUIEmptyMenuActionsReportMissingSelection(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		want   string
+	}{
+		{"copy-cluster-id", "No selected cluster"},
+		{"copy-cluster-name", "No selected cluster"},
+		{"copy-cluster-title", "No selected cluster"},
+		{"open", "No selected thread"},
+		{"copy-url", "No selected thread"},
+		{"copy-markdown", "No selected thread"},
+		{"copy-title", "No selected thread"},
+		{"open-first-link", "No selected thread"},
+		{"copy-first-link", "No selected thread"},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{Repository: "openclaw/openclaw"})
+			if !model.runMenuItem(tuiMenuItem{action: tc.action}) {
+				t.Fatal("empty action should be handled")
+			}
+			if model.status != tc.want {
+				t.Fatalf("empty action status = %q, want %q", model.status, tc.want)
+			}
+		})
 	}
 }
 
