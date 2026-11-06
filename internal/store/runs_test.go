@@ -79,26 +79,37 @@ func TestLastSuccessfulSyncAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repo: %v", err)
 	}
-	if _, err := st.RecordRun(ctx, RunRecord{
-		RepoID: repoID, Kind: "sync", Scope: "open", Status: "failed",
-		StartedAt: "2026-04-26T00:00:00Z", FinishedAt: "2026-04-26T00:00:30Z",
-	}); err != nil {
-		t.Fatalf("record failed run: %v", err)
-	}
-	if _, err := st.RecordRun(ctx, RunRecord{
-		RepoID: repoID, Kind: "sync", Scope: "open", Status: "success",
-		StartedAt: "2026-04-26T00:01:00Z", FinishedAt: "2026-04-26T00:01:30Z",
-	}); err != nil {
-		t.Fatalf("record success run: %v", err)
-	}
-
-	lastSync, err := st.LastSuccessfulSyncAt(ctx, repoID)
-	if err != nil {
-		t.Fatalf("last sync: %v", err)
-	}
-	want, _ := time.Parse(time.RFC3339Nano, "2026-04-26T00:01:30Z")
-	if !lastSync.Equal(want) {
-		t.Fatalf("last sync = %s, want %s", lastSync, want)
+	for _, step := range []struct {
+		status     string
+		startedAt  string
+		finishedAt string
+		want       string
+	}{
+		{"failed", "2026-04-26T00:00:00Z", "2026-04-26T00:00:30Z", ""},
+		{"success", "2026-04-26T00:01:00Z", "2026-04-26T00:01:30Z", "2026-04-26T00:01:30Z"},
+		{"failed", "2026-04-26T00:02:00Z", "2026-04-26T00:02:30Z", "2026-04-26T00:01:30Z"},
+		{"completed", "2026-04-26T00:03:00Z", "2026-04-26T00:03:30Z", "2026-04-26T00:03:30Z"},
+		{"checkpoint", "2026-04-26T00:04:00Z", "2026-04-26T00:04:30Z", "2026-04-26T00:03:30Z"},
+	} {
+		if _, err := st.RecordRun(ctx, RunRecord{
+			RepoID: repoID, Kind: "sync", Scope: "open", Status: step.status,
+			StartedAt: step.startedAt, FinishedAt: step.finishedAt,
+		}); err != nil {
+			t.Fatalf("record %s run at %s: %v", step.status, step.finishedAt, err)
+		}
+		lastSync, err := st.LastSuccessfulSyncAt(ctx, repoID)
+		if err != nil {
+			t.Fatalf("last sync after %s at %s: %v", step.status, step.finishedAt, err)
+		}
+		if step.want == "" {
+			if !lastSync.IsZero() {
+				t.Fatalf("failed-only history returned last sync %s", lastSync)
+			}
+			continue
+		}
+		if got := lastSync.UTC().Format(time.RFC3339Nano); got != step.want {
+			t.Fatalf("last sync after %s at %s = %s, want %s", step.status, step.finishedAt, got, step.want)
+		}
 	}
 }
 
