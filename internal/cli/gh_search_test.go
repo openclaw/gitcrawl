@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -328,16 +329,23 @@ func TestGHSearchJSONHelpersCoverFieldsAndFallbackLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json rows: %v", err)
 	}
-	if rows[0]["updatedAt"] != thread.UpdatedAt || rows[0]["body"] != "body text" {
-		t.Fatalf("rows = %#v", rows)
-	}
-	labels := rows[0]["labels"].([]ghLabel)
-	if len(labels) != 2 || labels[1].Name != "triage" {
-		t.Fatalf("labels = %#v", labels)
-	}
-	assignees := rows[0]["assignees"].([]map[string]any)
-	if len(assignees) != 2 || assignees[1]["login"] != " bob " {
-		t.Fatalf("assignees = %#v", assignees)
+	want := []map[string]any{{
+		"number":    10,
+		"title":     "title",
+		"state":     "closed",
+		"url":       "https://github.test/10",
+		"updatedAt": "2026-04-30T00:00:00Z",
+		"createdAt": "2026-04-29T00:00:00Z",
+		"closedAt":  "2026-04-30T01:00:00Z",
+		"mergedAt":  "2026-04-30T02:00:00Z",
+		"labels":    []ghLabel{{Name: "bug"}, {Name: "triage"}},
+		"assignees": []map[string]any{{"login": "alice"}, {"login": " bob "}},
+		"isDraft":   true,
+		"author":    map[string]any{"login": "alice", "type": "User"},
+		"body":      "body text",
+	}}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("rows = %#v, want %#v", rows, want)
 	}
 	if labels := ghLabelsFromJSON(`not-json`); labels != nil {
 		t.Fatalf("bad labels = %#v", labels)
