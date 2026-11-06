@@ -3931,15 +3931,9 @@ func TestSyncNormalizesRelativeSince(t *testing.T) {
 
 func TestSyncRejectsInvalidSince(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	s := New(fakeGitHub{}, st)
-	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "yesterday"}); err == nil {
-		t.Fatal("expected invalid since to fail")
+	s := New(nil, nil)
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", Since: "yesterday"}); err == nil || !strings.Contains(err.Error(), "invalid --since \"yesterday\"") {
+		t.Fatalf("sync error = %v, want invalid since rejection", err)
 	}
 }
 
@@ -3981,15 +3975,9 @@ func TestSyncDefaultsToOpenState(t *testing.T) {
 
 func TestSyncRejectsInvalidState(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "gitcrawl.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	s := New(fakeGitHub{}, st)
-	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", State: "merged"}); err == nil {
-		t.Fatal("expected invalid state to fail")
+	s := New(nil, nil)
+	if _, err := s.Sync(ctx, Options{Owner: "openclaw", Repo: "gitcrawl", State: "merged"}); err == nil || !strings.Contains(err.Error(), "invalid state \"merged\"") {
+		t.Fatalf("sync error = %v, want invalid state rejection", err)
 	}
 }
 
