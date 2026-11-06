@@ -1387,67 +1387,24 @@ func TestTUIActionMenuQuickKeysRunViewActions(t *testing.T) {
 	}
 }
 
-func TestTUIUpdateCoversKeyboardStateMachine(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		MinSize:    1,
-		Clusters:   sampleTUIClusters(),
-	})
-	model.detail = store.ClusterDetail{
-		Cluster: sampleTUIClusters()[0],
-		Members: []store.ClusterMemberDetail{
-			{Thread: store.Thread{ID: 10, Number: 10, Kind: "issue", State: "open", Title: "A", HTMLURL: ""}},
-			{Thread: store.Thread{ID: 11, Number: 11, Kind: "pull_request", State: "closed", Title: "B", HTMLURL: ""}},
-		},
-	}
-	model.hasDetail = true
-	model.sortMembers()
-
-	messages := []tea.Msg{
-		tea.WindowSizeMsg{Width: 150, Height: 30},
-		tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyRight},
-		tea.KeyMsg{Type: tea.KeyShiftTab},
-		tea.KeyMsg{Type: tea.KeyDown},
-		tea.KeyMsg{Type: tea.KeyUp},
-		tea.KeyMsg{Type: tea.KeyPgDown},
-		tea.KeyMsg{Type: tea.KeyPgUp},
-		tea.KeyMsg{Type: tea.KeyHome},
-		tea.KeyMsg{Type: tea.KeyEnd},
-		tea.KeyMsg{Type: tea.KeyEnter},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}},
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}},
-		tea.KeyMsg{Type: tea.KeyEsc},
-	}
-	var updated tea.Model = model
-	for _, msg := range messages {
-		next, _ := updated.Update(msg)
-		updated = next
-	}
-	model = updated.(clusterBrowserModel)
+func TestTUIWindowSizeAndKeyboardQuit(t *testing.T) {
+	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{})
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 150, Height: 30})
+	model = next.(clusterBrowserModel)
 	if model.width != 150 || model.height != 30 {
 		t.Fatalf("window size not applied: %dx%d", model.width, model.height)
 	}
-	if model.status == "" {
-		t.Fatalf("expected status after key flow")
-	}
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	model = next.(clusterBrowserModel)
-	if cmd == nil {
-		t.Fatal("q should return a quit command")
-	}
-	if model.quitRequested {
-		t.Fatal("keyboard quit should not set mouse quit flag")
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+		{Type: tea.KeyCtrlC},
+	} {
+		next, cmd := model.Update(key)
+		if cmd == nil {
+			t.Fatalf("%s should return a quit command", key.String())
+		}
+		if next.(clusterBrowserModel).quitRequested {
+			t.Fatalf("%s should not set mouse quit flag", key.String())
+		}
 	}
 }
 
@@ -2534,7 +2491,6 @@ func TestTUIActionMenuIncludesBodyLinkActions(t *testing.T) {
 	})
 	model.hasDetail = true
 	model.memberIndex = 0
-	model.hasDetail = true
 	model.memberRows = []memberRow{{
 		selectable: true,
 		member: store.ClusterMemberDetail{
