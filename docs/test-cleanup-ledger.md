@@ -82,6 +82,7 @@ that every test is E2E.
 | [Refused exclusive-rename bytes](https://github.com/openclaw/gitcrawl/pull/388) | Require source and destination file sentinels to survive a refused rename, alongside destination identity. Keep directory refusal and subsequent absent-destination publication checks. |
 | [GH compatibility helper duplication](https://github.com/openclaw/gitcrawl/pull/389) | Remove the direct shim-message fixture and repeated positive host mappings. Keep the public migration messages and returned-error check, unsupported-error wrapping, invalid URLs, host/config defaults and configured values. |
 | [Change-contract test ownership](https://github.com/openclaw/gitcrawl/pull/390) | Require usage errors before invalid-config access for malformed input; check missing-archive runtime errors and non-creation for valid commands. Remove the duplicate missing-action call and move the closed-DB sanitizer check to its owner using a plain SQL handle. |
+| [Broad command coverage smoke](https://github.com/openclaw/gitcrawl/pull/391) | Remove the 15-command nonempty-output fixture and redundant cluster-ID tail check. Keep focused payload/state tests, add exact single/mixed URL selection and exercise oldest-sort acceptance in the existing cluster-membership test. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
