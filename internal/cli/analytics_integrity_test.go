@@ -282,7 +282,20 @@ func TestAnalyticsLaneMigrationRetainsInflightCursorAndLegacyReceipt(t *testing.
 
 func TestAnalyticsDiscoveryLeavesDueItemsToBoundedRetryScheduler(t *testing.T) {
 	ctx := context.Background()
-	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "local"))
+	t.Setenv("APPDATA", filepath.Join(dir, "roaming"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("GITHUB_TOKEN", "test-token-placeholder")
+	t.Setenv("GH_TOKEN", "")
+	path := filepath.Join(dir, "archive.db")
+	t.Setenv("GITCRAWL_DB_PATH", path)
+	s, err := store.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,15 +310,28 @@ func TestAnalyticsDiscoveryLeavesDueItemsToBoundedRetryScheduler(t *testing.T) {
 	if err != nil || len(due) != 8 {
 		t.Fatalf("retry bound: %v %v", due, err)
 	}
-	// This app has no usable configuration. Any attempted collection would fail;
-	// discovery must skip even due items not selected by the retry budget.
+	// Discovery must skip even due items outside the retry budget. Collection
+	// failures for queued items can be swallowed, so observe provider requests.
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected discovery collection", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	t.Setenv("GITCRAWL_GITHUB_BASE_URL", server.URL)
 	a := New()
+	a.configPath = writeDoctorTestConfig(t, dir, path)
+	a.Stdout = io.Discard
+	a.Stderr = io.Discard
 	numbers := []int{}
 	for i := 1; i <= 24; i++ {
 		numbers = append(numbers, i)
 	}
 	if err = a.analyticsNumbers(ctx, s, "fixture", "repo", numbers, true, "graphql_history"); err != nil {
 		t.Fatal(err)
+	}
+	if count := requests.Load(); count != 0 {
+		t.Fatalf("discovery attempted collection: %d provider requests", count)
 	}
 	var attempts int
 	if e := s.DB().QueryRow("SELECT count(*) FROM analytics_fetch_attempts").Scan(&attempts); e != nil {

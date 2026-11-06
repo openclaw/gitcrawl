@@ -69,6 +69,7 @@ that every test is E2E.
 | [Legacy config path fixture consolidation](https://github.com/openclaw/gitcrawl/pull/374) | Share setup and five path assertions across platform-default and XDG-override cases. Retain fresh homes and separate environment cleanup for each case. |
 | [Publication source evidence reads](https://github.com/openclaw/gitcrawl/pull/375) | Check all four baseline and result reads before comparing timestamps, revisions or actor identities. Retain dry-run, replay, raw evidence and distinct same-login actors. |
 | [Quarantine-reader malformed admission proof](https://github.com/openclaw/gitcrawl/pull/376) | Verify three healthy source modes and a one-row fixture update before requiring the specific status/admission refusal. Reject unrelated reader errors; preserve namespace and history checks. |
+| [Analytics discovery provider guard](https://github.com/openclaw/gitcrawl/pull/377) | Use valid isolated config and require zero local-provider requests. Retain 24 queued items, the eight-item retry bound and unchanged attempt count; reject swallowed collection failures. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
