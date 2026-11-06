@@ -6,6 +6,7 @@ that every test is E2E.
 
 | Change | Outcome and retained coverage |
 | --- | --- |
+| [Empty-menu selection diagnostics](https://github.com/openclaw/gitcrawl/pull/413) | Move nine empty-selection menu actions into independent named cases with fresh models and exact missing-cluster or missing-thread diagnostics. Retain handled-action assertions and the broader populated-menu fixture. |
 | [Sync state contract owners](https://github.com/openclaw/gitcrawl/pull/407) | Move explicit all-state and initial open/closed request assertions into existing reconciliation fixtures. Remove two duplicate store fixtures and their now-unused capture client; retain rollback and checkpoint coverage. |
 | [Test-only CLI helpers](https://github.com/openclaw/gitcrawl/pull/293) | Removed unused CLI/TUI helpers. Retained active link extraction, palette and command checks. |
 | [Duplicate CLI usage calls](https://github.com/openclaw/gitcrawl/pull/410) | Remove eight duplicate invocations across unsupported/global commands, invalid flags/repositories/modes, TUI arity and status arguments. Retain exact usage exit 2 and valid/empty configuration fixtures. |
