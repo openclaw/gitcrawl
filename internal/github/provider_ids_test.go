@@ -104,6 +104,11 @@ func TestProviderIDsGraphQLPagination(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if r.URL.Path != "/graphql" || r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("graphql request: path=%q method=%q content-type=%q", r.URL.Path, r.Method, r.Header.Get("Content-Type"))
+			http.Error(w, "invalid test request", http.StatusBadRequest)
+			return
+		}
 		var request graphqlEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
@@ -157,6 +162,19 @@ func TestProviderIDsGraphQLPagination(t *testing.T) {
 		first["line"] != json.Number("42") || first["startLine"] != nil ||
 		first["viewerCanResolve"] != true || first["viewerCanUnresolve"] != false || first["viewerCanReply"] != true {
 		t.Errorf("first thread = %#v", first)
+	}
+	rawComments, ok := first["comments"].(map[string]any)
+	if !ok {
+		t.Fatalf("comments = %#v", first["comments"])
+	}
+	nodes, ok := rawComments["nodes"].([]map[string]any)
+	if !ok || len(nodes) != 3 {
+		t.Fatalf("comment nodes = %#v", rawComments["nodes"])
+	}
+	for i, want := range []string{"PRRC_first", "PRRC_second", "PRRC_third"} {
+		if nodes[i]["id"] != want {
+			t.Errorf("comment %d ID = %v, want %s", i, nodes[i]["id"], want)
+		}
 	}
 	comments := reviewThreadCommentsFromMap(first["comments"])
 	if len(comments.Nodes) != 3 || comments.PageInfo.HasNextPage || comments.PageInfo.EndCursor != "comments-done" {

@@ -297,46 +297,6 @@ func TestCheckRunsAndWorkflowRunsPaginate(t *testing.T) {
 	}
 }
 
-func TestListPullReviewThreadsDecodesGraphQLEnvelope(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/graphql" {
-			t.Errorf("unexpected path: %s", r.URL.String())
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s", r.Method)
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("content-type = %q", r.Header.Get("Content-Type"))
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-			"reviewThreads": map[string]any{
-				"nodes": []map[string]any{{
-					"id":         "PRRT_1",
-					"isResolved": false,
-					"comments":   map[string]any{"nodes": []map[string]any{{"id": "PRRC_1"}}},
-				}},
-				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-			},
-		}}}})
-	}))
-	defer server.Close()
-
-	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	rows, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 8, nil)
-	if err != nil {
-		t.Fatalf("list review threads: %v", err)
-	}
-	if len(rows) != 1 || rows[0]["id"] != "PRRT_1" {
-		t.Fatalf("rows = %#v", rows)
-	}
-}
-
 func TestListPullReviewThreadsUsesEnterpriseGraphQLEndpoint(t *testing.T) {
 	var graphQLPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -400,84 +360,6 @@ func TestListPullReviewThreadsRetriesWithBody(t *testing.T) {
 	}
 }
 
-func TestListPullReviewThreadsPaginatesReviewThreadComments(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.URL.Path != "/graphql" {
-			t.Errorf("unexpected path: %s", r.URL.String())
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-		var body graphqlEnvelope
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode request: %v", err)
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-		switch calls {
-		case 1:
-			if body.Variables["threadID"] != nil {
-				t.Errorf("first request should fetch review threads, variables=%+v", body.Variables)
-				http.Error(w, "invalid test request", http.StatusBadRequest)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-				"reviewThreads": map[string]any{
-					"nodes": []map[string]any{{
-						"id":         "PRRT_1",
-						"isResolved": false,
-						"comments": map[string]any{
-							"nodes":    []map[string]any{{"id": "PRRC_1"}},
-							"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "comment-cursor-1"},
-						},
-					}},
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-				},
-			}}}})
-		case 2:
-			if body.Variables["threadID"] != "PRRT_1" || body.Variables["cursor"] != "comment-cursor-1" {
-				t.Errorf("comment page variables = %+v", body.Variables)
-				http.Error(w, "invalid test request", http.StatusBadRequest)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-				"node": map[string]any{
-					"comments": map[string]any{
-						"nodes":    []map[string]any{{"id": "PRRC_2"}},
-						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-					},
-				},
-			}})
-		default:
-			t.Errorf("unexpected graphql call %d", calls)
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-	}))
-	defer server.Close()
-
-	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	rows, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 8, nil)
-	if err != nil {
-		t.Fatalf("list review threads: %v", err)
-	}
-	if calls != 2 {
-		t.Fatalf("calls = %d", calls)
-	}
-	if len(rows) != 1 || rows[0]["id"] != "PRRT_1" {
-		t.Fatalf("rows = %#v", rows)
-	}
-	comments, ok := rows[0]["comments"].(map[string]any)
-	if !ok {
-		t.Fatalf("comments = %#v", rows[0]["comments"])
-	}
-	nodes, ok := comments["nodes"].([]map[string]any)
-	if !ok || len(nodes) != 2 || nodes[1]["id"] != "PRRC_2" {
-		t.Fatalf("comment nodes = %#v", comments["nodes"])
-	}
-}
-
 func TestListPullReviewThreadsRejectsInvalidEndCursor(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -518,62 +400,6 @@ func TestListPullReviewThreadsRejectsInvalidEndCursor(t *testing.T) {
 				t.Fatalf("calls = %d, want %d", got, tc.wantCalls)
 			}
 		})
-	}
-}
-
-func TestListPullReviewThreadsPaginatesReviewThreads(t *testing.T) {
-	var calls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		var body graphqlEnvelope
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode request: %v", err)
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-		switch calls {
-		case 1:
-			if body.Variables["cursor"] != nil {
-				t.Errorf("first request should omit cursor, variables=%+v", body.Variables)
-				http.Error(w, "invalid test request", http.StatusBadRequest)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-				"reviewThreads": map[string]any{
-					"nodes":    []map[string]any{{"id": "PRRT_1"}},
-					"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "thread-cursor-1"},
-				},
-			}}}})
-		case 2:
-			if body.Variables["cursor"] != "thread-cursor-1" {
-				t.Errorf("second request cursor = %+v", body.Variables)
-				http.Error(w, "invalid test request", http.StatusBadRequest)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-				"reviewThreads": map[string]any{
-					"nodes":    []map[string]any{{"id": "PRRT_2"}},
-					"pageInfo": map[string]any{"hasNextPage": false, "endCursor": "thread-cursor-2"},
-				},
-			}}}})
-		default:
-			t.Errorf("unexpected graphql call %d", calls)
-			http.Error(w, "invalid test request", http.StatusBadRequest)
-			return
-		}
-	}))
-	defer server.Close()
-
-	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	rows, err := client.ListPullReviewThreads(context.Background(), "openclaw", "gitcrawl", 8, nil)
-	if err != nil {
-		t.Fatalf("list review threads: %v", err)
-	}
-	if calls != 2 {
-		t.Fatalf("calls = %d", calls)
-	}
-	if len(rows) != 2 || rows[0]["id"] != "PRRT_1" || rows[1]["id"] != "PRRT_2" {
-		t.Fatalf("rows = %#v", rows)
 	}
 }
 
