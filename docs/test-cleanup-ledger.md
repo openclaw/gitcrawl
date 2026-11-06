@@ -66,6 +66,7 @@ that every test is E2E.
 | [Cluster-reader early refusals](https://github.com/openclaw/gitcrawl/pull/371) | Isolate all five existing writer/provider cases. Require exact usage refusals before config application, credential lookup, output or file creation. |
 | [Code-command preflight errors](https://github.com/openclaw/gitcrawl/pull/372) | Require specific usage errors for eight existing invalid inputs and the missing per-file byte limit. Isolate paths and reject credential lookup, output or runtime file creation. |
 | [Portable payload cancellation controls](https://github.com/openclaw/gitcrawl/pull/373) | Isolate vacuum, metadata and canonical-schema fixtures. Require context.Canceled and healthy success; reject cancellation errors that lose their wrapped identity. |
+| [Legacy config path fixture consolidation](https://github.com/openclaw/gitcrawl/pull/374) | Share setup and five path assertions across platform-default and XDG-override cases. Retain fresh homes and separate environment cleanup for each case. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,

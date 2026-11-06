@@ -103,81 +103,54 @@ func TestDefaultPathsUsePlatformFallbacks(t *testing.T) {
 }
 
 func TestDefaultPathsPreferExistingLegacyInstallPaths(t *testing.T) {
-	home := t.TempDir()
-	legacy := filepath.Join(home, ".config", "gitcrawl")
-	if err := os.MkdirAll(filepath.Join(legacy, "cache"), 0o755); err != nil {
-		t.Fatalf("mkdir cache: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(legacy, "logs"), 0o755); err != nil {
-		t.Fatalf("mkdir logs: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "gitcrawl.db"), nil, 0o600); err != nil {
-		t.Fatalf("write db: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "config.toml"), nil, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	setTestHome(t, home)
-	clearXDGEnv(t)
+	for _, test := range []struct {
+		name string
+		xdg  bool
+	}{
+		{name: "platform defaults"},
+		{name: "XDG overrides", xdg: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			legacy := filepath.Join(home, ".config", "gitcrawl")
+			if err := os.MkdirAll(filepath.Join(legacy, "cache"), 0o755); err != nil {
+				t.Fatalf("mkdir cache: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(legacy, "logs"), 0o755); err != nil {
+				t.Fatalf("mkdir logs: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(legacy, "gitcrawl.db"), nil, 0o600); err != nil {
+				t.Fatalf("write db: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(legacy, "config.toml"), nil, 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			setTestHome(t, home)
+			clearXDGEnv(t)
+			if test.xdg {
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+				t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data"))
+				t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "xdg-cache"))
+				t.Setenv("XDG_STATE_HOME", filepath.Join(home, "xdg-state"))
+			}
 
-	cfg := Default()
-	if cfg.DBPath != filepath.Join(legacy, "gitcrawl.db") {
-		t.Fatalf("db path = %q", cfg.DBPath)
-	}
-	if cfg.CacheDir != filepath.Join(legacy, "cache") {
-		t.Fatalf("cache dir = %q", cfg.CacheDir)
-	}
-	if cfg.VectorDir != filepath.Join(legacy, "vectors") {
-		t.Fatalf("vector dir = %q", cfg.VectorDir)
-	}
-	if cfg.LogDir != filepath.Join(legacy, "logs") {
-		t.Fatalf("log dir = %q", cfg.LogDir)
-	}
-	if got := ResolvePath(""); got != filepath.Join(legacy, "config.toml") {
-		t.Fatalf("config path = %q", got)
-	}
-}
-
-func TestDefaultPathsKeepLegacyInstallWithXDGEnv(t *testing.T) {
-	home := t.TempDir()
-	legacy := filepath.Join(home, ".config", "gitcrawl")
-	configHome := filepath.Join(home, "xdg-config")
-	dataHome := filepath.Join(home, "xdg-data")
-	cacheHome := filepath.Join(home, "xdg-cache")
-	stateHome := filepath.Join(home, "xdg-state")
-	if err := os.MkdirAll(filepath.Join(legacy, "cache"), 0o755); err != nil {
-		t.Fatalf("mkdir cache: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(legacy, "logs"), 0o755); err != nil {
-		t.Fatalf("mkdir logs: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "gitcrawl.db"), nil, 0o600); err != nil {
-		t.Fatalf("write db: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "config.toml"), nil, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	setTestHome(t, home)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("XDG_CACHE_HOME", cacheHome)
-	t.Setenv("XDG_STATE_HOME", stateHome)
-
-	cfg := Default()
-	if cfg.DBPath != filepath.Join(legacy, "gitcrawl.db") {
-		t.Fatalf("db path = %q", cfg.DBPath)
-	}
-	if cfg.CacheDir != filepath.Join(legacy, "cache") {
-		t.Fatalf("cache dir = %q", cfg.CacheDir)
-	}
-	if cfg.VectorDir != filepath.Join(legacy, "vectors") {
-		t.Fatalf("vector dir = %q", cfg.VectorDir)
-	}
-	if cfg.LogDir != filepath.Join(legacy, "logs") {
-		t.Fatalf("log dir = %q", cfg.LogDir)
-	}
-	if got := ResolvePath(""); got != filepath.Join(legacy, "config.toml") {
-		t.Fatalf("config path = %q", got)
+			cfg := Default()
+			if cfg.DBPath != filepath.Join(legacy, "gitcrawl.db") {
+				t.Fatalf("db path = %q", cfg.DBPath)
+			}
+			if cfg.CacheDir != filepath.Join(legacy, "cache") {
+				t.Fatalf("cache dir = %q", cfg.CacheDir)
+			}
+			if cfg.VectorDir != filepath.Join(legacy, "vectors") {
+				t.Fatalf("vector dir = %q", cfg.VectorDir)
+			}
+			if cfg.LogDir != filepath.Join(legacy, "logs") {
+				t.Fatalf("log dir = %q", cfg.LogDir)
+			}
+			if got := ResolvePath(""); got != filepath.Join(legacy, "config.toml") {
+				t.Fatalf("config path = %q", got)
+			}
+		})
 	}
 }
 
