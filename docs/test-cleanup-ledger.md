@@ -63,6 +63,7 @@ that every test is E2E.
 | [Portable store cancellation controls](https://github.com/openclaw/gitcrawl/pull/368) | Give each of 15 operations a fresh valid fixture. Require typed cancellation followed by healthy success; prepare repository, blob-pointer removal and excerpt columns only where needed. |
 | [Permanent change-contract table IDs](https://github.com/openclaw/gitcrawl/pull/369) | Pin the 37 established table names to their persisted IDs. Retain dense/unique IDs and family references; permit appended IDs. |
 | [Portable progress fixture consolidation](https://github.com/openclaw/gitcrawl/pull/370) | Share setup across physical-drop and retained-column cases. Preserve fresh stores and the complete six- and twelve-stage ordered lists. |
+| [Cluster-reader early refusals](https://github.com/openclaw/gitcrawl/pull/371) | Isolate all five existing writer/provider cases. Require exact usage refusals before config application, credential lookup, output or file creation. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
