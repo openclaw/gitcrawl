@@ -1647,10 +1647,9 @@ func TestCloudPublishRejectsMissingRequestedCapabilityBeforeUpload(t *testing.T)
 
 func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 	type remoteSurfaceTest struct {
-		name      string
-		want      string
-		mutate    func(*crawlremote.Contract)
-		extraArgs []string
+		name   string
+		want   string
+		mutate func(*crawlremote.Contract)
 	}
 	tests := []remoteSurfaceTest{
 		{
@@ -1847,7 +1846,6 @@ func TestCloudPublishRejectsIncompleteRemoteSurfaceBeforeUpload(t *testing.T) {
 				"--allow-incomplete",
 				"--json",
 			}
-			args = append(args, test.extraArgs...)
 			err := New().Run(ctx, args)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("cloud publish error = %v", err)
@@ -2249,7 +2247,6 @@ func TestCloudPublishStageOnlyThenResumesDefaultCutover(t *testing.T) {
 					len(result.MutationToken),
 				)
 			}
-			time.Sleep(2 * time.Millisecond)
 		}
 		if index == 2 {
 			if result.AlreadyCutOver || result.Cutover == nil {
