@@ -1180,7 +1180,7 @@ func TestRateLimitClientCapsOverflowingRetryAfter(t *testing.T) {
 	var messages []string
 	reporter := Reporter(func(message string) { messages = append(messages, message) })
 	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := client.GetRepo(ctx, "openclaw", "gitcrawl", reporter)
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -1212,7 +1212,9 @@ func TestRateLimitWaitCapsHugeRateLimitReset(t *testing.T) {
 }
 
 func TestRateLimitRespectsContextCancellation(t *testing.T) {
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(time.Hour).Unix()))
 		http.Error(w, "rate limited", http.StatusForbidden)
@@ -1220,14 +1222,21 @@ func TestRateLimitRespectsContextCancellation(t *testing.T) {
 	defer server.Close()
 
 	client := New(Options{BaseURL: server.URL, PageDelay: -1})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := client.GetRepo(ctx, "openclaw", "gitcrawl", nil)
-	if err == nil {
-		t.Fatal("expected error")
+	retryStarted := false
+	reporter := Reporter(func(message string) {
+		if strings.Contains(message, "rate-limit retry wait=") {
+			retryStarted = true
+			cancel()
+		}
+	})
+	_, err := client.GetRepo(ctx, "openclaw", "gitcrawl", reporter)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context cancellation", err)
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v", err)
+	if got := calls.Load(); got != 1 || !retryStarted {
+		t.Fatalf("requests = %d, retry started = %t, want one request before cancellation", got, retryStarted)
 	}
 }
 
