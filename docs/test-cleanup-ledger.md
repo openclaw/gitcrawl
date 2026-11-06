@@ -33,6 +33,7 @@ that every test is E2E.
 | [History and coverage fixture failures](https://github.com/openclaw/gitcrawl/pull/324) | Propagate mapper/decoder errors to HTTP handlers. Retain coverage fields, completeness, publish/resume and history assertions. |
 | [Portable database cancellation fixture](https://github.com/openclaw/gitcrawl/pull/325) | Added required schema and healthy controls. Require context.Canceled rather than arbitrary missing-table errors. |
 | [Inert neighbor golden fixture](https://github.com/openclaw/gitcrawl/pull/326) | Removed byte-identical ineffective limit/threshold golden. Retained four goldens and independent exact-ID filter cases. |
+| [Sync option preflight fixtures](https://github.com/openclaw/gitcrawl/pull/405) | Reject invalid since/state with their specific cause and nil client/store dependencies; remove unnecessary SQLite setup and keep both Sync entry-point checks. |
 | [Unimplemented command stubs](https://github.com/openclaw/gitcrawl/pull/327) | Removed eleven unavailable dispatch mappings and formatting helper. Unknown-command usage exit 2 now applies. |
 | [Unused test-table data](https://github.com/openclaw/gitcrawl/pull/328) | Removed unread jsonShape/readOnly fields and duplicate version rows. Retained unique usage, durability and read-only cases. |
 | [CLI JSON document assertions](https://github.com/openclaw/gitcrawl/pull/329) | Decode whole JSON documents and check values. Reject prefixes and extra documents while retaining text/log checks. |
