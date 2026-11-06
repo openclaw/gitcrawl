@@ -710,7 +710,3 @@ func defaultPlatformTestDirs(home string) (configHome, dataHome, cacheHome, stat
 			filepath.Join(home, ".local", "state")
 	}
 }
-
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
-}

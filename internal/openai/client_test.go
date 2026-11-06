@@ -227,10 +227,6 @@ func TestEmbedErrorBranches(t *testing.T) {
 	}
 }
 
-func newSingleVectorServer(handler http.HandlerFunc) *httptest.Server {
-	return httptest.NewServer(handler)
-}
-
 func writeSingleVector(w http.ResponseWriter) {
 	_ = json.NewEncoder(w).Encode(embeddingResponse{Data: []struct {
 		Index     int       `json:"index"`
@@ -240,7 +236,7 @@ func writeSingleVector(w http.ResponseWriter) {
 
 func TestEmbedRetriesOn429AndHonorsRetryAfter(t *testing.T) {
 	var calls int32
-	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n == 1 {
 			w.Header().Set("Retry-After", "2")
@@ -253,7 +249,7 @@ func TestEmbedRetriesOn429AndHonorsRetryAfter(t *testing.T) {
 			return
 		}
 		writeSingleVector(w)
-	})
+	}))
 	defer server.Close()
 
 	var slept []time.Duration
@@ -275,7 +271,7 @@ func TestEmbedRetriesOn429AndHonorsRetryAfter(t *testing.T) {
 
 func TestEmbedPartialRetryConfigUsesDefaultMaxDelay(t *testing.T) {
 	var calls int32
-	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n == 1 {
 			w.Header().Set("Retry-After", "2")
@@ -283,7 +279,7 @@ func TestEmbedPartialRetryConfigUsesDefaultMaxDelay(t *testing.T) {
 			return
 		}
 		writeSingleVector(w)
-	})
+	}))
 	defer server.Close()
 
 	var slept []time.Duration
@@ -305,7 +301,7 @@ func TestEmbedPartialRetryConfigUsesDefaultMaxDelay(t *testing.T) {
 
 func TestEmbedDoesNotSleepAfterFinalRetryableError(t *testing.T) {
 	var calls int32
-	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
 		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.NewEncoder(w).Encode(embeddingResponse{Error: &struct {
@@ -313,7 +309,7 @@ func TestEmbedDoesNotSleepAfterFinalRetryableError(t *testing.T) {
 			Type    string `json:"type"`
 			Code    string `json:"code"`
 		}{Message: "rate limited", Type: "rate_limit_exceeded"}})
-	})
+	}))
 	defer server.Close()
 
 	var slept []time.Duration
@@ -366,7 +362,7 @@ func TestEmbedDoesNotRetryInsufficientQuota(t *testing.T) {
 
 func TestEmbedOverloadedUsesLongerBackoff(t *testing.T) {
 	var calls int32
-	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n == 1 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -378,7 +374,7 @@ func TestEmbedOverloadedUsesLongerBackoff(t *testing.T) {
 			return
 		}
 		writeSingleVector(w)
-	})
+	}))
 	defer server.Close()
 
 	var slept []time.Duration
@@ -402,9 +398,9 @@ func TestEmbedPropagatesContextCancellation(t *testing.T) {
 	// Server returns 429 so retry would normally engage. We pre-cancel the
 	// context to assert that cancellation short-circuits the retry loop and
 	// is not classified as a retryable failure.
-	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-	})
+	}))
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -422,7 +418,7 @@ func TestEmbedPropagatesContextCancellation(t *testing.T) {
 func TestEmbedRetryAfterDateForm(t *testing.T) {
 	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
 	var calls int32
-	server := newSingleVectorServer(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n == 1 {
 			w.Header().Set("Retry-After", now.Add(3*time.Second).Format(http.TimeFormat))
@@ -430,7 +426,7 @@ func TestEmbedRetryAfterDateForm(t *testing.T) {
 			return
 		}
 		writeSingleVector(w)
-	})
+	}))
 	defer server.Close()
 
 	var slept []time.Duration
