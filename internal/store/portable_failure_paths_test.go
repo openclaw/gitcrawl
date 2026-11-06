@@ -206,46 +206,84 @@ func TestPortablePragmaSettersFailClosed(t *testing.T) {
 
 func TestPortableStoreHelpersPropagateCancellation(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "canceled.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-
+	var st *Store
+	prepareRepository := func(t *testing.T) {
+		t.Helper()
+		if _, err := st.DB().ExecContext(ctx, `insert into repositories(owner, name, full_name, raw_json, updated_at)
+			values('openclaw', 'gitcrawl', 'openclaw/gitcrawl', '{}', '2026-08-09T00:00:00Z')`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepareExcerpt := func(t *testing.T) {
+		t.Helper()
+		if _, err := st.DB().ExecContext(ctx, `alter table threads add column body_excerpt text`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	checks := []struct {
-		name string
-		run  func() error
+		name    string
+		prepare func(*testing.T)
+		run     func(context.Context) error
 	}{
-		{name: "repository scope", run: func() error {
-			_, err := st.RestrictPortableRepositoryWithOptions(canceled, "openclaw/gitcrawl", PortableRepositoryScopeOptions{})
+		{name: "repository scope", prepare: prepareRepository, run: func(ctx context.Context) error {
+			_, err := st.RestrictPortableRepositoryWithOptions(ctx, "openclaw/gitcrawl", PortableRepositoryScopeOptions{})
 			return err
 		}},
-		{name: "table names", run: func() error { _, err := portableTableNames(canceled, st.DB()); return err }},
-		{name: "column set", run: func() error { _, err := portableTableColumnSet(canceled, st.DB(), "threads"); return err }},
-		{name: "foreign key count", run: func() error { _, err := portableForeignKeyViolationCount(canceled, st.DB()); return err }},
-		{name: "schema table name", run: func() error { _, _, err := portableSchemaTableName(canceled, st.DB(), "threads"); return err }},
-		{name: "retained dependencies", run: func() error {
-			return validatePortableRetainedSchemaDependencies(canceled, st.DB(), []string{"documents"})
-		}},
-		{name: "bulk drop", run: func() error { return st.dropCanonicalPortableTablesBulk(canceled, false, &PortablePruneStats{}, nil) }},
-		{name: "threads rebuild", run: func() error {
-			_, err := st.rebuildPortableCompatibilityThreadsWithOptions(canceled, PortablePruneOptions{}, &PortablePruneStats{})
+		{name: "table names", run: func(ctx context.Context) error { _, err := portableTableNames(ctx, st.DB()); return err }},
+		{name: "column set", run: func(ctx context.Context) error { _, err := portableTableColumnSet(ctx, st.DB(), "threads"); return err }},
+		{name: "foreign key count", run: func(ctx context.Context) error { _, err := portableForeignKeyViolationCount(ctx, st.DB()); return err }},
+		{name: "schema table name", run: func(ctx context.Context) error {
+			_, _, err := portableSchemaTableName(ctx, st.DB(), "threads")
 			return err
 		}},
-		{name: "threads sequence", run: func() error { _, err := portableThreadsSequence(canceled, st.DB()); return err }},
-		{name: "threads identity", run: func() error { _, err := portableThreadsIdentityForTable(canceled, st.DB(), "threads"); return err }},
-		{name: "foreign keys", run: func() error { _, err := portableForeignKeysForTable(canceled, st.DB(), "threads"); return err }},
-		{name: "child foreign keys", run: func() error { _, err := portableChildForeignKeysReferencingThreads(canceled, st.DB()); return err }},
-		{name: "rebuild columns", run: func() error { _, _, _, err := portableThreadsRebuildColumns(canceled, st.DB()); return err }},
-		{name: "rebuild indexes", run: func() error { _, _, err := portableThreadsRebuildIndexes(canceled, st.DB()); return err }},
-		{name: "rebuild triggers", run: func() error { _, err := portableThreadsRebuildTriggers(canceled, st.DB()); return err }},
+		{name: "retained dependencies", run: func(ctx context.Context) error {
+			return validatePortableRetainedSchemaDependencies(ctx, st.DB(), []string{"documents"})
+		}},
+		{name: "bulk drop", prepare: func(t *testing.T) { preparePortableBulkDropTest(t, ctx, st, &PortablePruneStats{}) }, run: func(ctx context.Context) error {
+			return st.dropCanonicalPortableTablesBulk(ctx, false, &PortablePruneStats{}, nil)
+		}},
+		{name: "threads rebuild", prepare: prepareExcerpt, run: func(ctx context.Context) error {
+			_, err := st.rebuildPortableCompatibilityThreadsWithOptions(ctx, PortablePruneOptions{}, &PortablePruneStats{})
+			return err
+		}},
+		{name: "threads sequence", run: func(ctx context.Context) error { _, err := portableThreadsSequence(ctx, st.DB()); return err }},
+		{name: "threads identity", run: func(ctx context.Context) error {
+			_, err := portableThreadsIdentityForTable(ctx, st.DB(), "threads")
+			return err
+		}},
+		{name: "foreign keys", run: func(ctx context.Context) error {
+			_, err := portableForeignKeysForTable(ctx, st.DB(), "threads")
+			return err
+		}},
+		{name: "child foreign keys", run: func(ctx context.Context) error {
+			_, err := portableChildForeignKeysReferencingThreads(ctx, st.DB())
+			return err
+		}},
+		{name: "rebuild columns", prepare: prepareExcerpt, run: func(ctx context.Context) error {
+			_, _, _, err := portableThreadsRebuildColumns(ctx, st.DB())
+			return err
+		}},
+		{name: "rebuild indexes", run: func(ctx context.Context) error { _, _, err := portableThreadsRebuildIndexes(ctx, st.DB()); return err }},
+		{name: "rebuild triggers", run: func(ctx context.Context) error { _, err := portableThreadsRebuildTriggers(ctx, st.DB()); return err }},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			if err := check.run(); err == nil {
-				t.Fatal("canceled store operation succeeded")
+			opened, err := Open(ctx, filepath.Join(t.TempDir(), "canceled.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			st = opened
+			defer st.Close()
+			if check.prepare != nil {
+				check.prepare(t)
+			}
+			if err := check.run(canceled); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled store operation = %v, want context.Canceled", err)
+			}
+			if err := check.run(ctx); err != nil {
+				t.Fatalf("healthy store operation: %v", err)
 			}
 		})
 	}
