@@ -87,16 +87,21 @@ func TestTUIRemainingActionAndErrorBranches(t *testing.T) {
 	model.runMenuItem(tuiMenuItem{label: "Open picked", action: "open-picked-link", value: "https://example.com/docs"})
 	model.runMenuItem(tuiMenuItem{label: "Copy picked", action: "copy-picked-link", value: "https://example.com/docs"})
 
-	model.closeSelectedClusterLocally()
-	if !strings.Contains(model.status, "only available for durable clusters") {
-		t.Fatalf("raw cluster local close status=%q", model.status)
-	}
-	model.reopenSelectedClusterLocally()
-	model.excludeSelectedClusterMemberLocally()
-	model.includeSelectedClusterMemberLocally()
-	model.setSelectedClusterCanonicalLocally()
-	if !strings.Contains(model.status, "only available for durable clusters") {
-		t.Fatalf("raw member local action status=%q", model.status)
+	for _, action := range []struct {
+		name string
+		run  func()
+	}{
+		{"close cluster", model.closeSelectedClusterLocally},
+		{"reopen cluster", model.reopenSelectedClusterLocally},
+		{"exclude member", model.excludeSelectedClusterMemberLocally},
+		{"include member", model.includeSelectedClusterMemberLocally},
+		{"canonical member", model.setSelectedClusterCanonicalLocally},
+	} {
+		model.status = ""
+		action.run()
+		if !strings.Contains(model.status, "only available for durable clusters") {
+			t.Fatalf("raw action %s status=%q", action.name, model.status)
+		}
 	}
 }
 

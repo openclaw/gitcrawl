@@ -1674,6 +1674,7 @@ func TestTUILocalActionUnavailableBranches(t *testing.T) {
 		loadCtx, cancel := context.WithCancel(context.Background())
 		model.neighborLoadStop = cancel
 		previousSeq := model.neighborLoadSeq
+		model.status = ""
 		if !model.runMenuItem(tuiMenuItem{action: action}) {
 			t.Fatalf("action %s should be handled", action)
 		}
@@ -1703,6 +1704,7 @@ func TestTUILocalActionUnavailableBranches(t *testing.T) {
 		empty.includeSelectedClusterMemberLocally,
 		empty.setSelectedClusterCanonicalLocally,
 	} {
+		empty.status = ""
 		fn()
 		if empty.status == "" {
 			t.Fatal("empty local action should set status")

@@ -14,6 +14,7 @@ that every test is E2E.
 | [Test-only portable adapters](https://github.com/openclaw/gitcrawl/pull/295) | Removed validation/staging wrappers. Retained context-aware archive and cancellation checks. |
 | [Test-only embedding adapter](https://github.com/openclaw/gitcrawl/pull/298) | Removed text wrapper and weaker raw-text assertion. Retained canonical text, hashing, truncation and task-selection checks. |
 | [Finite vector comparisons](https://github.com/openclaw/gitcrawl/pull/305) | Made tolerance checks reject NaN. Retained scalar oracle, dispatch equivalence and immutable-input scenarios. |
+| [TUI action status isolation](https://github.com/openclaw/gitcrawl/pull/412) | Clear inherited status before each unavailable or raw-cluster action and assert every raw guard separately; retain neighbor invalidation and empty-selection coverage. |
 | [Right-click menu fixtures](https://github.com/openclaw/gitcrawl/pull/401) | Share both starting-selection cases; preserve menu placement, cluster context and action labels. Explicitly select row 0 to detect a missed click selection. |
 | [Test-only viewport adapters](https://github.com/openclaw/gitcrawl/pull/310) | Removed duplicate offset calculations. Test rendered rows and mouse hit testing against actual viewport offsets. |
 | [Test-only portable rebuild adapter](https://github.com/openclaw/gitcrawl/pull/311) | Removed rebuild wrapper. Retained seven fixtures through the options-aware implementation and rollback/cancellation checks. |
