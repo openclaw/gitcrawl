@@ -58,7 +58,7 @@ test:
 	GOWORK=off go test ./...
 
 test-coverage:
-	GOWORK=off go test ./... -covermode=atomic -coverprofile=coverage.out
+	GOWORK=off go test ./... -coverpkg=./... -covermode=atomic -coverprofile=coverage.out
 	@total="$$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $$3); print $$3 }')"; \
 	if [ -z "$$total" ]; then echo "could not parse total coverage" >&2; exit 1; fi; \
 	echo "total coverage: $${total}%"; \

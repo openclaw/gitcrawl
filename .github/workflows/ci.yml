@@ -78,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           check_coverage() {
-            go test ./... -covermode=atomic -coverprofile=coverage.out || return $?
+            go test ./... -coverpkg=./... -covermode=atomic -coverprofile=coverage.out || return $?
             total="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')" || return $?
             echo "total coverage: ${total}%"
             awk -v total="$total" 'BEGIN { if (total + 0 < 85.0) { printf("coverage %.1f%% is below 85.0%%\n", total); exit 1 } }'
