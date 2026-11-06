@@ -581,16 +581,6 @@ func TestExportRejectsInvalidSourcesBudgetsAndOutputParents(t *testing.T) {
 		wantError string
 	}{
 		{
-			name: "default body budget",
-			options: func() ExportOptions {
-				options := testExportOptions(validSource, filepath.Join(dir, "default-body"))
-				options.BodyChars = 0
-				options.Progress = func(Stage) {}
-				return options
-			}(),
-			wantError: "portable export canceled during snapshot",
-		},
-		{
 			name:      "unknown profile",
 			options:   ExportOptions{Profile: "unknown"},
 			wantError: "unsupported portable export profile",
@@ -667,11 +657,6 @@ func TestExportRejectsInvalidSourcesBudgetsAndOutputParents(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			if test.name == "default body budget" {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
-			}
 			if _, err := Export(ctx, test.options); err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("export error = %v, want %q", err, test.wantError)
 			}

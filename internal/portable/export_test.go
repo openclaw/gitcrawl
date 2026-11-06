@@ -20,6 +20,51 @@ import (
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
+func TestExportDefaultsBodyBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		chars int
+	}{
+		{"zero", 0},
+		{"negative", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			sourcePath := filepath.Join(dir, "source.db")
+			st := seedExportSource(t, ctx, sourcePath)
+			defer st.Close()
+			for _, table := range []string{"threads", "comments"} {
+				if _, err := st.DB().ExecContext(ctx, "update "+table+" set body = ? where id = 1", strings.Repeat("é", 300)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			options := testExportOptions(sourcePath, filepath.Join(dir, "artifact"))
+			options.BodyChars = tc.chars
+			result, err := Export(ctx, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := readManifest(t, result.ManifestPath)
+			if result.BodyChars != 256 || manifest.BodyChars != 256 {
+				t.Fatalf("body budget: result=%d manifest=%d, want 256", result.BodyChars, manifest.BodyChars)
+			}
+			db := openRawDB(t, result.DatabasePath)
+			defer db.Close()
+			for _, table := range []string{"threads", "comments"} {
+				var body, excerpt string
+				var length int
+				if err := db.QueryRow("select body, body_excerpt, body_length from "+table+" where id = 1").Scan(&body, &excerpt, &length); err != nil {
+					t.Fatal(err)
+				}
+				if body != strings.Repeat("é", 256) || excerpt != body || length != 300 {
+					t.Fatalf("%s payload: body=%q excerpt=%q length=%d, want 256 characters and original length 300", table, body, excerpt, length)
+				}
+			}
+		})
+	}
+}
+
 func TestExportCurrentStateV1SnapshotsLiveWALWithoutMutatingSource(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
