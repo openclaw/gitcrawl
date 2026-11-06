@@ -1522,76 +1522,6 @@ func TestTUIRichDetailRenderingBranches(t *testing.T) {
 	}
 }
 
-func TestTUIRunMenuItemCoversNonExternalActions(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		MinSize:    5,
-		Clusters:   sampleTUIClusters(),
-	})
-	model.detail = store.ClusterDetail{Cluster: sampleTUIClusters()[0], Members: []store.ClusterMemberDetail{{
-		Thread: store.Thread{ID: 42, Number: 42, Kind: "issue", State: "open", Title: "Selected", HTMLURL: "https://github.com/openclaw/openclaw/issues/42"},
-	}}}
-	model.hasDetail = true
-	model.sortMembers()
-
-	actions := []tuiMenuItem{
-		{label: "section", action: tuiMenuSeparatorAction},
-		{action: "sort-size"},
-		{action: "sort-recent"},
-		{action: "member-sort-kind"},
-		{action: "member-sort-recent"},
-		{action: "refresh"},
-		{action: "filter"},
-		{action: "clear-filter"},
-		{action: "repository-picker"},
-		{action: "jump"},
-		{action: "toggle-layout"},
-		{action: "toggle-detail"},
-		{action: "min-size-1"},
-		{action: "min-size-5"},
-		{action: "min-size-10"},
-		{action: "toggle-closed"},
-		{action: "show-help"},
-		{action: "open-cluster-representative"},
-		{action: "copy-cluster-url"},
-		{action: "close-cluster-confirm"},
-		{action: "close-cluster-local"},
-		{action: "reopen-cluster-confirm"},
-		{action: "reopen-cluster-local"},
-		{action: "exclude-member-confirm"},
-		{action: "exclude-member-local"},
-		{action: "include-member-confirm"},
-		{action: "include-member-local"},
-		{action: "canonical-member-confirm"},
-		{action: "canonical-member-local"},
-		{action: "load-neighbors"},
-		{action: "close-thread-confirm"},
-		{action: "close-thread-local"},
-		{action: "reopen-thread-confirm"},
-		{action: "reopen-thread-local"},
-		{action: "copy-body-preview"},
-		{action: "copy-summaries"},
-		{action: "copy-neighbors"},
-		{action: "open-link-picker"},
-		{action: "copy-link-picker"},
-		{action: "copy-reference-links"},
-		{action: "close-menu"},
-		{action: "quit"},
-	}
-	for _, item := range actions {
-		model.searching = false
-		model.jumping = false
-		_ = model.runMenuItem(item)
-	}
-	if !model.quitRequested {
-		t.Fatal("quit action should mark quitRequested")
-	}
-	if model.status == "" {
-		t.Fatal("menu actions should update status")
-	}
-}
-
 func TestTUIEmptyMenuActionsReportMissingSelection(t *testing.T) {
 	for _, tc := range []struct {
 		action string
@@ -2881,17 +2811,23 @@ func TestTUIActionMenuIncludesViewControls(t *testing.T) {
 	}
 	model.search = ""
 
-	model.runAction("min-size-1")
-	if model.minSize != 1 {
-		t.Fatalf("min-size menu action set %d, want 1", model.minSize)
+	for _, size := range []int{10, 5, 1} {
+		model.runAction(fmt.Sprintf("min-size-%d", size))
+		if model.minSize != size {
+			t.Fatalf("min-size menu action set %d, want %d", model.minSize, size)
+		}
 	}
-	model.runAction("sort-size")
-	if model.payload.Sort != "size" {
-		t.Fatalf("sort menu action set %q, want size", model.payload.Sort)
+	for _, sort := range []string{"size", "recent"} {
+		model.runAction("sort-" + sort)
+		if model.payload.Sort != sort {
+			t.Fatalf("sort menu action set %q, want %s", model.payload.Sort, sort)
+		}
 	}
-	model.runAction("member-sort-recent")
-	if model.memberSort != memberSortRecent {
-		t.Fatalf("member sort menu action set %q, want recent", model.memberSort)
+	for _, sort := range []tuiMemberSort{memberSortRecent, memberSortKind} {
+		model.runAction("member-sort-" + string(sort))
+		if model.memberSort != sort {
+			t.Fatalf("member sort menu action set %q, want %s", model.memberSort, sort)
+		}
 	}
 	model.runAction("refresh")
 	if model.status != "Refresh unavailable for this view" {
@@ -4630,6 +4566,28 @@ func TestTUIUpdateSyncsDetailViewportAfterSearchJumpShortcuts(t *testing.T) {
 			}
 			if model.detailView.YOffset != 0 {
 				t.Fatalf("%q shortcut reused stale help scroll offset: got %d, want 0", string(tc.key), model.detailView.YOffset)
+			}
+		})
+	}
+}
+
+func TestTUIMenuEmptyContentGuards(t *testing.T) {
+	for _, tc := range []struct {
+		action  string
+		want    string
+		handled bool
+	}{
+		{"open-cluster-representative", "No representative URL", true},
+		{"copy-cluster-url", "No representative URL", true},
+		{"copy-body-preview", "No body preview", true},
+		{"open-link-picker", "No body links found", false},
+		{"copy-link-picker", "No body links found", false},
+		{"copy-reference-links", "No body links found", true},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{})
+			if got := model.runMenuItem(tuiMenuItem{action: tc.action}); got != tc.handled || model.status != tc.want {
+				t.Fatalf("action handled/status = %v/%q, want %v/%q", got, model.status, tc.handled, tc.want)
 			}
 		})
 	}
