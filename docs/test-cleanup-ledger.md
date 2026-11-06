@@ -70,6 +70,7 @@ that every test is E2E.
 | [Publication source evidence reads](https://github.com/openclaw/gitcrawl/pull/375) | Check all four baseline and result reads before comparing timestamps, revisions or actor identities. Retain dry-run, replay, raw evidence and distinct same-login actors. |
 | [Quarantine-reader malformed admission proof](https://github.com/openclaw/gitcrawl/pull/376) | Verify three healthy source modes and a one-row fixture update before requiring the specific status/admission refusal. Reject unrelated reader errors; preserve namespace and history checks. |
 | [Analytics discovery provider guard](https://github.com/openclaw/gitcrawl/pull/377) | Use valid isolated config and require zero local-provider requests. Retain 24 queued items, the eight-item retry bound and unchanged attempt count; reject swallowed collection failures. |
+| [Thread-list number and limit controls](https://github.com/openclaw/gitcrawl/pull/378) | Add competing rows and separate number-only and number-plus-limit cases. Retain the original repository/thread round trip and original selection; reject either ignored option. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,

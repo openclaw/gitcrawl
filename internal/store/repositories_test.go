@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -49,11 +50,33 @@ func TestUpsertRepositoryAndThread(t *testing.T) {
 	if len(rows) != 1 || rows[0].Title != "download stalls" {
 		t.Fatalf("unexpected rows: %#v", rows)
 	}
-	filtered, err := st.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repoID, Numbers: []int{1}, Limit: 1})
-	if err != nil {
-		t.Fatalf("filtered threads: %v", err)
+	for _, number := range []int{2, 3} {
+		if _, err := st.UpsertThread(ctx, Thread{
+			RepoID: repoID, GitHubID: fmt.Sprint(number), Number: number,
+			Kind: "issue", State: "open", LabelsJSON: "[]", AssigneesJSON: "[]",
+			RawJSON: "{}", UpdatedAt: "2026-04-26T00:00:00Z",
+		}); err != nil {
+			t.Fatalf("seed competing thread %d: %v", number, err)
+		}
 	}
-	if len(filtered) != 1 || filtered[0].Number != 1 {
-		t.Fatalf("unexpected filtered rows: %#v", filtered)
+	for _, test := range []struct {
+		name    string
+		numbers []int
+		limit   int
+		want    int
+	}{
+		{name: "original selection", numbers: []int{1}, limit: 1, want: 1},
+		{name: "numbers only", numbers: []int{2}, want: 2},
+		{name: "numbers and limit", numbers: []int{2, 3}, limit: 1, want: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filtered, err := st.ListThreadsFiltered(ctx, ThreadListOptions{RepoID: repoID, Numbers: test.numbers, Limit: test.limit})
+			if err != nil {
+				t.Fatalf("filtered threads: %v", err)
+			}
+			if len(filtered) != 1 || filtered[0].Number != test.want {
+				t.Fatalf("unexpected filtered rows: %#v, want number %d", filtered, test.want)
+			}
+		})
 	}
 }
