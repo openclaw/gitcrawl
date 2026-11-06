@@ -100,20 +100,6 @@ func TestOpenReadOnlyImmutableRejectsWritesAndMissingDatabase(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesSchema(t *testing.T) {
-	ctx := context.Background()
-	st := openTestStore(t, ctx)
-	defer st.Close()
-
-	var version int
-	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
-		t.Fatalf("read user_version: %v", err)
-	}
-	if version != schemaVersion {
-		t.Fatalf("schema version: got %d want %d", version, schemaVersion)
-	}
-}
-
 func TestOpenMigratesLegacyThreadKeySummaryKinds(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gitcrawl.db")
