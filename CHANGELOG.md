@@ -2,31 +2,23 @@
 
 ## Unreleased
 
-- Update Kong to v1.17.0 and SQLite to v1.61.1, retaining the matching SQLite runtime and Go 1.27.2 minimum.
+## 0.18.0 - 2026-11-05
 
-- Reject ignored `--match`, `--sort`, and `--order` options in `search issues|prs` with usage exit code 2. Remove these options from migrated invocations; they never changed local search results.
-
-- Reject the inert `--include-code` option on `sync` and `refresh` with usage exit code 2 before loading configuration or starting a stage. Remove this option from existing invocations; code hydration was never performed.
-
-- Close maintenance SQLite connections after vector verification, including rejected imports.
-
-- Close native code and cluster producer output pipes when rejecting prepared receipts, including producers that have already exited.
-
-- Run the native code and maintenance Python regression suites in Linux and macOS CI, alongside the existing cluster overlay check.
-
-- Reject unsupported embedding bases before task selection so empty repositories no longer report successful embedding for unsupported configurations. External vector bases remain available for clustering.
-
-- Reject unavailable command names such as `completion` and `sync-status` as unknown commands with usage exit code 2 instead of a runtime placeholder error.
-
-- Run SIMD and forced-fallback CI suites concurrently, preserving both test commands and failing validation if either suite fails.
-
-- Stop advertising the unimplemented `sync-status` stub as a legacy alias in launcher metadata. Use the supported `status --json` command.
-
-- Return usage exit code 2 for invalid `cluster` and `refresh` clustering-shape options, matching other invalid CLI arguments.
-
-- Refresh CI Go caches when validation workflow inputs change so newly added compiler experiments and analysis tools can be cached.
+**Highlights:** Opt-in change tracking for incremental archive readers, clearer CLI argument errors, and native maintenance reliability fixes.
 
 - Add an opt-in reader change contract (`gitcrawl change-contract`). In-store triggers journal every insert, update and delete of the tables Clawmmunity's research reader and history captures read, with row keys, in the writer's own transaction and from every writer binary. A bounded log, a generation for unexpressible rewrites and a documented reader algorithm let a consumer skip unchanged families and rebuild changed ones incrementally. Portable and cloud snapshots strip it.
+- Reject ignored `--match`, `--sort`, and `--order` options in `search issues|prs` with usage exit code 2. Remove these options from migrated invocations; they never changed local search results.
+- Reject the inert `--include-code` option on `sync` and `refresh` with usage exit code 2 before loading configuration or starting a stage. Remove this option from existing invocations; code hydration was never performed.
+- Reject unsupported embedding bases before task selection so empty repositories no longer report successful embedding for unsupported configurations. External vector bases remain available for clustering.
+- Reject unavailable command names such as `completion` and `sync-status` as unknown commands with usage exit code 2 instead of a runtime placeholder error.
+- Stop advertising the unimplemented `sync-status` stub as a legacy alias in launcher metadata. Use the supported `status --json` command.
+- Return usage exit code 2 for invalid `cluster` and `refresh` clustering-shape options, matching other invalid CLI arguments.
+- Close maintenance SQLite connections after vector verification, including rejected imports.
+- Close native code and cluster producer output pipes when rejecting prepared receipts, including producers that have already exited.
+- Update Kong to v1.17.0 and SQLite to v1.61.1, retaining the matching SQLite runtime and Go 1.27.2 minimum.
+- Run the native code and maintenance Python regression suites in Linux and macOS CI, alongside the existing cluster overlay check.
+- Run SIMD and forced-fallback CI suites concurrently, preserving both test commands and failing validation if either suite fails.
+- Refresh CI Go caches when validation workflow inputs change so newly added compiler experiments and analysis tools can be cached.
 
 ## 0.17.0 - 2026-10-23
 
