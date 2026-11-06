@@ -832,7 +832,8 @@ func TestRateLimitReserveSerializesConcurrentRequestsAtThreshold(t *testing.T) {
 	var coreCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/rate_limit" {
-			remaining := 12 - int(rateCalls.Add(1))
+			rateCalls.Add(1)
+			remaining := 11 - int(coreCalls.Load())
 			writeRateLimits(t, w, resetAt, remaining, 100)
 			return
 		}
@@ -859,6 +860,12 @@ func TestRateLimitReserveSerializesConcurrentRequestsAtThreshold(t *testing.T) {
 		errs <- err
 	}()
 	<-firstStarted
+	if client.reserve.requestMu.TryLock() {
+		client.reserve.requestMu.Unlock()
+		close(releaseFirst)
+		<-errs
+		t.Fatal("core request did not hold the guarded request lock")
+	}
 	go func() {
 		_, err := client.GetIssue(context.Background(), "openclaw", "gitcrawl", 1, nil)
 		errs <- err
