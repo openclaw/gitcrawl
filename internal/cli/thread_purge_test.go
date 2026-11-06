@@ -25,6 +25,7 @@ func TestThreadPurgeCLIPlansThenRequiresIdleOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	_, err = s.DB().Exec(`INSERT INTO repositories(id,owner,name,full_name,raw_json,updated_at) VALUES(1,'fixture','repo','fixture/repo','{}','2026-01-01');
  INSERT INTO threads(id,repo_id,github_id,number,kind,state,title,html_url,labels_json,assignees_json,raw_json,content_hash,updated_at) VALUES
  (1,1,'one',10,'pull_request','open','PRIVATE_SENTINEL','','[]','[]','{}','h','2026-01-01'),
@@ -61,6 +62,7 @@ func TestThreadPurgeCLIPlansThenRequiresIdleOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer lock.Close()
 	if err = lockPortableFile(lock); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,9 @@ func TestThreadPurgeCLIPlansThenRequiresIdleOwner(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ownership lock busy") {
 		t.Fatalf("owner bypass: %v", err)
 	}
-	lock.Close()
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
 	out, err = run("--apply", plan.PlanID)
 	if err != nil || !strings.Contains(out, `"applied": true`) {
 		t.Fatalf("apply=%s %v", out, err)
