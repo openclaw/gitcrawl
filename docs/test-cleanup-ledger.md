@@ -78,6 +78,7 @@ that every test is E2E.
 | [Retry cancellation readiness](https://github.com/openclaw/gitcrawl/pull/384) | Cancel on the observed retry decision and require a real request. Retain the overflow deadline, exact cap and request-count checks with a five-second bound instead of 50 ms. |
 | [Production Darwin flush default](https://github.com/openclaw/gitcrawl/pull/385) | Keep the test-binary opt-out check and run a plain executable against in-memory SQLite on Darwin. Verify both flush flags without forcing the policy; retain reconnect and read-only tests. |
 | [Default portable body budget](https://github.com/openclaw/gitcrawl/pull/386) | Replace the pre-canceled budget case with successful zero/negative-budget exports. Check literal defaults in result/manifest and Unicode thread/comment excerpts with original lengths; keep snapshot cancellation coverage. |
+| [Obsolete generated GitHub-close update](https://github.com/openclaw/gitcrawl/pull/387) | Remove the unused SQL definition, generated method/parameters and sole smoke caller. Keep the public observation-based close path and its positive, repeated-close and validation checks. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
