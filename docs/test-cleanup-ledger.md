@@ -17,6 +17,7 @@ that every test is E2E.
 | [Control output smoke consolidation](https://github.com/openclaw/gitcrawl/pull/312) | Renamed in-process E2E smoke as integration. Consolidated weaker duplicates and required decoded payloads and real archive counts. |
 | [Vector query test surface](https://github.com/openclaw/gitcrawl/pull/315) | Removed listing adapter and duplicate fixture. Retained production query filters, migration and vector round trips. |
 | [Cluster save modes](https://github.com/openclaw/gitcrawl/pull/316) | Removed test-only coupled save mode. Retained complete/partial/subset/scoped behavior and omission/removal proofs. |
+| [Native code receipt draining](https://github.com/openclaw/gitcrawl/pull/395) | Decode committed and no-op receipts while the producer writes them; retain immutable-source binding, rollback, admission and no-op assertions without depending on pipe capacity. |
 | [Native graph reference validation](https://github.com/openclaw/gitcrawl/pull/317) | Restored build-tagged graph oracle. Added Linux/macOS native overlay gate excluding opt-in volume/CPU experiments. |
 | [Obsolete native identity conflict checks](https://github.com/openclaw/gitcrawl/pull/318) | Removed uncalled receipt reader and test-only preflight. Use actual planner and retain publication/quarantine/recovery checks. |
 | [Test-only pull request cache wrapper](https://github.com/openclaw/gitcrawl/pull/319) | Removed all-family forwarding writer. Retained replacement, tombstone, ordering, migration and transactional checks. |
