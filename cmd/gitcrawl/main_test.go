@@ -17,6 +17,8 @@ func TestMainPrintsVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
+	defer read.Close()
+	defer write.Close()
 	os.Stdout = write
 	os.Args = []string{"gitcrawl", "--version"}
 	main()
