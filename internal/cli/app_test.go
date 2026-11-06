@@ -2738,9 +2738,6 @@ func TestMetadataStatusAndControlStatusJSON(t *testing.T) {
 	if !strings.HasSuffix(helpOut.String(), "[--json]\n") {
 		t.Fatalf("coverage help has unexpected suffix: %q", helpOut.String())
 	}
-	if err := New().Run(ctx, []string{"--config", configPath, "status", "extra"}); err == nil {
-		t.Fatal("status extra arg should fail")
-	}
 }
 
 func TestControlRepositoryAndClusterHelperBranches(t *testing.T) {
@@ -5369,15 +5366,12 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 		{"search", "prs", "-R", "openclaw/openclaw", "--order", "asc"},
 		{"--format", "xml", "version"},
 		{"help", "unknown"},
-		{"serve"},
 		{"summarize"},
 		{"configure", "--unknown"},
 		{"refresh", "--unknown"},
 		{"refresh", "openclaw/openclaw", "--no-sync", "--no-embed", "--no-cluster"},
-		{"refresh", "badrepo"},
 		{"search", "--unknown"},
 		{"search", "openclaw/openclaw"},
-		{"search", "openclaw/openclaw", "--query", "x", "--mode", "bogus"},
 		{"neighbors", "--unknown"},
 		{"neighbors", "openclaw/openclaw"},
 		{"cluster", "--unknown"},
@@ -5424,8 +5418,6 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 		{"portable", "prune", "--unknown"},
 		{"portable", "prune", "extra"},
 		{"--format", "yaml", "status"},
-		{"unknown"},
-		{"configure", "--bad"},
 		{"metadata", "extra"},
 		{"status", "extra"},
 		{"portable", "prune", "--body-chars", "bad"},
@@ -5469,7 +5461,6 @@ func TestAppOutputModesAndUsageBranches(t *testing.T) {
 		{"summarize", "bad-repo"},
 		{"summarize", "openclaw/openclaw", "--number", "bad"},
 		{"summarize", "openclaw/openclaw", "--limit", "bad"},
-		{"tui", "one", "two"},
 		{"tui", "--sort", "bad"},
 	}
 	for _, args := range errorCases {
@@ -9494,16 +9485,5 @@ func TestTUIHelp(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(out), "future tui") {
 		t.Fatalf("tui help still implies future-only support: %q", out)
-	}
-}
-
-func TestServeIsUnsupported(t *testing.T) {
-	app := New()
-	err := app.Run(context.Background(), []string{"serve"})
-	if err == nil {
-		t.Fatal("expected serve to fail")
-	}
-	if ExitCode(err) != 2 {
-		t.Fatalf("exit code: got %d want 2", ExitCode(err))
 	}
 }
