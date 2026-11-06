@@ -117,7 +117,26 @@ func TestCodeCommitGatePinsSourceAndReplacesAtomically(t *testing.T) {
 			os.Stdout = writer
 			defer func() { os.Stdout = stdout; reader.Close(); writer.Close() }()
 			done := make(chan error, 1)
+			finished := make(chan struct{})
+			defer func() {
+				select {
+				case <-finished:
+					return
+				default:
+				}
+				// Abort an unpublished producer before restoring stdout or removing its fixture.
+				writer.Close()
+				if err := os.WriteFile(gate, []byte("abort fixture"), 0600); err != nil {
+					t.Errorf("abort native producer: %v", err)
+				}
+				select {
+				case <-finished:
+				case <-time.After(15 * time.Second):
+					t.Error("native producer cleanup did not settle")
+				}
+			}()
 			go func() {
+				defer close(finished)
 				err := codeRun([]string{"--db", dbpath, "--source", repo, "--commit", sha, "--upstream-receipt", proof, "--commit-gate", gate})
 				done <- err
 				if err != nil {
