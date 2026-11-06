@@ -595,11 +595,57 @@ func TestChangeContractStatusReportsFamilies(t *testing.T) {
 }
 
 func TestChangeContractTableSpecsAreStable(t *testing.T) {
+	// Existing IDs are persisted in change logs. New IDs may be appended.
+	established := []string{
+		"repositories",
+		"threads",
+		"thread_revisions",
+		"blobs",
+		"pull_request_review_threads",
+		"thread_fingerprints",
+		"thread_key_summaries",
+		"document_summaries",
+		"thread_child_observation_reservations",
+		"thread_exclusions",
+		"pull_request_details",
+		"pull_request_files",
+		"pull_request_commits",
+		"pull_request_checks",
+		"comments",
+		"github_workflow_runs",
+		"sync_attempt_failures",
+		"sync_runs",
+		"summary_runs",
+		"repo_sync_state",
+		"portable_metadata",
+		"analytics_coverage",
+		"analytics_review_state_coverage",
+		"cluster_runs",
+		"clusters",
+		"cluster_members",
+		"cluster_groups",
+		"cluster_memberships",
+		"cluster_overrides",
+		"cluster_closures",
+		"cluster_candidate_generations",
+		"cluster_candidates",
+		"cluster_candidate_members",
+		"cluster_candidate_overlaps",
+		"cluster_candidate_selection",
+		"code_snapshots",
+		"code_documents",
+	}
+	if len(changeContractTableSpecs) < len(established) {
+		t.Fatalf("tracked table count = %d, want at least %d", len(changeContractTableSpecs), len(established))
+	}
 	ids := map[int64]bool{}
 	names := map[string]bool{}
 	for i, spec := range changeContractTableSpecs {
 		if spec.id != int64(i+1) || ids[spec.id] || names[spec.name] {
 			t.Fatalf("table identifiers must be permanent, dense and unique: %+v", spec)
+		}
+		if i < len(established) && spec.name != established[i] {
+			t.Fatalf("table ID %d = %q, want %q", spec.id, spec.name, established[i])
 		}
 		ids[spec.id], names[spec.name] = true, true
 	}
