@@ -59,7 +59,7 @@ func TestCLIAppControlOutputFormats(t *testing.T) {
 	})
 }
 
-func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
+func TestCLIAppUnsupportedBasisFallback(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -68,7 +68,7 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 	if err := app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	repoID, firstID, secondID := seedCommandFlowStore(t, dbPath)
+	_, firstID, secondID := seedCommandFlowStore(t, dbPath)
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -89,16 +89,25 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 	if err := configure.Run(ctx, []string{"--config", configPath, "configure", "--embed-model", "missing-model", "--embedding-basis", "missing-basis"}); err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	for _, args := range [][]string{
-		{"--config", configPath, "--json", "neighbors", "openclaw/openclaw", "--number", "101", "--limit", "1", "--threshold", "0.99"},
-		{"--config", configPath, "--json", "search", "openclaw/openclaw", "--query", "gateway", "--mode", ""},
-	} {
-		run := New()
-		var stdout bytes.Buffer
-		run.Stdout = &stdout
-		if err := run.Run(ctx, args); err != nil {
-			t.Fatalf("%v failed: %v\n%s", args, err, stdout.String())
+	neighbors := New()
+	var stdout bytes.Buffer
+	neighbors.Stdout = &stdout
+	if err := neighbors.Run(ctx, []string{"--config", configPath, "--json", "neighbors", "openclaw/openclaw", "--number", "101", "--limit", "1", "--threshold", "0.99"}); err != nil {
+		t.Fatalf("fallback neighbors: %v", err)
+	}
+	var payload struct {
+		Thread    struct{ Number int }
+		Neighbors []struct {
+			Number int
+			Score  float64
 		}
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode fallback neighbors: %v", err)
+	}
+	if payload.Thread.Number != 101 || len(payload.Neighbors) != 1 || payload.Neighbors[0].Number != 102 ||
+		payload.Neighbors[0].Score < 0.99 || payload.Neighbors[0].Score > 1 {
+		t.Fatalf("fallback neighbors = %+v, want source 101 and neighbor 102 above threshold", payload)
 	}
 	for _, args := range [][]string{
 		{"--config", configPath, "--json", "cluster", "openclaw/openclaw", "--threshold", "0.5", "--min-size", "2", "--limit", "2"},
@@ -122,9 +131,6 @@ func TestCLIAppVectorFallbackCoveragePaths(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "vector coverage cannot be verified") {
 			t.Fatalf("%v error = %v", args, err)
 		}
-	}
-	if repoID == 0 {
-		t.Fatal("seed repo id should be non-zero")
 	}
 }
 

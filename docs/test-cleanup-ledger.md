@@ -84,6 +84,7 @@ that every test is E2E.
 | [Change-contract test ownership](https://github.com/openclaw/gitcrawl/pull/390) | Require usage errors before invalid-config access for malformed input; check missing-archive runtime errors and non-creation for valid commands. Remove the duplicate missing-action call and move the closed-DB sanitizer check to its owner using a plain SQL handle. |
 | [Broad command coverage smoke](https://github.com/openclaw/gitcrawl/pull/391) | Remove the 15-command nonempty-output fixture and redundant cluster-ID tail check. Keep focused payload/state tests, add exact single/mixed URL selection and exercise oldest-sort acceptance in the existing cluster-membership test. |
 | [Fixture handle lifetime](https://github.com/openclaw/gitcrawl/pull/392) | Close both version-test pipe ends and purge-test store/lock handles on early failure. Keep explicit writer closure for EOF and lock release before apply; check the release error. |
+| Unsupported-basis fallback assertions | Require the actual neighbor and score; keep custom-basis cluster/refresh and strict refusal checks. Move blank-mode keyword behavior to the no-provider search fixture with exact mode/hits and zero calls; remove the seed-ID tail check. [PR 393](https://github.com/openclaw/gitcrawl/pull/393). |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
