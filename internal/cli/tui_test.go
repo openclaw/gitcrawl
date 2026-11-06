@@ -4224,86 +4224,54 @@ func TestTUILoadSelectedClusterPreservesMemberSelection(t *testing.T) {
 }
 
 func TestTUISortPreservesSelectedClusterAndMember(t *testing.T) {
-	first := store.ClusterSummary{ID: 1, Source: store.ClusterSourceRun, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"}
-	second := store.ClusterSummary{ID: 2, Source: store.ClusterSourceRun, Status: "active", MemberCount: 10, UpdatedAt: "2026-04-27T00:00:00Z"}
-	firstDetail := store.ClusterDetail{
-		Cluster: first,
-		Members: []store.ClusterMemberDetail{
-			{Thread: store.Thread{ID: 101, Number: 101, Kind: "issue", State: "open", Title: "alpha"}},
-			{Thread: store.Thread{ID: 102, Number: 102, Kind: "issue", State: "open", Title: "bravo"}},
-		},
-	}
-	secondDetail := store.ClusterDetail{
-		Cluster: second,
-		Members: []store.ClusterMemberDetail{
-			{Thread: store.Thread{ID: 201, Number: 201, Kind: "issue", State: "open", Title: "charlie"}},
-		},
-	}
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters:   []store.ClusterSummary{first, second},
-	})
-	model.detailCache[clusterSummaryKey(first)] = firstDetail
-	model.detailCache[clusterSummaryKey(second)] = secondDetail
-	model.loadSelectedCluster()
-	model.memberIndex = memberRowIndex(model.memberRows, 102)
+	for _, entry := range []string{"keyboard", "menu"} {
+		t.Run(entry, func(t *testing.T) {
+			first := store.ClusterSummary{ID: 1, Source: store.ClusterSourceRun, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"}
+			second := store.ClusterSummary{ID: 2, Source: store.ClusterSourceRun, Status: "active", MemberCount: 10, UpdatedAt: "2026-04-27T00:00:00Z"}
+			model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+				Repository: "openclaw/openclaw",
+				Sort:       "recent",
+				Clusters:   []store.ClusterSummary{first, second},
+			})
+			model.detailCache[clusterSummaryKey(first)] = store.ClusterDetail{
+				Cluster: first,
+				Members: []store.ClusterMemberDetail{
+					{Thread: store.Thread{ID: 101, Number: 101, Kind: "issue", State: "open", Title: "alpha"}},
+					{Thread: store.Thread{ID: 102, Number: 102, Kind: "issue", State: "open", Title: "bravo"}},
+				},
+			}
+			model.detailCache[clusterSummaryKey(second)] = store.ClusterDetail{
+				Cluster: second,
+				Members: []store.ClusterMemberDetail{
+					{Thread: store.Thread{ID: 201, Number: 201, Kind: "issue", State: "open", Title: "charlie"}},
+				},
+			}
+			model.loadSelectedCluster()
+			model.memberIndex = memberRowIndex(model.memberRows, 102)
+			if entry == "menu" {
+				model.openActionMenu()
+			}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	model = next.(clusterBrowserModel)
+			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+			model = next.(clusterBrowserModel)
 
-	if model.payload.Sort != "size" {
-		t.Fatalf("sort = %q, want size", model.payload.Sort)
-	}
-	if model.payload.Clusters[model.selected].ID != first.ID {
-		t.Fatalf("selected cluster after sort = %d, want %d", model.payload.Clusters[model.selected].ID, first.ID)
-	}
-	got, ok := model.selectedMember()
-	if !ok {
-		t.Fatal("no member selected after sort")
-	}
-	if got.Thread.ID != 102 {
-		t.Fatalf("selected member after sort = %d, want 102", got.Thread.ID)
-	}
-}
-
-func TestTUIMenuSortPreservesSelectedClusterAndMember(t *testing.T) {
-	first := store.ClusterSummary{ID: 1, Source: store.ClusterSourceRun, Status: "active", MemberCount: 1, UpdatedAt: "2026-04-27T00:00:00Z"}
-	second := store.ClusterSummary{ID: 2, Source: store.ClusterSourceRun, Status: "active", MemberCount: 10, UpdatedAt: "2026-04-27T00:00:00Z"}
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters:   []store.ClusterSummary{first, second},
-	})
-	model.detailCache[clusterSummaryKey(first)] = store.ClusterDetail{
-		Cluster: first,
-		Members: []store.ClusterMemberDetail{
-			{Thread: store.Thread{ID: 101, Number: 101, Kind: "issue", State: "open", Title: "alpha"}},
-			{Thread: store.Thread{ID: 102, Number: 102, Kind: "issue", State: "open", Title: "bravo"}},
-		},
-	}
-	model.detailCache[clusterSummaryKey(second)] = store.ClusterDetail{
-		Cluster: second,
-		Members: []store.ClusterMemberDetail{
-			{Thread: store.Thread{ID: 201, Number: 201, Kind: "issue", State: "open", Title: "charlie"}},
-		},
-	}
-	model.loadSelectedCluster()
-	model.memberIndex = memberRowIndex(model.memberRows, 102)
-	model.openActionMenu()
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	model = next.(clusterBrowserModel)
-
-	if model.payload.Clusters[model.selected].ID != first.ID {
-		t.Fatalf("selected cluster after menu sort = %d, want %d", model.payload.Clusters[model.selected].ID, first.ID)
-	}
-	got, ok := model.selectedMember()
-	if !ok {
-		t.Fatal("no member selected after menu sort")
-	}
-	if got.Thread.ID != 102 {
-		t.Fatalf("selected member after menu sort = %d, want 102", got.Thread.ID)
+			if model.payload.Sort != "size" {
+				t.Fatalf("sort = %q, want size", model.payload.Sort)
+			}
+			if model.payload.Clusters[0].ID != second.ID {
+				t.Fatalf("size sort first cluster = %d, want %d", model.payload.Clusters[0].ID, second.ID)
+			}
+			if model.payload.Clusters[model.selected].ID != first.ID {
+				t.Fatalf("selected cluster after %s sort = %d, want %d", entry, model.payload.Clusters[model.selected].ID, first.ID)
+			}
+			got, ok := model.selectedMember()
+			if !ok {
+				t.Fatalf("no member selected after %s sort", entry)
+			}
+			if got.Thread.ID != 102 {
+				t.Fatalf("selected member after %s sort = %d, want 102", entry, got.Thread.ID)
+			}
+		})
 	}
 }
 
