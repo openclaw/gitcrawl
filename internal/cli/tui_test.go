@@ -829,34 +829,6 @@ func TestTUIMemberMovementDoesNotWrapPastEdges(t *testing.T) {
 	}
 }
 
-func TestTUIRightClickOpensFloatingMenu(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters:   sampleTUIClusters(),
-	})
-	model.width = 140
-	model.height = 32
-	layout := model.layout()
-	model.selected = 1
-
-	model.handleMouse(tea.MouseMsg{
-		X:      layout.clusters.x + 2,
-		Y:      layout.clusters.y + 4,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonRight,
-	})
-	if model.selected != 1 {
-		t.Fatalf("right click changed selected cluster to %d", model.selected)
-	}
-	if !model.menuOpen || !model.menuFloating {
-		t.Fatalf("right click menu state open=%v floating=%v", model.menuOpen, model.menuFloating)
-	}
-	if !model.menuRect.contains(layout.clusters.x+3, layout.clusters.y+4) {
-		t.Fatalf("floating menu rect %+v should be placed at the right-click row", model.menuRect)
-	}
-}
-
 func TestTUIFiltersClusters(t *testing.T) {
 	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
 		Repository: "openclaw/openclaw",
@@ -1006,45 +978,53 @@ func TestTUIHideClosedUsesLoadedWorkingSet(t *testing.T) {
 }
 
 func TestTUIRightClickOpensActionMenu(t *testing.T) {
-	model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
-		Repository: "openclaw/openclaw",
-		Sort:       "recent",
-		Clusters:   sampleTUIClusters(),
-	})
-	model.width = 140
-	model.height = 32
-	layout := model.layout()
+	for _, selected := range []int{0, 1} {
+		t.Run(fmt.Sprintf("selected-%d", selected), func(t *testing.T) {
+			model := newClusterBrowserModel(context.Background(), nil, 0, clusterBrowserPayload{
+				Repository: "openclaw/openclaw",
+				Sort:       "recent",
+				Clusters:   sampleTUIClusters(),
+			})
+			model.width = 140
+			model.height = 32
+			layout := model.layout()
+			model.selected = selected
 
-	model.handleMouse(tea.MouseMsg{
-		X:      layout.clusters.x + 2,
-		Y:      layout.clusters.y + 4,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonRight,
-	})
+			model.handleMouse(tea.MouseMsg{
+				X:      layout.clusters.x + 2,
+				Y:      layout.clusters.y + 4,
+				Action: tea.MouseActionPress,
+				Button: tea.MouseButtonRight,
+			})
 
-	if !model.menuOpen {
-		t.Fatal("expected right click to open action menu")
-	}
-	if !model.menuFloating {
-		t.Fatal("expected right click action menu to float")
-	}
-	if model.menuTitle != "Cluster Actions" || model.menuContext != focusClusters {
-		t.Fatalf("cluster context menu title/context = %q/%q", model.menuTitle, model.menuContext)
-	}
-	if model.selected != 1 {
-		t.Fatalf("right click selected %d, want 1", model.selected)
-	}
-	joinedLabels := strings.Join(menuLabels(model.menuItems), "\n")
-	for _, want := range []string{"Copy cluster ID", "Copy cluster name", "Copy cluster title", "Copy cluster summary"} {
-		if !strings.Contains(joinedLabels, want) {
-			t.Fatalf("expected cluster action %q, got %+v", want, model.menuItems)
-		}
-	}
-	if !strings.Contains(joinedLabels, "Copy visible clusters") {
-		t.Fatalf("expected visible cluster action menu item, got %+v", model.menuItems)
-	}
-	if strings.Contains(joinedLabels, "Copy selected URL") {
-		t.Fatalf("cluster menu should not include selected member actions:\n%s", joinedLabels)
+			if !model.menuOpen {
+				t.Fatal("expected right click to open action menu")
+			}
+			if !model.menuFloating {
+				t.Fatal("expected right click action menu to float")
+			}
+			if !model.menuRect.contains(layout.clusters.x+3, layout.clusters.y+4) {
+				t.Fatalf("floating menu rect %+v should be placed at the right-click row", model.menuRect)
+			}
+			if model.menuTitle != "Cluster Actions" || model.menuContext != focusClusters {
+				t.Fatalf("cluster context menu title/context = %q/%q", model.menuTitle, model.menuContext)
+			}
+			if model.selected != 1 {
+				t.Fatalf("right click selected %d, want 1", model.selected)
+			}
+			joinedLabels := strings.Join(menuLabels(model.menuItems), "\n")
+			for _, want := range []string{"Copy cluster ID", "Copy cluster name", "Copy cluster title", "Copy cluster summary"} {
+				if !strings.Contains(joinedLabels, want) {
+					t.Fatalf("expected cluster action %q, got %+v", want, model.menuItems)
+				}
+			}
+			if !strings.Contains(joinedLabels, "Copy visible clusters") {
+				t.Fatalf("expected visible cluster action menu item, got %+v", model.menuItems)
+			}
+			if strings.Contains(joinedLabels, "Copy selected URL") {
+				t.Fatalf("cluster menu should not include selected member actions:\n%s", joinedLabels)
+			}
+		})
 	}
 }
 
