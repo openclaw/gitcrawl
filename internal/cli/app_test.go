@@ -658,7 +658,13 @@ func TestUploadSQLiteSnapshotArchiveReturnsRemoteError(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "create table repositories(id text primary key)"); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
+	var uploads atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPut &&
+			req.URL.EscapedPath() == "/v1/apps/gitcrawl/archives/gitcrawl%2Fopenclaw/sqlite" &&
+			req.Header.Get("x-crawl-sqlite-upload") == "bundle-part" {
+			uploads.Add(1)
+		}
 		http.Error(w, "nope", http.StatusBadGateway)
 	}))
 	defer server.Close()
@@ -679,8 +685,12 @@ func TestUploadSQLiteSnapshotArchiveReturnsRemoteError(t *testing.T) {
 		t.Fatalf("snapshot digest: %v", err)
 	}
 	_, _, err = uploadSQLiteSnapshotArchive(ctx, client, "gitcrawl", "gitcrawl/openclaw", snapshotPath, snapshotID, nil)
-	if err == nil {
-		t.Fatal("upload unexpectedly succeeded")
+	if uploads.Load() == 0 {
+		t.Fatal("snapshot upload never reached the bundle-part endpoint")
+	}
+	var remoteErr *crawlremote.Error
+	if !errors.As(err, &remoteErr) || remoteErr.Status != http.StatusBadGateway || remoteErr.Message != "nope" {
+		t.Fatalf("upload remote error = %v, want HTTP 502 with fixture message", err)
 	}
 }
 
