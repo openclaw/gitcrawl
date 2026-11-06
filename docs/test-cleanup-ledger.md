@@ -59,6 +59,7 @@ that every test is E2E.
 | [Forced summary selection](https://github.com/openclaw/gitcrawl/pull/364) | Require the forced task to identify the already summarized thread and revision. Retain the older pending-task limit and stale-revision checks. |
 | [Empty test scaffolding](https://github.com/openclaw/gitcrawl/pull/365) | Remove the config test hook with no setup or teardown. Inline six HTTP-server helper calls and retain each handler, assertion and server close. |
 | [Stale workflow snapshot replay](https://github.com/openclaw/gitcrawl/pull/366) | Replace a goroutine that waits until deletion completes with a direct stale replay. Retain skipped-write, run-membership and reservation-sequence assertions. |
+| [Allocator migration source maxima](https://github.com/openclaw/gitcrawl/pull/367) | Exercise negative-thread, revision, child-reservation and original workflow maxima. Require the migrated floor and next value; retain evidence repair and reservation backfill. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,

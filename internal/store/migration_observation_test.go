@@ -1391,57 +1391,74 @@ func TestMigrationPreservesSourceBoundWorkflowReservationBelowEvidenceFloor(t *t
 	}
 }
 
-func TestMigrationReconcilesAllocatorFromEveryPersistedSequenceTable(t *testing.T) {
-	ctx := context.Background()
-	dbPath, repoID, threadID := seedMigrationPullRequest(t, "allocator-head", 5)
-
-	raw := openRawMigrationDB(t, dbPath)
-	statements := []struct {
-		query string
-		args  []any
+func TestMigrationReconcilesAllocatorFromPersistedSequences(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		thread   int64
+		evidence int64
+		revision int64
+		child    int64
+		workflow int64
+		floor    int64
 	}{
-		{`update threads set observation_sequence = -17, evidence_observation_sequence = 19 where id = ?`, []any{threadID}},
-		{`update thread_revisions set observation_sequence = 23 where thread_id = ?`, []any{threadID}},
-		{`insert into thread_child_observation_reservations(thread_id, family, observation_sequence)
-			values(?, 'comments', 29)
-			on conflict(thread_id, family) do update set observation_sequence = excluded.observation_sequence`, []any{threadID}},
-		{`insert into workflow_run_observation_reservations(repo_id, head_sha, observation_sequence)
-			values(?, 'allocator-head', 31)
-			on conflict(repo_id, head_sha) do update set observation_sequence = excluded.observation_sequence`, []any{repoID}},
-		{`drop table thread_observation_sequence`, nil},
-		{`pragma user_version = 10`, nil},
-	}
-	for _, statement := range statements {
-		if _, err := raw.ExecContext(ctx, statement.query, statement.args...); err != nil {
-			_ = raw.Close()
-			t.Fatalf("prepare allocator state with %q: %v", statement.query, err)
-		}
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close allocator store: %v", err)
-	}
+		{name: "negative thread observation", thread: -37, evidence: 19, revision: 23, child: 29, workflow: 31, floor: 37},
+		{name: "thread revision", thread: -17, evidence: 19, revision: 37, child: 29, workflow: 31, floor: 37},
+		{name: "child reservation", thread: -17, evidence: 19, revision: 23, child: 37, workflow: 31, floor: 37},
+		{name: "workflow reservation", thread: -17, evidence: 19, revision: 23, child: 29, workflow: 31, floor: 31},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			dbPath, repoID, threadID := seedMigrationPullRequest(t, "allocator-head", 5)
 
-	st, err := Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("reopen allocator store: %v", err)
-	}
-	defer st.Close()
+			raw := openRawMigrationDB(t, dbPath)
+			statements := []struct {
+				query string
+				args  []any
+			}{
+				{`update threads set observation_sequence = ?, evidence_observation_sequence = ? where id = ?`, []any{test.thread, test.evidence, threadID}},
+				{`update thread_revisions set observation_sequence = ? where thread_id = ?`, []any{test.revision, threadID}},
+				{`insert into thread_child_observation_reservations(thread_id, family, observation_sequence)
+					values(?, 'comments', ?)
+					on conflict(thread_id, family) do update set observation_sequence = excluded.observation_sequence`, []any{threadID, test.child}},
+				{`insert into workflow_run_observation_reservations(repo_id, head_sha, observation_sequence)
+					values(?, 'allocator-head', ?)
+					on conflict(repo_id, head_sha) do update set observation_sequence = excluded.observation_sequence`, []any{repoID, test.workflow}},
+				{`drop table thread_observation_sequence`, nil},
+				{`pragma user_version = 10`, nil},
+			}
+			for _, statement := range statements {
+				if _, err := raw.ExecContext(ctx, statement.query, statement.args...); err != nil {
+					_ = raw.Close()
+					t.Fatalf("prepare allocator state with %q: %v", statement.query, err)
+				}
+			}
+			if err := raw.Close(); err != nil {
+				t.Fatalf("close allocator store: %v", err)
+			}
 
-	var floor int64
-	if err := st.DB().QueryRowContext(ctx, `
-		select value from thread_observation_sequence where id = 1
-	`).Scan(&floor); err != nil {
-		t.Fatalf("read allocator floor: %v", err)
-	}
-	if floor != 31 {
-		t.Fatalf("allocator floor = %d, want 31", floor)
-	}
-	next, err := st.NextThreadObservationSequence(ctx, "2026-07-12T08:00:00Z")
-	if err != nil {
-		t.Fatalf("advance allocator: %v", err)
-	}
-	if next != 32 {
-		t.Fatalf("next allocator sequence = %d, want 32", next)
+			st, err := Open(ctx, dbPath)
+			if err != nil {
+				t.Fatalf("reopen allocator store: %v", err)
+			}
+			defer st.Close()
+
+			var floor int64
+			if err := st.DB().QueryRowContext(ctx, `
+				select value from thread_observation_sequence where id = 1
+			`).Scan(&floor); err != nil {
+				t.Fatalf("read allocator floor: %v", err)
+			}
+			if floor != test.floor {
+				t.Fatalf("allocator floor = %d, want %d", floor, test.floor)
+			}
+			next, err := st.NextThreadObservationSequence(ctx, "2026-07-12T08:00:00Z")
+			if err != nil {
+				t.Fatalf("advance allocator: %v", err)
+			}
+			if next != test.floor+1 {
+				t.Fatalf("next allocator sequence = %d, want %d", next, test.floor+1)
+			}
+		})
 	}
 }
 
