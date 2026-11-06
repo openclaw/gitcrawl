@@ -16,6 +16,10 @@ import (
 )
 
 func TestCodeCommitGatePinsSourceAndReplacesAtomically(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
 	for _, tc := range []struct {
 		name                                   string
 		incomplete, rollback, stale, regressed bool
