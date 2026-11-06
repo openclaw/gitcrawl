@@ -435,27 +435,30 @@ func TestPortablePayloadHelpersHandleMissingAndExistingColumns(t *testing.T) {
 
 func TestPortablePayloadHelpersPropagateCancellation(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "payload-canceled.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	checks := []struct {
 		name string
-		run  func() error
+		run  func(context.Context, *Store) error
 	}{
-		{name: "vacuum", run: func() error { return st.vacuumPortableDatabase(canceled) }},
-		{name: "metadata", run: func() error { return st.ensurePortableMetadata(canceled) }},
-		{name: "canonical schema", run: func() error {
-			return st.canonicalizePortableSchema(canceled, PortablePruneOptions{}, &PortablePruneStats{})
+		{name: "vacuum", run: func(ctx context.Context, st *Store) error { return st.vacuumPortableDatabase(ctx) }},
+		{name: "metadata", run: func(ctx context.Context, st *Store) error { return st.ensurePortableMetadata(ctx) }},
+		{name: "canonical schema", run: func(ctx context.Context, st *Store) error {
+			return st.canonicalizePortableSchema(ctx, PortablePruneOptions{}, &PortablePruneStats{})
 		}},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			if err := check.run(); err == nil {
-				t.Fatal("canceled payload operation succeeded")
+			st, err := Open(ctx, filepath.Join(t.TempDir(), "payload-canceled.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			if err := check.run(canceled, st); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled payload operation = %v, want context.Canceled", err)
+			}
+			if err := check.run(ctx, st); err != nil {
+				t.Fatalf("healthy payload operation: %v", err)
 			}
 		})
 	}
