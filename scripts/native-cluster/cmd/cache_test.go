@@ -154,21 +154,41 @@ func TestReviewedParentCacheReusePreservesProvenance(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	raw, _ := os.ReadFile(filepath.Join(dir, id+".json"))
+	raw, e := os.ReadFile(filepath.Join(dir, id+".json"))
+	if e != nil {
+		t.Fatal(e)
+	}
 	var f pairCacheFile
-	json.Unmarshal(raw, &f)
+	if e := json.Unmarshal(raw, &f); e != nil {
+		t.Fatal(e)
+	}
+	publish := func(cache pairCacheFile) (string, []byte) {
+		t.Helper()
+		raw, e := json.Marshal(cache)
+		if e != nil {
+			t.Fatal(e)
+		}
+		id := store.NativeSHA256(raw)
+		if e := os.WriteFile(filepath.Join(dir, id+".json"), raw, 0600); e != nil {
+			t.Fatal(e)
+		}
+		pointer, e := json.Marshal(id)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e := os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600); e != nil {
+			t.Fatal(e)
+		}
+		return id, raw
+	}
 	f.Producer = reviewedSubsetCacheProducer
 	if !reviewedCacheProducer(reviewedQuarantineCacheProducer) || reviewedCacheProducer(store.NativeSHA256([]byte("unreviewed"))) {
 		t.Fatal("reviewed producer set changed")
 	}
-	raw, _ = json.Marshal(f)
-	parent := store.NativeSHA256(raw)
-	os.WriteFile(filepath.Join(dir, parent+".json"), raw, 0600)
-	pointer, _ := json.Marshal(parent)
-	os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600)
+	parent, raw := publish(f)
 	loaded, bound, e := loadPairs(dir, s)
 	if e != nil || bound != parent {
-		t.Fatal(e)
+		t.Fatalf("load reviewed parent: id=%q err=%v", bound, e)
 	}
 	got, _, e := buildWithCache(context.Background(), 1, s.Vectors, s.Threads, "openclaw/openclaw", opts, loaded)
 	if e != nil || !reflect.DeepEqual(got, want) || loaded.recomputed != 0 || loaded.reused != 3 {
@@ -177,20 +197,20 @@ func TestReviewedParentCacheReusePreservesProvenance(t *testing.T) {
 	if _, e = savePairs(dir, s, loaded, parent); e != nil {
 		t.Fatal(e)
 	}
-	still, _ := os.ReadFile(filepath.Join(dir, parent+".json"))
+	still, e := os.ReadFile(filepath.Join(dir, parent+".json"))
+	if e != nil {
+		t.Fatal(e)
+	}
 	if string(still) != string(raw) {
 		t.Fatal("parent provenance changed")
 	}
 	f.Producer = store.NativeSHA256([]byte("unreviewed"))
-	bad, _ := json.Marshal(f)
-	badID := store.NativeSHA256(bad)
-	os.WriteFile(filepath.Join(dir, badID+".json"), bad, 0600)
-	pointer, _ = json.Marshal(badID)
-	os.WriteFile(filepath.Join(dir, "current.json"), pointer, 0600)
-	if _, _, e = loadPairs(dir, s); e == nil {
-		t.Fatal("unreviewed parent admitted")
+	badID, bad := publish(f)
+	if _, _, e = loadPairs(dir, s); e == nil || e.Error() != "unrecognized complete-cache producer; evidence retained" {
+		t.Fatalf("expected unreviewed producer rejection, got %v", e)
 	}
-	if _, e = os.Stat(filepath.Join(dir, badID+".json")); e != nil {
-		t.Fatal("failed proof deleted")
+	retained, e := os.ReadFile(filepath.Join(dir, badID+".json"))
+	if e != nil || string(retained) != string(bad) {
+		t.Fatalf("rejected evidence changed: %q, %v", retained, e)
 	}
 }
