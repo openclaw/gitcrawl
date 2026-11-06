@@ -613,3 +613,14 @@ checks, independent review and platform CI using temporary state only.
   verify rejection after the fix, healthy exports and retained count controls.
   Run the native harness, static checks, independent review and platform CI.
   No live archives, provider calls, deployment or releases change.
+
+## Successful sync watermark selection
+
+- Reuse the existing run-history fixture to assert each transition: failed-only
+  history has no watermark; success and completed runs advance it; newer failed
+  and checkpoint runs preserve the previous successful time. The old fixture's
+  only failure preceded its success and could not detect a missing status filter.
+- Paired race-enabled overlays show the original test accepts both a missing
+  status filter and rejection of completed runs; the repaired test rejects both.
+  Keep production SQL unchanged. Validate store tests, static checks, independent
+  P0–P3 review and platform CI using temporary SQLite archives only.
