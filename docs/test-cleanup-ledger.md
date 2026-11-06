@@ -55,6 +55,7 @@ that every test is E2E.
 | [Remove discarded source-fixture serialization](https://github.com/openclaw/gitcrawl/pull/356) | Remove discarded JSON encoding/import. Retain all three SQLite evidence, repair/replay and actor-identity tests. |
 | [Native rollback assertions require successful reads](https://github.com/openclaw/gitcrawl/pull/357) | Check ten subset/quarantine reads before absence or preservation claims. Retain triggers, recovery and optional fixture exports. |
 | [Successful sync watermark selection](https://github.com/openclaw/gitcrawl/pull/361) | Check failed-only, success, newer failed, completed and checkpoint transitions. Retain production SQL and reject two previously undetected filter faults. |
+| [Closed-store error assertions](https://github.com/openclaw/gitcrawl/pull/363) | Remove three optional-schema probes that do not report closed-store errors. Require each of 14 operations to succeed on its own healthy fixture and report database closure afterward. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,

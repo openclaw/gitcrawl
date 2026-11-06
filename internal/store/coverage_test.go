@@ -953,18 +953,9 @@ func seedVectorThreads(t *testing.T, ctx context.Context, st *Store) (int64, []i
 
 func TestClosedStoreErrorBranches(t *testing.T) {
 	ctx := context.Background()
-	st := openTestStore(t, ctx)
-	repoID, threadIDs := seedVectorThreads(t, ctx, st)
-	if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
-		StableKey:              "closed-store",
-		RepresentativeThreadID: threadIDs[0],
-		Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0]}, {ThreadID: threadIDs[1]}},
-	}}); err != nil {
-		t.Fatalf("seed durable cluster: %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
+	var st *Store
+	var repoID int64
+	var threadIDs []int64
 	checks := []struct {
 		name string
 		fn   func() error
@@ -973,10 +964,7 @@ func TestClosedStoreErrorBranches(t *testing.T) {
 			_, err := st.ListDisplayClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID, IncludeClosed: true})
 			return err
 		}},
-		{"run summaries", func() error {
-			_, err := st.ListRunClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID})
-			return err
-		}},
+
 		{"durable summaries", func() error {
 			_, err := st.ListClusterSummaries(ctx, ClusterSummaryOptions{RepoID: repoID})
 			return err
@@ -1019,18 +1007,12 @@ func TestClosedStoreErrorBranches(t *testing.T) {
 			_, err := st.SetClusterCanonicalLocally(ctx, repoID, 1, 301, "closed")
 			return err
 		}},
-		{"summaries", func() error {
-			_, err := st.summariesByThreadIDs(ctx, threadIDs)
-			return err
-		}},
+
 		{"portable prune", func() error {
 			_, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{BodyChars: 8})
 			return err
 		}},
-		{"status", func() error {
-			_, err := st.Status(ctx)
-			return err
-		}},
+
 		{"repositories", func() error {
 			_, err := st.ListRepositories(ctx)
 			return err
@@ -1040,13 +1022,27 @@ func TestClosedStoreErrorBranches(t *testing.T) {
 			return err
 		}},
 	}
-	errorsSeen := 0
 	for _, check := range checks {
-		if err := check.fn(); err != nil {
-			errorsSeen++
-		}
-	}
-	if errorsSeen == 0 {
-		t.Fatal("closed store checks did not exercise any errors")
+		t.Run(check.name, func(t *testing.T) {
+			st = openTestStore(t, ctx)
+			defer st.Close()
+			repoID, threadIDs = seedVectorThreads(t, ctx, st)
+			if _, err := st.SaveCompleteDurableClusters(ctx, repoID, []DurableClusterInput{{
+				StableKey:              "closed-store",
+				RepresentativeThreadID: threadIDs[0],
+				Members:                []DurableClusterMemberInput{{ThreadID: threadIDs[0]}, {ThreadID: threadIDs[1]}},
+			}}); err != nil {
+				t.Fatalf("seed durable cluster: %v", err)
+			}
+			if err := check.fn(); err != nil {
+				t.Fatalf("healthy store: %v", err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatalf("close store: %v", err)
+			}
+			if err := check.fn(); err == nil || !strings.Contains(err.Error(), "database is closed") {
+				t.Fatalf("closed store error = %v, want database is closed", err)
+			}
+		})
 	}
 }
