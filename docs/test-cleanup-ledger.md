@@ -61,6 +61,7 @@ that every test is E2E.
 | [Stale workflow snapshot replay](https://github.com/openclaw/gitcrawl/pull/366) | Replace a goroutine that waits until deletion completes with a direct stale replay. Retain skipped-write, run-membership and reservation-sequence assertions. |
 | [Allocator migration source maxima](https://github.com/openclaw/gitcrawl/pull/367) | Exercise negative-thread, revision, child-reservation and original workflow maxima. Require the migrated floor and next value; retain evidence repair and reservation backfill. |
 | [Portable store cancellation controls](https://github.com/openclaw/gitcrawl/pull/368) | Give each of 15 operations a fresh valid fixture. Require typed cancellation followed by healthy success; prepare repository, blob-pointer removal and excerpt columns only where needed. |
+| [Permanent change-contract table IDs](https://github.com/openclaw/gitcrawl/pull/369) | Pin the 37 established table names to their persisted IDs. Retain dense/unique IDs and family references; permit appended IDs. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
