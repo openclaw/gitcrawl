@@ -72,6 +72,7 @@ that every test is E2E.
 | [Analytics discovery provider guard](https://github.com/openclaw/gitcrawl/pull/377) | Use valid isolated config and require zero local-provider requests. Retain 24 queued items, the eight-item retry bound and unchanged attempt count; reject swallowed collection failures. |
 | [Thread-list number and limit controls](https://github.com/openclaw/gitcrawl/pull/378) | Add competing rows and separate number-only and number-plus-limit cases. Retain the original repository/thread round trip and original selection; reject either ignored option. |
 | [Windows config home isolation](https://github.com/openclaw/gitcrawl/pull/379) | Reuse the platform-aware home fixture for normalization and runtime directories. Run the config package on hosted Windows; retain all existing assertions and filesystem checks. |
+| Duplicate fresh-schema smoke test ([PR #380](https://github.com/openclaw/gitcrawl/pull/380)) | Remove the version-only fresh-store check. Retain current-store diagnostics that verify the same persisted version plus capabilities and unchanged bytes; keep legacy, portable and empty-path cases. |
 
 The source audit read 183 Go test files and 20 supplemental test, fixture and
 ledger paths at `f3fb1c6674829438f1a20d5d3a39ce35ece06e3e`. CLI calls made in process,
