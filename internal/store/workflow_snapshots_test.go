@@ -107,29 +107,6 @@ func TestApplyWorkflowRunSnapshotRejectsStaleCASAfterDeletion(t *testing.T) {
 		t.Fatalf("read validated snapshot: %v", err)
 	}
 
-	staleReady := make(chan struct{})
-	releaseStale := make(chan struct{})
-	type applyResult struct {
-		result WorkflowRunSnapshotResult
-		err    error
-	}
-	staleResult := make(chan applyResult, 1)
-	go func() {
-		close(staleReady)
-		<-releaseStale
-		result, err := st.ApplyWorkflowRunSnapshot(
-			ctx,
-			repoID,
-			"shared-head",
-			"2026-07-12T00:02:00Z",
-			3,
-			validated,
-			initialRuns,
-		)
-		staleResult <- applyResult{result: result, err: err}
-	}()
-	<-staleReady
-
 	deletedRuns := workflowSnapshotRuns("900")
 	setWorkflowSnapshotRepoID(deletedRuns, repoID)
 	deleted, err := st.ApplyWorkflowRunSnapshot(
@@ -147,13 +124,20 @@ func TestApplyWorkflowRunSnapshotRejectsStaleCASAfterDeletion(t *testing.T) {
 	if !deleted.Applied {
 		t.Fatal("verified deletion was not applied")
 	}
-	close(releaseStale)
-	stale := <-staleResult
-	if stale.err != nil {
-		t.Fatalf("apply stale snapshot: %v", stale.err)
+	stale, err := st.ApplyWorkflowRunSnapshot(
+		ctx,
+		repoID,
+		"shared-head",
+		"2026-07-12T00:02:00Z",
+		3,
+		validated,
+		initialRuns,
+	)
+	if err != nil {
+		t.Fatalf("apply stale snapshot: %v", err)
 	}
-	if stale.result.Applied || stale.result.RowsSynced != 0 {
-		t.Fatalf("stale snapshot result = %+v, want skipped", stale.result)
+	if stale.Applied || stale.RowsSynced != 0 {
+		t.Fatalf("stale snapshot result = %+v, want skipped", stale)
 	}
 	assertWorkflowSnapshotRunIDs(t, ctx, st, repoID, "900")
 	source, sequence, found, err := st.WorkflowRunObservationReservation(
