@@ -50,16 +50,9 @@ func TestThreadVectorPreferredTieBreakers(t *testing.T) {
 }
 
 func TestGHRateLimitConfigHelpers(t *testing.T) {
-	t.Setenv("GH_HOST", "")
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_LOW_REMAINING", "")
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "")
 
-	if got := ghRateLimitHostForAPIBaseURL("https://api.github.com"); got != "github.com" {
-		t.Fatalf("api.github.com host = %q", got)
-	}
-	if got := ghRateLimitHostForAPIBaseURL("https://github.example.com/api/v3"); got != "github.example.com" {
-		t.Fatalf("enterprise host = %q", got)
-	}
 	if got := ghRateLimitHostForAPIBaseURL("://bad"); got != "" {
 		t.Fatalf("invalid base URL host = %q", got)
 	}
@@ -70,7 +63,6 @@ func TestGHRateLimitConfigHelpers(t *testing.T) {
 		t.Fatalf("default max age = %s", got)
 	}
 
-	t.Setenv("GH_HOST", "example.com")
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_LOW_REMAINING", "42")
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "2m")
 

@@ -79,23 +79,12 @@ func TestWriteJSONValueErrors(t *testing.T) {
 	}
 }
 
-func TestLocalGHUnsupportedAndShim(t *testing.T) {
+func TestLocalGHUnsupported(t *testing.T) {
 	if err := localGHUnsupported(nil); !errors.Is(err, errLocalGHUnsupported) {
 		t.Fatalf("nil wrapped error = %v", err)
 	}
 	if err := localGHUnsupported(errors.New("missing")); !errors.Is(err, errLocalGHUnsupported) || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("wrapped error = %v", err)
-	}
-
-	app := New()
-	var stderr bytes.Buffer
-	app.Stderr = &stderr
-	err := app.runGHShim(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "gitcrawl gh moved to octopool") {
-		t.Fatalf("runGHShim error = %v", err)
-	}
-	if !strings.Contains(stderr.String(), "octopool login") {
-		t.Fatalf("stderr = %s", stderr.String())
 	}
 }
 

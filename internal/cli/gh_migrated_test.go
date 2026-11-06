@@ -13,8 +13,8 @@ func TestGHShimPrintsOctopoolMigration(t *testing.T) {
 	app.Stderr = &stderr
 
 	err := app.Run(context.Background(), []string{"gh", "api", "repos/openclaw/openclaw/pulls/1"})
-	if err == nil {
-		t.Fatal("expected migration error")
+	if err == nil || !strings.Contains(err.Error(), "gitcrawl gh moved to octopool") {
+		t.Fatalf("migration error = %v", err)
 	}
 	got := stderr.String()
 	if !strings.Contains(got, "gitcrawl gh moved to octopool") {
