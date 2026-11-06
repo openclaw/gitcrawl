@@ -593,7 +593,7 @@ GITCRAWL_EMBED_MODEL = "config-embed"
 
 func TestNormalizeDefaultsAndRuntimeDirs(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 	t.Setenv("GITCRAWL_SUMMARY_MODEL", "summary-env")
 	t.Setenv("GITCRAWL_EMBED_MODEL", "embed-env")
 	cfg := Config{
