@@ -105,8 +105,11 @@ func (m *clusterBrowserModel) runMenuItem(item tuiMenuItem) bool {
 			m.status = "No representative URL"
 			return true
 		}
-		openURL(item.value)
-		m.status = "Opened " + item.value
+		if err := openURL(item.value); err != nil {
+			m.status = err.Error()
+		} else {
+			m.status = "Opened " + item.value
+		}
 		return true
 	case "copy-cluster-url":
 		if strings.TrimSpace(item.value) == "" {

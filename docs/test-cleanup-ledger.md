@@ -6,6 +6,7 @@ that every test is E2E.
 
 | Change | Outcome and retained coverage |
 | --- | --- |
+| [Desktop failure diagnostics](https://github.com/openclaw/gitcrawl/pull/414) | Require opener or clipboard error prefixes for every existing desktop failure action and the two picked-link actions. Fix representative URL opening to surface its opener error instead of reporting success. |
 | [Empty-menu selection diagnostics](https://github.com/openclaw/gitcrawl/pull/413) | Move nine empty-selection menu actions into independent named cases with fresh models and exact missing-cluster or missing-thread diagnostics. Retain handled-action assertions and the broader populated-menu fixture. |
 | [Sync state contract owners](https://github.com/openclaw/gitcrawl/pull/407) | Move explicit all-state and initial open/closed request assertions into existing reconciliation fixtures. Remove two duplicate store fixtures and their now-unused capture client; retain rollback and checkpoint coverage. |
 | [Test-only CLI helpers](https://github.com/openclaw/gitcrawl/pull/293) | Removed unused CLI/TUI helpers. Retained active link extraction, palette and command checks. |
