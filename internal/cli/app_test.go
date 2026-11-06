@@ -6630,6 +6630,31 @@ func TestHybridSearchSkipsOpenAIWhenNoVectors(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"mode": "keyword"`) || !strings.Contains(stdout.String(), `"requested_mode": "hybrid"`) {
 		t.Fatalf("hybrid fallback output = %q", stdout.String())
 	}
+	stdout.Reset()
+	blank := New()
+	blank.Stdout = &stdout
+	if err := blank.Run(ctx, []string{"--config", configPath, "--json", "search", "openclaw/openclaw", "--query", "gateway", "--mode", ""}); err != nil {
+		t.Fatalf("blank search mode: %v", err)
+	}
+	var payload struct {
+		Mode          string            `json:"mode"`
+		RequestedMode string            `json:"requested_mode"`
+		Hits          []store.SearchHit `json:"hits"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode blank-mode search: %v", err)
+	}
+	numbers := make([]int, 0, len(payload.Hits))
+	for _, hit := range payload.Hits {
+		numbers = append(numbers, hit.Number)
+	}
+	sort.Ints(numbers)
+	if payload.Mode != "keyword" || payload.RequestedMode != "" || !slices.Equal(numbers, []int{101, 102}) {
+		t.Fatalf("blank-mode search = %+v, want keyword hits 101 and 102", payload)
+	}
+	if atomic.LoadInt32(&calls) != 0 {
+		t.Fatalf("blank-mode search made %d OpenAI calls", calls)
+	}
 }
 
 func TestSyncCommandUsesConfiguredGitHubBaseURLAndHydratesComments(t *testing.T) {
