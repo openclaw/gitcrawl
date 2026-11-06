@@ -56,6 +56,14 @@ func TestPortableExclusiveRenamePreservesExistingDestination(t *testing.T) {
 			if err != nil || !os.SameFile(before, after) {
 				t.Fatalf("destination changed: %v", err)
 			}
+			if !directory {
+				for _, tc := range []struct{ path, want string }{{from, "new"}, {to, "keep"}} {
+					data, err := os.ReadFile(tc.path)
+					if err != nil || string(data) != tc.want {
+						t.Fatalf("refused rename changed %s: got %q, %v; want %q", filepath.Base(tc.path), data, err, tc.want)
+					}
+				}
+			}
 			if err := os.Remove(to); err != nil {
 				t.Fatal(err)
 			}
