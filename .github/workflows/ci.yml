@@ -74,12 +74,28 @@ jobs:
             exit 1
           fi
 
-      - name: Test with coverage
+      - name: Test coverage and durable SIMD parity
         run: |
-          go test ./... -covermode=atomic -coverprofile=coverage.out
-          total="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')"
-          echo "total coverage: ${total}%"
-          awk -v total="$total" 'BEGIN { if (total + 0 < 85.0) { printf("coverage %.1f%% is below 85.0%%\n", total); exit 1 } }'
+          set -euo pipefail
+          check_coverage() {
+            go test ./... -covermode=atomic -coverprofile=coverage.out || return $?
+            total="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')" || return $?
+            echo "total coverage: ${total}%"
+            awk -v total="$total" 'BEGIN { if (total + 0 < 85.0) { printf("coverage %.1f%% is below 85.0%%\n", total); exit 1 } }'
+          }
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            # Parity owns its temporary files; overlap its I/O with coverage.
+            check_coverage &
+            coverage_pid=$!
+            result=0
+            (
+              python3 -m unittest discover -s scripts -p test_cluster_simd_parity.py &&
+                python3 scripts/cluster_simd_parity.py
+            ) || result=1
+            wait "$coverage_pid" || result=1
+            exit "$result"
+          fi
+          check_coverage
 
       - name: Test native scripts
         run: |
@@ -105,12 +121,6 @@ jobs:
           wait "$simd_pid" || result=1
           wait "$fallback_pid" || result=1
           exit "$result"
-
-      - name: Compare durable cluster output across SIMD modes
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: |
-          python3 -m unittest discover -s scripts -p test_cluster_simd_parity.py
-          python3 scripts/cluster_simd_parity.py
 
       - name: Build
         run: go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=${GITHUB_SHA:0:7}" -o bin/gitcrawl ./cmd/gitcrawl
