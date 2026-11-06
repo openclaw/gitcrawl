@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run Linux coverage and durable SIMD parity checks concurrently while preserving both failure gates and the macOS coverage sequence.
+
 ## 0.18.0 - 2026-11-05
 
 **Highlights:** Opt-in change tracking for incremental archive readers, clearer CLI argument errors, and native maintenance reliability fixes.
