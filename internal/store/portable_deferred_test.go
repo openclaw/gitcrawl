@@ -102,63 +102,53 @@ func TestPortablePruneDeferredRewriteVisibleEquivalence(t *testing.T) {
 }
 
 func TestPortablePruneProgressStagesOrdered(t *testing.T) {
-	ctx := context.Background()
-	st := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "progress.db"))
-	defer st.Close()
-	var stages []PortablePruneStage
-	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
-		BodyChars:          8,
-		DeferSecureRewrite: true,
-		Progress: func(stage PortablePruneStage) {
-			stages = append(stages, stage)
+	for _, test := range []struct {
+		name           string
+		retainColumns  bool
+		trailingStages []PortablePruneStage
+	}{
+		{name: "physical drop"},
+		{
+			name:          "retained columns",
+			retainColumns: true,
+			trailingStages: []PortablePruneStage{
+				PortablePruneStageDisposableTableDrop,
+				PortablePruneStageThreadsRebuildPreflight,
+				PortablePruneStageThreadsRebuildForeignKeys,
+				PortablePruneStageThreadsRebuildCompactCopy,
+				PortablePruneStageThreadsRebuildSchemaSwap,
+				PortablePruneStageThreadsRebuildSchemaRestore,
+			},
 		},
-	}); err != nil {
-		t.Fatalf("prune with progress: %v", err)
-	}
-	want := []PortablePruneStage{
-		PortablePruneStageThreadBodies,
-		PortablePruneStageCommentReviewBodies,
-		PortablePruneStageMetadataRawPayloads,
-		PortablePruneStageFingerprintsSummaries,
-		PortablePruneStageDiscardedData,
-		PortablePruneStageCanonicalSchemaFinalization,
-	}
-	if !slices.Equal(stages, want) {
-		t.Fatalf("portable prune stages = %v, want %v", stages, want)
-	}
-}
-
-func TestPortablePruneRetainedColumnProgressStagesOrdered(t *testing.T) {
-	ctx := context.Background()
-	st := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "retained-progress.db"))
-	defer st.Close()
-	var stages []PortablePruneStage
-	if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
-		BodyChars:                     8,
-		DeferSecureRewrite:            true,
-		RetainSanitizedPayloadColumns: true,
-		Progress: func(stage PortablePruneStage) {
-			stages = append(stages, stage)
-		},
-	}); err != nil {
-		t.Fatalf("retained-column prune with progress: %v", err)
-	}
-	want := []PortablePruneStage{
-		PortablePruneStageThreadBodies,
-		PortablePruneStageCommentReviewBodies,
-		PortablePruneStageMetadataRawPayloads,
-		PortablePruneStageFingerprintsSummaries,
-		PortablePruneStageDiscardedData,
-		PortablePruneStageCanonicalSchemaFinalization,
-		PortablePruneStageDisposableTableDrop,
-		PortablePruneStageThreadsRebuildPreflight,
-		PortablePruneStageThreadsRebuildForeignKeys,
-		PortablePruneStageThreadsRebuildCompactCopy,
-		PortablePruneStageThreadsRebuildSchemaSwap,
-		PortablePruneStageThreadsRebuildSchemaRestore,
-	}
-	if !slices.Equal(stages, want) {
-		t.Fatalf("retained-column prune stages = %v, want %v", stages, want)
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := seedPortableDeferredStore(t, ctx, filepath.Join(t.TempDir(), "progress.db"))
+			defer st.Close()
+			var stages []PortablePruneStage
+			if _, err := st.PrunePortablePayloads(ctx, PortablePruneOptions{
+				BodyChars:                     8,
+				DeferSecureRewrite:            true,
+				RetainSanitizedPayloadColumns: test.retainColumns,
+				Progress: func(stage PortablePruneStage) {
+					stages = append(stages, stage)
+				},
+			}); err != nil {
+				t.Fatalf("prune with progress: %v", err)
+			}
+			want := []PortablePruneStage{
+				PortablePruneStageThreadBodies,
+				PortablePruneStageCommentReviewBodies,
+				PortablePruneStageMetadataRawPayloads,
+				PortablePruneStageFingerprintsSummaries,
+				PortablePruneStageDiscardedData,
+				PortablePruneStageCanonicalSchemaFinalization,
+			}
+			want = append(want, test.trailingStages...)
+			if !slices.Equal(stages, want) {
+				t.Fatalf("portable prune stages = %v, want %v", stages, want)
+			}
+		})
 	}
 }
 
