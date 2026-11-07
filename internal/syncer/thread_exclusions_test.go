@@ -47,7 +47,7 @@ func TestOwnerExcludedSelectionNeverReachesProviderOrRetryLedger(t *testing.T) {
 		case "/repos/fixture/repo":
 			fmt.Fprint(w, `{"id":100,"full_name":"fixture/repo","owner":{"login":"fixture"},"name":"repo"}`)
 		case "/repos/fixture/repo/issues":
-			fmt.Fprint(w, `[{"id":"one","number":10,"title":"removed","state":"open","body":"do not restore","pull_request":{}},{"id":"two","number":20,"title":"keeper","state":"open","body":"keep","pull_request":{}}]`)
+			fmt.Fprint(w, `[{"id":1010,"number":10,"title":"removed","state":"open","body":"do not restore","pull_request":{}},{"id":1020,"number":20,"title":"keeper","state":"open","body":"keep","pull_request":{}}]`)
 		case "/repos/fixture/repo/issues/20/comments", "/repos/fixture/repo/pulls/20/reviews", "/repos/fixture/repo/pulls/20/comments":
 			fmt.Fprint(w, `[]`)
 		default:

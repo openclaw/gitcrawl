@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
+
 - Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage and durable SIMD parity checks concurrently while preserving both failure gates and the macOS coverage sequence.
 

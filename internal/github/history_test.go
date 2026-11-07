@@ -53,7 +53,7 @@ func TestGraphQLHistoryBatchNoRESTAndExactIDs(t *testing.T) {
 		t.Fatalf("calls=%d batch=%+v", calls, batch)
 	}
 	item := batch.Items[0]
-	if item.Thread["id"] != "PR_fixture" || item.Pull["id"] != "9007199254740993" || item.Thread["state"] != "closed" {
+	if item.Thread["id"] != nil || item.Pull["id"] != "9007199254740993" || item.Thread["state"] != "closed" {
 		t.Fatalf("identity/state %+v", item)
 	}
 	if historyMap(item.Thread["user"])["login"] != "helper[bot]" {

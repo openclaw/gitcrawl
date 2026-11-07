@@ -299,7 +299,7 @@ func TestExpiredGraphQLQuotaRefreshPreservesPaginationValidation(t *testing.T) {
 					t.Fatalf("items=%d pages=%d err=%v", len(batch.Items), pages, err)
 				}
 				item := batch.Items[0]
-				if item.Thread["id"] != "PR_fixture" || item.Thread["body"] != "body" || item.Pull["id"] != "9007199254740993" || len(historyNodes(historyMap(item.Thread["_graphql"]), "labels")) != 2 {
+				if item.Thread["id"] != nil || item.Thread["body"] != "body" || item.Pull["id"] != "9007199254740993" || len(historyNodes(historyMap(item.Thread["_graphql"]), "labels")) != 2 {
 					t.Fatal("content/identity/membership changed")
 				}
 			} else {
