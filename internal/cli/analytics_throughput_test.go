@@ -98,9 +98,19 @@ func TestAnalyticsRecoveryUsesQuotaAfterCoreAndResumesCancellation(t *testing.T)
 				if r.URL.Path == "/rate_limit" {
 					probes.Add(1)
 					if coreSeen.Load() {
-						recoveryProbes.Add(1)
+						var persisted int
+						if err := s.DB().QueryRow("SELECT count(*) FROM threads WHERE number=10000").Scan(&persisted); err != nil {
+							t.Error(err)
+						}
+						if persisted > 0 {
+							recoveryProbes.Add(1)
+						}
 					}
 					fmt.Fprintf(w, `{"resources":{"graphql":{"limit":20000,"remaining":%d,"reset":4102444800},"core":{"limit":20000,"remaining":19999,"reset":4102444800}}}`, quota())
+					return
+				}
+				if r.URL.Path == "/repos/fixture/repo/issues/10000" {
+					fmt.Fprint(w, `{"id":110000,"number":10000,"pull_request":{}}`)
 					return
 				}
 				if r.URL.Path != "/graphql" {

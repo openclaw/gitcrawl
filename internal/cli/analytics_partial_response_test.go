@@ -42,6 +42,11 @@ func TestAnalyticsPairedPartialRejectionIsolatesPeerAndPreservesUnavailableHisto
 			fmt.Fprint(w, `{"resources":{"graphql":{"limit":20000,"remaining":19000,"reset":4102444800},"core":{"limit":20000,"remaining":19000,"reset":4102444800}}}`)
 			return
 		}
+		if r.URL.Path == "/repos/fixture/repo/issues/16944" || r.URL.Path == "/repos/fixture/repo/issues/16945" {
+			n, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/repos/fixture/repo/issues/"))
+			fmt.Fprintf(w, `{"id":%d,"number":%d,"pull_request":{}}`, n+100000, n)
+			return
+		}
 		var req struct{ Query string }
 		if e := json.NewDecoder(r.Body).Decode(&req); e != nil {
 			t.Error(e)
