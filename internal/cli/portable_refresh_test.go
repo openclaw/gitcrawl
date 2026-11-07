@@ -119,6 +119,12 @@ func newPortableRefreshFixture(t *testing.T, compressed bool) portableRefreshFix
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	return newPortableRefreshFixtureInGitEnv(t, compressed)
+}
+
+// The caller owns Git environment isolation, including for parallel subtests.
+func newPortableRefreshFixtureInGitEnv(t *testing.T, compressed bool) portableRefreshFixture {
+	t.Helper()
 	dir := t.TempDir()
 	fixture := portableRefreshFixture{remote: filepath.Join(dir, "publisher"), checkout: filepath.Join(dir, "subscriber"), configPath: filepath.Join(dir, "config.toml"), relative: "data/archive.db"}
 	if err := os.MkdirAll(filepath.Join(fixture.remote, "data"), 0o755); err != nil {
@@ -274,10 +280,15 @@ func TestPortableRefreshSuccessNoopAndLocalMirror(t *testing.T) {
 }
 
 func TestPortableRefreshRefusalsPreserveLastGood(t *testing.T) {
+	// Keep the environment fixed until every isolated repository case finishes.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	cases := []string{"invalid", "dirty", "index", "ignored", "divergent", "ahead", "origin", "hook", "filter", "lock", "runtime-lock", "orphan", "low-space", "growth", "timeout", "submodule"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			fixture := newPortableRefreshFixture(t, false)
+			t.Parallel()
+			fixture := newPortableRefreshFixtureInGitEnv(t, false)
 			if _, err := fixture.refresh(t); err != nil {
 				t.Fatal(err)
 			}
