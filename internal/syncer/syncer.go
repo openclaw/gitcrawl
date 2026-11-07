@@ -321,6 +321,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		closedOverlapNumbers[intValue(row["number"])] = struct{}{}
 	}
 
+	resolver := issueIDResolver{client: s.client, options: options}
 	payloads := make([]threadSyncPayload, 0, len(rows))
 	workflowObservationOrder := 0
 	for _, row := range rows {
@@ -334,17 +335,19 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			excludedCount++
 			continue
 		}
+		row, err = resolver.resolve(ctx, row)
+		if err != nil {
+			if recordErr := recordFailure(number, nil, err, "issue"); recordErr != nil {
+				return Stats{}, recordErr
+			}
+			if history != nil {
+				return Stats{}, errors.Join(failures...)
+			}
+			continue
+		}
+		payload.row = row
 		kind := issueKind(row)
 		if history != nil {
-			// Keep legacy REST identity stable when revisiting a previously saved
-			// thread. The exact GraphQL identity remains in the provider payload.
-			existing, err := s.store.ListThreadsFiltered(ctx, store.ThreadListOptions{RepoID: repoID, IncludeClosed: true, Numbers: []int{number}, Limit: 1})
-			if err != nil {
-				return Stats{}, err
-			}
-			if len(existing) > 0 {
-				row["id"] = existing[0].GitHubID
-			}
 			for _, item := range history.Items {
 				if intValue(item.Thread["number"]) != number {
 					continue
@@ -830,6 +833,9 @@ func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw
 		}
 		var threadID int64
 		if row != nil {
+			if _, err := canonicalIssueID(row["id"]); err != nil {
+				return err
+			}
 			thread := mapIssueToThread(repoID, row, now)
 			_, hasDraft := row["draft"]
 			upsert, err := st.UpsertThreadObservation(recordCtx, thread, store.UpsertThreadOptions{

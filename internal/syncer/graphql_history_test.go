@@ -25,7 +25,7 @@ func (f historyFixtureClient) FetchGraphQLHistory(context.Context, string, strin
 	}
 	return f.batch, f.err
 }
-func TestGraphQLHistoryUsesNativeTransactionsAndPreservesLegacyIdentity(t *testing.T) {
+func TestGraphQLHistoryUsesNativeTransactionsAndCanonicalIdentity(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	if err != nil {
@@ -57,8 +57,13 @@ func TestGraphQLHistoryUsesNativeTransactionsAndPreservesLegacyIdentity(t *testi
 	inline, _ := legacy.ListPullReviewComments(ctx, "openclaw", "gitcrawl", 8, nil)
 	rawRepo, _ := legacy.GetRepo(ctx, "openclaw", "gitcrawl", nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("REST fallback %s", r.URL)
-		http.Error(w, "REST forbidden", 500)
+		if r.URL.Path != "/repos/openclaw/gitcrawl/issues/8" {
+			t.Errorf("unexpected REST %s", r.URL)
+			http.Error(w, "unexpected", 500)
+			return
+		}
+		issue, _ := legacy.GetIssue(ctx, "openclaw", "gitcrawl", 8, nil)
+		json.NewEncoder(w).Encode(issue)
 	}))
 	defer server.Close()
 	client := historyFixtureClient{Client: gh.New(gh.Options{BaseURL: server.URL}), batch: gh.HistoryBatch{Repository: rawRepo, Items: []gh.HistoryItem{{Thread: row, Pull: pull, Comments: comments, Reviews: reviews, ReviewComments: inline}}}}

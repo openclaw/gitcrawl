@@ -346,9 +346,11 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 		return item, fmt.Errorf("invalid history item type")
 	}
 	row := historyProjection(node)
-	// GraphQL does not expose a PR's REST issue-database ID. New thread IDs
-	// therefore use the opaque node ID. Syncer preserves any existing legacy ID.
-	row["id"] = node["id"]
+	// A PR database ID belongs to the PullRequest, not its backing Issue.
+	// Leave it unresolved for the syncer; retain both provider IDs as evidence.
+	if typ == "PullRequest" {
+		row["id"] = nil
+	}
 	row["number"] = node["number"]
 	row["title"] = node["title"]
 	row["state"] = strings.ToLower(historyString(node["state"]))

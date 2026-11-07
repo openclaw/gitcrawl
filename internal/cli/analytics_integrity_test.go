@@ -53,6 +53,10 @@ func TestAnalyticsPoisonItemAndDiscoveryLaneDoNotStarvePeers(t *testing.T) {
 					fmt.Fprint(w, `{"resources":{"graphql":{"limit":50000,"remaining":49000,"reset":4102444800},"core":{"limit":50000,"remaining":49000,"reset":4102444800}}}`)
 					return
 				}
+				if r.URL.Path == "/repos/fixture/repo/issues/2" {
+					fmt.Fprint(w, `{"id":1002,"number":2,"pull_request":{}}`)
+					return
+				}
 				if r.URL.Path != "/graphql" {
 					t.Errorf("unexpected fallback: %s", r.URL.Path)
 					http.Error(w, "no fallback", 400)
