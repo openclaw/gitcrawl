@@ -118,7 +118,9 @@ Supervisors should retry failed selections in isolation. Empty reviews remain
 retained, including approvals without bodies. Minimized comments and null
 (deleted) authors are retained as returned by GitHub; deleted comments that
 GitHub no longer returns cannot be reconstructed. The ordinary empty-comment
-filtering contract is unchanged.
+filtering contract is unchanged. The authenticated user's own unsubmitted (`PENDING`)
+review and its draft inline comments are visible only to that user, so this profile
+omits them everywhere, including from the retained `_graphql` object.
 
 Stored raw maps are explicitly labelled projections: `_gitcrawl_source` is
 `graphql`, and `_graphql` retains the hydrated provider object. Existing thread

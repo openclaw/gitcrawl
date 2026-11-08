@@ -7,6 +7,8 @@
 - Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage, SIMD and scalar fallback suites, and durable SIMD parity concurrently while preserving every failure gate.
 
+- Omit the authenticated user's own unsubmitted (`PENDING`) review and its draft inline comments from `--graphql-history` sync, including the retained GraphQL object.
+
 ## 0.18.0 - 2026-11-05
 
 **Highlights:** Opt-in change tracking for incremental archive readers, clearer CLI argument errors, and native maintenance reliability fixes.
