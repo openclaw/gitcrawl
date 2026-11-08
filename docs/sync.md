@@ -238,7 +238,9 @@ An item fetch failure records its actual operation: `issue`, `issue_comments`,
 not create a thread stub. Failed child fetches can retain the observed parent
 metadata, but do not replace incomplete child collections or certify complete
 evidence. Cancellation stops further work; transactions already committed remain.
-A quota-reserve failure also stops new acquisition, including quota probes.
+A quota-reserve failure, or a GitHub primary or secondary rate limit that
+outlasts the client's own wait and retry, also stops new acquisition, including
+quota probes.
 Completed payloads can still commit. Skipped requests are not recorded as
 failures; shared-head groups that still need verification remain uncommitted.
 

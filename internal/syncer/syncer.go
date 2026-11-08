@@ -237,9 +237,15 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	}
 	var failures []error
 	var reserveErr *gh.RateLimitReserveError
+	// Stop acquiring further rows after the quota reserve fires or GitHub's own
+	// rate limit outlasts the client's retry; GitHub asks clients to stop
+	// sending requests while rate limited.
+	stopAcquisition := false
 	recordFailure := func(number int, row map[string]any, cause error, operations ...string) error {
 		failures = append(failures, fmt.Errorf("%s #%d: %w", strings.Join(operations, ", "), number, cause))
-		errors.As(cause, &reserveErr)
+		if errors.As(cause, &reserveErr) || gh.IsRateLimited(cause) {
+			stopAcquisition = true
+		}
 		if err := s.recordSyncFailure(ctx, options, repoRaw, row, number, cause, operations...); err != nil {
 			failures = append(failures, fmt.Errorf("record sync attempt failure: %w", err))
 			return errors.Join(failures...)
@@ -257,7 +263,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		}
 	} else if len(numbers) > 0 {
 		for _, number := range numbers {
-			if reserveErr != nil {
+			if stopAcquisition {
 				break
 			}
 			row, err := s.client.GetIssue(ctx, options.Owner, options.Repo, number, options.Reporter)
@@ -375,7 +381,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			}
 			continue
 		}
-		if reserveErr != nil && (options.IncludeComments ||
+		if stopAcquisition && (options.IncludeComments ||
 			kind == "pull_request" && (options.IncludePRMetadata || options.IncludePRDetails)) {
 			continue
 		}
@@ -441,7 +447,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			return Stats{}, err
 		}
 	}
-	groupFailures := s.consolidateWorkflowSnapshots(ctx, options, payloads, reserveErr == nil)
+	groupFailures := s.consolidateWorkflowSnapshots(ctx, options, payloads, !stopAcquisition)
 	completed := payloads[:0]
 	for index, payload := range payloads {
 		if cause, excluded := groupFailures[index]; excluded {

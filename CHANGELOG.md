@@ -5,6 +5,7 @@
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
 
 - Show opener failures when opening a representative URL from the TUI action menu.
+- Stop fetching the remaining issues and PRs of a sync after GitHub rate limits a request beyond the client's retry, as the quota reserve already does, instead of sending more requests while rate limited.
 - Run Linux coverage, SIMD and scalar fallback suites, and durable SIMD parity concurrently while preserving every failure gate.
 
 ## 0.18.0 - 2026-11-05
