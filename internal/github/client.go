@@ -385,7 +385,11 @@ func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, numb
 
 func (c *Client) ListPullReviews(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", pathEscape(owner), pathEscape(repo), number)
-	return c.paginate(ctx, path, 0, 0, reporter)
+	rows, err := c.paginate(ctx, path, 0, 0, reporter)
+	if err != nil {
+		return nil, err
+	}
+	return withoutPendingReviews(rows), nil
 }
 
 func (c *Client) ListPullReviewComments(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {

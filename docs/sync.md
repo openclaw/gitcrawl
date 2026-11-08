@@ -185,6 +185,10 @@ add `--include-comments` when needed. Selecting both hydration modes uses full
 or fingerprints. It resolves PR metadata-fetch failures, not failures of omitted
 child collections.
 
+The authenticated user's own unsubmitted (`PENDING`) review and its draft review-thread
+comments are visible only to that user, and their author can still discard them.
+REST sync therefore does not archive them; they appear once the review is submitted.
+
 Full PR details also populate `pull_request_files`, `pull_request_commits`,
 `pull_request_checks`, and `github_workflow_runs` for local review and search.
 

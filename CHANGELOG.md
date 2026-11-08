@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop archiving the authenticated user's own unsubmitted (`PENDING`) pull request review and its draft review-thread comments during REST sync. GitHub shows those drafts only to their author.
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
 
 - Show opener failures when opening a representative URL from the TUI action menu.

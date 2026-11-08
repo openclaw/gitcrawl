@@ -31,6 +31,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
               id
               databaseId
               body
+              state
               author { login __typename }
               path
               diffHunk
@@ -63,6 +64,7 @@ query($threadID: ID!, $cursor: String) {
           id
           databaseId
           body
+          state
           author { login __typename }
           path
           diffHunk
@@ -165,7 +167,7 @@ func (c *Client) ListPullReviewThreads(ctx context.Context, owner, repo string, 
 		seen[next] = struct{}{}
 		cursor = next
 	}
-	return out, nil
+	return withoutPendingThreadComments(out), nil
 }
 
 func (c *Client) completeReviewThreadComments(ctx context.Context, thread map[string]any, reporter Reporter) error {
