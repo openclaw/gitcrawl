@@ -22,8 +22,10 @@ gitcrawl refresh owner/repo
 By default this performs:
 
 1. **Sync** — open + recently closed issues and PRs (see [Sync](/sync/))
-2. **Embed** — fill `thread_vectors` for any thread whose document changed
-3. **Cluster** — rebuild durable clusters with the standard thresholds
+2. **Embed** — fill `thread_vectors` for any open thread whose document changed
+3. **Cluster** — rebuild durable clusters from open threads with the standard thresholds
+
+Closed items from the sync sweep update their local state but are not embedded or clustered. With `--state all` or `--state closed`, the embed and cluster stages include closed threads too, as `--include-closed` does for the standalone commands.
 
 Disable any stage with `--no-sync`, `--no-embed`, `--no-cluster`. The remaining stages still run; failures are reported per stage in the JSON output.
 
@@ -34,7 +36,7 @@ Disable any stage with `--no-sync`, `--no-embed`, `--no-cluster`. The remaining 
 | Forwarded to | Flag |
 | --- | --- |
 | sync | `--since`, `--state`, `--limit`, `--include-comments`, `--include-pr-details`, `--with pr-details`, `--force` (bypass unchanged issue-comment reuse) |
-| embed | `--limit` |
+| embed | `--limit`; `--state all` or `--state closed` also includes closed threads |
 | cluster | `--threshold` (0.80), `--min-size` (1), `--max-cluster-size` (40), `--k` (16), `--cross-kind-threshold` (0.93), `--strict-vectors` |
 
 Code hydration is unavailable. `--include-code` is rejected; remove it from
