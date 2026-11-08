@@ -4,6 +4,7 @@
 
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
 
+- Explain an `owner/repo` that is not in the archive, naming the `gitcrawl sync` command, instead of failing local reads with `select repository: sql: no rows in result set`.
 - Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage, SIMD and scalar fallback suites, and durable SIMD parity concurrently while preserving every failure gate.
 

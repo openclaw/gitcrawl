@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/openclaw/gitcrawl/internal/store/storedb"
@@ -36,9 +37,22 @@ func (s *Store) UpsertRepository(ctx context.Context, repo Repository) (int64, e
 	return id, nil
 }
 
+// repositoryNotFoundError explains an owner/repo absent from this archive and
+// still matches sql.ErrNoRows for callers that treat absence as a first sync.
+type repositoryNotFoundError struct{ fullName string }
+
+func (e repositoryNotFoundError) Error() string {
+	return fmt.Sprintf("repository %s is not in this archive; check the owner/repo spelling, or sync it first with `gitcrawl sync %s`", e.fullName, e.fullName)
+}
+
+func (e repositoryNotFoundError) Unwrap() error { return sql.ErrNoRows }
+
 func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repository, error) {
 	if s.hasColumn(ctx, "repositories", "raw_json") {
 		repo, err := s.qsql().RepositoryByFullName(ctx, fullName)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Repository{}, repositoryNotFoundError{fullName: fullName}
+		}
 		if err != nil {
 			return Repository{}, fmt.Errorf("select repository: %w", err)
 		}
@@ -52,6 +66,9 @@ func (s *Store) RepositoryByFullName(ctx context.Context, fullName string) (Repo
 		from repositories
 		where full_name = ?
 	`, fullName).Scan(&repo.ID, &repo.Owner, &repo.Name, &repo.FullName, &githubRepoID, &rawJSON, &repo.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Repository{}, repositoryNotFoundError{fullName: fullName}
+	}
 	if err != nil {
 		return Repository{}, fmt.Errorf("select repository: %w", err)
 	}
