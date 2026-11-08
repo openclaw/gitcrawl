@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -115,5 +116,54 @@ func TestSyncStopsAcquisitionAfterRateLimitFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// GitHub reports GraphQL primary-quota exhaustion as HTTP 200 with a
+// RATE_LIMITED error rather than as a 403 or 429. Review-thread hydration must
+// stop on it like any other rate limit instead of querying every remaining PR.
+func TestSyncStopsAcquisitionAfterGraphQLRateLimited(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var mu sync.Mutex
+	reviewThreadQueries := map[int]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/fixture/repo":
+			fmt.Fprint(w, `{"id":1,"name":"repo","full_name":"fixture/repo","owner":{"login":"fixture"}}`)
+		case strings.HasPrefix(r.URL.Path, "/repos/fixture/repo/issues/"):
+			n, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/repos/fixture/repo/issues/"))
+			fmt.Fprintf(w, `{"id":%d,"number":%d,"title":"pr %d","state":"open","pull_request":{},"updated_at":"2026-11-01T00:00:00Z"}`, 100+n, n, n)
+		case r.URL.Path == "/graphql":
+			var request struct {
+				Variables struct {
+					PR int `json:"pr"`
+				} `json:"variables"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			mu.Lock()
+			reviewThreadQueries[request.Variables.PR]++
+			mu.Unlock()
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+			fmt.Fprint(w, `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}`)
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.Error(w, "unexpected", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	_, err = New(gh.New(gh.Options{BaseURL: server.URL}), s).Sync(ctx, Options{Owner: "fixture", Repo: "repo", Numbers: []int{1, 2, 3}, IncludePRDetails: true})
+	if err == nil || !gh.IsRateLimited(err) {
+		t.Fatalf("GraphQL rate limit not reported as a rate limit: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if reviewThreadQueries[1] != 1 || reviewThreadQueries[2] != 0 || reviewThreadQueries[3] != 0 {
+		t.Fatalf("review-thread queries by PR = %v, want only PR 1", reviewThreadQueries)
 	}
 }

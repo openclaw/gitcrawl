@@ -268,7 +268,14 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 		}
 		var rejected any
 		_ = decodeJSON(bytes.NewReader(envelope.Data), &rejected)
-		return graphQLRejection(rejected, envelope.Errors, fmt.Errorf("github graphql: %s", strings.Join(messages, "; ")))
+		cause := fmt.Errorf("github graphql: %s", strings.Join(messages, "; "))
+		for _, graphqlErr := range envelope.Errors {
+			if graphqlErr.Type == "RATE_LIMITED" {
+				cause = graphQLRateLimitedError{cause}
+				break
+			}
+		}
+		return graphQLRejection(rejected, envelope.Errors, cause)
 	}
 	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return historyFailure("missing_data", 0, nil, fmt.Errorf("github graphql response missing data"))
