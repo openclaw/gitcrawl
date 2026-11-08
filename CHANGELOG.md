@@ -6,6 +6,7 @@
 
 - Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage, SIMD and scalar fallback suites, and durable SIMD parity concurrently while preserving every failure gate.
+- Wait one minute and retry once when GitHub reports a secondary rate limit without `Retry-After` while quota remains, instead of failing the request immediately.
 
 ## 0.18.0 - 2026-11-05
 
