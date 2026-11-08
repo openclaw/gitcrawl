@@ -947,7 +947,13 @@ func requestedIssueIdentity(repoRaw, row map[string]any, number int) error {
 	if location == "" {
 		location = fmt.Sprintf("#%d in %s", intValue(row["number"]), rowRepoURL)
 	}
-	return fmt.Errorf("requested #%d resolved to %s; it was likely transferred to another repository", number, location)
+	next := "sync the destination repository to mirror it there"
+	if i := strings.LastIndex(rowRepoURL, "/repos/"); i >= 0 {
+		if destination := rowRepoURL[i+len("/repos/"):]; strings.Count(destination, "/") == 1 {
+			next = fmt.Sprintf("run `gitcrawl sync %s --numbers %d` to mirror it there", destination, intValue(row["number"]))
+		}
+	}
+	return fmt.Errorf("requested #%d resolved to %s; it was likely transferred to another repository: %s", number, location, next)
 }
 
 func mergeIssueRows(primary, overlap []map[string]any) []map[string]any {

@@ -80,9 +80,9 @@ gitcrawl sync owner/repo --numbers https://github.com/owner/repo/issues/123 --wi
 `--numbers` is the safest way to refresh specific issues or PRs — it bypasses list ordering and the updated-time window, fetching exactly the rows you ask for. Pair it with `--include-comments` and/or `--include-pr-details` to hydrate the conversation and PR-only data at the same time.
 
 GitHub redirects a transferred issue to its new repository and number. Such a
-selection fails as an `issue` fetch naming the new location, and local threads
-are left unchanged; sync the destination repository to mirror it there.
-Renamed repositories still follow their redirects.
+selection fails as an `issue` fetch, and local threads are left unchanged. The
+error names the new location and the `gitcrawl sync <owner/repo> --numbers <n>`
+command that mirrors it there. Renamed repositories still follow their redirects.
 
 `--numbers` accepts comma-separated thread references, not just integers:
 `123`, `#123`, `issues/123`, `pull/123`, `owner/repo#123`, and full GitHub

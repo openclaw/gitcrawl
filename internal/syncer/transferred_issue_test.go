@@ -68,7 +68,8 @@ func TestSyncNumbersRejectsIssueTransferredToAnotherRepository(t *testing.T) {
 			if count != 1 || title != "local nine" || htmlURL != "https://github.com/fixture/repo/issues/9" || githubID != "909" {
 				t.Fatalf("local thread replaced: count=%d title=%q url=%q id=%q", count, title, htmlURL, githubID)
 			}
-			if err == nil || !strings.Contains(err.Error(), "https://github.com/fixture/other/issues/9") {
+			if err == nil || !strings.Contains(err.Error(), "https://github.com/fixture/other/issues/9") ||
+				!strings.Contains(err.Error(), "run `gitcrawl sync fixture/other --numbers 9` to mirror it there") {
 				t.Fatalf("transferred issue accepted: %+v %v", stats, err)
 			}
 			if stats.ThreadsSynced != 0 {
