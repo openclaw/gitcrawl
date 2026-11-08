@@ -183,7 +183,7 @@ func TestClosedSweepPreservesExplicitScopeContracts(t *testing.T) {
 	}{
 		{"since", Options{Since: "1h"}},
 		{"limited", Options{Limit: 1}},
-		{"number", Options{Numbers: []int{1}}},
+		{"number", Options{Numbers: []int{7}}},
 		{"all", Options{State: "all"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

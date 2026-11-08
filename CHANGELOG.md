@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
+- Fail `sync --numbers` selections that GitHub redirects to an issue transferred to another repository, instead of saving that issue over an unrelated local thread. Renamed repositories still follow their redirects.
 
 - Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage, SIMD and scalar fallback suites, and durable SIMD parity concurrently while preserving every failure gate.

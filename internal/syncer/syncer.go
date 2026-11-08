@@ -261,6 +261,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 				break
 			}
 			row, err := s.client.GetIssue(ctx, options.Owner, options.Repo, number, options.Reporter)
+			if err == nil {
+				err = requestedIssueIdentity(repoRaw, row, number)
+			}
 			if err != nil {
 				if err := recordFailure(number, nil, err, "issue"); err != nil {
 					return Stats{}, err
@@ -928,6 +931,23 @@ func uniquePositiveNumbers(numbers []int) []int {
 		out = append(out, number)
 	}
 	return out
+}
+
+// GitHub answers a transferred issue with a redirect to its new repository and
+// number. Accept only the requested issue from the requested repository; a
+// renamed repository redirects both requests, so its URLs still agree.
+func requestedIssueIdentity(repoRaw, row map[string]any, number int) error {
+	repoURL := stringValue(repoRaw["url"])
+	rowRepoURL := stringValue(row["repository_url"])
+	if intValue(row["number"]) == number &&
+		(repoURL == "" || rowRepoURL == "" || strings.EqualFold(repoURL, rowRepoURL)) {
+		return nil
+	}
+	location := stringValue(row["html_url"])
+	if location == "" {
+		location = fmt.Sprintf("#%d in %s", intValue(row["number"]), rowRepoURL)
+	}
+	return fmt.Errorf("requested #%d resolved to %s; it was likely transferred to another repository", number, location)
 }
 
 func mergeIssueRows(primary, overlap []map[string]any) []map[string]any {
