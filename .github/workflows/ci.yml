@@ -74,7 +74,7 @@ jobs:
             exit 1
           fi
 
-      - name: Test coverage and durable SIMD parity
+      - name: Test coverage, SIMD modes, and durable parity
         run: |
           set -euo pipefail
           check_coverage() {
@@ -84,15 +84,28 @@ jobs:
             awk -v total="$total" 'BEGIN { if (total + 0 < 85.0) { printf("coverage %.1f%% is below 85.0%%\n", total); exit 1 } }'
           }
           if [[ "$RUNNER_OS" == Linux ]]; then
-            # Parity owns its temporary files; overlap its I/O with coverage.
+            # Each check owns its outputs and fixtures; overlap their I/O.
             check_coverage &
             coverage_pid=$!
-            result=0
+            # Release binaries use this experiment, so test everything they ship.
+            (
+              GOEXPERIMENT=simd go test ./... 2>&1 | sed 's/^/[simd] /'
+            ) &
+            simd_pid=$!
+            (
+              GOEXPERIMENT=simd GODEBUG=simd=0 go test ./internal/vector ./internal/cli 2>&1 | sed 's/^/[fallback] /'
+            ) &
+            fallback_pid=$!
             (
               python3 -m unittest discover -s scripts -p test_cluster_simd_parity.py &&
                 python3 scripts/cluster_simd_parity.py
-            ) || result=1
+            ) &
+            parity_pid=$!
+            result=0
             wait "$coverage_pid" || result=1
+            wait "$simd_pid" || result=1
+            wait "$fallback_pid" || result=1
+            wait "$parity_pid" || result=1
             exit "$result"
           fi
           check_coverage
@@ -103,24 +116,6 @@ jobs:
           python3 -B -m unittest discover -s scripts/native-cluster -p 'test_*.py'
           python3 -B -m unittest discover -s scripts/native-code -p 'test_*.py'
           python3 -B -m unittest discover -s scripts/native-maintenance -p 'test_*.py'
-
-      - name: Test portable SIMD and scalar fallback
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: |
-          # Release binaries are built with this experiment, so test everything they ship.
-          set -euo pipefail
-          (
-            GOEXPERIMENT=simd go test ./... 2>&1 | sed 's/^/[simd] /'
-          ) &
-          simd_pid=$!
-          (
-            GOEXPERIMENT=simd GODEBUG=simd=0 go test ./internal/vector ./internal/cli 2>&1 | sed 's/^/[fallback] /'
-          ) &
-          fallback_pid=$!
-          result=0
-          wait "$simd_pid" || result=1
-          wait "$fallback_pid" || result=1
-          exit "$result"
 
       - name: Build
         run: go build -ldflags "-X github.com/openclaw/gitcrawl/internal/cli.version=${GITHUB_SHA:0:7}" -o bin/gitcrawl ./cmd/gitcrawl
