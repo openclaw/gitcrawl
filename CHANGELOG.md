@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject GitHub search qualifiers that local `search issues|prs` does not apply, such as `label:`, `author:` and `is:merged`, with usage exit code 2. Earlier versions searched for them as plain text and silently returned unrelated rows.
+
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
 
 - Show opener failures when opening a representative URL from the TUI action menu.

@@ -88,6 +88,14 @@ Recognized flags in this mode:
 rejected with usage exit code 2. Remove them from migrated invocations; earlier
 versions accepted these options without applying them.
 
+Query qualifiers: `repo:`, `state:`, `is:open` and `is:closed` are applied, and
+`is:issue` (for `search issues`) or `is:pr` / `is:pull-request` (for
+`search prs`) are accepted. Other GitHub search qualifiers, such as `label:`,
+`author:`, `assignee:`, `is:merged` and `created:`, and negated qualifiers are
+not applied by local search. They are rejected with usage exit code 2; earlier
+versions searched for them as plain text. Words that only contain a colon,
+such as `TypeError:` or URLs, are still searched as text.
+
 The output shape matches `gh search issues|prs --json ...` exactly so you can pipe into the same `jq` filters you already have.
 
 ## `--sync-if-stale`
