@@ -88,8 +88,17 @@ archive; it does not fetch GitHub data or rerun clustering. Run
 timestamp and limits. Output contains base64-encoded exact request bytes. Retain
 the complete bundle before sending or retrying it. `delivery stage-clusters`
 validates and exclusively stores those exact bytes in an explicit cluster outbox;
-`delivery cluster-status` reads its staged metadata without opening the source.
-Both require explicit paths and bounds/deadline. Staging pins the operator-selected
+`delivery cluster-status` reads its metadata and validated receipt prefix without
+opening the source.
+`delivery deliver-clusters` explicitly resumes the saved bytes with positive
+part/row/byte/deadline bounds and a named service-token environment variable.
+It rechecks current native public/exclusion authority before each request and
+records exact receipts, including nonzero offsets for later snapshots. A lost
+reply remains pending for the next explicit invocation; status distinguishes
+staged, partial and receiver-acknowledged completion.
+
+Staging and status require explicit paths and bounds/deadline. Staging pins the
+operator-selected
 current source, not the historical export inode, and does not send requests or
 claim publication. Retain failed owned files; no automatic retry or cleanup runs.
 

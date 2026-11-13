@@ -41,6 +41,8 @@ type ClusterState struct {
 	SeedID, NativeThrough, InventorySHA256, ManifestSHA256 string
 	Rows, Bytes                                            int64
 	PartCount                                              int
+	Receipts                                               int
+	BeginSequence                                          int64
 }
 
 // A distinct application identity prevents private v1/v2/v3 outbox readers or
@@ -353,38 +355,65 @@ func ReadClusterOutboxState(ctx context.Context, path string) (ClusterState, err
 		return state, err
 	}
 	defer ro.Close()
-	err = ro.WithTx(ctx, func(tx *sql.Tx) error {
+	err = ro.WithTx(ctx, func(tx *sql.Tx) error { var err error; state, err = readClusterState(ctx, tx); return err })
+	if err != nil {
+		return ClusterState{}, err
+	}
+	return state, nil
+}
+
+type clusterQuery interface {
+	seedQuery
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func readClusterState(ctx context.Context, q clusterQuery) (ClusterState, error) {
+	var state ClusterState
+	err := func() error {
 		var app, version, tables int
-		if err := tx.QueryRowContext(ctx, `pragma application_id`).Scan(&app); err != nil {
+		if err := q.QueryRowContext(ctx, `pragma application_id`).Scan(&app); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		if err := q.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `select count(*) from sqlite_schema where type='table' and name not like 'sqlite_%'`).Scan(&tables); err != nil {
+		if err := q.QueryRowContext(ctx, `select count(*) from sqlite_schema where type='table' and name not like 'sqlite_%'`).Scan(&tables); err != nil {
 			return err
 		}
 		if app != clusterOutboxApplicationID || version != 1 || tables != 3 {
 			return ErrClusterOutbox
 		}
 		var registration []byte
-		if err := tx.QueryRowContext(ctx, `select registration_json,repository_id,github_repo_id,seed_id,native_through,inventory_sha256,manifest_sha256,rows,bytes,part_count from binding cross join captures where singleton=1 and begin_sequence is null and length(registration_json)<=65536 and length(github_repo_id)<=16384 and length(native_through)<=512 and length(seed_id)=32`).Scan(&registration, &state.RepositoryID, &state.GitHubRepositoryID, &state.SeedID, &state.NativeThrough, &state.InventorySHA256, &state.ManifestSHA256, &state.Rows, &state.Bytes, &state.PartCount); err != nil {
+		var begin sql.NullInt64
+		if err := q.QueryRowContext(ctx, `select registration_json,repository_id,github_repo_id,seed_id,native_through,inventory_sha256,manifest_sha256,rows,bytes,part_count,begin_sequence from binding cross join captures where singleton=1 and length(registration_json)<=65536 and length(github_repo_id)<=16384 and length(native_through)<=512 and length(seed_id)=32`).Scan(&registration, &state.RepositoryID, &state.GitHubRepositoryID, &state.SeedID, &state.NativeThrough, &state.InventorySHA256, &state.ManifestSHA256, &state.Rows, &state.Bytes, &state.PartCount, &begin); err != nil {
 			return err
 		}
 		if json.Unmarshal(registration, &state.Registration) != nil || validateSeedRegistration(state.Registration) != nil || state.RepositoryID <= 0 || state.GitHubRepositoryID == "" || state.PartCount < 2 || state.PartCount > remote.MaxSeedChunks+2 || state.Rows < 1 || state.Bytes < 1 {
 			return ErrClusterOutbox
 		}
 		var count, first, last, receipts int
+		var receiptLast sql.NullInt64
 		var total int64
-		if err := tx.QueryRowContext(ctx, `select count(*),min(part_index),max(part_index),sum(length(body)),count(receipt_json) from parts where seed_id=?`, state.SeedID).Scan(&count, &first, &last, &total, &receipts); err != nil {
+		if err := q.QueryRowContext(ctx, `select count(*),min(part_index),max(part_index),sum(length(body)),count(receipt_json),max(case when receipt_json is not null then part_index end) from parts where seed_id=?`, state.SeedID).Scan(&count, &first, &last, &total, &receipts, &receiptLast); err != nil {
 			return err
 		}
-		if count != state.PartCount || first != 0 || last != count-1 || total != state.Bytes || receipts != 0 {
+		if count != state.PartCount || first != 0 || last != count-1 || total != state.Bytes {
 			return ErrClusterOutbox
+		}
+		state.Receipts = receipts
+		if receipts == 0 {
+			if begin.Valid || receiptLast.Valid {
+				return ErrClusterOutbox
+			}
+		} else {
+			if !begin.Valid || begin.Int64 <= 0 || !receiptLast.Valid || receiptLast.Int64 != int64(receipts-1) {
+				return ErrClusterOutbox
+			}
+			state.BeginSequence = begin.Int64
 		}
 		var body []byte
 		var hash string
-		if err := tx.QueryRowContext(ctx, `select body,payload_sha256 from parts where seed_id=? and part_index=0 and length(body)<=4194304`, state.SeedID).Scan(&body, &hash); err != nil {
+		if err := q.QueryRowContext(ctx, `select body,payload_sha256 from parts where seed_id=? and part_index=0 and length(body)<=4194304`, state.SeedID).Scan(&body, &hash); err != nil {
 			return err
 		}
 		if privateSeedHash(body) != hash || hash != state.ManifestSHA256 {
@@ -408,10 +437,41 @@ func ReadClusterOutboxState(ctx context.Context, path string) (ClusterState, err
 		if m.Profile != store.NativeClusterContextProfile || m.Archive != state.Registration.Archive || m.BindingID != state.Registration.BindingID || m.Repository != state.Registration.Repository || m.RepositoryID != strconv.FormatInt(state.RepositoryID, 10) || m.SeedID != state.SeedID || m.NativeThrough != state.NativeThrough || m.NativeSHA256 != state.InventorySHA256 || rows != state.Rows || parts != state.PartCount {
 			return ErrClusterOutbox
 		}
-		return nil
-	})
+		return readClusterReceipts(ctx, q, state)
+	}()
 	if err != nil {
 		return ClusterState{}, err
 	}
 	return state, nil
+}
+
+// Receipt validation is metadata-only and bounded independently of payloads.
+// Status and the writer share this owner; a receipt count alone is not proof.
+func readClusterReceipts(ctx context.Context, q clusterQuery, state ClusterState) error {
+	rows, err := q.QueryContext(ctx, `select part_index,payload_sha256,case when length(receipt_json)<=4096 then receipt_json end from parts where seed_id=? and receipt_json is not null order by part_index`, state.SeedID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var index int
+		var hash string
+		var body []byte
+		if err := rows.Scan(&index, &hash, &body); err != nil {
+			return err
+		}
+		var receipt remote.SeedReceipt
+		if index != seen || json.Unmarshal(body, &receipt) != nil || !clusterReceiptMatches(state, index, hash, receipt, state.BeginSequence) {
+			return ErrClusterOutbox
+		}
+		seen++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if seen != state.Receipts {
+		return ErrClusterOutbox
+	}
+	return nil
 }

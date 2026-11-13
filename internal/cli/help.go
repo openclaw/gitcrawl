@@ -231,6 +231,7 @@ Usage:
   gitcrawl delivery export-clusters --db PATH --repo OWNER/REPO --archive ID --binding ID --seed-id HEX32 --captured-at RFC3339Nano --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D
   gitcrawl delivery stage-clusters --db PATH --bundle PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery cluster-status --outbox PATH --timeout D [--json]
+  gitcrawl delivery deliver-clusters --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
   gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
@@ -249,8 +250,13 @@ native reads and encoded requests; base64 output adds transport overhead.
 
 stage-clusters exclusively persists a retained export's exact requests. It pins
 the operator-selected current source identity, not the historical export inode.
-cluster-status reads staged metadata only; neither command sends, records receipts,
-or claims publication/qualification. Cluster bytes counts decoded wire bytes.
+cluster-status validates staged metadata and the ordered receipt prefix.
+deliver-clusters validates all saved requests before credentials, sends exact bytes
+only to the saved origin, and rechecks current native public/exclusion authority
+after token acquisition and on redirects. Explicit retries replay pending bytes.
+Status is staged, partial or complete; complete proves receiver acknowledgement,
+not upstream freshness or a private report baseline. Cluster bytes counts decoded
+wire bytes. No source capture, provider sync or scheduler runs.
 Retain the original bundle and any failed owned file; no retry or cleanup runs.
 
 All paths and positive bounds are explicit. Seed/change commands require native

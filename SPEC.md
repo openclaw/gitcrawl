@@ -253,15 +253,20 @@ The cluster outbox has application identity `GCCO` and version 1, separate from
 private seed/report outboxes. It reuses their exclusive creation, FULL transaction
 and part insertion owner. Nullable positive `begin_sequence` and per-part
 `receipt_json` fields reserve the known subsequent sender contract: begin learns
-the authenticated source sequence, later parts must be consecutive. Both remain
-NULL here; there is no receipt settlement or delivery command in this slice.
+the authenticated source sequence, later parts must be consecutive. Staging
+leaves both NULL. The explicit sender
+settles the authenticated begin sequence and each consecutive part receipt in one
+FULL transaction. Replayed receipts must match all fields except the replay flag.
 Private v1/v2/v3 readers and migrations refuse this format unchanged.
 
 `delivery cluster-status --outbox PATH --timeout D` opens only the outbox
-read-only. It checks bounded manifest/custody metadata and reports `staged`,
-content identities and counts, never a qualified baseline or publication. Status
-is not a full request-body audit; a future sender must validate pending bytes and
-current source authority. `rows` counts captured projection rows; `bytes` counts
+read-only. It checks bounded manifest/custody metadata plus every retained receipt
+(up to 4096 bytes each), requiring an exact ordered prefix and source sequence
+offset. It reports `staged`, `partial` or `complete`, content identities, counts
+and the decimal begin sequence when present. Complete means receiver-acknowledged
+snapshot delivery, not current visibility, provider freshness or a private report
+baseline. Status is not a full request-body audit. `rows` counts captured
+projection rows; `bytes` counts
 all decoded request bodies, not base64 overhead or RSS. Both commands honor
 `--json` and global output format and return content-free failures.
 
@@ -269,9 +274,35 @@ Physical file identity is recorded at staging for the operator-selected current
 source. The export does not carry an inode, so staging cannot prove which file
 produced that historical bundle. Store checks the current schema and exact
 repository/native/provider identity without reading content or qualifying public
-status/exclusion policy. Later delivery must recheck that authority. Failed owned
+status/exclusion policy. Delivery rechecks that authority. Failed owned
 files and original bundles are retained for explicit reconciliation; no automatic
 retry, overwrite or cleanup runs.
+
+`delivery deliver-clusters` requires `--db`, `--outbox`, `--max-parts`,
+`--max-rows`, `--max-encoded-bytes`, `--timeout` and an explicit `--token-env`
+name. It validates the entire saved bundle, including acknowledged parts and
+receipts, before credential lookup or network effects. It constructs the existing
+Crawlkit seed client from the persisted origin; no credential/config fallback runs.
+Each invocation pins that immutable capture. A positive begin receipt establishes
+the server sequence offset, so a second snapshot on the same binding need not
+start at sequence 1. Each subsequent receipt must match `begin_sequence + index`.
+Local receipt writes are atomic and idempotent, including concurrent exact replays.
+
+Store checks current file/repository/provider identity, observed public metadata
+and owner exclusions in one read-only snapshot immediately before each request,
+including redirects. Every attempt checks all bounded saved thread numbers and
+compact node identities; it does not fetch current bodies or infer old identity
+from rows that may have been removed. Missing/empty node identity holds when the
+global exclusion ledger is nonempty. The full compact reference set is checked
+per request rather than cached as authority. No journal anchor is fabricated.
+
+A lost or invalid reply leaves that exact part pending. The invocation stops,
+retains custody and reports only its durable settlements; it does not retry or
+attach a stale completion claim. The next explicit invocation replays unchanged
+bytes. Parent cancellation/deadline and positive part/row/byte limits bound the
+run; limits do not claim an RSS or disk cap. Remote diagnostics, source paths and
+credential values are excluded from printable delivery errors. There is no
+provider acquisition, migration, cleanup or automatic schedule.
 
 A completed inventory proves delivery of this captured view, not upstream
 freshness. Historical completeness cannot authorize a current empty-relationship

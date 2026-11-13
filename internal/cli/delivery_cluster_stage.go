@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/openclaw/crawlkit/remote"
 	"github.com/openclaw/gitcrawl/internal/remotedelivery"
@@ -14,6 +15,8 @@ import (
 
 type clusterStageOutput struct {
 	Status          string `json:"status"`
+	Receipts        int    `json:"receipts"`
+	BeginSequence   string `json:"begin_sequence,omitempty"`
 	Profile         string `json:"profile"`
 	SeedID          string `json:"seed_id"`
 	NativeThrough   string `json:"native_through"`
@@ -68,7 +71,7 @@ func (a *App) runClusterStage(ctx context.Context, args []string) error {
 	if err != nil {
 		return clusterStageError(err)
 	}
-	return a.writeOutput("delivery", clusterStageOutput{Status: "staged", Profile: store.NativeClusterContextProfile, SeedID: state.SeedID, NativeThrough: state.NativeThrough, ManifestSHA256: state.ManifestSHA256, InventorySHA256: state.InventorySHA256, Parts: state.PartCount, Rows: state.Rows, Bytes: state.Bytes}, false)
+	return a.writeOutput("delivery", clusterStateOutput(state), false)
 }
 
 func stageClusterFile(ctx context.Context, outbox, source, path string, r remotedelivery.SeedRegistration, limits remotedelivery.ClusterStageLimits) (remotedelivery.ClusterState, error) {
@@ -97,10 +100,18 @@ func stageClusterFile(ctx context.Context, outbox, source, path string, r remote
 }
 
 func clusterStageError(err error) error {
-	for _, known := range []error{context.Canceled, context.DeadlineExceeded, remotedelivery.ErrClusterOutbox, remotedelivery.ErrSeedOutbox} {
+	for _, known := range []error{context.Canceled, context.DeadlineExceeded, remotedelivery.ErrClusterOutbox, remotedelivery.ErrSeedOutbox, remotedelivery.ErrClusterDelivery, store.ErrNativeClusterContext, store.ErrNativeReportLimit, store.ErrThreadExcluded, remote.ErrMissingToken} {
 		if errors.Is(err, known) {
 			return known
 		}
 	}
-	return errors.New("cluster staging failed; retain the bundle and any owned outbox for reconciliation")
+	return errors.New("cluster custody failed; retain the bundle and any owned outbox for reconciliation")
+}
+
+func clusterStateOutput(state remotedelivery.ClusterState) clusterStageOutput {
+	out := clusterStageOutput{Status: state.Status(), Receipts: state.Receipts, Profile: store.NativeClusterContextProfile, SeedID: state.SeedID, NativeThrough: state.NativeThrough, ManifestSHA256: state.ManifestSHA256, InventorySHA256: state.InventorySHA256, Parts: state.PartCount, Rows: state.Rows, Bytes: state.Bytes}
+	if state.BeginSequence > 0 {
+		out.BeginSequence = strconv.FormatInt(state.BeginSequence, 10)
+	}
+	return out
 }
