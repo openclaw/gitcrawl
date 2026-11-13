@@ -395,3 +395,78 @@ func TestRemoteAccessAcceptsCaseInsensitiveLoopback(t *testing.T) {
 		t.Fatal("uppercase loopback did not reach the configured reader")
 	}
 }
+
+func TestRemoteAccessBoundLoginRejectsIncompleteResults(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("FIXTURE_GITHUB_TOKEN", "github-secret")
+	for _, result := range []crawlremote.LoginPollResult{
+		{Status: "pending", Token: "replacement-secret"},
+		{Status: "error", Token: "replacement-secret"},
+		{Token: "replacement-secret"},
+		{Status: "replacement-secret", Token: "replacement-secret"},
+		{Status: "complete"},
+		{Status: "complete", Token: "  "},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(result)
+		}))
+		path := filepath.Join(t.TempDir(), "reader.toml")
+		cfg := config.Default()
+		cfg.Remote.Mode, cfg.Remote.Endpoint, cfg.Remote.Archive = "cloud", "https://prior.example.test/api", "gitcrawl/fixture"
+		cfg.CloudflareAccess = config.CloudflareAccessConfig{Endpoint: cfg.Remote.Endpoint, TokenEnv: "ABSENT_PRIOR_TOKEN"}
+		if err := config.Save(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := cfg
+		target.Remote.Endpoint = server.URL
+		account := remoteAccessKeyringAccount(target, path)
+		if err := keyring.Set(config.DefaultRemoteTokenKeyringService, account, "prior-target-session"); err != nil {
+			t.Fatal(err)
+		}
+		app := New()
+		var output bytes.Buffer
+		app.Stdout, app.Stderr = &output, &output
+		err = app.Run(context.Background(), []string{"--config", path, "remote", "login", "--endpoint", server.URL, "--github-token-env", "FIXTURE_GITHUB_TOKEN", "--json"})
+		if err == nil || strings.Contains(err.Error(), "replacement-secret") || strings.Contains(output.String(), "replacement-secret") {
+			t.Fatal("incomplete sign-in succeeded or disclosed returned credential/status")
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatal("incomplete sign-in changed reader config")
+		}
+		stored, err := keyring.Get(config.DefaultRemoteTokenKeyringService, account)
+		if err != nil || stored != "prior-target-session" {
+			t.Fatal("incomplete sign-in overwrote target-bound session")
+		}
+		server.Close()
+	}
+}
+
+func TestRemoteAccessRejectsUnboundKeyringBeforeDispatch(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("FIXTURE_ACCESS_TOKEN", fixtureHumanAccessToken())
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); _, _ = w.Write([]byte(`{}`)) }))
+	defer server.Close()
+	for _, source := range []string{"keyring", "", "env"} {
+		cfg := config.Default()
+		cfg.Remote.Mode, cfg.Remote.Endpoint, cfg.Remote.Archive = "cloud", server.URL, "gitcrawl/fixture"
+		cfg.Remote.TokenEnv = "ABSENT_WORKER_TOKEN"
+		cfg.Remote.Auth = crawlremote.AuthConfig{TokenSource: source, KeyringService: config.DefaultRemoteTokenKeyringService, KeyringAccount: "legacy-account"}
+		cfg.CloudflareAccess = config.CloudflareAccessConfig{Endpoint: server.URL, TokenEnv: "FIXTURE_ACCESS_TOKEN"}
+		if err := keyring.Set(cfg.Remote.Auth.KeyringService, cfg.Remote.Auth.KeyringAccount, "legacy-session"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := New().remoteClient(cfg); err == nil {
+			t.Fatal("unbound Access reader keyring accepted")
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatal("unbound keyring reader reached network")
+	}
+}

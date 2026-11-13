@@ -149,12 +149,19 @@ func (a *App) runRemoteLogin(ctx context.Context, args []string) error {
 	return finish("github-oauth", result)
 }
 
-func (a *App) finishRemoteLogin(cfg config.Config, configExists bool, endpointOverride string, method string, result crawlremote.LoginPollResult) error {
+func validateRemoteLoginCompletion(result crawlremote.LoginPollResult) error {
 	if strings.ToLower(strings.TrimSpace(result.Status)) != "complete" {
-		return fmt.Errorf("remote login returned status %q", result.Status)
+		return fmt.Errorf("remote login did not complete")
 	}
 	if strings.TrimSpace(result.Token) == "" {
 		return fmt.Errorf("remote login completed without token")
+	}
+	return nil
+}
+
+func (a *App) finishRemoteLogin(cfg config.Config, configExists bool, endpointOverride string, method string, result crawlremote.LoginPollResult) error {
+	if err := validateRemoteLoginCompletion(result); err != nil {
+		return err
 	}
 	auth, err := config.StoreRemoteToken(cfg, result.Token)
 	if err != nil {
@@ -393,7 +400,10 @@ func (a *App) remoteClient(cfg config.Config) (*crawlremote.Client, error) {
 	if !cfg.Remote.Enabled() {
 		return nil, fmt.Errorf("remote archive is not configured")
 	}
-	if strings.HasPrefix(cfg.Remote.Auth.KeyringAccount, "gitcrawl:access-reader:") && cfg.Remote.Auth.TokenSource == "keyring" && cfg.Remote.Auth.KeyringAccount != remoteAccessKeyringAccount(cfg, a.configPath) {
+	accessConfigured := cfg.CloudflareAccess.TokenEnv != "" || cfg.CloudflareAccess.Endpoint != ""
+	boundAccount := strings.HasPrefix(cfg.Remote.Auth.KeyringAccount, "gitcrawl:access-reader:")
+	usesKeyring := cfg.Remote.Auth.TokenSource == "keyring" || cfg.Remote.Auth.KeyringAccount != "" || cfg.Remote.Auth.KeyringService != ""
+	if (accessConfigured || boundAccount) && usesKeyring && (cfg.Remote.Auth.KeyringAccount != remoteAccessKeyringAccount(cfg, a.configPath) || cfg.Remote.Auth.KeyringService != "" && cfg.Remote.Auth.KeyringService != config.DefaultRemoteTokenKeyringService) {
 		return nil, fmt.Errorf("Cloudflare Access reader session must match the configured endpoint, archive and config path; sign in again")
 	}
 	httpClient, err := remoteAccessHTTPClient(cfg)

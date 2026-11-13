@@ -209,6 +209,9 @@ var promoteRemoteAccessConfig = os.Rename
 // Stage the config before touching the endpoint/archive-bound keyring entry.
 // Rename failure restores the prior session and leaves the prior config intact.
 func (a *App) finishRemoteBoundLogin(cfg config.Config, method string, result crawlremote.LoginPollResult) error {
+	if err := validateRemoteLoginCompletion(result); err != nil {
+		return err
+	}
 	configPath := config.ResolvePath(a.configPath)
 	if info, err := os.Lstat(configPath); err == nil && !info.Mode().IsRegular() {
 		return errors.New("reader sign-in requires a regular configuration file")
