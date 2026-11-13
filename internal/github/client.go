@@ -563,23 +563,93 @@ func (c *Client) doWithToken(ctx context.Context, method, path string, body io.R
 		}
 		return bytes.NewReader(bodyBytes)
 	}
-	resp, err := c.doOnce(ctx, method, path, bodyReader(), reporter, selectedToken)
-	if err == nil {
-		return resp, nil
+	fullURL := path
+	if !isAbsoluteURL(path) {
+		fullURL = c.baseURL + path
 	}
-	wait, ok := rateLimitWait(err)
-	if !ok {
-		return nil, err
+	_, cost := c.requestRateLimit(method, fullURL)
+	// Quota probes can recursively enter this method from doOnce. Keep their
+	// existing policy separate from retries of read-only content requests.
+	retryContent := method == http.MethodGet && body == nil && cost > 0
+	maxAttempts := 2
+	if retryContent {
+		maxAttempts = 3
 	}
-	reporter.Printf("[github] rate-limit retry wait=%s", wait.Round(time.Second))
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
+	rateLimitRetried, contentRetries := false, 0
+	for attempt := 1; ; attempt++ {
+		resp, err := c.doOnce(ctx, method, path, bodyReader(), reporter, selectedToken)
+		if err == nil {
+			return resp, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if attempt >= maxAttempts {
+			return nil, err
+		}
+		wait, limited := rateLimitWait(err)
+		if limited {
+			if rateLimitRetried {
+				return nil, err
+			}
+			rateLimitRetried = true
+			// Preserve the existing rate-limit retry's token-selection policy.
+			selectedToken = nil
+			reporter.Printf("[github] rate-limit retry wait=%s", wait.Round(time.Second))
+		} else {
+			if !retryContent {
+				return nil, err
+			}
+			var ok bool
+			wait, ok = contentRetryWait(err, contentRetries)
+			if !ok {
+				return nil, err
+			}
+			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+				return nil, err
+			}
+			contentRetries++
+			reporter.Printf("[github] transient content retry attempt=%d/3 wait=%s", attempt+1, wait)
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	return c.doOnce(ctx, method, path, bodyReader(), reporter, nil)
+}
+
+func contentRetryWait(err error, retries int) (time.Duration, bool) {
+	// Do not unwrap: a nested HTTP failure from quota/token/origin preflight
+	// is not evidence that the requested content GET was dispatched.
+	failure, ok := err.(*RequestError)
+	if !ok || failure.Method != http.MethodGet ||
+		(failure.Status != 502 && failure.Status != 503 && failure.Status != 504) {
+		return 0, false
+	}
+	wait := 250 * time.Millisecond * time.Duration(1<<retries)
+	if hint := strings.TrimSpace(failure.Headers.Get("Retry-After")); hint != "" {
+		var requested time.Duration
+		if seconds, err := strconv.ParseUint(hint, 10, 64); err == nil {
+			if seconds > 2 {
+				return 0, false
+			}
+			requested = time.Duration(seconds) * time.Second
+		} else if at, err := http.ParseTime(hint); err == nil {
+			requested = time.Until(at)
+		} else {
+			return 0, false
+		}
+		if requested > 2*time.Second {
+			return 0, false
+		}
+		if requested > wait {
+			wait = requested
+		}
+	}
+	return wait, true
 }
 
 func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader, reporter Reporter, selectedToken *string) (*http.Response, error) {

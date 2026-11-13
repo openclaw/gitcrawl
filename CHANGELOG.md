@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retry transient HTTP 502/503/504 responses for bodyless content GETs with bounded waits, without replaying completed pages or bypassing quota and credential guards.
+
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
 
 - Show opener failures when opening a representative URL from the TUI action menu.

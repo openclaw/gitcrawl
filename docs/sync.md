@@ -225,6 +225,16 @@ Use `gitcrawl coverage [owner/repo] --json` to inspect archive completeness afte
 
 ## Partial failures
 
+Bodyless REST content GETs retry HTTP 502, 503 and 504 responses, with at most
+three content attempts in total. Default waits are 250 and 500 milliseconds.
+A valid `Retry-After` can increase a wait to at most two seconds; an invalid
+hint, a longer requested wait, or insufficient caller time stops the request.
+Each attempt rechecks quota and credential guards. Quota probes, non-GET
+requests, transport/TLS failures and malformed successful responses do not
+receive this additional retry policy. The existing single rate-limit retry
+shares the content-attempt ceiling. Only the failed page is retried; an
+exhausted request remains a sync failure.
+
 Each completed issue or PR commits atomically with its requested children,
 document, revision, fingerprint, and failure resolutions. A failed item does not
 roll back completed siblings. Shared-head workflow observations are consolidated
