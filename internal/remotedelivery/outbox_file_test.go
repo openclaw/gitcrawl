@@ -13,6 +13,43 @@ import (
 	crawlstore "github.com/openclaw/crawlkit/store"
 )
 
+func TestReadSeedOutboxStateDoesNotOpenWriter(t *testing.T) {
+	ctx, native := nativeFixture(t)
+	c, _ := projected(t, ctx, native)
+	o, path := newSeedOutbox(t, ctx, c)
+	expected := outboxState(t, ctx, o)
+	if _, err := o.base.DB().ExecContext(ctx, "pragma journal_mode=DELETE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadSeedOutboxState(ctx, path)
+	if err != nil || state != expected {
+		t.Fatalf("read-only state: %+v %v", state, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o640 || !bytes.Equal(before, after) {
+		t.Fatal("status changed bytes or permissions", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Stat(path + suffix); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("status opened a writer", suffix, err)
+		}
+	}
+}
+
 func TestSeedOutboxRefusalBeforeFileEffects(t *testing.T) {
 	ctx, native := nativeFixture(t)
 	c, _ := projected(t, ctx, native)

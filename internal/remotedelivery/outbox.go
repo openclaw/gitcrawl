@@ -146,26 +146,28 @@ func CreateSeedOutbox(ctx context.Context, path string, r SeedRegistration, capt
 	return o, nil
 }
 
-// OpenSeedOutbox recognizes the current outbox read-only before a writable
-// helper may chmod or change journal mode. There are no implicit migrations.
-func OpenSeedOutbox(ctx context.Context, path string) (*Outbox, error) {
+// ReadSeedOutboxState validates and inspects current seed custody without
+// opening a writer, migrating schema, changing modes or acquiring credentials.
+// Normal SQLite WAL reader sidecars may still be created by the storage engine.
+func ReadSeedOutboxState(ctx context.Context, path string) (SeedState, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return SeedState{}, err
 	}
 	if err := seedOutboxPath(path); err != nil {
-		return nil, err
+		return SeedState{}, err
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return SeedState{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, ErrSeedOutbox
+		return SeedState{}, ErrSeedOutbox
 	}
 	ro, err := crawlstore.OpenReadOnly(ctx, path)
 	if err != nil {
-		return nil, err
+		return SeedState{}, err
 	}
+	var state SeedState
 	err = ro.WithTx(ctx, func(tx *sql.Tx) error {
 		var app, version, tables int
 		if err := tx.QueryRowContext(ctx, `pragma application_id`).Scan(&app); err != nil {
@@ -180,7 +182,7 @@ func OpenSeedOutbox(ctx context.Context, path string) (*Outbox, error) {
 		if app != seedOutboxApplicationID || version != seedOutboxVersion || tables != 3 {
 			return ErrSeedOutbox
 		}
-		state, err := readSeedState(ctx, tx)
+		state, err = readSeedState(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -214,10 +216,19 @@ func OpenSeedOutbox(ctx context.Context, path string) (*Outbox, error) {
 	})
 	closeErr := ro.Close()
 	if err != nil {
-		return nil, err
+		return SeedState{}, err
 	}
 	if closeErr != nil {
-		return nil, closeErr
+		return SeedState{}, closeErr
+	}
+	return state, nil
+}
+
+// OpenSeedOutbox recognizes the current outbox read-only before a writable
+// helper may chmod or change journal mode. There are no implicit migrations.
+func OpenSeedOutbox(ctx context.Context, path string) (*Outbox, error) {
+	if _, err := ReadSeedOutboxState(ctx, path); err != nil {
+		return nil, err
 	}
 	base, err := crawlstore.Open(ctx, crawlstore.Options{Path: path})
 	if err != nil {
