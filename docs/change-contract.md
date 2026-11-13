@@ -126,6 +126,20 @@ when legacy triggers are still armed. Native report capture refuses legacy
 comment mode or missing/unarmed membership/global-node tracking. This code
 change does not activate or migrate any deployed archive.
 
+### Preparing report policy indexes
+
+The internal `Store.PrepareNativeReportIndexes` operation builds reverse node-ID
+indexes for threads and comments on a current native archive. It requires a
+deadline and runs both index creations in one transaction; a failure rolls back
+the preparation. Ordinary archive open does not run it. Schedule this explicit
+operation before qualifying a reporting baseline: building indexes can scan a
+large archive and changes the SQLite schema cookie used by capture anchors.
+
+The indexed expression preserves native exclusion comparisons, including numeric
+JSON values and SQLite TEXT affinity. Invalid JSON and missing or null node IDs
+do not match a node exclusion. This operation does not enable change tracking,
+qualify a baseline, run a collector, or activate delivery.
+
 ## Families
 
 | Family | Tables |
