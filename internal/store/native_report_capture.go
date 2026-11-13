@@ -214,7 +214,7 @@ func captureNativeReport(ctx context.Context, tx *sql.Tx, request NativeReportRe
 	return out, nil
 }
 
-func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, limits NativeReportLimits, totalRows, totalBytes *int64) (NativeReportTable, error) {
+func nativeReportTableDefinition(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec) (NativeReportTable, error) {
 	table := NativeReportTable{Name: spec.name, Columns: strings.Fields(spec.columns), KeyColumns: strings.Fields(spec.keys)}
 	// Refuse missing/extra columns, including empty tables, instead of silently
 	// omitting a migration-added fact. Column physical order is not significant.
@@ -262,6 +262,15 @@ func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTab
 	if !armed {
 		return table, ErrNativeReportSource
 	}
+	return table, nil
+}
+
+func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, limits NativeReportLimits, totalRows, totalBytes *int64) (NativeReportTable, error) {
+	table, err := nativeReportTableDefinition(ctx, tx, spec)
+	if err != nil {
+		return table, err
+	}
+	keys := table.KeyColumns
 	if spec.name == "threads" || spec.name == "comments" {
 		// Match the purge owner's native $.node_id interpretation and global
 		// NodeExcluded policy. A retained conflict outside the parent filter
@@ -299,7 +308,7 @@ func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTab
 	for i, k := range keys {
 		order[i] = "x." + sqliteQuotedIdentifier(k)
 	}
-	rows, err = tx.QueryContext(ctx, "select "+strings.Join(columns, ",")+" from "+spec.from+" order by "+strings.Join(order, ","), repoID)
+	rows, err := tx.QueryContext(ctx, "select "+strings.Join(columns, ",")+" from "+spec.from+" order by "+strings.Join(order, ","), repoID)
 	if err != nil {
 		return table, err
 	}
