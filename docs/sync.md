@@ -70,6 +70,35 @@ gitcrawl sync owner/repo --since 2026-04-01T00:00:00Z
 gitcrawl sync owner/repo --state all --since 2026-04-01T00:00:00Z
 ```
 
+## Pooled REST acquisition
+
+```bash
+gitcrawl sync owner/repo --octopool --state all --since 2026-04-01T00:00:00Z --include-comments
+```
+
+`--octopool` sends native REST reads through Octopool's
+`POST /v1/github/request` relay. Supply the existing caller session in
+`OCTOPOOL_TOKEN`; `OCTOPOOL_URL` defaults to `https://octopool.dev` and
+`OCTOPOOL_POOL` to `maintainers`. The command does not read Octopool's saved
+login file, resolve a GitHub token, run a token command, or fall back to direct
+GitHub acquisition. Explicit tokens belong to the configured relay endpoint;
+HTTPS is required except for loopback development servers.
+
+The relay owns provider identity selection, access and quota. This mode supports
+one public repository per invocation: issue/PR metadata, issue comments, reviews
+and inline review comments. GraphQL history, `--with`, `--include-pr-details`
+and `--github-token-command` are rejected before acquisition. Private repositories
+and unsupported relay routes fail without a native fallback. Full PR revisions
+remain incomplete without their separately required PR-detail evidence.
+
+Reads request `cache-control: max-age=0`; stale relay results fail the sync.
+The native retry and SQLite checkpoint behavior remains unchanged: complete
+items survive a partial failure, and a failed traversal cannot advance its
+successful-run watermark. Reuse the existing archive and resume from its last
+completed cutoff with an overlap window. Do not use a successful timer firing
+as proof that a scope caught up. Scheduled pooled collectors must explicitly
+pass `--octopool`; other invocations retain their existing transport.
+
 ## Exact rows
 
 ```bash

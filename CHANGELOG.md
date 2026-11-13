@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit `sync --octopool` REST acquisition for public repositories using an existing caller session, without direct GitHub fallback or GraphQL/PR-detail enrichment.
+
 - Support human Cloudflare Access reader login with endpoint-bound gateway requests and separate reader-session keyring storage.
 - Retry transient HTTP 502/503/504 responses for bodyless content GETs with bounded waits, without replaying completed pages or bypassing quota and credential guards.
 - Build with Go 1.27.4 to include the standard-library fix reported by GO-2026-6859.

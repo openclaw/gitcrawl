@@ -37,6 +37,15 @@ func (a *App) maybeNotifyRelease(ctx context.Context, args []string) {
 }
 
 func releaseNotificationAllowed(args []string) bool {
+	// Pooled acquisition must not make an unrelated direct GitHub release read.
+	if len(args) > 0 && args[0] == "sync" {
+		for _, arg := range args[1:] {
+			name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+			if name == "octopool" {
+				return false
+			}
+		}
+	}
 	// Metrics commands must not touch archive/runtime state or make unrelated
 	// network requests, including during read-only imports and status checks.
 	if len(args) > 0 && args[0] == "metrics" {

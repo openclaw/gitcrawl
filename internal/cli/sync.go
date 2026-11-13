@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	numbersRaw := fs.String("numbers", "", "comma-separated issue or pull request numbers")
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
+	octopool := fs.Bool("octopool", false, "acquire REST metadata and comments through Octopool without direct fallback")
 	graphqlHistory := fs.Bool("graphql-history", false, "batch exact conversation and PR metadata collection through GraphQL")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	force := fs.Bool("force", false, "download selected data even when issue comments are unchanged")
@@ -57,6 +59,9 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
+	if *octopool && (*graphqlHistory || *includePRDetails || len(with) != 0 || a.githubTokenCommand != nil) {
+		return usageErr(fmt.Errorf("--octopool does not support GraphQL history, PR enrichment or --github-token-command"))
+	}
 	progress, err := newSyncProgressWriter(
 		*progressFile,
 		owner+"/"+repo,
@@ -71,6 +76,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	}
 
 	stats, target, err := a.syncRepository(ctx, owner, repo, syncOptions{
+		Octopool:          *octopool,
 		GraphQLHistory:    *graphqlHistory,
 		Since:             strings.TrimSpace(*since),
 		State:             strings.TrimSpace(*state),
@@ -98,6 +104,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 }
 
 type syncOptions struct {
+	Octopool          bool
 	GraphQLHistory    bool
 	Since             string
 	State             string
@@ -384,26 +391,9 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	if err != nil {
 		return syncer.Stats{}, dbTargetInfo{}, err
 	}
-	token := a.resolveGitHubToken(ctx, cfg)
-	var provider func(context.Context) (string, error)
-	if a.githubTokenCommand != nil {
-		var command func(context.Context) (string, error)
-		command, err = githubTokenProvider(*a.githubTokenCommand)
-		if err != nil {
-			return syncer.Stats{}, dbTargetInfo{}, err
-		}
-		provider = func(ctx context.Context) (string, error) {
-			a.githubTokenMu.Lock()
-			a.observedGitHubToken = ""
-			a.githubTokenMu.Unlock()
-			return command(ctx)
-		}
-	}
-	if a.analyticsTokenProvider != nil {
-		provider = a.analyticsTokenProvider
-	}
-	if provider == nil && token.Value == "" {
-		return syncer.Stats{}, dbTargetInfo{}, fmt.Errorf("missing GitHub token: set %s or authenticate gh", cfg.GitHub.TokenEnv)
+	client, err := a.syncGitHubClient(ctx, cfg, owner+"/"+repo, options)
+	if err != nil {
+		return syncer.Stats{}, dbTargetInfo{}, err
 	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return syncer.Stats{}, dbTargetInfo{}, err
@@ -423,14 +413,6 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		}
 		logger = progressLogger(a.Stderr)
 	}
-	baseURL := githubBaseURL()
-	client := gh.New(gh.Options{
-		Token:            token.Value,
-		TokenProvider:    provider,
-		BaseURL:          baseURL,
-		RateLimit:        a.observeGitHubRateLimit(ctx),
-		RateLimitReserve: options.RateLimitReserve,
-	})
 	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
 		GraphQLHistory:    options.GraphQLHistory,
@@ -449,4 +431,38 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 		Progress:          options.Progress,
 	})
 	return stats, target, err
+}
+
+func (a *App) syncGitHubClient(ctx context.Context, cfg config.Config, repository string, options syncOptions) (*gh.Client, error) {
+	if options.Octopool {
+		return gh.NewOctopool(strings.TrimSpace(os.Getenv("OCTOPOOL_URL")), strings.TrimSpace(os.Getenv("OCTOPOOL_POOL")), strings.TrimSpace(os.Getenv("OCTOPOOL_TOKEN")), repository)
+	}
+	token := a.resolveGitHubToken(ctx, cfg)
+	var provider func(context.Context) (string, error)
+	if a.githubTokenCommand != nil {
+		command, err := githubTokenProvider(*a.githubTokenCommand)
+		if err != nil {
+			return nil, err
+		}
+		provider = func(ctx context.Context) (string, error) {
+			a.githubTokenMu.Lock()
+			a.observedGitHubToken = ""
+			a.githubTokenMu.Unlock()
+			return command(ctx)
+		}
+	}
+	if a.analyticsTokenProvider != nil {
+		provider = a.analyticsTokenProvider
+	}
+	if provider == nil && token.Value == "" {
+		return nil, fmt.Errorf("missing GitHub token: set %s or authenticate gh", cfg.GitHub.TokenEnv)
+	}
+	baseURL := githubBaseURL()
+	return gh.New(gh.Options{
+		Token:            token.Value,
+		TokenProvider:    provider,
+		BaseURL:          baseURL,
+		RateLimit:        a.observeGitHubRateLimit(ctx),
+		RateLimitReserve: options.RateLimitReserve,
+	}), nil
 }
