@@ -29,6 +29,8 @@ func (a *App) runDelivery(ctx context.Context, args []string) error {
 	}
 	command := args[0]
 	switch command {
+	case "export-clusters":
+		return a.runClusterExport(ctx, args[1:])
 	case "report-status", "upgrade", "stage-changes", "deliver-changes":
 		return a.runReportDelivery(ctx, args)
 	}

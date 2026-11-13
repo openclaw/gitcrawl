@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded offline public durable-cluster export from existing native data, preserving membership, representatives, exclusions and unknown historical qualification. The four-table seed uses exact request bytes and a content digest without inventing a journal cursor; no receiver, collector or schedule is activated.
+
 - Add explicit Octopool incremental sync from qualified native checkpoints. Complete all-state comment runs preserve their initial coverage cutoff and advance only after successful acquisition; missing checkpoints require an explicit bootstrap instead of a full crawl. No schedule is activated.
 
 - Add an explicit schema-3 report outbox upgrade with bounded native change staging, exact multipart retries and atomic baseline promotion after final receipt. The incremental sender rechecks current policy before each request and retains unfinished captures for resumption; no schedule is activated.

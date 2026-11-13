@@ -79,6 +79,21 @@ schema in each transaction, including handles opened before an explicit migratio
 The [delivery contract](SPEC.md#explicit-private-delivery-commands)
 describes limits and partial results.
 
+## Public cluster context export
+
+`gitcrawl delivery export-clusters` prepares a bounded, offline public cluster
+snapshot for a separately configured receiver. It reads the existing native
+archive; it does not fetch GitHub data or rerun clustering. Run
+`gitcrawl help delivery` for explicit source, destination identity, capture ID,
+timestamp and limits. Output contains base64-encoded exact request bytes. Retain
+the complete bundle before sending or retrying it.
+
+The export keeps the native durable membership and representative rules, omits
+excluded members and refuses excluded representatives. It requires observed
+public repository metadata. Unknown historical scope qualification stays unknown;
+a successful export does not establish current provider freshness or permission
+to publish. See the [cluster contract](SPEC.md#public-durable-cluster-context).
+
 ## Command map
 
 | Job | Command | Guide |

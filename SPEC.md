@@ -200,6 +200,52 @@ are content-free. Context and known native/outbox error classifications survive.
 Failed claimed files and uncertain sends remain for explicit reconciliation;
 there is no cleanup, automatic retry or implicit source capture during delivery.
 
+### Public durable cluster context
+
+`CaptureNativeClusterContext` reads one bounded native schema-16 transaction
+using the native durable selection and visible-membership rules. It never repairs
+representatives, migrates schema, rearms a journal, reruns analysis or acquires
+upstream data. It requires a deadline, physical source-file identity and positive
+row/compact-byte limits. Raw repository metadata must explicitly identify the
+repository as public. Excluded ordinary members are omitted; an excluded or
+missing representative refuses the capture. Under a nonempty global node ledger,
+missing node identity also refuses capture. NULL representatives remain NULL.
+
+The public profile `gitcrawl.public-durable-cluster-context/v1` contains four
+ordered tables: `selection`, `groups`, `members`, `threads`. Selection keeps
+selected and latest-analysis qualification separately, including absent scope
+flags as NULL. Threads retain native integer identities, provider node identity,
+nullable update time, labels and at most 800 UTF-8 runes of body. The SQL read
+bounds the body prefix to 3200 bytes; it never loads raw bodies, embeddings or
+model summaries into the projection. Native text, including embedded NUL, remains
+lossless within the selected excerpt. The wire profile refuses any text scalar
+over 16 KiB rather than truncating it.
+
+`ProjectClusterContext` uses view `durable-active/v1` and canonical inventory
+layout `gitcrawl-cluster-context-16-v1`. Scope is exactly the UTF-8 bytes of
+`profile + "\n" + view + "\n" + repository + "\n"`. The inventory digest binds
+all fixed typed rows and NULLs. It is distinct from the local native capture
+digest. Manifest `repository_id` is the native SQLite ID; `selection.github_repo_id`
+is the provider identity. The content token is
+`gitcrawl-cluster-v1:<scope64hex>:<inventory64hex>`; it invents no journal cursor.
+The existing exact-byte seed packer and receipt protocol carry this closed profile.
+
+`delivery export-clusters` requires `--db`, `--repo`, `--archive`, `--binding`,
+`--seed-id`, `--captured-at`, `--max-rows`, `--max-native-bytes`,
+`--max-encoded-bytes` and `--timeout`. The capture ID is 32 lowercase hex characters;
+the fixed timestamp uses RFC3339 and cannot be in the future. It emits JSON with
+`profile`, `manifest`, `chunks` and `complete`; byte fields are base64 so decoding
+recovers exact request bodies. The command does not create an outbox or send a
+request. A sender must persist the complete bundle and replay unchanged bytes,
+not recapture a changed archive under the same seed ID. Failed exports return no
+partial bundle. No credentials, runtime configuration or provider calls run.
+
+A completed inventory proves delivery of this captured view, not upstream
+freshness. Historical completeness cannot authorize a current empty-relationship
+claim. A receiver must recheck current exclusion policy and independently qualify
+freshness before using negative results for structural caching. Recurring cluster
+projection updates and scheduled delivery remain separate activation work.
+
 ### Private native change-request preparation
 
 `remotedelivery.PreparePrivateChanges` encodes an already projected, deterministic
@@ -266,7 +312,7 @@ No `serve` command.
 Public commands:
 
 - `init`
-- `delivery stage-seed|status|deliver`
+- `delivery stage-seed|status|deliver|export-clusters`
 - `doctor`
 - `configure`
 - `version`

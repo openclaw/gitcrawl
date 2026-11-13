@@ -56,7 +56,13 @@ func PreparePrivateSeed(ctx context.Context, report PrivateReport, request Priva
 		BindingID: request.BindingID, SeedID: request.SeedID, Profile: report.Profile, NativeSchema: 16,
 		Repository: report.Repository, RepositoryID: report.RepositoryID, ScopeSHA256: report.ScopeSHA256, NativeSHA256: report.SHA256,
 		NativeThrough: strings.Join([]string{"gitcrawl-native-v1", c.Epoch, c.Generation, c.SchemaVersion, c.Sequence, c.PrunedThrough, report.ScopeSHA256, report.SHA256}, ":")}
-	for _, layout := range privateLayouts {
+	return prepareGitHubSeed(ctx, m, report.Tables, privateLayouts, rows, request.MaxBytes)
+}
+
+// Both closed profiles share exact chunk packing and receipt contracts. Their
+// callers supply fixed layouts and distinct content-token metadata.
+func prepareGitHubSeed(ctx context.Context, m remote.GitHubSeedManifest, tables []PrivateTable, layouts []privateLayout, rows, maxBytes int64) (PrivateSeed, error) {
+	for _, layout := range layouts {
 		m.Tables = append(m.Tables, remote.SeedTable{Name: layout.name, Rows: "0", SHA256: privateSeedHash(nil), Chunks: []remote.SeedChunkInfo{}})
 	}
 	// Validate caller identity and native-token metadata before processing rows.
@@ -69,19 +75,20 @@ func PreparePrivateSeed(ctx context.Context, report PrivateReport, request Priva
 	probe := privateSeedChunk(m, 1)
 	probeHeaderBytes := privateSeedHeaderBytes(probe)
 	var out PrivateSeed
+	var err error
 	var used, seen int64
 	retain := func(body []byte) error {
-		if int64(len(body)) > request.MaxBytes-used {
+		if int64(len(body)) > maxBytes-used {
 			return ErrPrivateSeedLimit
 		}
 		used += int64(len(body))
 		return nil
 	}
-	for i, table := range report.Tables {
+	for i, table := range tables {
 		if err := ctx.Err(); err != nil {
 			return PrivateSeed{}, err
 		}
-		layout := privateLayouts[i]
+		layout := layouts[i]
 		columns, keys := strings.Fields(layout.columns), strings.Fields(layout.keys)
 		if table.Name != layout.name || !slices.Equal(table.Columns, columns) || !slices.Equal(table.KeyColumns, keys) {
 			return PrivateSeed{}, ErrPrivateSeed

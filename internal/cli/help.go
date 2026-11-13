@@ -228,6 +228,7 @@ Usage:
 	"delivery": `gitcrawl delivery explicitly manages one private report outbox.
 
 Usage:
+  gitcrawl delivery export-clusters --db PATH --repo OWNER/REPO --archive ID --binding ID --seed-id HEX32 --captured-at RFC3339Nano --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D
   gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
@@ -237,8 +238,16 @@ Usage:
   gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
   gitcrawl delivery deliver-changes --db PATH --outbox PATH --max-rows N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
 
-All paths and positive bounds are explicit. Native schema 16 and an armed change
-contract are required; no config discovery, automatic migration, provider sync,
+export-clusters is offline: it reads the native public durable-active/v1 view
+and emits JSON containing base64 exact manifest, chunk and completion bytes.
+It does not create an outbox, send requests, acquire credentials or advance a
+checkpoint. Legacy/partial selection stays explicitly unqualified. captured-at
+is a caller-supplied fixed capture timestamp, not provider freshness. Bounds cover
+native reads and encoded requests; base64 output adds transport overhead.
+
+All paths and positive bounds are explicit. Seed/change commands require native
+schema 16 and an armed change
+contract; no config discovery, automatic migration, provider sync,
 release check, or credential helper runs. stage-seed exclusively creates a new outbox;
 failed owned files are retained. status opens the current outbox read-only.
 deliver sends saved bytes only to the saved destination and checks current native
