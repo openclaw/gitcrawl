@@ -51,6 +51,38 @@ gitcrawl remote login \
 
 The Worker verifies the GitHub token against the same organization and team policy. Gitcrawl stores only the remote session token.
 
+### Cloudflare Access reader login
+
+An Access-protected endpoint requires two credentials: the human Access application
+token for the gateway, and a reader session for the archive service. A browser's
+Access cookie is not automatically available to the CLI.
+
+Use Cloudflare's [supported CLI login](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/)
+with your existing permitted identity. In a POSIX shell:
+
+```bash
+cloudflared access login https://archive.example.invalid
+export CRAWL_ACCESS_TOKEN="$(cloudflared access token --app=https://archive.example.invalid)"
+gitcrawl --config reader.toml remote login \
+  --endpoint https://archive.example.invalid \
+  --access-token-env CRAWL_ACCESS_TOKEN --json
+gitcrawl --config reader.toml whoami --json
+```
+
+Configure the intended archive in that reader config before login. The remote must
+support `POST /v1/auth/access/session`. Gitcrawl verifies the exchanged identity and
+its exact reader-only role before saving the Worker session to a separate keyring
+account bound to the endpoint, archive, and config path. Legacy reader keyring entries remain
+unchanged.
+
+Gitcrawl saves only the Access environment variable's name and endpoint binding
+under `[cloudflare_access]`. Keep the variable available to later reader commands
+and renew it through `cloudflared` when its session expires. Gitcrawl sends the
+Access token only within the configured API endpoint and rejects redirects,
+changed endpoint/archive bindings, and service credentials. Never print tokens or
+put them in command arguments or config files. This login does not grant publisher
+roles or change the deployment's Access policies.
+
 ## Read from cloud mode
 
 After cloud initialization and login, supported read commands use the configured archive:

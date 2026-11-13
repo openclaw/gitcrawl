@@ -17,18 +17,26 @@ const (
 )
 
 type Config struct {
-	Version        int                `toml:"version"`
-	DBPath         string             `toml:"db_path"`
-	CacheDir       string             `toml:"cache_dir"`
-	VectorDir      string             `toml:"vector_dir"`
-	LogDir         string             `toml:"log_dir"`
-	Env            map[string]string  `toml:"env"`
-	GitHub         GitHubConfig       `toml:"github"`
-	OpenAI         OpenAIConfig       `toml:"openai"`
-	EmbeddingBasis string             `toml:"embedding_basis"`
-	VectorBackend  string             `toml:"vector_backend"`
-	TUI            TUIConfig          `toml:"tui"`
-	Remote         crawlremote.Config `toml:"remote"`
+	Version          int                    `toml:"version"`
+	DBPath           string                 `toml:"db_path"`
+	CacheDir         string                 `toml:"cache_dir"`
+	VectorDir        string                 `toml:"vector_dir"`
+	LogDir           string                 `toml:"log_dir"`
+	Env              map[string]string      `toml:"env"`
+	GitHub           GitHubConfig           `toml:"github"`
+	OpenAI           OpenAIConfig           `toml:"openai"`
+	EmbeddingBasis   string                 `toml:"embedding_basis"`
+	VectorBackend    string                 `toml:"vector_backend"`
+	TUI              TUIConfig              `toml:"tui"`
+	Remote           crawlremote.Config     `toml:"remote"`
+	CloudflareAccess CloudflareAccessConfig `toml:"cloudflare_access"`
+}
+
+// CloudflareAccessConfig names a human Access credential without storing it.
+// Endpoint binds that credential to the configured remote API, including its path.
+type CloudflareAccessConfig struct {
+	Endpoint string `toml:"endpoint"`
+	TokenEnv string `toml:"token_env"`
 }
 
 type GitHubConfig struct {
