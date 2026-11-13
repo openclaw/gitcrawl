@@ -238,6 +238,27 @@ seed-only operations refuse it, including handles opened before migration.
 The receiver sequence and cursor still describe the qualified baseline. This
 migration does not qualify a new native generation or start incremental delivery.
 
+### Native incremental capture and qualified index
+
+`store.CaptureNativeReportChanges` reads a bounded journal interval, expands
+changed parent/exclusion dependencies through native keys and the preceding
+qualified compact index, and returns exact typed upserts/removals. The outbox
+owner must pin that index and the entire baseline state for the call;
+`WithQualifiedReportIndex` supplies both from one transaction. Neither read
+transaction stays open for staging or network effects.
+
+Prepare native reverse-node indexes before capturing the initial baseline.
+Preparation changes the schema cookie; an older anchor is refused rather than
+silently rebound. Capture also refuses changed file identity, epoch, generation,
+scope, schema, missing tracking/indexes or an expired/regressing pruning floor.
+
+Callers supply a deadline and positive journal-record, affected-key, lookup-row,
+output-row and logical-byte limits. Every error returns no partial delta.
+Ordinary title/body edits do not enumerate unchanged descendants; parent moves,
+renumbering and changed exclusion policy expand the affected old/current
+subtrees. Global native node exclusions retain their existing policy semantics.
+The returned delta does not advance provider acquisition or qualify delivery.
+
 ## Command Surface
 
 No `serve` command.

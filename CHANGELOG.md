@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded native incremental report capture against a pinned qualified inventory, including parent/exclusion dependency changes, snapshot-consistent typed rows and explicit stale-source holds. No ingestion schedule is activated.
+
 - Add an explicit, bounded seed-outbox inventory migration that reuses fully receipted saved requests, retains original seed evidence and native tokens, and atomically builds compact typed fingerprints and parent/node lookup metadata.
 
 - Add bounded private native change-request preparation with typed v1-to-v2 range validation, exact multipart cursor chaining, duplicate-key refusal and explicit empty checkpoint batches. No delivery or collector is activated.
