@@ -200,6 +200,27 @@ are content-free. Context and known native/outbox error classifications survive.
 Failed claimed files and uncertain sends remain for explicit reconciliation;
 there is no cleanup, automatic retry or implicit source capture during delivery.
 
+### Private native change-request preparation
+
+`remotedelivery.PreparePrivateChanges` encodes an already projected, deterministic
+list of native-key changes into exact private `changes-v1` request bytes. It
+validates a canonical v1/v2 From followed by a compatible v2 Through, uses the
+existing seven-table profile, refuses repeated native keys, and preserves typed
+values and input order. Removals carry only their key; comments cannot retain an
+unresolved raw blob reference, and observation families remain comments-only.
+
+Positive total-byte and part limits apply, with the wire ceiling of 64 parts,
+500 observations per part and 4 MiB per request. Preparation reserves the largest
+legal envelope when splitting; a row near that ceiling can be refused even if a
+shorter actual envelope would fit. An empty interval produces one explicit empty
+part, allowing a receipt to acknowledge an unchanged scoped inventory. Cursors
+chain from the supplied qualified cursor through each exact part ID.
+
+This is encoding only. It does not read source state, stage an outbox, obtain
+credentials, send requests, qualify a baseline or enable a timer. The outbox
+owner must atomically bind these bytes to the corresponding candidate inventory;
+only complete receipt settlement may promote it.
+
 ## Command Surface
 
 No `serve` command.
