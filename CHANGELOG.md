@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Retry transient HTTP 502/503/504 responses for bodyless content GETs with bounded waits, without replaying completed pages or bypassing quota and credential guards.
 - Build with Go 1.27.4 to include the standard-library fix reported by GO-2026-6859.
 
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
