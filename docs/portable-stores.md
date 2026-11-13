@@ -392,6 +392,45 @@ The optional `--repository owner/repo` is semantic export behavior: Gitcrawl
 removes all other repositories and their dependent rows from the disposable
 snapshot, verifies the exact remaining identity, and records it in the manifest.
 Without the flag, multi-repository artifacts remain supported.
+For a copy-only recent subset, add `--since 2026-11-01T00:00:00Z` (an
+RFC3339 timestamp, including offsets and nanoseconds). `--since` cannot be
+combined with `--consume-source`. Selection keeps all open or unknown-state
+threads, and closed threads with recent or uncertain thread/comment activity.
+Only threads whose state is exactly `closed` and whose activity is provably
+before the cutoff are removed. Equality and future timestamps are retained.
+
+Thread selection considers `created_at_gh`, `updated_at_gh`, `closed_at_gh`,
+and `merged_at_gh`. A missing thread update time or any malformed non-NULL
+clock keeps the thread. Comment creation/update, deletion, submission and
+publication clocks also keep their parent when recent or uncertain; a NULL
+comment update clock falls back to creation. Optional NULL close, merge,
+delete, submission and publication clocks are not uncertainty by themselves.
+Local ingestion timestamps do not define recency. Other child families do not
+define the selection window, so this is not complete recent GitHub activity.
+
+All profile-supported children of retained threads remain, including older
+comments and membership evidence. Repository workflow rows and observation
+allocators also remain. Repository-wide `repo_sync_state` completeness rows
+are cleared in the copy; the profile already removes run checkpoints and the
+native change journal. This cache is not a full-history or incremental-sync
+baseline. Local owner exclusions refuse recent export before repository or
+thread filtering can discard their evidence.
+
+The optional manifest/result `subset` records normalized `since`, the versioned
+selection rule and `capturedAt` (backup completion time, not a historical as-of
+boundary). SQLite `subset_*` metadata records only stable selection scope and
+cleared completeness. Capture time stays outside SQLite and semantic identity.
+Re-exporting a recent subset is refused, even with a later cutoff: start from
+the original source, because an earlier horizon cannot recover omitted rows.
+
+The filter still starts with a complete SQLite backup and needs working and
+compact-copy disk space. `--max-bytes` bounds the finalized artifact, not peak
+disk or execution time; exceeding it fails instead of trimming child closure.
+Portable install and strict refresh validate the subset claim against SQLite,
+including when the claim or whole manifest is missing. Refresh JSON includes
+`subset`; status warns that the cache is partial. Without `--since`, ordinary
+export selection and metadata remain unchanged.
+
 The manifest reports every retained table as a sorted `{name, rows}` object.
 It includes a singular repository object for scoped exports and for unscoped
 artifacts that naturally contain exactly one repository; multi-repository
@@ -499,6 +538,7 @@ the private staging directory.
 | `--database-name <name>` | `gitcrawl.db` | Safe database basename inside the generation |
 | `--public-path <path>` | database name | Logical relative slash path recorded in metadata and the manifest |
 | `--repository <owner/repo>` | _(unset)_ | Semantically restrict the artifact to exactly one repository |
+| `--since <RFC3339>` | _(unset)_ | Copy-only recent thread subset, retaining open and uncertain threads and child closure |
 | `--body-chars <n>` | `256` | Maximum body characters retained in compact excerpts |
 | `--max-bytes <n>` | _(unset)_ | Inclusive maximum finalized database size |
 | `--consume-source` | _(off)_ | Move an exclusively owned, backed-up source into staging; errors after handoff discard it |

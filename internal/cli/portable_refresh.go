@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/openclaw/gitcrawl/internal/config"
+	portableexport "github.com/openclaw/gitcrawl/internal/portable"
 )
 
 type portableRefreshOptions struct {
@@ -27,19 +28,20 @@ type portableRefreshOptions struct {
 }
 
 type portableRefreshResult struct {
-	Stage         string           `json:"stage"`
-	Result        string           `json:"result"`
-	BeforeCommit  string           `json:"before_commit,omitempty"`
-	AfterCommit   string           `json:"after_commit,omitempty"`
-	TargetCommit  string           `json:"target_commit,omitempty"`
-	ArtifactID    string           `json:"artifact_id,omitempty"`
-	SHA256        string           `json:"sha256,omitempty"`
-	ArtifactBytes int64            `json:"artifact_bytes,omitempty"`
-	Mirror        string           `json:"mirror_destination,omitempty"`
-	MirrorResult  string           `json:"mirror_result,omitempty"`
-	Capacity      portableCapacity `json:"capacity"`
-	ElapsedMS     int64            `json:"elapsed_ms"`
-	Reason        string           `json:"reason,omitempty"`
+	Subset        *portableexport.RecentSubset `json:"subset,omitempty"`
+	Stage         string                       `json:"stage"`
+	Result        string                       `json:"result"`
+	BeforeCommit  string                       `json:"before_commit,omitempty"`
+	AfterCommit   string                       `json:"after_commit,omitempty"`
+	TargetCommit  string                       `json:"target_commit,omitempty"`
+	ArtifactID    string                       `json:"artifact_id,omitempty"`
+	SHA256        string                       `json:"sha256,omitempty"`
+	ArtifactBytes int64                        `json:"artifact_bytes,omitempty"`
+	Mirror        string                       `json:"mirror_destination,omitempty"`
+	MirrorResult  string                       `json:"mirror_result,omitempty"`
+	Capacity      portableCapacity             `json:"capacity"`
+	ElapsedMS     int64                        `json:"elapsed_ms"`
+	Reason        string                       `json:"reason,omitempty"`
 	// Repack reports split-store object consolidation: geometric, current
 	// (no loose objects), skipped-loose-backlog, or failed. It never affects
 	// the validated generation.
@@ -307,6 +309,7 @@ func (a *App) refreshPortable(ctx context.Context, options portableRefreshOption
 	if err != nil {
 		return result, err
 	}
+	result.Subset = manifest.Subset
 	result.ArtifactID, result.SHA256, result.ArtifactBytes = manifest.ArtifactID, manifest.SHA256, manifest.OutputBytes
 	if result.ArtifactID == "" {
 		result.ArtifactID = manifest.SHA256

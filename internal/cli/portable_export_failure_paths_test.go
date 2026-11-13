@@ -19,6 +19,8 @@ func TestPortableExportArgumentsFailBeforeOpeningRuntime(t *testing.T) {
 		args      []string
 		wantError string
 	}{
+		{name: "invalid since", args: []string{"--profile", "current-state-v1", "--output-dir", "out", "--since", "yesterday"}, wantError: "RFC3339"},
+		{name: "since cannot consume", args: []string{"--profile", "current-state-v1", "--output-dir", "out", "--since", "2026-11-01T00:00:00Z", "--consume-source"}, wantError: "copy-only"},
 		{name: "unknown flag", args: []string{"--unknown"}, wantError: "flag provided but not defined"},
 		{name: "positional argument", args: []string{"--profile", "current-state-v1", "--output-dir", "out", "extra"}, wantError: "does not take positional arguments"},
 		{name: "missing profile", args: []string{"--output-dir", "out"}, wantError: "--profile is required"},

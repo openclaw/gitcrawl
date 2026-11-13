@@ -11,6 +11,7 @@ import (
 
 	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/gitcrawl/internal/config"
+	portableexport "github.com/openclaw/gitcrawl/internal/portable"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -89,6 +90,13 @@ func (a *App) localArchiveStatus(ctx context.Context, cfg config.Config) (contro
 			return control.Status{}, err
 		}
 		defer st.Close()
+		subset, err := portableexport.ReadRecentSubset(ctx, st.DB())
+		if err != nil {
+			return control.Status{}, err
+		}
+		if subset != nil {
+			warnings = append(warnings, "Recent portable subset since "+subset.Since+"; includes open and uncertain threads, not full history or an acquisition checkpoint.")
+		}
 		status, err = st.Status(ctx)
 		if err != nil {
 			return control.Status{}, err

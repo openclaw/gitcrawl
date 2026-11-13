@@ -43,6 +43,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	databaseName := fs.String("database-name", "gitcrawl.db", "portable database basename")
 	publicPath := fs.String("public-path", "", "logical portable database path")
 	repositoryRaw := fs.String("repository", "", "restrict the artifact to one owner/repo")
+	since := fs.String("since", "", "retain open, uncertain and recently active threads since RFC3339 timestamp")
 	maxBytesRaw := fs.String("max-bytes", "", "maximum finalized database bytes")
 	compression := fs.String("compression", "", "artifact packaging (gzip or split)")
 	maxArchiveBytesRaw := fs.String("max-archive-bytes", "", "maximum finalized archive bytes")
@@ -51,7 +52,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 	valueFlags := map[string]bool{
 		"profile": true, "body-chars": true, "output-dir": true,
 		"database-name": true, "public-path": true, "repository": true, "max-bytes": true,
-		"compression": true, "max-archive-bytes": true,
+		"compression": true, "max-archive-bytes": true, "since": true,
 	}
 	if err := fs.Parse(normalizeCommandArgs(args, valueFlags)); err != nil {
 		return usageErr(err)
@@ -119,6 +120,14 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 			return usageErr(fmt.Errorf("repository: expected owner/repo, got %q", *repositoryRaw))
 		}
 	}
+	if *since != "" {
+		if *consumeSource {
+			return usageErr(fmt.Errorf("--since requires copy-only export; --consume-source is incompatible"))
+		}
+		if _, err := portableexport.ParseSince(*since); err != nil {
+			return usageErr(err)
+		}
+	}
 	rt, err := a.openLocalRuntimeReadOnly(ctx)
 	if err != nil {
 		return err
@@ -136,6 +145,7 @@ func (a *App) runPortableExport(ctx context.Context, args []string) error {
 		PublicPath:      logicalPath,
 		Profile:         *profile,
 		Repository:      repository,
+		Since:           *since,
 		BodyChars:       bodyChars,
 		MaxBytes:        maxBytes,
 		Compression:     *compression,

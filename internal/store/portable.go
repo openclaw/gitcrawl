@@ -94,16 +94,8 @@ type PortablePruneStats struct {
 }
 
 func (s *Store) PrunePortablePayloads(ctx context.Context, options PortablePruneOptions) (PortablePruneStats, error) {
-	// Owner exclusions belong to this local archive. Do not silently drop their
-	// policy or publish owner-request metadata through a portable export.
-	if s.hasTable(ctx, "thread_exclusions") {
-		var n int
-		if err := s.q().QueryRowContext(ctx, "SELECT count(*) FROM thread_exclusions").Scan(&n); err != nil {
-			return PortablePruneStats{}, err
-		}
-		if n > 0 {
-			return PortablePruneStats{}, fmt.Errorf("portable publication is unavailable for an archive with local owner exclusions")
-		}
+	if err := s.CheckPortablePublication(ctx); err != nil {
+		return PortablePruneStats{}, err
 	}
 	// A portable artifact never publishes the local change contract, and the
 	// payload rewrites below are not reader-visible changes of this archive.
@@ -454,4 +446,21 @@ func rowsAffected(result sql.Result) int64 {
 		return 0
 	}
 	return rows
+}
+
+// CheckPortablePublication preserves the local exclusion policy before a disposable
+// export removes any repository or thread rows. It does not authorize publication.
+func (s *Store) CheckPortablePublication(ctx context.Context) error {
+	// Owner exclusions belong to this local archive. Do not silently drop their
+	// policy or publish owner-request metadata through a portable export.
+	if s.hasTable(ctx, "thread_exclusions") {
+		var n int
+		if err := s.q().QueryRowContext(ctx, "SELECT count(*) FROM thread_exclusions").Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("portable publication is unavailable for an archive with local owner exclusions")
+		}
+	}
+	return nil
 }

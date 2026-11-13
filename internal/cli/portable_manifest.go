@@ -12,22 +12,24 @@ import (
 	"strings"
 
 	portableexport "github.com/openclaw/gitcrawl/internal/portable"
+	"github.com/openclaw/gitcrawl/internal/store"
 )
 
 type portableDBManifest struct {
-	Schema            string `json:"schema,omitempty"`
-	Profile           string `json:"profile,omitempty"`
-	ExportedAt        string `json:"exportedAt,omitempty"`
-	OutputPath        string `json:"outputPath,omitempty"`
-	OutputBytes       int64  `json:"outputBytes,omitempty"`
-	SHA256            string `json:"sha256,omitempty"`
-	ArtifactID        string `json:"artifactId,omitempty"`
-	ArtifactIDProfile string `json:"artifactIdProfile,omitempty"`
-	QuickCheck        string `json:"quickCheck,omitempty"`
-	Compression       string `json:"compression,omitempty"`
-	ArchivePath       string `json:"archivePath,omitempty"`
-	ArchiveBytes      int64  `json:"archiveBytes,omitempty"`
-	ArchiveSHA256     string `json:"archiveSha256,omitempty"`
+	Subset            *portableexport.RecentSubset `json:"subset,omitempty"`
+	Schema            string                       `json:"schema,omitempty"`
+	Profile           string                       `json:"profile,omitempty"`
+	ExportedAt        string                       `json:"exportedAt,omitempty"`
+	OutputPath        string                       `json:"outputPath,omitempty"`
+	OutputBytes       int64                        `json:"outputBytes,omitempty"`
+	SHA256            string                       `json:"sha256,omitempty"`
+	ArtifactID        string                       `json:"artifactId,omitempty"`
+	ArtifactIDProfile string                       `json:"artifactIdProfile,omitempty"`
+	QuickCheck        string                       `json:"quickCheck,omitempty"`
+	Compression       string                       `json:"compression,omitempty"`
+	ArchivePath       string                       `json:"archivePath,omitempty"`
+	ArchiveBytes      int64                        `json:"archiveBytes,omitempty"`
+	ArchiveSHA256     string                       `json:"archiveSha256,omitempty"`
 	// Split archives list ordered uncompressed parts beside the manifest.
 	ArchiveParts    []portableArchivePart `json:"archiveParts,omitempty"`
 	MaxArchiveBytes int64                 `json:"maxArchiveBytes,omitempty"`
@@ -142,6 +144,20 @@ func validatePortableDBManifest(ctx context.Context, dbPath, manifestPath string
 	manifest, ok, err := readPortableDBManifest(manifestPath)
 	if err != nil {
 		return fmt.Errorf("portable manifest mismatch: %w", err)
+	}
+	// This validator checks the exact artifact file bytes; do not create
+	// reader sidecars in a protected portable checkout.
+	reader, err := store.OpenReadOnlyImmutable(ctx, dbPath)
+	if err != nil {
+		return err
+	}
+	scopeErr := portableexport.ValidateRecentSubset(ctx, reader.DB(), manifest.Subset)
+	closeErr := reader.Close()
+	if scopeErr != nil {
+		return fmt.Errorf("portable manifest mismatch: %w", scopeErr)
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	if !ok {
 		return nil

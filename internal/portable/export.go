@@ -40,6 +40,7 @@ type ExportOptions struct {
 	PublicPath      string
 	Profile         string
 	Repository      string
+	Since           string
 	BodyChars       int
 	MaxBytes        *int64
 	Compression     string
@@ -53,6 +54,7 @@ type Stage string
 const (
 	StageSnapshot         Stage = "snapshot"
 	StageRepositoryScope  Stage = "repository scope"
+	StageRecentScope      Stage = "recent scope"
 	StageProfileOmissions Stage = "profile omissions"
 	StageCanonicalShaping Stage = "canonical shaping"
 	StageIndexRemoval     Stage = "index removal"
@@ -78,6 +80,7 @@ type ExportResult struct {
 	ManifestPath         string        `json:"manifest_path"`
 	PublicPath           string        `json:"public_path"`
 	Repository           *Repository   `json:"repository,omitempty"`
+	Subset               *RecentSubset `json:"subset,omitempty"`
 	BodyChars            int           `json:"body_chars"`
 	BytesBefore          int64         `json:"bytes_before"`
 	BytesAfter           int64         `json:"bytes_after"`
@@ -117,6 +120,16 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	profile, err := ResolveProfile(options.Profile)
 	if err != nil {
 		return result, err
+	}
+	var since time.Time
+	if options.Since != "" {
+		if options.ConsumeSource {
+			return result, fmt.Errorf("since requires copy-only export; consume-source is incompatible")
+		}
+		since, err = ParseSince(options.Since)
+		if err != nil {
+			return result, err
+		}
 	}
 	if options.BodyChars <= 0 {
 		options.BodyChars = defaultBodyChars
@@ -160,6 +173,20 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 	}
 	if !sourceInfo.Mode().IsRegular() {
 		return result, fmt.Errorf("source database is not a regular file: %s", sourcePath)
+	}
+	if options.ConsumeSource {
+		source, err := store.OpenReadOnlyImmutable(ctx, sourcePath)
+		if err != nil {
+			return result, err
+		}
+		err = rejectInheritedSubset(ctx, source.DB())
+		closeErr := source.Close()
+		if err != nil {
+			return result, err
+		}
+		if closeErr != nil {
+			return result, closeErr
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(outputDir), 0o755); err != nil {
 		return result, fmt.Errorf("create output parent: %w", err)
@@ -214,6 +241,13 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			return result, err
 		}
 	}
+	if !since.IsZero() {
+		now := time.Now
+		if e.now != nil {
+			now = e.now
+		}
+		result.Subset = &RecentSubset{Since: since.UTC().Format(time.RFC3339Nano), Selection: recentSelection, CapturedAt: now().UTC().Format(time.RFC3339Nano)}
+	}
 	// Opening the disposable snapshot migrates valid older/physically-pruned
 	// portable schemas back to the current writable schema before shaping.
 	st, err := store.Open(ctx, dbPath)
@@ -226,8 +260,17 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			_ = st.Close()
 		}
 	}()
+	if err := rejectInheritedSubset(ctx, st.DB()); err != nil {
+		return result, err
+	}
 	if err := configureDisposableStore(ctx, st.DB()); err != nil {
 		return result, err
+	}
+	if !since.IsZero() {
+		// Check before repository restriction can discard an exclusion ledger.
+		if err := st.CheckPortablePublication(ctx); err != nil {
+			return result, err
+		}
 	}
 	if err := reportProgress(ctx, options.Progress, StageRepositoryScope); err != nil {
 		return result, err
@@ -238,6 +281,14 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 			return result, fmt.Errorf("restrict portable repository: %w", err)
 		}
 		result.Repository = repositoryFromStore(scope.Repository)
+	}
+	if !since.IsZero() {
+		if err := reportProgress(ctx, options.Progress, StageRecentScope); err != nil {
+			return result, err
+		}
+		if err := st.RestrictPortableSince(ctx, since); err != nil {
+			return result, fmt.Errorf("restrict recent portable scope: %w", err)
+		}
 	}
 	if err := reportProgress(ctx, options.Progress, StageProfileOmissions); err != nil {
 		return result, err
@@ -319,6 +370,11 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		"index_profile":         profile.IndexProfile,
 		"column_profile":        profile.ColumnProfile,
 		"thread_author_profile": "login,type,association",
+	}
+	if result.Subset != nil {
+		for key, value := range result.Subset.metadata() {
+			metadata[key] = value
+		}
 	}
 	if _, err := st.DB().ExecContext(ctx, `delete from portable_metadata`); err != nil {
 		return result, fmt.Errorf("clear inherited portable metadata: %w", err)
@@ -467,6 +523,7 @@ func (e exporter) export(ctx context.Context, options ExportOptions) (result Exp
 		ArtifactID:           artifactID,
 		ArtifactIDProfile:    result.ArtifactIDProfile,
 		Repository:           result.Repository,
+		Subset:               result.Subset,
 		BodyChars:            options.BodyChars,
 		MaxBytes:             options.MaxBytes,
 		Compression:          options.Compression,

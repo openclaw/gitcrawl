@@ -45,6 +45,7 @@ type Manifest struct {
 	ArtifactID           string        `json:"artifactId"`
 	ArtifactIDProfile    string        `json:"artifactIdProfile"`
 	Repository           *Repository   `json:"repository,omitempty"`
+	Subset               *RecentSubset `json:"subset,omitempty"`
 	BodyChars            int           `json:"bodyChars"`
 	MaxBytes             *int64        `json:"maxBytes,omitempty"`
 	Compression          string        `json:"compression,omitempty"`
@@ -198,6 +199,9 @@ func validateManifestPair(ctx context.Context, dbPath, manifestPath string, expe
 	}
 	if !reflect.DeepEqual(repository, actual.Repository) {
 		return fmt.Errorf("portable manifest repository does not match database scope")
+	}
+	if err := ValidateRecentSubset(ctx, db, actual.Subset); err != nil {
+		return err
 	}
 	for key, want := range map[string]string{
 		"schema":          actual.Schema,
