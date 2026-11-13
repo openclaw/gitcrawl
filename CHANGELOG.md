@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a bounded read-only native delivery policy checker for staged thread/raw-node references, preserving source incarnation checks and global owner exclusions while allowing ordinary acquisition progress.
+
 - Add a separate private seed outbox with exclusive creation, exact request bytes and native provenance across reopen, and atomic receipt-only baseline qualification. No sender, native writes or CLI is activated.
 
 - Add bounded in-memory packing of private native reports into deterministic GitHub seed requests, preserving native identity and typed rows without delivering or qualifying a baseline.

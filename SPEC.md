@@ -102,6 +102,37 @@ effect; staged bytes or their hashes cannot authorize delivery. Receiver policy
 remains independent. Future delta support must extend this one durable owner
 through an explicit migration, not introduce another checkpoint.
 
+### Native delivery policy checks
+
+`store.CheckNativeReportDelivery` checks a recorded native anchor and streamed
+staged references in one current read transaction. The caller supplies thread
+numbers resolved from its staged inventory, plus raw JSON from staged threads
+and comments; exclusion-ledger rows are metadata, not content references.
+The checker uses the native repository/number exclusion and global node ledger,
+with the purge owner's exact SQLite top-level `$.node_id` interpretation and
+invalid-JSON-as-`{}` behavior. A repository-scoped ledger digest is insufficient.
+
+The physical file, repository ID/scope, schema cookie, epoch, generation and
+armed change contract must match. Current sequence must be at least the captured
+sequence and the current pruning floor must be sane. Ordinary content progress
+and legitimate table-mode sequence gaps remain allowed; this is not a full
+recapture or a journal-contiguity check. The existing stable-path precondition
+applies, including its accepted transient replacement limitation.
+
+The caller must provide a deadline and positive total row/raw-byte caps.
+`MaxRows` counts each supplied number and each raw JSON string, including repeated
+references; one row supplied as both counts twice. `MaxBytes` counts raw JSON
+bytes, not process RSS. The callback is synchronous, must honor cancellation and
+must not retain its yield function or perform HTTP. Any error refuses the entire
+check. The native transaction closes before return; success describes that
+snapshot, not reusable authorization, provider coverage or a delivery receipt.
+
+The checker issues no SQL writes, migrations or checkpoints. Normal read-only
+SQLite access can create or leave WAL/SHM reader sidecars. It does not switch to
+immutable mode, change journal mode, checkpoint or unlink source files; current
+WAL policy must remain visible. A future sender must invoke it at outbound effect
+and keep receiver policy and authenticated receipt settlement separate.
+
 ## Command Surface
 
 No `serve` command.
