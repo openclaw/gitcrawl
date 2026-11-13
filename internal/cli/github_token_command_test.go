@@ -118,6 +118,8 @@ func TestGitHubTokenCommandOutputBoundary(t *testing.T) {
 }
 
 func TestGitHubTokenCommandCancellationKillsDescendants(t *testing.T) {
+	const startupBudget = 3 * time.Second
+	const cleanupBudget = 3 * time.Second
 	for _, deadline := range []bool{false, true} {
 		t.Run(fmt.Sprint(deadline), func(t *testing.T) {
 			pidPath := filepath.Join(t.TempDir(), "child.pid")
@@ -129,13 +131,15 @@ func TestGitHubTokenCommandCancellationKillsDescendants(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			if deadline {
-				ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+				// Readiness must fit before the deadline: canceling during shell
+				// startup never exercises cleanup of a running descendant.
+				ctx, cancel = context.WithTimeout(context.Background(), startupBudget+500*time.Millisecond)
 			}
 			defer cancel()
 			result := make(chan error, 1)
 			go func() { _, err := provider(ctx); result <- err }()
 			var pid int
-			for until := time.Now().Add(3 * time.Second); time.Now().Before(until); {
+			for until := time.Now().Add(startupBudget); time.Now().Before(until); {
 				if data, err := os.ReadFile(pidPath); err == nil {
 					pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
 					if pid > 0 {
@@ -149,8 +153,13 @@ func TestGitHubTokenCommandCancellationKillsDescendants(t *testing.T) {
 				<-result
 				t.Fatal("descendant did not start")
 			}
-			start := time.Now()
-			if !deadline {
+			cleanupUntil := time.Now().Add(cleanupBudget)
+			if deadline {
+				// Deadline waiting is not cleanup time. Keep the real context
+				// deadline and bound provider cleanup from when it expires.
+				expires, _ := ctx.Deadline()
+				cleanupUntil = expires.Add(cleanupBudget)
+			} else {
 				cancel()
 			}
 			select {
@@ -158,10 +167,10 @@ func TestGitHubTokenCommandCancellationKillsDescendants(t *testing.T) {
 				if err == nil {
 					t.Fatal("cancellation succeeded")
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(time.Until(cleanupUntil)):
 				t.Fatal("provider cancellation exceeded cleanup bound")
 			}
-			if time.Since(start) > 3*time.Second {
+			if time.Now().After(cleanupUntil) {
 				t.Fatal("unbounded cancellation")
 			}
 			// Linux may retain a dead orphan as a zombie until init reaps it.
