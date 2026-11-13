@@ -121,6 +121,12 @@ func TestPrivateSeedNativeCaptureToCodec(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, changed := projected(t, ctx, s)
+	if changed.Cursor.Sequence == report.Cursor.Sequence {
+		t.Fatal("membership writer failed to advance the native journal")
+	}
+	// Codec-only regression: an inventory digest must distinguish equal-H
+	// input independently of the now-tracked native membership writer.
+	changed.Cursor = report.Cursor
 	newSeed, err := PreparePrivateSeed(ctx, changed, seedRequest())
 	if err != nil || changed.Cursor.Sequence != report.Cursor.Sequence || newSeed.Plan.Manifest().NativeThrough == seed.Plan.Manifest().NativeThrough {
 		t.Fatal("same-head inventory change was collapsed", err)

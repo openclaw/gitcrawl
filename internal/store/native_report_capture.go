@@ -97,8 +97,8 @@ func NativeReportFileIdentity(path string) (NativeReportFile, error) {
 // CaptureNativeReport owns one read transaction and materializes the entire
 // selected scope or returns a zero result. It never migrates, enables tracking,
 // writes a checkpoint, infers provider deletion, or qualifies a baseline.
-// Every call scans scoped content, including untracked memberships/excluded
-// nodes: equal contract sequences do not imply equal snapshots.
+// Every call scans scoped content. This snapshot API does not use journal keys
+// to skip rows or treat the sequence as a substitute for an inventory digest.
 func CaptureNativeReport(ctx context.Context, path string, request NativeReportRequest) (NativeReportCapture, error) {
 	if err := ctx.Err(); err != nil {
 		return NativeReportCapture{}, err
@@ -143,19 +143,18 @@ func CaptureNativeReport(ctx context.Context, path string, request NativeReportR
 
 type nativeReportTableSpec struct {
 	name, columns, keys, from string
-	tracked                   bool
 }
 
 // This is a native schema-16 local read set, not the historical GitHub seed or
 // a service allowlist. Only the comments observation family is in this scope.
 var nativeReportTables = []nativeReportTableSpec{
-	{"repositories", "id owner name full_name github_repo_id raw_json updated_at", "id", "repositories x where x.id = ?", true},
-	{"threads", "id repo_id github_id number kind state title body author_login author_type author_association html_url labels_json assignees_json raw_json content_hash is_draft created_at_gh updated_at_gh closed_at_gh merged_at_gh closed_at_local close_reason_local first_pulled_at last_pulled_at observation_sequence evidence_observation_sequence evidence_source_updated_at updated_at", "id", "threads x where x.id in (" + nativeReportThreads + ")", true},
-	{"comments", "id thread_id github_id comment_type author_login author_type body is_bot raw_json raw_json_blob_id created_at_gh updated_at_gh deleted_at deletion_reason submitted_at_gh publication_at_gh", "id", "comments x where x.thread_id in (" + nativeReportThreads + ")", true},
-	{"thread_child_observation_reservations", "thread_id family source_updated_at observation_sequence", "thread_id family", "thread_child_observation_reservations x where x.family = 'comments' and x.thread_id in (" + nativeReportThreads + ")", true},
-	{"thread_child_observation_memberships", "thread_id family observation_sequence member_ids_json", "thread_id family", "thread_child_observation_memberships x where x.family = 'comments' and x.thread_id in (" + nativeReportThreads + ")", false},
-	{"thread_exclusions", "repository number kind original_thread_id github_id excluded_at reason plan_id", "repository number", "thread_exclusions x where x.repository = (select lower(full_name) from repositories where id = ?)", true},
-	{"thread_excluded_nodes", "node_id repository number", "node_id", "thread_excluded_nodes x where x.repository = (select lower(full_name) from repositories where id = ?)", false},
+	{"repositories", "id owner name full_name github_repo_id raw_json updated_at", "id", "repositories x where x.id = ?"},
+	{"threads", "id repo_id github_id number kind state title body author_login author_type author_association html_url labels_json assignees_json raw_json content_hash is_draft created_at_gh updated_at_gh closed_at_gh merged_at_gh closed_at_local close_reason_local first_pulled_at last_pulled_at observation_sequence evidence_observation_sequence evidence_source_updated_at updated_at", "id", "threads x where x.id in (" + nativeReportThreads + ")"},
+	{"comments", "id thread_id github_id comment_type author_login author_type body is_bot raw_json raw_json_blob_id created_at_gh updated_at_gh deleted_at deletion_reason submitted_at_gh publication_at_gh", "id", "comments x where x.thread_id in (" + nativeReportThreads + ")"},
+	{"thread_child_observation_reservations", "thread_id family source_updated_at observation_sequence", "thread_id family", "thread_child_observation_reservations x where x.family = 'comments' and x.thread_id in (" + nativeReportThreads + ")"},
+	{"thread_child_observation_memberships", "thread_id family observation_sequence member_ids_json", "thread_id family", "thread_child_observation_memberships x where x.family = 'comments' and x.thread_id in (" + nativeReportThreads + ")"},
+	{"thread_exclusions", "repository number kind original_thread_id github_id excluded_at reason plan_id", "repository number", "thread_exclusions x where x.repository = (select lower(full_name) from repositories where id = ?)"},
+	{"thread_excluded_nodes", "node_id repository number", "node_id", "thread_excluded_nodes x where x.repository = (select lower(full_name) from repositories where id = ?)"},
 }
 
 const nativeReportThreads = `select t.id from threads t join repositories r on r.id=t.repo_id where t.repo_id=? and not exists(select 1 from thread_exclusions e where e.repository=lower(r.full_name) and e.number=t.number)`
@@ -252,14 +251,16 @@ func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTab
 	if !slices.Equal(keys, table.KeyColumns) {
 		return table, ErrNativeReportSource
 	}
-	if spec.tracked {
-		armed, err := changeContractTableArmed(ctx, tx, spec.name)
-		if err != nil {
-			return table, err
-		}
-		if !armed {
-			return table, ErrNativeReportSource
-		}
+	var mode string
+	if err := tx.QueryRowContext(ctx, `select mode from change_contract_tables where table_name=?`, spec.name).Scan(&mode); err != nil || mode != ChangeContractModeRows {
+		return table, ErrNativeReportSource
+	}
+	armed, err := changeContractTableArmed(ctx, tx, spec.name)
+	if err != nil {
+		return table, err
+	}
+	if !armed {
+		return table, ErrNativeReportSource
 	}
 	if spec.name == "threads" || spec.name == "comments" {
 		// Match the purge owner's native $.node_id interpretation and global

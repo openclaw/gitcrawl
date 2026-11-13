@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Journal native comment keys, child observation memberships and global node exclusions for incremental reporting; repair legacy tracking modes on writable open, report stored modes, and require complete row tracking before native capture.
+
 - Add explicit private `delivery stage-seed`, read-only `delivery status`, and resumable `delivery deliver` commands with required bounds, lazy named service credentials and content-free partial results. Runtime config, GitHub auth, release checks and implicit upgrades are bypassed.
 
 - Add explicit resumable native GitHub seed delivery with current-policy checks after credential acquisition, whole-seed completion checks, exact-byte retries and receipt-only qualification. No collector or schedule is activated.

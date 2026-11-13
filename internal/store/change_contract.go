@@ -68,7 +68,7 @@ var changeContractTableSpecs = []changeContractTableSpec{
 	{12, "pull_request_files", ChangeContractModeTable},
 	{13, "pull_request_commits", ChangeContractModeTable},
 	{14, "pull_request_checks", ChangeContractModeTable},
-	{15, "comments", ChangeContractModeTable},
+	{15, "comments", ChangeContractModeRows},
 	{16, "github_workflow_runs", ChangeContractModeTable},
 	{17, "sync_attempt_failures", ChangeContractModeRows},
 	{18, "sync_runs", ChangeContractModeRows},
@@ -91,6 +91,8 @@ var changeContractTableSpecs = []changeContractTableSpec{
 	{35, "cluster_candidate_selection", ChangeContractModeRows},
 	{36, "code_snapshots", ChangeContractModeRows},
 	{37, "code_documents", ChangeContractModeTable},
+	{38, "thread_child_observation_memberships", ChangeContractModeRows},
+	{39, "thread_excluded_nodes", ChangeContractModeRows},
 }
 
 // Families name the tables each Clawmmunity reader family reads. A consumer
@@ -345,6 +347,32 @@ func (s *Store) repairChangeContract(ctx context.Context) (ChangeContractRepair,
 	armed := false
 	if complete {
 		if armed, err = changeContractArmed(ctx, s.q()); err != nil {
+			return ChangeContractRepair{}, err
+		}
+	}
+	if armed {
+		// An older repair owner can install valid triggers with a mode this
+		// writer no longer expects. Generic reader armed-state remains about
+		// stored trigger integrity; writable repair also checks its own modes.
+		rows, err := s.q().QueryContext(ctx, `select table_name,mode from change_contract_tables`)
+		if err != nil {
+			return ChangeContractRepair{}, err
+		}
+		for rows.Next() {
+			var table, mode string
+			if err := rows.Scan(&table, &mode); err != nil {
+				rows.Close()
+				return ChangeContractRepair{}, err
+			}
+			for _, spec := range changeContractTableSpecs {
+				if spec.name == table && spec.mode != mode {
+					armed = false
+				}
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
 			return ChangeContractRepair{}, err
 		}
 	}
@@ -779,7 +807,7 @@ func (s *Store) ChangeContractStatus(ctx context.Context) (ChangeContractStatus,
 			return status, err
 		}
 		var keyJSON string
-		err := tx.QueryRowContext(ctx, `select key_columns, last_seq from change_contract_tables where table_id = ?`, spec.id).Scan(&keyJSON, &row.LastSeq)
+		err := tx.QueryRowContext(ctx, `select mode, key_columns, last_seq from change_contract_tables where table_id = ?`, spec.id).Scan(&row.Mode, &keyJSON, &row.LastSeq)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return status, err
 		}

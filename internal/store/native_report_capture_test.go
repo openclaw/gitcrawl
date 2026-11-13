@@ -105,7 +105,7 @@ func TestNativeReportFidelityAndSourceUnchanged(t *testing.T) {
 	}
 }
 
-func TestNativeReportTableGapsAndSameHeadChanges(t *testing.T) {
+func TestNativeReportTableGapsAndTrackedInventoryChanges(t *testing.T) {
 	s := changeContractFixture(t, 0)
 	ctx, req := nativeReportRequest(t, s)
 	initial := takeNativeReport(t, ctx, s, req)
@@ -113,6 +113,9 @@ func TestNativeReportTableGapsAndSameHeadChanges(t *testing.T) {
 		t.Fatal("empty tables or genuine H0 lost")
 	}
 	if _, err := s.UpsertComment(ctx, Comment{ThreadID: 1, GitHubID: "comment", CommentType: "issue_comment", Body: "one", RawJSON: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `insert into pull_request_files(thread_id,path,raw_json,fetched_at) values(2,'fixture.go','{}','2026-01-01')`); err != nil {
 		t.Fatal(err)
 	}
 	first := takeNativeReport(t, ctx, s, req)
@@ -130,15 +133,15 @@ func TestNativeReportTableGapsAndSameHeadChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := takeNativeReport(t, ctx, s, req)
-	if before.Anchor.Cursor != after.Anchor.Cursor || before.SHA256 == after.SHA256 {
-		t.Fatal("same-H membership change lost")
+	if after.Anchor.Cursor.Sequence <= before.Anchor.Cursor.Sequence || before.SHA256 == after.SHA256 {
+		t.Fatal("tracked membership change lost")
 	}
 	if _, err := s.UpsertComment(ctx, Comment{ThreadID: 1, GitHubID: "comment", CommentType: "issue_comment", Body: "changed", RawJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	changed := takeNativeReport(t, ctx, s, req)
 	if nativeReportTable(t, changed, "comments").SHA256 == nativeReportTable(t, after, "comments").SHA256 {
-		t.Fatal("table-mode content update lost")
+		t.Fatal("comment content update lost")
 	}
 }
 
@@ -167,14 +170,14 @@ func TestNativeReportExclusionsAndLocalAbsence(t *testing.T) {
 	if len(nativeReportTable(t, after, "thread_exclusions").Rows) != 1 || len(nativeReportTable(t, after, "thread_excluded_nodes").Rows) != 1 {
 		t.Fatal("lost owner exclusion evidence")
 	}
-	// Excluded nodes have no change-contract trigger. Their facts still change
-	// the digest even if no tracked writer advances the global sequence.
+	// Policy changes now advance the same journal as content and change the
+	// captured inventory digest, including direct SQLite writers.
 	if _, err = s.db.ExecContext(ctx, "insert into thread_excluded_nodes values('later-node','fixture/repo',10)"); err != nil {
 		t.Fatal(err)
 	}
-	sameH := takeNativeReport(t, ctx, s, req)
-	if sameH.Anchor.Cursor != after.Anchor.Cursor || sameH.SHA256 == after.SHA256 {
-		t.Fatal("same-H policy change lost")
+	policy := takeNativeReport(t, ctx, s, req)
+	if policy.Anchor.Cursor.Sequence <= after.Anchor.Cursor.Sequence || policy.SHA256 == after.SHA256 {
+		t.Fatal("tracked policy change lost")
 	}
 	// The native writer retains comments even when their node is excluded;
 	// queueAnalyticsActor skips enrichment but does not reject the content.
@@ -205,6 +208,8 @@ func TestNativeReportRefusesUnsupportedSourceWithoutPartialResult(t *testing.T) 
 		{"missing publication", `alter table comments drop column submitted_at_gh`, ErrNativeReportSource},
 		{"extra column", `alter table comments add column future_evidence text`, ErrNativeReportSource},
 		{"unarmed", `drop trigger change_contract_comments_insert`, ErrNativeReportSource},
+		{"unarmed membership", `drop trigger change_contract_thread_child_observation_memberships_update`, ErrNativeReportSource},
+		{"unarmed global nodes", `drop trigger change_contract_thread_excluded_nodes_delete`, ErrNativeReportSource},
 		{"disabled", `drop table change_contract_state`, ErrNativeReportSource},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -238,6 +243,23 @@ func TestNativeReportRefusesUnsupportedSourceWithoutPartialResult(t *testing.T) 
 	}
 	if _, err := CaptureNativeReport(context.Background(), s.Path(), req); err == nil {
 		t.Fatal("unbounded deadline accepted")
+	}
+}
+
+func TestNativeReportRequiresCurrentJournalCoverage(t *testing.T) {
+	for _, omitNew := range []bool{true, false} {
+		s := changeContractFixture(t, 0)
+		ctx, req := nativeReportRequest(t, s)
+		installLegacyReportTracking(t, s, omitNew)
+		// This is a fresh snapshot request, not rejection of an old schema cookie.
+		// Even armed legacy comment triggers cannot satisfy the row-key contract.
+		if got, err := CaptureNativeReport(ctx, s.Path(), req); !errors.Is(err, ErrNativeReportSource) || !reflect.DeepEqual(got, NativeReportCapture{}) {
+			t.Fatal("legacy row coverage accepted", err)
+		}
+		if _, err := s.EnableChangeContract(ctx, ChangeContractEnableOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		takeNativeReport(t, ctx, s, req)
 	}
 }
 

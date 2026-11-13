@@ -265,12 +265,12 @@ func TestChangeContractKeyChangeAndTableMode(t *testing.T) {
 		t.Fatalf("key change must journal delete(old)+insert(new): %+v", got)
 	}
 	before := changeContractSequence(t, db)
-	if _, err := db.Exec(`insert into comments(id, thread_id, github_id, comment_type, body, raw_json) values(1, 2, 'c1', 'issue_comment', 'x', '{}')`); err != nil {
+	if _, err := db.Exec(`insert into pull_request_files(thread_id,path,raw_json,fetched_at) values(2,'fixture.go','{}','2026-01-01')`); err != nil {
 		t.Fatal(err)
 	}
 	after := changeContractSequence(t, db)
 	var last int64
-	if err := db.QueryRow(`select last_seq from change_contract_tables where table_name = 'comments'`).Scan(&last); err != nil {
+	if err := db.QueryRow(`select last_seq from change_contract_tables where table_name = 'pull_request_files'`).Scan(&last); err != nil {
 		t.Fatal(err)
 	}
 	if after != before+1 || last != after || len(changeContractEntriesAfter(t, db, before)) != 0 {
@@ -634,6 +634,8 @@ func TestChangeContractTableSpecsAreStable(t *testing.T) {
 		"cluster_candidate_selection",
 		"code_snapshots",
 		"code_documents",
+		"thread_child_observation_memberships",
+		"thread_excluded_nodes",
 	}
 	if len(changeContractTableSpecs) < len(established) {
 		t.Fatalf("tracked table count = %d, want at least %d", len(changeContractTableSpecs), len(established))
@@ -681,9 +683,9 @@ func BenchmarkChangeContractWriterOverhead(b *testing.B) {
 		"blob_upsert_conflict": `insert into blobs(sha256, media_type, compression, size_bytes, storage_kind, inline_text, created_at)
 			values(?, 'application/json', 'none', 1, 'inline', ?, '2026-01-01')
 			on conflict(sha256) do update set inline_text = excluded.inline_text`,
-		"comment_insert_table_mode": `insert into comments(thread_id, github_id, comment_type, body, raw_json) values(1, ?, 'issue_comment', ?, '{}')`,
+		"comment_insert_rows_mode": `insert into comments(thread_id, github_id, comment_type, body, raw_json) values(1, ?, 'issue_comment', ?, '{}')`,
 	}
-	for _, name := range []string{"blob_upsert_conflict", "comment_insert_table_mode"} {
+	for _, name := range []string{"blob_upsert_conflict", "comment_insert_rows_mode"} {
 		for _, enabled := range []bool{false, true} {
 			b.Run(fmt.Sprintf("%s/enabled=%v", name, enabled), func(b *testing.B) {
 				ctx := context.Background()

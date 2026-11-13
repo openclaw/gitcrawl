@@ -54,9 +54,10 @@ migrations or convergence work, and refuse an archive whose schema version
 differs from the binary's. They take only SQLite's ordinary write lock, so they
 can run beside a live collector.
 
-Every writable open by this or a later Gitcrawl binary re-arms an enabled
-contract whose triggers a migration removed, and advances the generation. Open
-does not fail if the repair fails; readers detect unarmed tables independently.
+Regular `Store.Open` re-arms an enabled contract whose triggers a migration
+removed, and advances the generation. Open does not fail if repair fails; readers
+detect unarmed tables independently. Narrow `OpenWritableWithoutMigration`
+writers do not re-arm the contract.
 
 ## How changes are recorded
 
@@ -102,18 +103,43 @@ They answer "changed since C" but not "which rows".
 
 Table identifiers are permanent. New tables receive new identifiers.
 
+Comments retain ID 15 and now use key-only `rows` mode. Child observation
+memberships use appended ID 38 with key `(thread_id,family)`; global excluded
+nodes use ID 39 with key `node_id`. These share the existing sequence, log,
+pruning and transactional triggers. There is no second feed or payload log.
+
+### Writer compatibility before activation
+
+This is a coverage change within contract version 1, whose row mode already
+supports these keys. On an enabled archive, current `Store.Open` or explicit
+`enable` re-arms legacy comments/new tables and advances generation once. The
+trigger DDL also changes the schema cookie. Existing cursors require a fresh
+qualified baseline; no missing historical keys are invented.
+
+Older binaries that expect table-mode comments can demote the contract again
+on writable open/rearm. Before live activation, qualify every writable
+binary/collector against this coverage floor, re-arm through the native owner,
+verify actual modes and armed state, and qualify the new generation. Do not
+interleave old repair owners or assume one new reader upgrades the writer fleet.
+Status reports the stored mode; current writable repair detects mode drift even
+when legacy triggers are still armed. Native report capture refuses legacy
+comment mode or missing/unarmed membership/global-node tracking. This code
+change does not activate or migrate any deployed archive.
+
 ## Families
 
 | Family | Tables |
 | --- | --- |
-| `reader.coverage` | `repositories`, `threads`, `thread_revisions`, `thread_fingerprints`, `thread_key_summaries`, `thread_child_observation_reservations`, `cluster_runs`, `cluster_groups`, `cluster_memberships`, `pull_request_details`, `pull_request_files`¹, `comments`¹, `pull_request_commits`¹, `pull_request_checks`¹, `pull_request_review_threads`, `github_workflow_runs`¹, `sync_attempt_failures`, `sync_runs`, `summary_runs`, `repo_sync_state`, `portable_metadata`, `thread_exclusions`, `analytics_coverage`, `analytics_review_state_coverage` |
+| `reader.coverage` | `repositories`, `threads`, `thread_revisions`, `thread_fingerprints`, `thread_key_summaries`, `thread_child_observation_reservations`, `cluster_runs`, `cluster_groups`, `cluster_memberships`, `pull_request_details`, `pull_request_files`¹, `comments`, `pull_request_commits`¹, `pull_request_checks`¹, `pull_request_review_threads`, `github_workflow_runs`¹, `sync_attempt_failures`, `sync_runs`, `summary_runs`, `repo_sync_state`, `portable_metadata`, `thread_exclusions`, `analytics_coverage`, `analytics_review_state_coverage` |
 | `reader.clusters` | `repositories`, `threads`, `thread_revisions`, `thread_key_summaries`, `document_summaries`, `cluster_runs`, `clusters`, `cluster_members`, `cluster_groups`, `cluster_memberships`, `cluster_overrides`, `cluster_closures`, `cluster_candidate_generations`, `cluster_candidates`, `cluster_candidate_members`, `cluster_candidate_overlaps`, `cluster_candidate_selection`, `thread_exclusions` |
 | `reader.code` | `repositories`, `code_snapshots`, `code_documents`¹, `thread_exclusions` |
 | `history.blobs` | `blobs` |
 | `history.pull_request_review_threads` | `pull_request_review_threads` |
 | `history.thread_revisions` | `thread_revisions` |
 
-¹ `table` mode. All other tracked tables are `rows` mode.
+¹ `table` mode. All other tracked tables are `rows` mode. Memberships and global
+excluded nodes are tracked independently of these historical reader families;
+native report capture verifies its own complete seven-table read set.
 
 Families are a convenience derived from the Clawmmunity reader. A consumer must
 still verify that every table it reads, including tables named by its own
@@ -208,7 +234,8 @@ algorithm.
 
 ## Overhead
 
-Measured on Apple M-series with the bundled pure-Go SQLite, inside one writer
+Historical measurements before comment row-key logging, on Apple M-series with
+the bundled pure-Go SQLite, inside one writer
 transaction so commit flushes are excluded
 (`go test ./internal/store -bench ChangeContractWriterOverhead`):
 
@@ -269,14 +296,16 @@ binds the scope hash and ordered table hashes. File identity and contract cursor
 are separate from content equality. No JSON encoding or wire compatibility is
 implied by these local digests or types.
 
-Each call scans the complete selected content, including tables without row
-journaling. In particular, comments have no native content digest: table
-invalidation cannot suppress unchanged rows without reading/hashing them.
-This supports incremental provider acquisition and eventual receipt/delta
-delivery; it does not promise O(changes) native scanning. Table-mode mutations
-legitimately leave gaps in the row log. Untracked membership or excluded-node
-changes can change the snapshot digest while the contract sequence stays equal.
-An equal sequence must never be used alone to skip delivery.
+Each call still scans the complete selected content: this API is an explicit
+snapshot/reconciliation operation, not the final periodic incremental reader.
+All seven participating tables now require armed row-key tracking. A future
+incremental reader can coalesce their logged keys and fetch only changed rows;
+comments need no new content-digest column to identify those candidates. Other
+table-mode tables still leave legitimate gaps in the global row log. Expired
+retention, rearm or incarnation changes require explicit reconciliation. The
+inventory digest remains independently bound in the seed token; codec/custody
+tests preserve equal-sequence, different-inventory inputs without claiming that
+current armed membership writers leave the sequence unchanged.
 
 Preflight SQL measures scoped rows and scalar bytes before each table is loaded;
 loading also enforces the limits. The byte limit counts column-name bytes and

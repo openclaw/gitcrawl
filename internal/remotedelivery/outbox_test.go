@@ -316,9 +316,12 @@ func TestSeedOutboxSameHeadInventorySurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := projected(t, ctx, native)
-	if before.Anchor != after.Anchor || before.SHA256 == after.SHA256 {
-		t.Fatal("fixture did not change inventory at same native head")
+	if after.Anchor.Cursor.Sequence <= before.Anchor.Cursor.Sequence || before.SHA256 == after.SHA256 {
+		t.Fatal("membership writer failed to change native sequence/inventory")
 	}
+	// Controlled custody input keeps the same-H digest invariant separate from
+	// native membership tracking, which now advances the journal.
+	after.Anchor.Cursor = before.Anchor.Cursor
 	var tokens []string
 	for _, c := range []store.NativeReportCapture{before, after} {
 		o, path := newSeedOutbox(t, ctx, c)

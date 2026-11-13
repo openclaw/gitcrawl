@@ -54,6 +54,17 @@ TUI guidance:
 - right-click must not be required for primary actions because terminal mouse support is inconsistent
 - avoid decorative glyph noise or transient rendering debris in dense panes
 
+### Native journal coverage
+
+Native report capture requires armed row-key tracking for all seven selected
+tables. Comments retain table ID 15; child observation memberships and global
+excluded nodes use appended IDs 38 and 39 in the existing journal. Writable
+repair reconciles legacy tracking modes and advances generation; read-only
+status reports the stored mode, and capture never repairs the source. A writer
+upgrade requires a fresh qualified baseline after rearm. See the
+[change contract](docs/change-contract.md#writer-compatibility-before-activation)
+for the writer floor; this code does not upgrade a deployed collector.
+
 ### Private seed custody
 
 `CreateSeedOutbox` takes an explicit `SeedRegistration`, an unmodified successful

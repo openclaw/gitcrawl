@@ -57,6 +57,9 @@ func TestNativeReportDeliveryRealPurgeAndOrdinaryProgress(t *testing.T) {
 	if _, err := s.UpsertComment(ctx, Comment{ThreadID: 2, GitHubID: "2", CommentType: "issue_comment", Body: "ordinary progress", RawJSON: `{"node_id":"comment-2"}`}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.ExecContext(ctx, `insert into pull_request_files(thread_id,path,raw_json,fetched_at) values(2,'fixture.go','{}','2026-01-01')`); err != nil {
+		t.Fatal(err)
+	}
 	ctx, request := nativeReportRequest(t, s)
 	progress := takeNativeReport(t, ctx, s, request)
 	if progress.Anchor.Cursor.Sequence <= c.Anchor.Cursor.Sequence || int64(len(changeContractEntriesAfter(t, s.db, c.Anchor.Cursor.Sequence))) >= progress.Anchor.Cursor.Sequence-c.Anchor.Cursor.Sequence {
