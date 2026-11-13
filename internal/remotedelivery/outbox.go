@@ -100,6 +100,25 @@ func CreateSeedOutbox(ctx context.Context, path string, r SeedRegistration, capt
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	registration, _ := json.Marshal(r)
+	anchor, _ := json.Marshal(capture.Anchor)
+	return createOutboxFile(ctx, path, func(conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, seedOutboxSchema); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `insert into binding(singleton,origin,archive,binding_id,registration_json,baseline_state) values(1,?,?,?,?, 'unqualified')`, r.Origin, r.Archive, r.BindingID, registration); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `insert into captures(seed_id,anchor_json,native_through,native_sha256,native_rows,native_bytes,part_count) values(?,?,?,?,?,?,?)`, id, anchor, seed.Plan.Manifest().NativeThrough, capture.SHA256, capture.Rows, capture.Bytes, len(parts)); err != nil {
+			return err
+		}
+		return insertSeedParts(ctx, conn, id, parts)
+	})
+}
+
+// createOutboxFile owns exclusive file creation and the same FULL transaction
+// for both closed profiles. Callers validate their entire input before this point.
+func createOutboxFile(ctx context.Context, path string, initialize func(*sql.Conn) error) (*Outbox, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -115,35 +134,25 @@ func CreateSeedOutbox(ctx context.Context, path string, r SeedRegistration, capt
 		return nil, err
 	}
 	o := &Outbox{base: base}
-	registration, _ := json.Marshal(r)
-	anchor, _ := json.Marshal(capture.Anchor)
-	err = o.write(ctx, func(conn *sql.Conn) error {
-		if _, err := conn.ExecContext(ctx, seedOutboxSchema); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, `insert into binding(singleton,origin,archive,binding_id,registration_json,baseline_state) values(1,?,?,?,?, 'unqualified')`, r.Origin, r.Archive, r.BindingID, registration); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, `insert into captures(seed_id,anchor_json,native_through,native_sha256,native_rows,native_bytes,part_count) values(?,?,?,?,?,?,?)`, id, anchor, seed.Plan.Manifest().NativeThrough, capture.SHA256, capture.Rows, capture.Bytes, len(parts)); err != nil {
-			return err
-		}
-		statement, err := conn.PrepareContext(ctx, `insert into parts(seed_id,part_index,body,payload_sha256) values(?,?,?,?)`)
-		if err != nil {
-			return err
-		}
-		defer statement.Close()
-		for i, body := range parts {
-			if _, err := statement.ExecContext(ctx, id, i, body, privateSeedHash(body)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	if err := o.write(ctx, initialize); err != nil {
 		base.Close()
 		return nil, err
 	}
 	return o, nil
+}
+
+func insertSeedParts(ctx context.Context, conn *sql.Conn, id string, parts [][]byte) error {
+	statement, err := conn.PrepareContext(ctx, `insert into parts(seed_id,part_index,body,payload_sha256) values(?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer statement.Close()
+	for i, body := range parts {
+		if _, err := statement.ExecContext(ctx, id, i, body, privateSeedHash(body)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadSeedOutboxState validates and inspects current seed custody without

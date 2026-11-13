@@ -15,6 +15,11 @@ import (
 )
 
 func clusterReportFixture(t *testing.T) (context.Context, store.NativeClusterContext) {
+	ctx, c, _ := clusterReportSourceFixture(t)
+	return ctx, c
+}
+
+func clusterReportSourceFixture(t *testing.T) (context.Context, store.NativeClusterContext, string) {
 	t.Helper()
 	ctx, s := nativeFixture(t)
 	_, err := s.DB().ExecContext(ctx, `update repositories set raw_json='{"private":false}'; update threads set kind='issue',body=NULL;
@@ -34,7 +39,7 @@ func clusterReportFixture(t *testing.T) (context.Context, store.NativeClusterCon
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ctx, c
+	return ctx, c, s.Path()
 }
 
 func TestClusterSeedNativeRoundTrip(t *testing.T) {

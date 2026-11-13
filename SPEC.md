@@ -240,6 +240,39 @@ request. A sender must persist the complete bundle and replay unchanged bytes,
 not recapture a changed archive under the same seed ID. Failed exports return no
 partial bundle. No credentials, runtime configuration or provider calls run.
 
+`delivery stage-clusters` requires `--db`, `--bundle`, `--repo`, `--outbox
+NEW_PATH`, `--origin`, `--archive`, `--binding`, `--max-rows`,
+`--max-encoded-bytes` and `--timeout`. It bounds the JSON envelope before base64
+decoding, validates the fixed profile, exact destination, typed rows, descriptor
+hashes, canonical inventory and completion, then exclusively creates private
+SQLite custody. Existing destinations and sidecars are refused. The original
+manifest/chunk/completion bytes are retained without re-encoding; no native
+recapture, source migration, credential lookup or HTTP request runs.
+
+The cluster outbox has application identity `GCCO` and version 1, separate from
+private seed/report outboxes. It reuses their exclusive creation, FULL transaction
+and part insertion owner. Nullable positive `begin_sequence` and per-part
+`receipt_json` fields reserve the known subsequent sender contract: begin learns
+the authenticated source sequence, later parts must be consecutive. Both remain
+NULL here; there is no receipt settlement or delivery command in this slice.
+Private v1/v2/v3 readers and migrations refuse this format unchanged.
+
+`delivery cluster-status --outbox PATH --timeout D` opens only the outbox
+read-only. It checks bounded manifest/custody metadata and reports `staged`,
+content identities and counts, never a qualified baseline or publication. Status
+is not a full request-body audit; a future sender must validate pending bytes and
+current source authority. `rows` counts captured projection rows; `bytes` counts
+all decoded request bodies, not base64 overhead or RSS. Both commands honor
+`--json` and global output format and return content-free failures.
+
+Physical file identity is recorded at staging for the operator-selected current
+source. The export does not carry an inode, so staging cannot prove which file
+produced that historical bundle. Store checks the current schema and exact
+repository/native/provider identity without reading content or qualifying public
+status/exclusion policy. Later delivery must recheck that authority. Failed owned
+files and original bundles are retained for explicit reconciliation; no automatic
+retry, overwrite or cleanup runs.
+
 A completed inventory proves delivery of this captured view, not upstream
 freshness. Historical completeness cannot authorize a current empty-relationship
 claim. A receiver must recheck current exclusion policy and independently qualify
@@ -312,7 +345,7 @@ No `serve` command.
 Public commands:
 
 - `init`
-- `delivery stage-seed|status|deliver|export-clusters`
+- `delivery stage-seed|status|deliver|export-clusters|stage-clusters|cluster-status`
 - `doctor`
 - `configure`
 - `version`

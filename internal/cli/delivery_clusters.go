@@ -16,12 +16,7 @@ import (
 
 // Byte slices intentionally marshal as base64: decoding this envelope restores
 // the exact bounded seed requests, without another JSON normalization pass.
-type clusterExportOutput struct {
-	Profile  string   `json:"profile"`
-	Manifest []byte   `json:"manifest"`
-	Chunks   [][]byte `json:"chunks"`
-	Complete []byte   `json:"complete"`
-}
+type clusterExportOutput = remotedelivery.ClusterBundle
 
 func (a *App) runClusterExport(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("delivery export-clusters", flag.ContinueOnError)

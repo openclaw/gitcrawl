@@ -225,10 +225,12 @@ Usage:
 Usage:
   gitcrawl threads owner/repo [--include-closed] [--numbers refs] [--limit N] [--json]
 `,
-	"delivery": `gitcrawl delivery explicitly manages one private report outbox.
+	"delivery": `gitcrawl delivery explicitly manages native report and cluster custody.
 
 Usage:
   gitcrawl delivery export-clusters --db PATH --repo OWNER/REPO --archive ID --binding ID --seed-id HEX32 --captured-at RFC3339Nano --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D
+  gitcrawl delivery stage-clusters --db PATH --bundle PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-encoded-bytes N --timeout D [--json]
+  gitcrawl delivery cluster-status --outbox PATH --timeout D [--json]
   gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
@@ -244,6 +246,12 @@ It does not create an outbox, send requests, acquire credentials or advance a
 checkpoint. Legacy/partial selection stays explicitly unqualified. captured-at
 is a caller-supplied fixed capture timestamp, not provider freshness. Bounds cover
 native reads and encoded requests; base64 output adds transport overhead.
+
+stage-clusters exclusively persists a retained export's exact requests. It pins
+the operator-selected current source identity, not the historical export inode.
+cluster-status reads staged metadata only; neither command sends, records receipts,
+or claims publication/qualification. Cluster bytes counts decoded wire bytes.
+Retain the original bundle and any failed owned file; no retry or cleanup runs.
 
 All paths and positive bounds are explicit. Seed/change commands require native
 schema 16 and an armed change

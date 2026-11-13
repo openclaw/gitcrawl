@@ -181,3 +181,46 @@ func clusterScopeValues(s *store.NativeClusterContextScope) []PrivateValue {
 	}
 	return []PrivateValue{clusterText(s.Mode), clusterText(s.PolicyDigest), clusterText(s.SourceThrough), clusterText(s.SourceObservedAt), clusterBoolean(s.ProviderComplete), clusterBoolean(s.FullNativeScopeComplete), clusterBoolean(s.SelectedInputComplete), clusterInteger(s.RetainedPriorMemberships), identity, publication}
 }
+
+// The inventory format permits NULL for every non-key column. This smaller
+// native profile does not: validate its ingress after RowDigest has checked
+// fixed types, widths and exact key/row agreement.
+func clusterRowWithinProfile(c remote.Change) bool {
+	var layout privateLayout
+	for _, l := range clusterLayouts {
+		if l.name == c.Table {
+			layout = l
+			break
+		}
+	}
+	nullable := map[string]string{
+		"selection": "selection_run_id scope_mode policy_digest source_through source_observed_at provider_complete full_native_scope_complete selected_input_complete retained_prior_memberships identity_reconciliation_complete publication_status analysis_status analysis_run_id analysis_scope_mode analysis_policy_digest analysis_source_through analysis_source_observed_at analysis_provider_complete analysis_full_native_scope_complete analysis_selected_input_complete analysis_retained_prior_memberships analysis_identity_reconciliation_complete analysis_publication_status",
+		"groups":    "closed_at representative_thread_id", "members": "last_seen_run_id", "threads": "updated_at body node_id",
+	}
+	cols := strings.Fields(layout.columns)
+	if layout.name == "" || len(c.Row) != len(cols) {
+		return false
+	}
+	for i, name := range cols {
+		v := c.Row[i]
+		if v.Kind == "null" {
+			if !slices.Contains(strings.Fields(nullable[c.Table]), name) {
+				return false
+			}
+			continue
+		}
+		if v.Value == nil {
+			return false
+		}
+		if v.Kind == "integer" {
+			n, err := strconv.ParseInt(*v.Value, 10, 64)
+			if err != nil || n < 0 || ((slices.Contains(strings.Fields(layout.keys), name) || name == "number" || name == "representative_thread_id") && n == 0) {
+				return false
+			}
+			if (strings.HasSuffix(name, "_complete") || name == "quarantined") && n > 1 {
+				return false
+			}
+		}
+	}
+	return true
+}

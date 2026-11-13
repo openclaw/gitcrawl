@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded offline `delivery stage-clusters` and read-only `cluster-status`, preserving exact exported request bytes, explicit current source custody and private outbox isolation. No sender, source migration or publication is activated.
+
 - Add bounded offline public durable-cluster export from existing native data, preserving membership, representatives, exclusions and unknown historical qualification. The four-table seed uses exact request bytes and a content digest without inventing a journal cursor; no receiver, collector or schedule is activated.
 
 - Add explicit Octopool incremental sync from qualified native checkpoints. Complete all-state comment runs preserve their initial coverage cutoff and advance only after successful acquisition; missing checkpoints require an explicit bootstrap instead of a full crawl. No schedule is activated.
