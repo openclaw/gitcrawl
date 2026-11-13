@@ -128,6 +128,42 @@ func TestNativeReportDeliveryGlobalNodesUseNativeJSONSemantics(t *testing.T) {
 	}
 }
 
+func TestNativeReportDeliveryCompactNodeEvidence(t *testing.T) {
+	s, ctx, c := deliveryFixture(t)
+	if _, err := s.db.ExecContext(ctx, `insert into thread_exclusions values('other/repo',90,'issue',90,'other','now','owner_requested','fixture')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []string{"", "123.0", "node\x00suffix", "9223372036854775808"} {
+		if _, err := s.db.ExecContext(ctx, `insert into thread_excluded_nodes values(?,'other/repo',90)`, node); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, deliveryLimits(), deliveryWalk(NativeReportDeliveryEvidence{NodeIDs: []string{node}})); !errors.Is(err, ErrThreadExcluded) {
+			t.Fatal("exact compact global node ignored", err)
+		}
+	}
+	if err := CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, deliveryLimits(), deliveryWalk(NativeReportDeliveryEvidence{NodeIDs: []string{"123", "node", "allowed"}})); err != nil {
+		t.Fatal("compact node text was normalized", err)
+	}
+	e := NativeReportDeliveryEvidence{ThreadNumbers: []int64{10}, RawJSON: []string{"{}"}, NodeIDs: []string{"allowed"}}
+	exact := NativeReportDeliveryLimits{MaxRows: 6, MaxBytes: 18}
+	if err := CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, exact, deliveryWalk(e, e)); err != nil {
+		t.Fatal("exact mixed evidence budget refused", err)
+	}
+	for _, limits := range []NativeReportDeliveryLimits{{MaxRows: 5, MaxBytes: 18}, {MaxRows: 6, MaxBytes: 17}} {
+		if err := CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, limits, deliveryWalk(e, e)); !errors.Is(err, ErrNativeReportLimit) {
+			t.Fatal("compact nodes escaped aggregate budget", err)
+		}
+	}
+	batch := NativeReportDeliveryEvidence{NodeIDs: make([]string, 501)}
+	for i := range batch.NodeIDs {
+		batch.NodeIDs[i] = "allowed"
+	}
+	batch.NodeIDs[500] = "node\x00suffix"
+	if err := CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, NativeReportDeliveryLimits{MaxRows: 501, MaxBytes: 8192}, deliveryWalk(batch)); !errors.Is(err, ErrThreadExcluded) {
+		t.Fatal("compact node beyond SQL batch boundary escaped", err)
+	}
+}
+
 func TestNativeReportDeliveryOneSnapshotAcrossConcurrentPurge(t *testing.T) {
 	s, ctx, c := deliveryFixture(t)
 	e := NativeReportDeliveryEvidence{ThreadNumbers: []int64{10}, RawJSON: []string{`{"node_id":"comment-1"}`}}

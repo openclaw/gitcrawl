@@ -28,8 +28,12 @@ func (a *App) runDelivery(ctx context.Context, args []string) error {
 		return a.printCommandUsage("delivery")
 	}
 	command := args[0]
+	switch command {
+	case "report-status", "upgrade", "stage-changes", "deliver-changes":
+		return a.runReportDelivery(ctx, args)
+	}
 	if command != "stage-seed" && command != "status" && command != "deliver" {
-		return usageErr(errors.New("delivery requires stage-seed, status, or deliver"))
+		return usageErr(errors.New("unknown delivery command; see gitcrawl help delivery"))
 	}
 	fs := flag.NewFlagSet("delivery", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

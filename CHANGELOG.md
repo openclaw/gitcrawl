@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an explicit schema-3 report outbox upgrade with bounded native change staging, exact multipart retries and atomic baseline promotion after final receipt. The incremental sender rechecks current policy before each request and retains unfinished captures for resumption; no schedule is activated.
+
+- Recheck retained parent node identities before seed and incremental child delivery, including globally excluded nodes whose native parent has since been removed.
+
 - Add bounded native incremental report capture against a pinned qualified inventory, including parent/exclusion dependency changes, snapshot-consistent typed rows and explicit stale-source holds. No ingestion schedule is activated.
 
 - Add an explicit, bounded seed-outbox inventory migration that reuses fully receipted saved requests, retains original seed evidence and native tokens, and atomically builds compact typed fingerprints and parent/node lookup metadata.

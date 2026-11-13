@@ -30,6 +30,7 @@ type ReportOutboxState struct {
 	BaselineNative, BaselineSHA256, ServerCursor string
 	InventorySHA256, InventoryLayout             string
 	ReceiverSequence                             int64
+	ActiveChangeID                               string
 }
 
 const inventoryMigrationSchema = `
@@ -220,14 +221,30 @@ func inventorySeedIdentity(s SeedState, m remote.GitHubSeedManifest) error {
 	return nil
 }
 
+type compactInventoryRow struct {
+	Table                          string
+	Key, SHA256, KeyJSON           []byte
+	RepositoryID                   int64
+	ThreadID, ThreadNumber, NodeID any
+}
+
 func insertInventoryRow(ctx context.Context, conn *sql.Conn, codec *remote.InventoryCodec, anchor store.NativeReportAnchor, change remote.Change) error {
-	key, err := codec.EncodeKey(change.Table, change.Key)
+	row, err := deriveInventoryRow(ctx, conn, codec, anchor, change)
 	if err != nil {
 		return err
 	}
+	_, err = conn.ExecContext(ctx, `insert into inventory_rows(table_name,encoded_key,row_sha256,key_json,repository_id,thread_id,thread_number,node_id) values(?,?,?,?,?,?,?,?)`, row.Table, row.Key, row.SHA256, row.KeyJSON, row.RepositoryID, row.ThreadID, row.ThreadNumber, row.NodeID)
+	return err
+}
+
+func deriveInventoryRow(ctx context.Context, conn *sql.Conn, codec *remote.InventoryCodec, anchor store.NativeReportAnchor, change remote.Change) (compactInventoryRow, error) {
+	key, err := codec.EncodeKey(change.Table, change.Key)
+	if err != nil {
+		return compactInventoryRow{}, err
+	}
 	hash, err := codec.RowDigest(change.Table, change.Key, change.Row)
 	if err != nil {
-		return err
+		return compactInventoryRow{}, err
 	}
 	cell := func(name string) remote.ChangeValue { return change.Row[deliveryColumn(change.Table, name)] }
 	integer := func(name string) (int64, error) { return deliveryInteger(cell(name)) }
@@ -245,48 +262,48 @@ func insertInventoryRow(ctx context.Context, conn *sql.Conn, codec *remote.Inven
 		id, e := integer("id")
 		name, e2 := text("full_name")
 		if e != nil || e2 != nil || id != anchor.RepositoryID || strings.ToLower(name) != anchor.Repository {
-			return ErrSeedOutbox
+			return compactInventoryRow{}, ErrSeedOutbox
 		}
 	case "threads":
 		id, e := integer("repo_id")
 		tid, e2 := integer("id")
 		n, e3 := integer("number")
 		if e != nil || e2 != nil || e3 != nil || id != anchor.RepositoryID {
-			return ErrSeedOutbox
+			return compactInventoryRow{}, ErrSeedOutbox
 		}
 		threadID, number = tid, n
 	case "comments", "thread_child_observation_reservations", "thread_child_observation_memberships":
 		tid, e := integer("thread_id")
 		if e != nil {
-			return e
+			return compactInventoryRow{}, e
 		}
 		threadID = tid
 		if change.Table == "comments" {
 			if cell("raw_json_blob_id").Kind != "null" {
-				return ErrSeedOutbox
+				return compactInventoryRow{}, ErrSeedOutbox
 			}
 		} else {
 			family, e := text("family")
 			if e != nil || family != "comments" {
-				return ErrSeedOutbox
+				return compactInventoryRow{}, ErrSeedOutbox
 			}
 		}
 	case "thread_exclusions", "thread_excluded_nodes":
 		repo, e := text("repository")
 		n, e2 := integer("number")
 		if e != nil || e2 != nil || repo != anchor.Repository {
-			return ErrSeedOutbox
+			return compactInventoryRow{}, ErrSeedOutbox
 		}
 		number = n
 		if change.Table == "thread_excluded_nodes" {
 			id, e := text("node_id")
 			if e != nil {
-				return e
+				return compactInventoryRow{}, e
 			}
 			node = id
 		}
 	default:
-		return ErrSeedOutbox
+		return compactInventoryRow{}, ErrSeedOutbox
 	}
 	if change.Table == "threads" || change.Table == "comments" {
 		var raw any
@@ -298,7 +315,7 @@ func insertInventoryRow(ctx context.Context, conn *sql.Conn, codec *remote.Inven
 		// including integers beyond float64 precision, JSON null and malformed JSON.
 		var value sql.NullString
 		if err := conn.QueryRowContext(ctx, `select cast(json_extract(case when json_valid(?) then ? else '{}' end,'$.node_id') as text)`, raw, raw).Scan(&value); err != nil {
-			return err
+			return compactInventoryRow{}, err
 		}
 		if value.Valid {
 			node = value.String
@@ -306,10 +323,9 @@ func insertInventoryRow(ctx context.Context, conn *sql.Conn, codec *remote.Inven
 	}
 	keyJSON, err := json.Marshal(change.Key)
 	if err != nil {
-		return err
+		return compactInventoryRow{}, err
 	}
-	_, err = conn.ExecContext(ctx, `insert into inventory_rows(table_name,encoded_key,row_sha256,key_json,repository_id,thread_id,thread_number,node_id) values(?,?,?,?,?,?,?,?)`, change.Table, key, hash[:], keyJSON, anchor.RepositoryID, threadID, number, node)
-	return err
+	return compactInventoryRow{Table: change.Table, Key: key, SHA256: hash[:], KeyJSON: keyJSON, RepositoryID: anchor.RepositoryID, ThreadID: threadID, ThreadNumber: number, NodeID: node}, nil
 }
 
 func digestInventoryRows(ctx context.Context, conn *sql.Conn, codec *remote.InventoryCodec, scope string, maxRows int64) (string, error) {
@@ -325,10 +341,14 @@ func digestInventoryRows(ctx context.Context, conn *sql.Conn, codec *remote.Inve
 	if err != nil {
 		return "", err
 	}
+	return digestInventoryCursor(ctx, codec, scope, counts, uint64(maxRows), rows)
+}
+
+func digestInventoryCursor(ctx context.Context, codec *remote.InventoryCodec, scope string, counts []remote.InventoryCount, maxRows uint64, rows *sql.Rows) (string, error) {
 	defer rows.Close()
 	// Private profile scope encoding is the 64 lowercase hexadecimal ASCII
 	// bytes, not the decoded 32-byte digest. This is part of inventory identity.
-	hash, err := codec.Digest(ctx, []byte(scope), counts, remote.InventoryLimits{MaxEntries: uint64(maxRows), MaxKeyBytes: remote.MaxChangeBytes}, func(ctx context.Context) (remote.InventoryEntry, error) {
+	hash, err := codec.Digest(ctx, []byte(scope), counts, remote.InventoryLimits{MaxEntries: maxRows, MaxKeyBytes: remote.MaxChangeBytes}, func(ctx context.Context) (remote.InventoryEntry, error) {
 		if err := ctx.Err(); err != nil {
 			return remote.InventoryEntry{}, err
 		}
@@ -372,7 +392,7 @@ func inventoryVersion(ctx context.Context, q seedQuery, version, tables int) err
 	return nil
 }
 
-// ReadReportOutboxState admits schema 2 without opening a writer or reading
+// ReadReportOutboxState admits schema 2/3 without opening a writer or reading
 // native state. It reads the current binding independently of seed history;
 // future delta settlement must not reinterpret the old seed as the new baseline.
 func ReadReportOutboxState(ctx context.Context, path string) (ReportOutboxState, error) {
@@ -408,7 +428,17 @@ func ReadReportOutboxState(ctx context.Context, path string) (ReportOutboxState,
 
 func readReportState(ctx context.Context, q seedQuery) (ReportOutboxState, error) {
 	var s ReportOutboxState
-	if err := inventoryVersion(ctx, q, reportOutboxVersion, 4); err != nil {
+	var version int
+	if err := q.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		return s, err
+	}
+	tables := 4
+	if version == 3 {
+		tables = 7
+	} else if version != reportOutboxVersion {
+		return s, ErrSeedOutbox
+	}
+	if err := inventoryVersion(ctx, q, version, tables); err != nil {
 		return s, err
 	}
 	var registration, anchor []byte
@@ -420,17 +450,25 @@ func readReportState(ctx context.Context, q seedQuery) (ReportOutboxState, error
 	if json.Unmarshal(registration, &s.Registration) != nil || json.Unmarshal(anchor, &s.BaselineAnchor) != nil || validateSeedRegistration(s.Registration) != nil || origin != s.Registration.Origin || archive != s.Registration.Archive || binding != s.Registration.BindingID || qualified != BaselineQualified || s.BaselineAnchor.File != s.Registration.File || s.BaselineAnchor.Repository != s.Registration.Repository || s.BaselineAnchor.RepositoryID <= 0 || !digest(s.BaselineSHA256) || !digest(s.InventorySHA256) || s.InventoryLayout != privateInventoryLayoutID || s.ReceiverSequence <= 0 || s.ServerCursor == "" {
 		return ReportOutboxState{}, ErrSeedOutbox
 	}
-	// This slice admits migrated v1 baselines only. A future delta owner must
-	// explicitly extend admission when it introduces native-v2 settlement.
+	// Token versions preserve their hash semantics: migrated v1 baselines keep
+	// the original full inventory hash until explicit v2 receipt settlement.
 	a, c := s.BaselineAnchor, s.BaselineAnchor.Cursor
 	token, err := remote.ParseGitHubNativeAnchor(s.BaselineNative)
-	if err != nil || token.Version != remote.GitHubNativeV1 || token.Epoch != c.Epoch || token.Generation != c.Generation || token.SchemaCookie != c.SchemaVersion || token.Sequence != c.Sequence || token.PrunedThrough != c.PrunedThrough || token.ScopeSHA256 != a.ScopeSHA256 || token.InventorySHA256 != s.BaselineSHA256 {
+	if err != nil || token.Epoch != c.Epoch || token.Generation != c.Generation || token.SchemaCookie != c.SchemaVersion || token.Sequence != c.Sequence || token.PrunedThrough != c.PrunedThrough || token.ScopeSHA256 != a.ScopeSHA256 || token.InventorySHA256 != s.BaselineSHA256 {
 		return ReportOutboxState{}, ErrSeedOutbox
+	}
+	if token.Version == remote.GitHubNativeV2 && s.BaselineSHA256 != s.InventorySHA256 {
+		return ReportOutboxState{}, ErrSeedOutbox
+	}
+	if version == 3 {
+		if err := q.QueryRowContext(ctx, `select coalesce(active_change_id,'') from binding where singleton=1`).Scan(&s.ActiveChangeID); err != nil {
+			return ReportOutboxState{}, err
+		}
 	}
 	return s, nil
 }
 
-// OpenReportOutbox recognizes schema2 before the storage helper can change
+// OpenReportOutbox recognizes schema2/3 before the storage helper can change
 // modes/journaling. It does not migrate or permit old seed operations.
 func OpenReportOutbox(ctx context.Context, path string) (*Outbox, error) {
 	if _, err := ReadReportOutboxState(ctx, path); err != nil {

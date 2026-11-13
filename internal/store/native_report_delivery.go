@@ -11,14 +11,17 @@ import (
 
 // NativeReportDeliveryEvidence contains references from staged content, not
 // exclusion-ledger metadata. The caller resolves parent numbers from the staged
-// inventory and supplies raw JSON only from its threads/comments.
+// inventory and supplies raw JSON only from its threads/comments. NodeIDs are
+// exact compact node text already interpreted by native SQLite, not JSON or
+// provider IDs inferred by the caller. They may include empty text or NUL.
 type NativeReportDeliveryEvidence struct {
 	ThreadNumbers []int64
 	RawJSON       []string
+	NodeIDs       []string
 }
 
-// MaxRows counts every number and raw JSON item, including repeated references.
-// MaxBytes counts raw JSON bytes across all yields, not allocations or RSS.
+// MaxRows counts every number, raw JSON and node item, including repeats.
+// MaxBytes counts raw JSON and node bytes across yields, not allocations or RSS.
 type NativeReportDeliveryLimits struct{ MaxRows, MaxBytes int64 }
 
 // CheckNativeReportDelivery checks all supplied references in one current
@@ -67,17 +70,19 @@ func CheckNativeReportDelivery(ctx context.Context, path string, anchor NativeRe
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			for _, count := range []int{len(e.ThreadNumbers), len(e.RawJSON)} {
+			for _, count := range []int{len(e.ThreadNumbers), len(e.RawJSON), len(e.NodeIDs)} {
 				if int64(count) > limits.MaxRows-rows {
 					return ErrNativeReportLimit
 				}
 				rows += int64(count)
 			}
-			for _, raw := range e.RawJSON {
-				if int64(len(raw)) > limits.MaxBytes-rawBytes {
-					return ErrNativeReportLimit
+			for _, values := range [][]string{e.RawJSON, e.NodeIDs} {
+				for _, value := range values {
+					if int64(len(value)) > limits.MaxBytes-rawBytes {
+						return ErrNativeReportLimit
+					}
+					rawBytes += int64(len(value))
 				}
-				rawBytes += int64(len(raw))
 			}
 			for _, number := range e.ThreadNumbers {
 				if number <= 0 {
@@ -134,6 +139,23 @@ func checkNativeDeliveryEvidence(ctx context.Context, tx *sql.Tx, repository str
 		query := `with evidence(raw) as (values ` + values + `) select exists(select 1 from thread_excluded_nodes where node_id in (select json_extract(case when json_valid(raw) then raw else '{}' end,'$.node_id') from evidence))`
 		var excluded bool
 		if err := tx.QueryRowContext(ctx, query, args...).Scan(&excluded); err != nil {
+			return err
+		}
+		if excluded {
+			return ErrThreadExcluded
+		}
+	}
+	for start := 0; start < len(e.NodeIDs); start += batchSize {
+		end := min(start+batchSize, len(e.NodeIDs))
+		args := make([]any, 0, end-start)
+		for _, node := range e.NodeIDs[start:end] {
+			args = append(args, node)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", end-start), ",")
+		var excluded bool
+		// The compact inventory owner already applied native JSON extraction and
+		// TEXT affinity. Compare these exact bytes directly to the global ledger.
+		if err := tx.QueryRowContext(ctx, `select exists(select 1 from thread_excluded_nodes where node_id in (`+placeholders+`))`, args...).Scan(&excluded); err != nil {
 			return err
 		}
 		if excluded {

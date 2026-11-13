@@ -404,3 +404,53 @@ A saved capture or included ledger is not current policy authority; stale pendin
 bytes must be held rather than silently rewritten or allowed to clear historical
 exclusions. Packing makes no provider freshness, history-completeness or public
 publication claim.
+
+
+### Explicit report outbox commands
+
+The `delivery` command keeps schema1 seed custody separate from incremental
+report custody. Existing `stage-seed`, `status`, and `deliver` commands retain
+their seed behavior. Every operation requires an explicit outbox and positive
+`--timeout`; no command discovers configuration, invokes provider sync, rearms
+the source journal, or builds native indexes.
+
+```text
+gitcrawl delivery report-status --outbox PATH --timeout D [--json]
+gitcrawl delivery upgrade --outbox PATH --to-version 2 --max-rows N --max-encoded-bytes N --timeout D [--json]
+gitcrawl delivery upgrade --outbox PATH --to-version 3 --timeout D [--json]
+gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
+gitcrawl delivery deliver-changes --db PATH --outbox PATH --max-rows N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
+```
+
+`report-status` opens schema2/3 read-only and returns the qualified native token,
+compact digest/layout, receiver cursor/sequence and active capture ID. It does
+not open the native source, acquire a token, or write application state. Normal
+SQLite WAL reader coordination may still create sidecars. Receiver sequence is
+an exact decimal string; the active capture has not yet replaced that baseline.
+
+`upgrade` performs one explicitly selected transition. Version2 requires a fully
+receipted seed, validates every saved request/receipt, and builds its compact
+inventory without reopening the source. Its encoded-byte limit includes saved
+request and receipt bytes. Version3 is a schema-only transition from version2.
+Neither operation chains upgrades or resets existing custody; wrong versions,
+incomplete seeds and exhausted limits fail with retained state.
+
+`stage-changes` requires schema3 and no active capture. Destination, repository,
+source incarnation and baseline come from saved custody. Native capture checks
+all five explicit work bounds; source and index transactions close before the
+outbox compares that exact predecessor under its writer transaction. Staging
+retains exact request bytes and candidate metadata without advancing the
+qualified baseline. All encoded limits are explicit, with at most 64 parts of
+at most 4 MiB/500 changes each. Candidate hashing streams the complete compact
+index under the deadline; row/byte bounds are not process RSS limits.
+
+`deliver-changes` uses only the saved destination and one pinned capture. The
+service token named by `--token-env` is resolved lazily for sending; GitHub token
+helpers are not used. An idle outbox requires neither source access nor a token.
+A part-limited call reports `part_limit`; a failed call reports `partial` with
+only the pinned capture ID and receipts durably settled by that invocation.
+A lost reply may follow a remote commit: explicitly resume saved bytes rather
+than stage again. Final contiguous receipt settlement promotes the inventory,
+native token and receiver checkpoint atomically. No retry, migration, cleanup
+or successor capture is implicit. Qualified custody is not provider freshness,
+coverage, current privacy authority or publication approval.

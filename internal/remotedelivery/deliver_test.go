@@ -207,6 +207,134 @@ func TestDeliverSeedBoundsBeforeCredentials(t *testing.T) {
 	}
 }
 
+func TestDeliverSeedChildChunkRechecksRetainedParentNode(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(missing), func(t *testing.T) {
+			ctx, native := nativeFixture(t)
+			if _, err := native.DB().ExecContext(ctx, `update threads set raw_json='{"node_id":"parent-node"}' where id=1`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := native.UpsertComment(ctx, store.Comment{ThreadID: 1, GitHubID: "child", CommentType: "issue_comment", Body: "private child", RawJSON: `{"node_id":"child-node"}`}); err != nil {
+				t.Fatal(err)
+			}
+			var bodies [][]byte
+			var requests atomic.Int64
+			seen := &sync.Map{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				serveSeedReceipt(t, w, r, bodies, seen)
+			}))
+			defer server.Close()
+			o, _, bodies := deliveryFixture(t, ctx, native, server.URL)
+			plan, err := remote.DecodeGitHubSeedManifest(bodies[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			childPart := -1
+			for index := 1; index < len(bodies)-1; index++ {
+				chunk, err := plan.ValidateChunk(bodies[index])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if chunk.Changes[0].Table == "comments" {
+					childPart = index
+					break
+				}
+			}
+			if childPart < 1 {
+				t.Fatal("fixture lacks a child-only chunk")
+			}
+			limits := deliveryLimits()
+			limits.MaxParts = childPart
+			if result, err := o.DeliverSeed(ctx, native.Path(), remote.StaticToken("fixture"), nil, limits); err != nil || result.Receipts != childPart || result.Complete {
+				t.Fatal("seed prefix did not settle", result, err)
+			}
+			pending := nextSeedPart(t, ctx, o)
+			before := requests.Load()
+			token := deliveryToken(func(context.Context) (string, error) {
+				if missing {
+					if _, err := native.DB().ExecContext(ctx, `delete from threads where id=1`); err != nil {
+						return "", err
+					}
+				}
+				_, err := native.DB().ExecContext(ctx, `insert into thread_exclusions values('other/repo',90,'issue',90,'other','now','owner_requested','fixture'); insert into thread_excluded_nodes values('parent-node','other/repo',90)`)
+				return "fixture", err
+			})
+			limits.MaxParts = 1
+			result, err := o.DeliverSeed(ctx, native.Path(), token, nil, limits)
+			if !errors.Is(err, store.ErrThreadExcluded) || result.Receipts != 0 || result.Complete || requests.Load() != before {
+				t.Fatal("child chunk escaped current global parent-node policy", result, err)
+			}
+			after := nextSeedPart(t, ctx, o)
+			if after.Ref != pending.Ref || !bytes.Equal(after.Body, pending.Body) || outboxState(t, ctx, o).BaselineState != BaselineUnqualified {
+				t.Fatal("parent-node hold advanced seed custody")
+			}
+		})
+	}
+}
+
+func TestDeliverSeedParentNodeAffinityAndExactRowBudget(t *testing.T) {
+	ctx, native := nativeFixture(t)
+	cases := []struct {
+		raw, node string
+		valid     bool
+	}{
+		{`{}`, "", false},
+		{`{"node_id":null}`, "", false},
+		{`not-json`, "", false},
+		{`{"node_id":""}`, "", true},
+		{`{"node_id":"node\u0000suffix"}`, "node\x00suffix", true},
+		{`{"node_id":9007199254740993}`, "9007199254740993", true},
+		{`{"node_id":123.0}`, "123.0", true},
+	}
+	ids := make([]int64, len(cases))
+	for i, item := range cases {
+		id, err := native.UpsertThread(ctx, store.Thread{RepoID: 1, GitHubID: strconv.Itoa(i + 100), Number: i + 100, Kind: "issue", State: "open", Title: "retained", RawJSON: item.raw, LabelsJSON: "[]", AssigneesJSON: "[]", ContentHash: strconv.Itoa(i), UpdatedAt: "2026-01-01"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = id
+		if _, err := native.UpsertComment(ctx, store.Comment{ThreadID: id, GitHubID: strconv.Itoa(i + 100), CommentType: "issue_comment", RawJSON: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Enough child rows make completion require three evidence entries per
+	// child; a two-times allowance would reject the exact native-row budget.
+	for i := 0; i < 10; i++ {
+		if _, err := native.UpsertComment(ctx, store.Comment{ThreadID: ids[len(ids)-1], GitHubID: strconv.Itoa(i + 200), CommentType: "issue_comment", RawJSON: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var bodies [][]byte
+	seen := &sync.Map{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveSeedReceipt(t, w, r, bodies, seen) }))
+	defer server.Close()
+	o, _, bodies := deliveryFixture(t, ctx, native, server.URL)
+	// Parent extraction runs inside the existing streaming transaction, not
+	// through another connection that would deadlock a one-connection outbox.
+	o.base.DB().SetMaxOpenConns(1)
+	limits := deliveryLimits()
+	limits.MaxRows = outboxState(t, ctx, o).NativeRows
+	limits.MaxBytes = 0
+	for _, body := range bodies {
+		limits.MaxBytes += int64(len(body))
+	}
+	d, err := o.prepareDelivery(ctx, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, item := range cases {
+		parent := d.parents[ids[i]]
+		if parent.number != int64(i+100) || parent.node.Valid != item.valid || parent.node.String != item.node {
+			t.Fatalf("native SQLite parent identity mismatch at fixture %d", i)
+		}
+	}
+	result, err := o.DeliverSeed(ctx, native.Path(), remote.StaticToken("fixture"), nil, limits)
+	if err != nil || !result.Complete || result.Receipts != len(bodies) {
+		t.Fatal("exact seed bounds failed", result, err)
+	}
+}
+
 func purgeDeliveryThread(t *testing.T, ctx context.Context, native *store.Store) {
 	purgeDeliveryNumber(t, ctx, native, 10)
 }

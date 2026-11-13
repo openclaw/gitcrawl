@@ -32,8 +32,13 @@ type DeliveryResult struct {
 type seedDelivery struct {
 	state   SeedState
 	plan    *remote.GitHubSeedPlan
-	parents map[int64]int64
+	parents map[int64]seedDeliveryParent
 	limits  DeliveryLimits
+}
+
+type seedDeliveryParent struct {
+	number int64
+	node   sql.NullString
 }
 
 // DeliverSeed resumes exact saved requests. It never retries an uncertain
@@ -76,17 +81,17 @@ func (o *Outbox) DeliverSeed(ctx context.Context, source string, token remote.To
 			transport = http.DefaultTransport
 		}
 		transportClient.Transport = seedPolicyTransport{base: transport, check: func(requestCtx context.Context) error {
-			// Each staged row contributes at most one thread reference and one
-			// raw JSON value to the source owner's independent evidence budget.
+			// A child may contribute its thread number, raw JSON and the saved
+			// parent's compact node identity to the source owner's budget.
 			policyRows := int64(math.MaxInt64)
-			if limits.MaxRows <= math.MaxInt64/2 {
-				policyRows = limits.MaxRows * 2
+			if limits.MaxRows <= math.MaxInt64/3 {
+				policyRows = limits.MaxRows * 3
 			}
 			return store.CheckNativeReportDelivery(requestCtx, source, d.state.Anchor,
 				store.NativeReportDeliveryLimits{MaxRows: policyRows, MaxBytes: limits.MaxBytes},
 				func(yield func(store.NativeReportDeliveryEvidence) error) error {
 					if part.Ref.Index == part.PartCount-1 {
-						return o.walkSeedChunks(requestCtx, d, func(c remote.GitHubSeedChunk) error { return d.yieldEvidence(c, yield) })
+						return o.walkSeedChunks(requestCtx, d, func(_ *sql.Tx, c remote.GitHubSeedChunk) error { return d.yieldEvidence(c, yield) })
 					}
 					if part.Ref.Index == 0 {
 						return nil
@@ -160,8 +165,9 @@ func (o *Outbox) prepareDelivery(ctx context.Context, limits DeliveryLimits) (*s
 	if err != nil {
 		return nil, err
 	}
-	d := &seedDelivery{state: state, plan: plan, parents: make(map[int64]int64), limits: limits}
-	err = o.walkSeedChunks(ctx, d, func(c remote.GitHubSeedChunk) error {
+	d := &seedDelivery{state: state, plan: plan, parents: make(map[int64]seedDeliveryParent), limits: limits}
+	var nodeBytes int64
+	err = o.walkSeedChunks(ctx, d, func(tx *sql.Tx, c remote.GitHubSeedChunk) error {
 		for _, change := range c.Changes {
 			if change.Table != "threads" {
 				continue
@@ -178,7 +184,27 @@ func (o *Outbox) prepareDelivery(ctx context.Context, limits DeliveryLimits) (*s
 			if _, exists := d.parents[key]; exists {
 				return ErrSeedOutbox
 			}
-			d.parents[key] = number
+			var raw any
+			v := change.Row[deliveryColumn("threads", "raw_json")]
+			switch {
+			case v.Kind == "null":
+			case v.Kind == "text" && v.Value != nil:
+				raw = *v.Value
+			default:
+				return ErrSeedOutbox
+			}
+			// SQLite owns native JSON extraction and TEXT affinity. Keep only
+			// the compact identity, including NULL/empty/NUL and exact numbers;
+			// the current native parent may already be gone at delivery time.
+			var node sql.NullString
+			if err := tx.QueryRowContext(ctx, `select cast(json_extract(case when json_valid(?) then ? else '{}' end,'$.node_id') as text)`, raw, raw).Scan(&node); err != nil {
+				return err
+			}
+			if int64(len(node.String)) > limits.MaxBytes-nodeBytes {
+				return ErrSeedOutbox
+			}
+			nodeBytes += int64(len(node.String))
+			d.parents[key] = seedDeliveryParent{number: number, node: node}
 		}
 		return nil
 	})
@@ -198,7 +224,7 @@ func deliveryInteger(v remote.ChangeValue) (int64, error) {
 
 // walkSeedChunks streams at most one wire body at a time. Even acknowledged
 // parts remain subject to the full completion check; receipts are not policy.
-func (o *Outbox) walkSeedChunks(ctx context.Context, d *seedDelivery, visit func(remote.GitHubSeedChunk) error) error {
+func (o *Outbox) walkSeedChunks(ctx context.Context, d *seedDelivery, visit func(*sql.Tx, remote.GitHubSeedChunk) error) error {
 	return o.base.WithTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `select part_index,body,payload_sha256 from parts where seed_id=? order by part_index`, d.state.SeedID)
 		if err != nil {
@@ -254,7 +280,7 @@ func (o *Outbox) walkSeedChunks(ctx context.Context, d *seedDelivery, visit func
 					return ErrSeedOutbox
 				}
 			}
-			if err := visit(chunk); err != nil {
+			if err := visit(tx, chunk); err != nil {
 				return err
 			}
 		}
@@ -287,11 +313,14 @@ func (d *seedDelivery) yieldEvidence(chunk remote.GitHubSeedChunk, yield func(st
 		if err != nil {
 			return err
 		}
-		number, ok := d.parents[id]
+		identity, ok := d.parents[id]
 		if !ok {
 			return ErrSeedOutbox
 		}
-		evidence.ThreadNumbers = append(evidence.ThreadNumbers, number)
+		evidence.ThreadNumbers = append(evidence.ThreadNumbers, identity.number)
+		if c.Table != "threads" && identity.node.Valid {
+			evidence.NodeIDs = append(evidence.NodeIDs, identity.node.String)
+		}
 		if raw >= 0 {
 			v := c.Row[raw]
 			if v.Kind == "null" {

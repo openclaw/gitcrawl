@@ -63,7 +63,7 @@ Core commands:
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
   capture              export a stable code-free conversation snapshot
-  delivery             explicitly stage, inspect, or deliver a private native seed
+  delivery             explicitly manage a private report outbox
   code index           index tracked text files from a local Git checkout
   cluster              build durable clusters from local thread vectors
   purge-threads        permanently remove selected local threads and exclude collection
@@ -219,22 +219,46 @@ Usage:
 Usage:
   gitcrawl threads owner/repo [--include-closed] [--numbers refs] [--limit N] [--json]
 `,
-	"delivery": `gitcrawl delivery explicitly manages one private native seed outbox.
+	"delivery": `gitcrawl delivery explicitly manages one private report outbox.
 
 Usage:
   gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
+  gitcrawl delivery report-status --outbox PATH --timeout D [--json]
+  gitcrawl delivery upgrade --outbox PATH --to-version 2 --max-rows N --max-encoded-bytes N --timeout D [--json]
+  gitcrawl delivery upgrade --outbox PATH --to-version 3 --timeout D [--json]
+  gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
+  gitcrawl delivery deliver-changes --db PATH --outbox PATH --max-rows N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
 
 All paths and positive bounds are explicit. Native schema 16 and an armed change
-contract are required; no config discovery, migration, provider sync, release
-check, or credential helper runs. stage-seed exclusively creates a new outbox;
+contract are required; no config discovery, automatic migration, provider sync,
+release check, or credential helper runs. stage-seed exclusively creates a new outbox;
 failed owned files are retained. status opens the current outbox read-only.
 deliver sends saved bytes only to the saved destination and checks current native
 policy after lazy service-token acquisition. There is no automatic retry.
 Output contains custody/count fields only; bytes counts captured native scalar
 bytes, not RSS. A qualified baseline means completed seed delivery, not provider
 freshness, coverage, or publication approval.
+
+Seed commands retain schema1 behavior. report-status reads schema2/3 qualified
+metadata and active capture identity without opening the source or a writer.
+upgrade performs only the named next transition: 1->2 validates the completed
+seed and builds its compact inventory; 2->3 adds change-capture custody. It never
+chains upgrades. The version2 byte bound includes saved requests and receipts.
+
+stage-changes requires schema3, no pending capture, and an already-prepared
+native row journal and report indexes. It never builds indexes or rearms the
+source. All native/index reads close before exact-predecessor staging. Source
+limits bound journal records, affected keys, lookup rows, rows and logical bytes;
+encoding limits bound saved requests. The compact baseline digest still requires
+a full compact-index scan under the deadline, not a full body reread.
+
+deliver-changes sends one pinned saved capture, with at most --max-parts receipts
+per invocation (1..64). It resolves --token-env lazily only for actual HTTP and
+rechecks native policy. idle needs no token or source access. Partial/error output
+reports only that pinned capture and this invocation's durable receipts; inspect
+report-status and resume explicitly. No automatic retry or successor capture runs.
 `,
 	"capture": `gitcrawl capture exports a stable code-free conversation snapshot.
 
