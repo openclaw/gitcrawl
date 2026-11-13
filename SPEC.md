@@ -44,7 +44,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - `internal/cluster`: bounded similarity-graph grouping; `internal/store` owns durable cluster persistence and governance
 - Search orchestration lives in `internal/cli/search.go`; SQLite keyword queries live in `internal/store/search.go`.
 - `internal/portable`: compact snapshot export, profiles, manifests, artifact I/O, and deterministic identity
-- `internal/remotedelivery`: pure private native-report projection; no transport or baseline registration
+- `internal/remotedelivery`: pure private native-report projection and bounded exact seed request packing; no delivery or baseline registration
 
 TUI guidance:
 

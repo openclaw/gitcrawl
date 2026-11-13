@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded in-memory packing of private native reports into deterministic GitHub seed requests, preserving native identity and typed rows without delivering or qualifying a baseline.
+
 - Add a pure private projection of native report captures, preserving typed scalars, raw evidence and publication timestamps while keeping physical file identity local.
 
 - Add a bounded read-only native report snapshot API with complete scoped inventories, publication timestamps and exclusion evidence, without advancing acquisition or delivery state.

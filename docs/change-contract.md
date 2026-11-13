@@ -312,3 +312,52 @@ encoded projection. The store remains the exclusion-policy owner: no second
 filter or deletion inference is applied. Unsupported layouts/scalars and blob
 references return a zero result with a content-free error. This profile neither
 certifies historical bodies or acquisition completeness nor authorizes delivery.
+
+
+### In-memory private seed preparation
+
+`remotedelivery.PreparePrivateSeed(ctx, report, request)` consumes an unmodified
+`ProjectPrivateReport` result and returns a Crawlkit `GitHubSeedPlan` plus exact
+manifest, ordered chunk and completion bytes. The request supplies archive,
+binding ID, a preallocated random 32-character lowercase hexadecimal seed ID,
+and a positive `MaxBytes` total wire budget. The same report and request produce
+the same bytes. A different captured inventory needs its own downstream seed
+lifecycle; this packer does not authorize reusing an already delivered seed ID.
+
+The adapter uses the existing seven-table profile and its key-column order.
+Local `{kind:"null", value:null}` cells become wire `{kind:"null"}`; text and
+signed integer strings retain their values, including NUL, private raw JSON and
+native publication timestamps. The native SQLite repository ID remains separate
+from provider `github_repo_id` text. No rows are collapsed, sanitized or removed.
+Every table has a descriptor, even when it has no rows or chunks.
+
+Chunks are filled in table/row order, with at most 500 rows and 4 MiB of exact
+JSON per body, including the envelope, cursor and separators. One-row Crawlkit
+encoding validates scalar bounds before marshaling and measures JSON escaping.
+The adapter accounts for the actual chunk header and encodes the completed chunk
+once; it does not repeatedly encode each growing row prefix. A single row that
+cannot fit is refused. Table hashes bind ordered binary chunk digests; manifest
+and completion hashes refer to the final exact bytes, never a later re-encoding.
+
+The native token retains epoch, generation, SQLite schema cookie, journal head,
+retained-log floor, scope digest and native inventory digest. The schema cookie
+is distinct from native schema 16. An inventory change produces a different
+token even when the head is unchanged. Wire hashes never replace native hashes.
+The capture owner remains responsible for the native hashes and exclusion/blob
+holds; preparation does not duplicate that policy or re-read native state.
+
+`MaxBytes` counts all returned manifest/chunk/completion bodies. It is not an
+RSS budget and does not include the caller's existing capture/projection. The
+8192-chunk codec limit also applies. Cancellation is checked during packing;
+callers own the deadline and process budget. Malformed input, an oversized row,
+exhausted total budget or cancellation returns a zero result and a content-free
+error; cancellation/deadline causes remain recognizable with `errors.Is`.
+
+These are persistable bytes, not durable staging, HTTP delivery or a qualified
+baseline. No file, source cursor, checkpoint or receiver state changes. Later
+delivery must independently qualify destination/binding authority and current
+native-owner exclusion policy against pending exact payloads, including replay.
+A saved capture or included ledger is not current policy authority; stale pending
+bytes must be held rather than silently rewritten or allowed to clear historical
+exclusions. Packing makes no provider freshness, history-completeness or public
+publication claim.
