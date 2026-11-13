@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an explicit, bounded seed-outbox inventory migration that reuses fully receipted saved requests, retains original seed evidence and native tokens, and atomically builds compact typed fingerprints and parent/node lookup metadata.
+
 - Add bounded private native change-request preparation with typed v1-to-v2 range validation, exact multipart cursor chaining, duplicate-key refusal and explicit empty checkpoint batches. No delivery or collector is activated.
 
 - Recheck seed-outbox schema identity inside every operation so an already-open seed-only handle refuses an explicitly migrated or foreign outbox without exposing requests or recording receipts.

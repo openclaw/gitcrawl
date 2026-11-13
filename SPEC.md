@@ -221,6 +221,23 @@ credentials, send requests, qualify a baseline or enable a timer. The outbox
 owner must atomically bind these bytes to the corresponding candidate inventory;
 only complete receipt settlement may promote it.
 
+### Saved-seed inventory migration
+
+`remotedelivery.MigrateSeedOutboxV2` explicitly migrates a fully acknowledged v1
+seed outbox using positive row/byte limits and a caller deadline. It validates
+every saved request and ordered receipt, then builds one compact inventory from
+those bytes in a FULL SQLite transaction. No native database or provider is read.
+The original seed parts, receipts, capture anchor and v1 native token are retained.
+Failure rolls back the inventory schema and checkpoint changes.
+
+Schema 2 adds canonical BLOB keys, row fingerprints and parent/number/node lookup
+metadata, without copying full bodies. The private profile supplies its scope
+SHA256 to the shared digest as exactly 64 lower-case hexadecimal ASCII bytes.
+`ReadReportOutboxState` and `OpenReportOutbox` admit this explicit version; old
+seed-only operations refuse it, including handles opened before migration.
+The receiver sequence and cursor still describe the qualified baseline. This
+migration does not qualify a new native generation or start incremental delivery.
+
 ## Command Surface
 
 No `serve` command.
