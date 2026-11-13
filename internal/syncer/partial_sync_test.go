@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -480,5 +481,95 @@ func TestSyncSharedHeadSurvivesSiblingTransactionFailure(t *testing.T) {
 			assertWorkflowRunReservation(t, ctx, st, repo.ID, "same-sync-head", 1)
 			assertNoSuccessfulSync(t, st, repo.ID)
 		})
+	}
+}
+
+func TestOctopoolCheckpointRequiresCompleteProfile(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, tc := range []struct {
+		name   string
+		change func(*Options)
+	}{
+		{"limited", func(o *Options) { o.Limit = 1 }},
+		{"targeted", func(o *Options) { o.Numbers = []int{7} }},
+		{"metadata", func(o *Options) { o.IncludeComments = false }},
+		{"enrichment-without-comments", func(o *Options) { o.IncludeComments = false; o.IncludePRMetadata = true }},
+		{"enrichment-with-comments", func(o *Options) { o.IncludePRMetadata = true }},
+		{"other-transport", func(o *Options) { o.Octopool = false }},
+		{"implicit-cutoff", func(o *Options) { o.Since = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := Options{Owner: "fixture", Repo: "repo", Octopool: true, State: "all", Since: "2026-04-01T00:00:00Z", IncludeComments: true}
+			tc.change(&opts)
+			stats, err := New(fakeGitHub{}, st).Sync(ctx, opts)
+			if err != nil || stats.OctopoolCheckpoint != nil {
+				t.Fatal("ordinary manual sync changed", stats, err)
+			}
+			repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err := st.ReadOctopoolSyncCheckpoint(ctx, repo.ID)
+			if err != nil || cp != nil {
+				t.Fatal("unqualified profile bootstrapped", cp, err)
+			}
+		})
+	}
+}
+
+func TestOctopoolCheckpointFinalReceiptRollback(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	start := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
+	run := func(options Options) (Stats, error) {
+		s := New(fakeGitHub{}, st)
+		first := true
+		s.now = func() time.Time {
+			if first {
+				first = false
+				return start
+			}
+			return start.Add(2 * time.Hour)
+		}
+		return s.Sync(ctx, options)
+	}
+	opts := Options{Owner: "fixture", Repo: "repo", Octopool: true, State: "all", Since: "2026-04-01T00:00:00Z", IncludeComments: true}
+	first, err := run(opts)
+	if err != nil || first.OctopoolCheckpoint == nil || first.OctopoolCheckpoint.Through != first.StartedAt || first.StartedAt == first.FinishedAt {
+		t.Fatal("initial boundary", first, err)
+	}
+	repo, err := st.RepositoryByFullName(ctx, "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `create trigger fail_checkpoint before insert on sync_runs when new.status='success' begin select raise(abort,'fixture final receipt failure'); end`); err != nil {
+		t.Fatal(err)
+	}
+	start = start.Add(24 * time.Hour)
+	opts.Since = ""
+	opts.Incremental = true
+	failed, err := run(opts)
+	if err == nil || !strings.Contains(err.Error(), "fixture final receipt failure") || failed.OctopoolCheckpoint != nil {
+		t.Fatal("failed receipt qualified", failed, err)
+	}
+	saved, err := st.ReadOctopoolSyncCheckpoint(ctx, repo.ID)
+	if err != nil || !reflect.DeepEqual(saved, first.OctopoolCheckpoint) {
+		t.Fatal("rollback lost prior checkpoint", saved, err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `drop trigger fail_checkpoint`); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := run(opts)
+	if err != nil || recovered.OctopoolCheckpoint == nil || recovered.RequestedSince != "2026-05-01T23:59:00Z" || recovered.OctopoolCheckpoint.Through != start.Format(time.RFC3339Nano) || recovered.OctopoolCheckpoint.CoverageSince != first.OctopoolCheckpoint.CoverageSince {
+		t.Fatal("recovery skipped request boundary", recovered, err)
 	}
 }

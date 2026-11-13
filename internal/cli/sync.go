@@ -27,6 +27,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	limitRaw := fs.String("limit", "", "maximum issue/PR rows")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	octopool := fs.Bool("octopool", false, "acquire REST metadata and comments through Octopool without direct fallback")
+	incremental := fs.Bool("incremental", false, "resume the qualified Octopool all-state comments checkpoint")
 	graphqlHistory := fs.Bool("graphql-history", false, "batch exact conversation and PR metadata collection through GraphQL")
 	includeComments := fs.Bool("include-comments", false, "hydrate issue comments, PR reviews, and PR review comments")
 	force := fs.Bool("force", false, "download selected data even when issue comments are unchanged")
@@ -62,6 +63,9 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	if *octopool && (*graphqlHistory || *includePRDetails || len(with) != 0 || a.githubTokenCommand != nil) {
 		return usageErr(fmt.Errorf("--octopool does not support GraphQL history, PR enrichment or --github-token-command"))
 	}
+	if *incremental && (!*octopool || strings.TrimSpace(*state) != "all" || !*includeComments || flagWasSet(fs, "since") || flagWasSet(fs, "numbers") || flagWasSet(fs, "limit") || *graphqlHistory || *includePRDetails || len(with) != 0) {
+		return usageErr(fmt.Errorf("--incremental requires --octopool --state all --include-comments without --since, --numbers, --limit or enrichment"))
+	}
 	progress, err := newSyncProgressWriter(
 		*progressFile,
 		owner+"/"+repo,
@@ -77,6 +81,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 
 	stats, target, err := a.syncRepository(ctx, owner, repo, syncOptions{
 		Octopool:          *octopool,
+		Incremental:       *incremental,
 		GraphQLHistory:    *graphqlHistory,
 		Since:             strings.TrimSpace(*since),
 		State:             strings.TrimSpace(*state),
@@ -105,6 +110,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 
 type syncOptions struct {
 	Octopool          bool
+	Incremental       bool
 	GraphQLHistory    bool
 	Since             string
 	State             string
@@ -415,6 +421,8 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 	}
 	service := syncer.New(client, rt.Store)
 	stats, err := service.Sync(ctx, syncer.Options{
+		Octopool:          options.Octopool,
+		Incremental:       options.Incremental,
 		GraphQLHistory:    options.GraphQLHistory,
 		Owner:             owner,
 		Repo:              repo,

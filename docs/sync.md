@@ -92,12 +92,46 @@ and unsupported relay routes fail without a native fallback. Full PR revisions
 remain incomplete without their separately required PR-detail evidence.
 
 Reads request `cache-control: max-age=0`; stale relay results fail the sync.
-The native retry and SQLite checkpoint behavior remains unchanged: complete
-items survive a partial failure, and a failed traversal cannot advance its
-successful-run watermark. Reuse the existing archive and resume from its last
-completed cutoff with an overlap window. Do not use a successful timer firing
-as proof that a scope caught up. Scheduled pooled collectors must explicitly
-pass `--octopool`; other invocations retain their existing transport.
+Complete items survive a partial failure, and a failed traversal cannot advance
+its qualified checkpoint. Scheduled pooled collectors must explicitly pass
+`--octopool`; other invocations retain their existing transport.
+
+After the explicit cutoff bootstrap above succeeds, resume with:
+
+```bash
+gitcrawl sync owner/repo --octopool --state all --include-comments --incremental --json
+```
+
+`--incremental` requires that exact transport/state/hydration profile. It rejects
+`--since`, `--numbers`, `--limit`, GraphQL and PR enrichment. A missing or legacy
+checkpoint refuses before provider acquisition; it never falls back to a full
+recrawl or a window relative to the current time. Each resume reads the native
+`sync_runs` qualification and requests its `through` timestamp minus one minute.
+The single repository metadata GET must still match the checkpoint's immutable
+GitHub repository ID before any list or hydration request.
+
+A typed `octopool_checkpoint` in the successful run's statistics records the
+profile, repository IDs, exact request lower bound, initial `coverage_since`, and
+`through`. Qualification is committed with the run receipt only after complete
+pagination and all selected comments/reviews hydrate successfully. `through` is
+the run's **start**, not its finish time or the newest returned item. A long run
+or downtime therefore does not move the next request past unobserved changes.
+Failed, cancelled, partial, limited, targeted, metadata-only, enrichment and
+legacy runs cannot bootstrap or advance this checkpoint.
+
+Manual `--since` behavior remains available. A successful matching-profile run
+can bootstrap from that explicit cutoff, or advance an existing checkpoint when
+its request interval overlaps the previous `through`. A disjoint manual window
+still succeeds as a manual sync but does not skip the checkpoint's gap. The
+initial `coverage_since` stays unchanged. Provider identity changes require a
+separately qualified native source. Repeating `--since` against the same store
+cannot reset or rebind the existing checkpoint; no reset/delete path is supplied.
+
+This records the selected REST acquisition profile since the explicit cutoff,
+not full history, complete PR-detail evidence, absence of provider deletions,
+or report-publication authority. The overlap is not a provider snapshot
+consistency guarantee. No scheduler state, source journal rearm, index build or
+outbox migration is performed. A timer firing alone is not proof of catch-up.
 
 ## Exact rows
 

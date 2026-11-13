@@ -43,6 +43,8 @@ type Syncer struct {
 }
 
 type Options struct {
+	Octopool        bool
+	Incremental     bool
 	GraphQLHistory  bool
 	ReviewStateOnly bool
 	// ReceiptOperation separates targeted review-state recovery from verified
@@ -64,33 +66,34 @@ type Options struct {
 }
 
 type Stats struct {
-	OwnerExcluded        int    `json:"owner_excluded,omitempty"`
-	ReviewStateOnly      bool   `json:"review_state_only,omitempty"`
-	FetchMillis          int64  `json:"fetch_ms,omitempty"`
-	PersistMillis        int64  `json:"persist_ms,omitempty"`
-	Repository           string `json:"repository"`
-	ThreadsSynced        int    `json:"threads_synced"`
-	IssuesSynced         int    `json:"issues_synced"`
-	PullRequestsSynced   int    `json:"pull_requests_synced"`
-	CommentsSynced       int    `json:"comments_synced"`
-	ReviewThreadsSynced  int    `json:"review_threads_synced"`
-	PRDetailsSynced      int    `json:"pr_details_synced"`
-	PRFilesSynced        int    `json:"pr_files_synced"`
-	PRCommitsSynced      int    `json:"pr_commits_synced"`
-	PRChecksSynced       int    `json:"pr_checks_synced"`
-	WorkflowRunsSynced   int    `json:"workflow_runs_synced"`
-	EvidenceObserved     int    `json:"evidence_observed"`
-	RevisionsCreated     int    `json:"revisions_created"`
-	FingerprintsUpserted int    `json:"fingerprints_upserted"`
-	ThreadsClosed        int    `json:"threads_closed"`
-	ThreadsSkippedStale  int    `json:"threads_skipped_stale"`
-	RequestedSince       string `json:"requested_since,omitempty"`
-	ClosedSweepThrough   string `json:"closed_sweep_through,omitempty"`
-	Limit                int    `json:"limit,omitempty"`
-	Numbers              []int  `json:"numbers,omitempty"`
-	MetadataOnly         bool   `json:"metadata_only"`
-	StartedAt            string `json:"started_at"`
-	FinishedAt           string `json:"finished_at"`
+	OctopoolCheckpoint   *store.OctopoolSyncCheckpoint `json:"octopool_checkpoint,omitempty"`
+	OwnerExcluded        int                           `json:"owner_excluded,omitempty"`
+	ReviewStateOnly      bool                          `json:"review_state_only,omitempty"`
+	FetchMillis          int64                         `json:"fetch_ms,omitempty"`
+	PersistMillis        int64                         `json:"persist_ms,omitempty"`
+	Repository           string                        `json:"repository"`
+	ThreadsSynced        int                           `json:"threads_synced"`
+	IssuesSynced         int                           `json:"issues_synced"`
+	PullRequestsSynced   int                           `json:"pull_requests_synced"`
+	CommentsSynced       int                           `json:"comments_synced"`
+	ReviewThreadsSynced  int                           `json:"review_threads_synced"`
+	PRDetailsSynced      int                           `json:"pr_details_synced"`
+	PRFilesSynced        int                           `json:"pr_files_synced"`
+	PRCommitsSynced      int                           `json:"pr_commits_synced"`
+	PRChecksSynced       int                           `json:"pr_checks_synced"`
+	WorkflowRunsSynced   int                           `json:"workflow_runs_synced"`
+	EvidenceObserved     int                           `json:"evidence_observed"`
+	RevisionsCreated     int                           `json:"revisions_created"`
+	FingerprintsUpserted int                           `json:"fingerprints_upserted"`
+	ThreadsClosed        int                           `json:"threads_closed"`
+	ThreadsSkippedStale  int                           `json:"threads_skipped_stale"`
+	RequestedSince       string                        `json:"requested_since,omitempty"`
+	ClosedSweepThrough   string                        `json:"closed_sweep_through,omitempty"`
+	Limit                int                           `json:"limit,omitempty"`
+	Numbers              []int                         `json:"numbers,omitempty"`
+	MetadataOnly         bool                          `json:"metadata_only"`
+	StartedAt            string                        `json:"started_at"`
+	FinishedAt           string                        `json:"finished_at"`
 }
 
 type syncPersistStats struct {
@@ -149,6 +152,33 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	state, err := normalizeState(options.State)
 	if err != nil {
 		return Stats{}, err
+	}
+	checkpointEligible := options.Octopool && !options.GraphQLHistory && !options.ReviewStateOnly && state == "all" && options.IncludeComments && !options.IncludePRMetadata && !options.IncludePRDetails && options.Limit == 0 && len(options.Numbers) == 0
+	var incrementalCheckpoint *store.OctopoolSyncCheckpoint
+	if options.Incremental {
+		if !checkpointEligible || options.Since != "" {
+			return Stats{}, fmt.Errorf("incremental sync requires Octopool, all states and comments without since, numbers, limits or enrichment")
+		}
+		repo, err := s.store.RepositoryByFullName(ctx, options.Owner+"/"+options.Repo)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Stats{}, store.ErrOctopoolSyncCheckpoint
+		}
+		if err != nil {
+			return Stats{}, err
+		}
+		checkpoint, err := s.store.ReadOctopoolSyncCheckpoint(ctx, repo.ID)
+		if err != nil {
+			return Stats{}, err
+		}
+		if checkpoint == nil {
+			return Stats{}, store.ErrOctopoolSyncCheckpoint
+		}
+		through, _ := time.Parse(time.RFC3339Nano, checkpoint.Through)
+		if through.After(startedAt) {
+			return Stats{}, store.ErrOctopoolSyncCheckpoint
+		}
+		since = through.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+		incrementalCheckpoint = checkpoint
 	}
 	operation := options.ReceiptOperation
 	if operation == "" {
@@ -223,6 +253,9 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	}
 	if err != nil {
 		return Stats{}, err
+	}
+	if incrementalCheckpoint != nil && jsonID(repoRaw["id"]) != incrementalCheckpoint.GitHubRepoID {
+		return Stats{}, store.ErrOctopoolSyncIdentity
 	}
 	var repoID int64
 	if err := s.store.WithTx(ctx, func(st *store.Store) error {
@@ -766,6 +799,12 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		if err != nil {
 			return err
 		}
+		if checkpointEligible && since != "" {
+			stats.OctopoolCheckpoint, err = st.QualifyOctopoolSyncCheckpoint(ctx, repoID, jsonID(repoRaw["id"]), since, startedAt)
+			if err != nil {
+				return err
+			}
+		}
 		_, err = st.RecordRun(ctx, store.RunRecord{
 			RepoID:     repoID,
 			Kind:       "sync",
@@ -778,6 +817,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		return err
 	})
 	if err != nil {
+		stats.OctopoolCheckpoint = nil
 		stats.ClosedSweepThrough = ""
 		tracker.Finish(err)
 		return stats, err

@@ -162,7 +162,7 @@ Usage:
 	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
 
 Usage:
-  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--graphql-history] [--octopool] [--force] [--json]
+  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--graphql-history] [--octopool] [--incremental] [--force] [--json]
 
 pr-metadata fetches only the pull request object; pr-details also hydrates files,
 commits, checks, workflows, and review threads. Comments are selected separately.
@@ -174,6 +174,12 @@ support --since, --limit, or full pr-details hydration.
 --octopool routes REST metadata and comments through Octopool using OCTOPOOL_TOKEN,
 OCTOPOOL_URL and OCTOPOOL_POOL. It never falls back to direct GitHub requests and
 does not support GraphQL history, PR enrichment or --github-token-command.
+--incremental requires --octopool --state all --include-comments, and rejects
+--since, --numbers and --limit. It resumes the qualified native checkpoint with
+one minute of overlap. Missing/legacy checkpoints refuse acquisition: first run
+an explicit --since bootstrap with that same profile. Only full successful
+pagination/hydration advances through the run's start; initial coverage_since
+is retained and does not claim earlier history. No source rearm or rebuild runs.
 `,
 	"sync-failures": `gitcrawl sync-failures lists failed sync hydration attempts.
 

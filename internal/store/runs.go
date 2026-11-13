@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,90 @@ type RunRecord struct {
 	FinishedAt string `json:"finished_at,omitempty"`
 	StatsJSON  string `json:"stats_json,omitempty"`
 	ErrorText  string `json:"error_text,omitempty"`
+}
+
+const octopoolSyncProfile = "gitcrawl-octopool-comments/v1"
+
+var ErrOctopoolSyncCheckpoint = errors.New("incremental sync requires a qualified Octopool all-state comments checkpoint; bootstrap with an explicit --since cutoff")
+
+var ErrOctopoolSyncIdentity = errors.New("incremental repository identity changed; use a separately qualified native source, because --since cannot reset the existing checkpoint")
+
+// OctopoolSyncCheckpoint covers REST discovery and selected comment hydration
+// since CoverageSince. It is not a full-history or PR-detail coverage claim.
+type OctopoolSyncCheckpoint struct {
+	Profile         string `json:"profile"`
+	RepositoryID    int64  `json:"repository_id"`
+	GitHubRepoID    string `json:"github_repo_id"`
+	Transport       string `json:"transport"`
+	State           string `json:"state"`
+	IncludeComments bool   `json:"include_comments"`
+	RequestSince    string `json:"request_since"`
+	CoverageSince   string `json:"coverage_since"`
+	Through         string `json:"through"`
+}
+
+// ReadOctopoolSyncCheckpoint ignores legacy/manual run statistics without an
+// explicit qualification. A malformed qualification fails rather than falling
+// back to an older checkpoint or a sliding time window.
+func (s *Store) ReadOctopoolSyncCheckpoint(ctx context.Context, repoID int64) (*OctopoolSyncCheckpoint, error) {
+	var raw, started, finished string
+	err := s.q().QueryRowContext(ctx, `
+select stats_json,started_at,finished_at from sync_runs
+where repo_id=? and scope='all' and status='success'
+  and json_type(case when json_valid(stats_json) then stats_json else '{}' end,
+                '$.octopool_checkpoint') is not null
+order by id desc limit 1`, repoID).Scan(&raw, &started, &finished)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var stats struct {
+		Checkpoint     *OctopoolSyncCheckpoint `json:"octopool_checkpoint"`
+		RequestedSince string                  `json:"requested_since"`
+		Limit          int                     `json:"limit"`
+		Numbers        []int                   `json:"numbers"`
+		MetadataOnly   bool                    `json:"metadata_only"`
+	}
+	if json.Unmarshal([]byte(raw), &stats) != nil || stats.Checkpoint == nil {
+		return nil, ErrOctopoolSyncCheckpoint
+	}
+	c := stats.Checkpoint
+	providerID, providerErr := strconv.ParseInt(c.GitHubRepoID, 10, 64)
+	lower, e1 := time.Parse(time.RFC3339Nano, c.CoverageSince)
+	request, e2 := time.Parse(time.RFC3339Nano, c.RequestSince)
+	through, e3 := time.Parse(time.RFC3339Nano, c.Through)
+	start, e4 := time.Parse(time.RFC3339Nano, started)
+	finish, e5 := time.Parse(time.RFC3339Nano, finished)
+	if c.Profile != octopoolSyncProfile || c.RepositoryID != repoID || providerErr != nil || providerID <= 0 || strconv.FormatInt(providerID, 10) != c.GitHubRepoID || c.Transport != "octopool" || c.State != "all" || !c.IncludeComments || stats.MetadataOnly || stats.Limit != 0 || len(stats.Numbers) != 0 || stats.RequestedSince != c.RequestSince || e1 != nil || e2 != nil || e3 != nil || e4 != nil || e5 != nil || lower.After(through) || request.After(through) || !through.Equal(start) || finish.Before(through) {
+		return nil, ErrOctopoolSyncCheckpoint
+	}
+	return c, nil
+}
+
+// QualifyOctopoolSyncCheckpoint is called in the final successful run
+// transaction, after full pagination and all required hydration have succeeded.
+// A disjoint manual interval remains a successful run but cannot skip a gap.
+func (s *Store) QualifyOctopoolSyncCheckpoint(ctx context.Context, repoID int64, githubRepoID, requestSince string, startedAt time.Time) (*OctopoolSyncCheckpoint, error) {
+	request, err := time.Parse(time.RFC3339Nano, requestSince)
+	providerID, providerErr := strconv.ParseInt(githubRepoID, 10, 64)
+	if err != nil || request.After(startedAt) || providerErr != nil || providerID <= 0 || strconv.FormatInt(providerID, 10) != githubRepoID {
+		return nil, nil
+	}
+	previous, err := s.ReadOctopoolSyncCheckpoint(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	coverage := requestSince
+	if previous != nil {
+		through, _ := time.Parse(time.RFC3339Nano, previous.Through)
+		if previous.GitHubRepoID != githubRepoID || request.After(through) || startedAt.Before(through) {
+			return nil, nil
+		}
+		coverage = previous.CoverageSince
+	}
+	return &OctopoolSyncCheckpoint{Profile: octopoolSyncProfile, RepositoryID: repoID, GitHubRepoID: githubRepoID, Transport: "octopool", State: "all", IncludeComments: true, RequestSince: requestSince, CoverageSince: coverage, Through: startedAt.UTC().Format(time.RFC3339Nano)}, nil
 }
 
 func (s *Store) RecordRun(ctx context.Context, run RunRecord) (int64, error) {

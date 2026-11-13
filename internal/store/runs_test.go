@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -157,5 +160,82 @@ func TestLastSuccessfulListSyncAtIgnoresTargetedRuns(t *testing.T) {
 	}
 	if _, err := st.SuccessfulListSyncRuns(ctx, repoID, "invalid"); err == nil {
 		t.Fatal("invalid list sync state succeeded")
+	}
+}
+
+func TestOctopoolSyncCheckpointIntervals(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t, ctx)
+	defer st.Close()
+	repo, err := st.UpsertRepository(ctx, Repository{Owner: "fixture", Name: "repo", FullName: "fixture/repo", RawJSON: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(v string) time.Time {
+		x, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	record := func(since, start, finish string, abort bool) *OctopoolSyncCheckpoint {
+		t.Helper()
+		var cp *OctopoolSyncCheckpoint
+		stop := errors.New("fixture rollback")
+		err := st.WithTx(ctx, func(tx *Store) error {
+			var err error
+			cp, err = tx.QualifyOctopoolSyncCheckpoint(ctx, repo, "123", since, at(start))
+			if err != nil {
+				return err
+			}
+			stats := map[string]any{"requested_since": since, "metadata_only": false}
+			if cp != nil {
+				stats["octopool_checkpoint"] = cp
+			}
+			body, _ := json.Marshal(stats)
+			_, err = tx.RecordRun(ctx, RunRecord{RepoID: repo, Kind: "sync", Scope: "all", Status: "success", StartedAt: start, FinishedAt: finish, StatsJSON: string(body)})
+			if err == nil && abort {
+				return stop
+			}
+			return err
+		})
+		if (abort && !errors.Is(err, stop)) || (!abort && err != nil) {
+			t.Fatal(err)
+		}
+		return cp
+	}
+	read := func() *OctopoolSyncCheckpoint {
+		t.Helper()
+		cp, err := st.ReadOctopoolSyncCheckpoint(ctx, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cp
+	}
+	first := record("2026-04-01T00:00:00Z", "2026-04-02T00:00:00Z", "2026-04-02T02:00:00Z", false)
+	if first == nil || !reflect.DeepEqual(first, read()) || first.Through != "2026-04-02T00:00:00Z" {
+		t.Fatal("checkpoint used finish time", first)
+	}
+	if gap := record("2026-04-03T00:00:00Z", "2026-04-04T00:00:00Z", "2026-04-04T01:00:00Z", false); gap != nil || !reflect.DeepEqual(first, read()) {
+		t.Fatal("disjoint window skipped gap")
+	}
+	record("2026-04-01T23:59:00Z", "2026-04-05T00:00:00Z", "2026-04-05T01:00:00Z", true)
+	if !reflect.DeepEqual(first, read()) {
+		t.Fatal("rollback advanced checkpoint")
+	}
+	next := record("2026-04-01T23:59:00Z", "2026-04-05T00:00:00Z", "2026-04-05T01:00:00Z", false)
+	if next == nil || next.CoverageSince != first.CoverageSince || next.Through != "2026-04-05T00:00:00Z" {
+		t.Fatal("coverage lower bound changed", next)
+	}
+	if changed, err := st.QualifyOctopoolSyncCheckpoint(ctx, repo, "456", next.RequestSince, at("2026-04-06T00:00:00Z")); err != nil || changed != nil {
+		t.Fatal("provider identity rebound", changed, err)
+	}
+	next.IncludeComments = false
+	body, _ := json.Marshal(map[string]any{"requested_since": next.RequestSince, "metadata_only": false, "octopool_checkpoint": next})
+	if _, err := st.RecordRun(ctx, RunRecord{RepoID: repo, Kind: "sync", Scope: "all", Status: "success", StartedAt: next.Through, FinishedAt: "2026-04-05T01:00:00Z", StatsJSON: string(body)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReadOctopoolSyncCheckpoint(ctx, repo); !errors.Is(err, ErrOctopoolSyncCheckpoint) {
+		t.Fatal("malformed qualification fell back", err)
 	}
 }

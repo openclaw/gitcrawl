@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit Octopool incremental sync from qualified native checkpoints. Complete all-state comment runs preserve their initial coverage cutoff and advance only after successful acquisition; missing checkpoints require an explicit bootstrap instead of a full crawl. No schedule is activated.
+
 - Add an explicit schema-3 report outbox upgrade with bounded native change staging, exact multipart retries and atomic baseline promotion after final receipt. The incremental sender rechecks current policy before each request and retains unfinished captures for resumption; no schedule is activated.
 
 - Recheck retained parent node identities before seed and incremental child delivery, including globally excluded nodes whose native parent has since been removed.
