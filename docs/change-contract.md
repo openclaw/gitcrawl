@@ -220,3 +220,71 @@ transaction so commit flushes are excluded
 Each committing transaction that touches tracked tables also dirties the
 sequence page, the table-state page and the log tail page (at most three extra
 WAL pages), plus a prune every 1,024 log entries.
+
+
+## Bounded native report snapshots
+
+`store.CaptureNativeReport` is a local, read-only snapshot API. It requires an
+explicit lowercase `owner/repo`, the expected `NativeReportFileIdentity`, positive
+row/byte limits and a context deadline. It opens the existing schema-16 native
+archive without migration and reads the enabled, armed change contract and all
+selected data in one transaction. It does not enable tracking or change native
+retention. The caller must keep the pathname bound to one physical file during
+the call. Concurrent SQLite writers are supported; rename/replacement is not.
+Pre/post device/inode checks detect persistent replacement, not a transient
+A → B → A swap. Identity is currently supported on Darwin and Linux.
+
+The fixed `gitcrawl.native-report/v1` local read set contains:
+
+- The selected repository and current threads/comments after filtering parent
+  exclusions by repository and thread number.
+- Comment-family observation reservations and completed membership rows for
+  those threads. Other enrichment-family observations are outside this profile.
+- Both complete exclusion ledgers for that repository, including exclusions
+  whose native thread has already been purged.
+
+A retained thread/comment whose native `raw_json.node_id` is in the global
+excluded-node ledger refuses the entire capture. This uses the purge owner's
+native node interpretation; it does not silently remove individual rows or
+rewrite completed membership lists. Parent-excluded content is already filtered.
+The hold also covers an excluded node reappearing under a surviving parent.
+
+Every table, including an empty table, has an explicit column/key layout,
+ordered rows and a SHA-256 digest. Missing or extra columns are refused. Native
+SQL NULL, signed int64 values and exact text bytes are retained separately;
+text can contain NUL or invalid UTF-8. Comment submission/publication timestamps
+remain their stored values, independently of creation time. A non-null comment
+`raw_json_blob_id` refuses the capture: this slice does not dereference inline
+or filesystem blobs or claim their raw evidence is complete. Historical
+revisions, PR enrichment and acquisition completeness are outside the profile.
+
+The anchor records the physical file, repository name/native ID, profile/scope
+hash, contract epoch/generation, schema cookie, sequence and retained-log floor.
+It is observation evidence, **not a qualified delivery baseline or authority**.
+The scope hash binds the fixed profile identifier and exact repository name.
+Table hashes bind table name, ordered column names and row scalars; strings use
+an unsigned 64-bit big-endian byte length followed by exact bytes, and scalars
+use a kind byte followed by text or an eight-byte integer. The snapshot hash
+binds the scope hash and ordered table hashes. File identity and contract cursor
+are separate from content equality. No JSON encoding or wire compatibility is
+implied by these local digests or types.
+
+Each call scans the complete selected content, including tables without row
+journaling. In particular, comments have no native content digest: table
+invalidation cannot suppress unchanged rows without reading/hashing them.
+This supports incremental provider acquisition and eventual receipt/delta
+delivery; it does not promise O(changes) native scanning. Table-mode mutations
+legitimately leave gaps in the row log. Untracked membership or excluded-node
+changes can change the snapshot digest while the contract sequence stays equal.
+An equal sequence must never be used alone to skip delivery.
+
+Preflight SQL measures scoped rows and scalar bytes before each table is loaded;
+loading also enforces the limits. The byte limit counts column-name bytes and
+scalar payload encoding (one kind byte, plus eight bytes for integers or text
+lengths, plus text bytes). It is not a process RSS limit. SQL scan time is bounded
+by the deadline. Any error returns no successful or partial capture. No source
+checkpoint, outbox, baseline qualification, wire projection or removal comparator
+is implemented here. Future removal comparison must use a complete inventory
+from the same qualified binding; local absence is not a provider deletion.
+Current exclusion-policy qualification and pending-payload policy enforcement
+remain delivery prerequisites, independently of the native snapshot's freshness.

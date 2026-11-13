@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a bounded read-only native report snapshot API with complete scoped inventories, publication timestamps and exclusion evidence, without advancing acquisition or delivery state.
+
 - Add explicit `sync --octopool` REST acquisition for public repositories using an existing caller session, without direct GitHub fallback or GraphQL/PR-detail enrichment.
 
 - Support human Cloudflare Access reader login with endpoint-bound gateway requests and separate reader-session keyring storage.
