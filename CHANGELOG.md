@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recheck seed-outbox schema identity inside every operation so an already-open seed-only handle refuses an explicitly migrated or foreign outbox without exposing requests or recording receipts.
+
 - Bind private report inventory fingerprints to the existing seven-table wire layout with shared typed key/row hashing and receiver-matched vectors.
 
 - Add explicit, deadline-bound native report index preparation for reverse node-policy lookups, preserving SQLite scalar comparison semantics without index construction on ordinary archive open.

@@ -74,7 +74,9 @@ credential helper, background release check or scheduler runs.
 Status is read-only. Results contain custody and counts, never private rows or
 URLs; a qualified baseline proves completed seed delivery, not provider freshness,
 coverage or publication permission. Retain failed outboxes for reconciliation;
-there is no automatic retry or cleanup. The [delivery contract](SPEC.md#explicit-private-delivery-commands)
+there is no automatic retry or cleanup. Seed-only operations recheck the outbox
+schema in each transaction, including handles opened before an explicit migration.
+The [delivery contract](SPEC.md#explicit-private-delivery-commands)
 describes limits and partial results.
 
 ## Command map

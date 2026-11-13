@@ -169,17 +169,11 @@ func ReadSeedOutboxState(ctx context.Context, path string) (SeedState, error) {
 	}
 	var state SeedState
 	err = ro.WithTx(ctx, func(tx *sql.Tx) error {
-		var app, version, tables int
-		if err := tx.QueryRowContext(ctx, `pragma application_id`).Scan(&app); err != nil {
-			return err
-		}
-		if err := tx.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
-			return err
-		}
+		var tables int
 		if err := tx.QueryRowContext(ctx, `select count(*) from sqlite_schema where type='table' and name not like 'sqlite_%'`).Scan(&tables); err != nil {
 			return err
 		}
-		if app != seedOutboxApplicationID || version != seedOutboxVersion || tables != 3 {
+		if tables != 3 {
 			return ErrSeedOutbox
 		}
 		state, err = readSeedState(ctx, tx)
@@ -266,7 +260,26 @@ type seedQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+func checkSeedOutboxVersion(ctx context.Context, q seedQuery) error {
+	var app, version int
+	if err := q.QueryRowContext(ctx, `pragma application_id`).Scan(&app); err != nil {
+		return err
+	}
+	if err := q.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if app != seedOutboxApplicationID || version != seedOutboxVersion {
+		return ErrSeedOutbox
+	}
+	return nil
+}
+
 func readSeedState(ctx context.Context, q seedQuery) (SeedState, error) {
+	// Recheck in the caller's transaction: an open handle may outlive a later
+	// explicit migration. Seed-only operations must not interpret that schema.
+	if err := checkSeedOutboxVersion(ctx, q); err != nil {
+		return SeedState{}, err
+	}
 	var s SeedState
 	var registration, anchor []byte
 	var origin, archive, binding string
