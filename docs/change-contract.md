@@ -288,3 +288,27 @@ is implemented here. Future removal comparison must use a complete inventory
 from the same qualified binding; local absence is not a provider deletion.
 Current exclusion-policy qualification and pending-payload policy enforcement
 remain delivery prerequisites, independently of the native snapshot's freshness.
+
+
+### Private report projection
+
+`remotedelivery.ProjectPrivateReport` converts a successful native capture into
+`gitcrawl-private-report-v1`. It is a pure local projection, with no HTTP, CLI,
+outbox or baseline-registration behavior. The caller still owns source custody,
+raw-payload provenance and any later destination approval.
+
+All seven tables retain their fixed columns, keys and ordered rows, including
+empty tables. Each scalar is `{kind, value}`: SQL NULL has kind `null` and a null
+value; text has kind `text`; signed integers have kind `integer` and an exact
+decimal string. Empty text remains distinct from NULL. Text, including private
+raw JSON and NUL, is unchanged. Invalid UTF-8 is refused before JSON encoding
+can replace it. Native submission/publication timestamps are neither parsed nor
+replaced with creation or ingestion times.
+
+The projection retains repository identity, logical cursor and native inventory
+digests; integer metadata also uses decimal strings. It omits the physical
+`Anchor.File`. Hashes and byte counts still describe the native capture, not the
+encoded projection. The store remains the exclusion-policy owner: no second
+filter or deletion inference is applied. Unsupported layouts/scalars and blob
+references return a zero result with a content-free error. This profile neither
+certifies historical bodies or acquisition completeness nor authorizes delivery.

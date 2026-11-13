@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a pure private projection of native report captures, preserving typed scalars, raw evidence and publication timestamps while keeping physical file identity local.
+
 - Add a bounded read-only native report snapshot API with complete scoped inventories, publication timestamps and exclusion evidence, without advancing acquisition or delivery state.
 
 - Add explicit `sync --octopool` REST acquisition for public repositories using an existing caller session, without direct GitHub fallback or GraphQL/PR-detail enrichment.
