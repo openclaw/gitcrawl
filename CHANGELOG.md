@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bind private report inventory fingerprints to the existing seven-table wire layout with shared typed key/row hashing and receiver-matched vectors.
+
 - Add explicit, deadline-bound native report index preparation for reverse node-policy lookups, preserving SQLite scalar comparison semantics without index construction on ordinary archive open.
 
 - Journal native comment keys, child observation memberships and global node exclusions for incremental reporting; repair legacy tracking modes on writable open, report stored modes, and require complete row tracking before native capture.
