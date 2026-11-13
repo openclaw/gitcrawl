@@ -61,6 +61,22 @@ The default local archive keeps configuration, SQLite data, vectors, caches, and
 
 Octopool owns pooled live `gh` reads. Gitcrawl keeps local mirror, search, clustering, and TUI workflows; use `gh` or Octopool for final live verification and GitHub write actions. See the [migration note](docs/gh-shim.md).
 
+## Private native seed delivery
+
+`gitcrawl delivery stage-seed`, `status`, and `deliver` operate an explicit private
+outbox for a current native schema-16 archive with an armed change contract.
+Run `gitcrawl help delivery` for the required paths, registered destination and
+positive row/byte/part/deadline bounds. Staging creates a new outbox atomically;
+delivery resumes its exact saved requests using only the named service-token
+environment variable. No configuration discovery, migration, GitHub acquisition,
+credential helper, background release check or scheduler runs.
+
+Status is read-only. Results contain custody and counts, never private rows or
+URLs; a qualified baseline proves completed seed delivery, not provider freshness,
+coverage or publication permission. Retain failed outboxes for reconciliation;
+there is no automatic retry or cleanup. The [delivery contract](SPEC.md#explicit-private-delivery-commands)
+describes limits and partial results.
+
 ## Command map
 
 | Job | Command | Guide |

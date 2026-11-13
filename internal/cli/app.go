@@ -99,6 +99,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if a.githubTokenCommand != nil && rest[0] == "capture" {
 		return usageErr(fmt.Errorf("capture does not support --github-token-command: offline quota provenance for managed credentials is unavailable"))
 	}
+	if a.githubTokenCommand != nil && rest[0] == "delivery" {
+		return usageErr(fmt.Errorf("delivery does not support --github-token-command; use explicit --token-env for the service"))
+	}
 	if releaseNotificationAllowed(rest) {
 		a.maybeNotifyRelease(ctx, rest)
 	}
@@ -141,6 +144,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runThreads(ctx, rest[1:])
 	case "capture":
 		return a.runCapture(ctx, rest[1:])
+	case "delivery":
+		return a.runDelivery(ctx, rest[1:])
 	case "purge-threads":
 		return a.runPurgeThreads(ctx, rest[1:])
 	case "change-contract":

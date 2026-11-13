@@ -19,6 +19,7 @@ func TestReleaseNotificationAllowed(t *testing.T) {
 		want bool
 	}{
 		{name: "no command", want: true},
+		{name: "explicit delivery", args: []string{"delivery", "stage-seed"}, want: false},
 		{name: "ordinary command", args: []string{"sync", "openclaw/gitcrawl"}, want: true},
 		{name: "fill without reserve", args: []string{"fill-pr-details", "openclaw/gitcrawl"}, want: true},
 		{name: "fill with separate reserve", args: []string{"fill-pr-details", "openclaw/gitcrawl", "--reserve-rate-limit", "10"}, want: false},

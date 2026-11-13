@@ -63,6 +63,7 @@ Core commands:
   embed                generate OpenAI embeddings for local thread documents
   threads              list local issue and pull request rows
   capture              export a stable code-free conversation snapshot
+  delivery             explicitly stage, inspect, or deliver a private native seed
   code index           index tracked text files from a local Git checkout
   cluster              build durable clusters from local thread vectors
   purge-threads        permanently remove selected local threads and exclude collection
@@ -217,6 +218,23 @@ Usage:
 
 Usage:
   gitcrawl threads owner/repo [--include-closed] [--numbers refs] [--limit N] [--json]
+`,
+	"delivery": `gitcrawl delivery explicitly manages one private native seed outbox.
+
+Usage:
+  gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
+  gitcrawl delivery status --outbox PATH --timeout D [--json]
+  gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
+
+All paths and positive bounds are explicit. Native schema 16 and an armed change
+contract are required; no config discovery, migration, provider sync, release
+check, or credential helper runs. stage-seed exclusively creates a new outbox;
+failed owned files are retained. status opens the current outbox read-only.
+deliver sends saved bytes only to the saved destination and checks current native
+policy after lazy service-token acquisition. There is no automatic retry.
+Output contains custody/count fields only; bytes counts captured native scalar
+bytes, not RSS. A qualified baseline means completed seed delivery, not provider
+freshness, coverage, or publication approval.
 `,
 	"capture": `gitcrawl capture exports a stable code-free conversation snapshot.
 

@@ -44,7 +44,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - `internal/cluster`: bounded similarity-graph grouping; `internal/store` owns durable cluster persistence and governance
 - Search orchestration lives in `internal/cli/search.go`; SQLite keyword queries live in `internal/store/search.go`.
 - `internal/portable`: compact snapshot export, profiles, manifests, artifact I/O, and deterministic identity
-- `internal/remotedelivery`: private native-report projection, bounded exact seed packing, a separate local seed outbox and explicit policy-checked HTTP delivery; no CLI or schedule activation
+- `internal/remotedelivery`: private native-report projection, bounded exact seed packing, a separate local seed outbox and explicit policy-checked HTTP delivery; `internal/cli/delivery.go` owns explicit commands, with no schedule activation
 
 TUI guidance:
 
@@ -96,8 +96,8 @@ freshness or current exclusion authority. The receipt caller owns transport
 authentication; recording a receipt itself makes no network request.
 
 Outbox creation and receipt APIs do not open native sources or store
-credentials. Delivery is explicit through `DeliverSeed` below; there is no CLI,
-scheduler or delta path. Staged bytes or their hashes cannot authorize delivery.
+credentials. Delivery is explicit through `DeliverSeed` and the commands below;
+there is no scheduler or delta path. Staged bytes or their hashes cannot authorize delivery.
 Receiver policy remains independent. Future delta support must extend this one
 durable owner through an explicit migration, not introduce another checkpoint.
 
@@ -162,6 +162,33 @@ than unique remote effects. An already completed outbox returns its saved result
 without opening the native source or acquiring credentials. No collector,
 scheduler, native checkpoint, upstream fetch or public endpoint is activated.
 
+### Explicit private delivery commands
+
+`delivery stage-seed` requires `--db`, `--repo`, `--outbox NEW_PATH`,
+`--origin`, `--archive`, `--binding`, `--max-rows`, `--max-native-bytes`,
+`--max-encoded-bytes` and `--timeout`. It identifies the literal native file,
+captures through `CaptureNativeReport`, then uses `CreateSeedOutbox` for the
+exclusive atomic stage. There is no separate empty registration or init state.
+
+`delivery status --outbox PATH --timeout D` uses `ReadSeedOutboxState` without
+opening a writer. `delivery deliver` requires `--db`, `--outbox`, `--max-parts`,
+`--max-rows`, `--max-encoded-bytes`, `--timeout` and an explicit `--token-env NAME`.
+It uses `Outbox.DeliverSeed` with the lazy environment provider and saved origin,
+archive and binding. The invocation's timeout respects an earlier caller deadline.
+Every bound must be positive; wire limits additionally cap encoded bytes and parts.
+These are data/work bounds, not memory or disk reservations.
+
+All three commands support `--json` and the global output format. They ignore
+runtime configuration and bypass release notification, GitHub auth commands,
+keyrings, provider sync and schema migration. `--github-token-command` is refused.
+Output is limited to status, seed ID, baseline state, native token and counts;
+`bytes` means captured native scalar bytes. Success reports cumulative receipts;
+a failed send reports only this invocation's recorded receipts with status
+`partial`, without a stale baseline. Unknown storage, HTTP and credential errors
+are content-free. Context and known native/outbox error classifications survive.
+Failed claimed files and uncertain sends remain for explicit reconciliation;
+there is no cleanup, automatic retry or implicit source capture during delivery.
+
 ## Command Surface
 
 No `serve` command.
@@ -169,6 +196,7 @@ No `serve` command.
 Public commands:
 
 - `init`
+- `delivery stage-seed|status|deliver`
 - `doctor`
 - `configure`
 - `version`
