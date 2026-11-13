@@ -14,7 +14,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/openclaw/crawlkit v0.17.5-0.20261113151307-653b46f63cf0
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	modernc.org/sqlite v1.61.1
 )
 
