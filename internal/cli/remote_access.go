@@ -62,7 +62,8 @@ func remoteAccessEndpoint(raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return nil, errors.New("invalid remote endpoint for reader authentication")
 	}
-	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
 	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
 		return nil, fmt.Errorf("remote endpoint cannot use bearer auth over %s; HTTPS is required except for loopback HTTP", u.Scheme)
 	}
@@ -193,8 +194,8 @@ func loginRemoteAccess(ctx context.Context, cfg config.Config, httpClient *http.
 }
 
 func remoteAccessKeyringAccount(cfg config.Config, configPath string) string {
-	endpoint, _ := remoteAccessEndpoint(cfg.CloudflareAccess.Endpoint)
-	canonical := cfg.CloudflareAccess.Endpoint
+	endpoint, _ := remoteAccessEndpoint(cfg.Remote.Endpoint)
+	canonical := cfg.Remote.Endpoint
 	if endpoint != nil {
 		canonical = endpoint.Scheme + "://" + net.JoinHostPort(strings.ToLower(endpoint.Hostname()), remoteAccessPort(endpoint)) + endpoint.EscapedPath()
 	}
@@ -207,7 +208,7 @@ var promoteRemoteAccessConfig = os.Rename
 
 // Stage the config before touching the endpoint/archive-bound keyring entry.
 // Rename failure restores the prior session and leaves the prior config intact.
-func (a *App) finishRemoteAccessLogin(cfg config.Config, result crawlremote.LoginPollResult) error {
+func (a *App) finishRemoteBoundLogin(cfg config.Config, method string, result crawlremote.LoginPollResult) error {
 	configPath := config.ResolvePath(a.configPath)
 	if info, err := os.Lstat(configPath); err == nil && !info.Mode().IsRegular() {
 		return errors.New("reader sign-in requires a regular configuration file")
@@ -249,5 +250,5 @@ func (a *App) finishRemoteAccessLogin(cfg config.Config, result crawlremote.Logi
 		}
 		return errors.New("cannot promote reader configuration; previous session restored")
 	}
-	return a.writeRemoteLoginResult(cfg, "cloudflare-access", result)
+	return a.writeRemoteLoginResult(cfg, method, result)
 }

@@ -79,8 +79,12 @@ func (a *App) runRemoteLogin(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	boundLogin := cfg.CloudflareAccess.TokenEnv != "" || cfg.CloudflareAccess.Endpoint != "" || strings.HasPrefix(cfg.Remote.Auth.KeyringAccount, "gitcrawl:access-reader:")
 	if strings.TrimSpace(*endpoint) != "" {
 		cfg.Remote.Endpoint = *endpoint
+		if strings.TrimSpace(*accessTokenEnv) == "" && strings.TrimRight(strings.TrimSpace(*endpoint), "/") != cfg.CloudflareAccess.Endpoint {
+			cfg.CloudflareAccess = config.CloudflareAccessConfig{}
+		}
 	}
 	cfg.Remote.Normalize()
 	if cfg.Remote.Endpoint == "" {
@@ -100,11 +104,17 @@ func (a *App) runRemoteLogin(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return a.finishRemoteAccessLogin(cfg, result)
+		return a.finishRemoteBoundLogin(cfg, "cloudflare-access", result)
 	}
 	client, err := crawlremote.NewClientFromConfig(cfg.Remote, crawlremote.Options{HTTPClient: httpClient, UserAgent: "gitcrawl/" + version})
 	if err != nil {
 		return err
+	}
+	finish := func(method string, result crawlremote.LoginPollResult) error {
+		if boundLogin {
+			return a.finishRemoteBoundLogin(cfg, method, result)
+		}
+		return a.finishRemoteLogin(cfg, configExists, strings.TrimSpace(*endpoint), method, result)
 	}
 	if tokenEnv := strings.TrimSpace(*githubTokenEnv); tokenEnv != "" {
 		githubToken := strings.TrimSpace(os.Getenv(tokenEnv))
@@ -115,7 +125,7 @@ func (a *App) runRemoteLogin(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return a.finishRemoteLogin(cfg, configExists, strings.TrimSpace(*endpoint), "github-token", result)
+		return finish("github-token", result)
 	}
 	pollSecret, err := crawlremote.NewLoginPollSecret()
 	if err != nil {
@@ -136,7 +146,7 @@ func (a *App) runRemoteLogin(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return a.finishRemoteLogin(cfg, configExists, strings.TrimSpace(*endpoint), "github-oauth", result)
+	return finish("github-oauth", result)
 }
 
 func (a *App) finishRemoteLogin(cfg config.Config, configExists bool, endpointOverride string, method string, result crawlremote.LoginPollResult) error {
@@ -383,7 +393,7 @@ func (a *App) remoteClient(cfg config.Config) (*crawlremote.Client, error) {
 	if !cfg.Remote.Enabled() {
 		return nil, fmt.Errorf("remote archive is not configured")
 	}
-	if cfg.CloudflareAccess.TokenEnv != "" && cfg.Remote.Auth.TokenSource == "keyring" && cfg.Remote.Auth.KeyringAccount != remoteAccessKeyringAccount(cfg, a.configPath) {
+	if strings.HasPrefix(cfg.Remote.Auth.KeyringAccount, "gitcrawl:access-reader:") && cfg.Remote.Auth.TokenSource == "keyring" && cfg.Remote.Auth.KeyringAccount != remoteAccessKeyringAccount(cfg, a.configPath) {
 		return nil, fmt.Errorf("Cloudflare Access reader session must match the configured endpoint, archive and config path; sign in again")
 	}
 	httpClient, err := remoteAccessHTTPClient(cfg)

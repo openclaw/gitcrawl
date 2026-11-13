@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,9 +32,9 @@ func TestRemoteAccessReaderLogin(t *testing.T) {
 	if err := keyring.Set(config.DefaultRemoteTokenKeyringService, "gitcrawl:gitcrawl/fixture", "legacy-session"); err != nil {
 		t.Fatal(err)
 	}
-	requests := 0
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests.Add(1)
 		if r.Header.Get("CF-Access-Token") != token {
 			t.Error("missing Access credential")
 			w.Header().Set("Content-Type", "text/html")
@@ -87,8 +88,8 @@ func TestRemoteAccessReaderLogin(t *testing.T) {
 			t.Fatalf("reader flow failed at %s: %v", args[0], err)
 		}
 	}
-	if requests != 4 || !strings.Contains(output.String(), "fixture result") {
-		t.Fatalf("incomplete reader flow: requests=%d", requests)
+	if requests.Load() != 4 || !strings.Contains(output.String(), "fixture result") {
+		t.Fatalf("incomplete reader flow: requests=%d", requests.Load())
 	}
 	stored, err := os.ReadFile(path)
 	if err != nil {
@@ -114,9 +115,9 @@ func TestRemoteAccessReaderLogin(t *testing.T) {
 func TestRemoteAccessGuardsAndSecretFreeErrors(t *testing.T) {
 	token := fixtureHumanAccessToken()
 	t.Setenv("FIXTURE_ACCESS_TOKEN", token)
-	leakedRequests := 0
+	var leakedRequests atomic.Int32
 	leakReceiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		leakedRequests++
+		leakedRequests.Add(1)
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer leakReceiver.Close()
@@ -132,9 +133,9 @@ func TestRemoteAccessGuardsAndSecretFreeErrors(t *testing.T) {
 		{"foreign-redirect", 307, "text/html", leakReceiver.URL + "/steal"},
 	} {
 		t.Run(response.name, func(t *testing.T) {
-			requests := 0
+			var requests atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
+				requests.Add(1)
 				w.Header().Set("Content-Type", response.contentType)
 				w.Header().Set("Location", response.location)
 				w.WriteHeader(response.status)
@@ -154,17 +155,17 @@ func TestRemoteAccessGuardsAndSecretFreeErrors(t *testing.T) {
 					req.Header.Set("Authorization", "Bearer worker-secret")
 				}
 				_, err = client.Do(req)
-				if err == nil || requests != index+1 || strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "worker-secret") {
+				if err == nil || requests.Load() != int32(index+1) || strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "worker-secret") {
 					t.Fatal("challenge/redirect did not fail without credential exposure")
 				}
 			}
 		})
 	}
-	if leakedRequests != 0 {
+	if leakedRequests.Load() != 0 {
 		t.Fatal("redirect reached a foreign receiver")
 	}
-	foreignCalls := 0
-	foreign := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { foreignCalls++ }))
+	var foreignCalls atomic.Int32
+	foreign := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { foreignCalls.Add(1) }))
 	defer foreign.Close()
 	cfg := config.Default()
 	cfg.Remote.Endpoint = foreign.URL + "/api"
@@ -180,7 +181,7 @@ func TestRemoteAccessGuardsAndSecretFreeErrors(t *testing.T) {
 			t.Fatal("unbound request accepted")
 		}
 	}
-	if foreignCalls != 0 {
+	if foreignCalls.Load() != 0 {
 		t.Fatal("unbound request reached the network")
 	}
 	cfg.Remote.Endpoint = foreign.URL + "/elsewhere"
@@ -239,11 +240,11 @@ func TestRemoteAccessCancellationAndKeyringBinding(t *testing.T) {
 		t.Fatal("login did not preserve caller deadline cancellation")
 	}
 	account := remoteAccessKeyringAccount(cfg, "reader.toml")
-	cfg.CloudflareAccess.Endpoint += "/other"
+	cfg.Remote.Endpoint += "/other"
 	if remoteAccessKeyringAccount(cfg, "reader.toml") == account {
 		t.Fatal("keyring account was not endpoint-bound")
 	}
-	cfg.CloudflareAccess.Endpoint = server.URL
+	cfg.Remote.Endpoint = server.URL
 	cfg.Remote.Archive += "-other"
 	if remoteAccessKeyringAccount(cfg, "reader.toml") == account {
 		t.Fatal("keyring account was not archive-bound")
@@ -274,7 +275,7 @@ func TestRemoteAccessFailurePreservesConfigurationAndSessions(t *testing.T) {
 			t.Cleanup(func() { promoteRemoteAccessConfig = original })
 			app := New()
 			app.configPath = path
-			if err := app.finishRemoteAccessLogin(cfg, crawlremote.LoginPollResult{Status: "complete", Token: "replacement-session"}); err == nil {
+			if err := app.finishRemoteBoundLogin(cfg, "cloudflare-access", crawlremote.LoginPollResult{Status: "complete", Token: "replacement-session"}); err == nil {
 				t.Fatal("promotion failure accepted")
 			}
 			after, err := os.ReadFile(path)
@@ -299,7 +300,7 @@ func TestRemoteAccessReaderConfigsDoNotShareKeyringAccounts(t *testing.T) {
 		app := New()
 		app.Stdout = io.Discard
 		app.configPath = filepath.Join(t.TempDir(), name+".toml")
-		if err := app.finishRemoteAccessLogin(cfg, crawlremote.LoginPollResult{Status: "complete", Token: name + "-session"}); err != nil {
+		if err := app.finishRemoteBoundLogin(cfg, "cloudflare-access", crawlremote.LoginPollResult{Status: "complete", Token: name + "-session"}); err != nil {
 			t.Fatal(err)
 		}
 		loaded, err := config.Load(app.configPath)
@@ -316,5 +317,81 @@ func TestRemoteAccessReaderConfigsDoNotShareKeyringAccounts(t *testing.T) {
 		if err != nil || stored != name+"-session" {
 			t.Fatal("isolated reader overwrote another session")
 		}
+	}
+}
+
+func TestRemoteAccessSwitchToGitHubEndpointPreservesPriorSession(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("FIXTURE_GITHUB_TOKEN", "github-secret")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("CF-Access-Token") != "" {
+			t.Error("prior Access credential reached new endpoint")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/v1/auth/github/token" {
+			t.Error("unexpected endpoint-switch request")
+		}
+		_, _ = w.Write([]byte(`{"status":"complete","token":"new-session","org":"fixture","login":"fixture"}`))
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "reader.toml")
+	cfg := config.Default()
+	cfg.Remote.Mode, cfg.Remote.Endpoint, cfg.Remote.Archive = "cloud", "https://old.example.test/api", "gitcrawl/fixture"
+	cfg.CloudflareAccess = config.CloudflareAccessConfig{Endpoint: cfg.Remote.Endpoint, TokenEnv: "ABSENT_PRIOR_ACCESS_TOKEN"}
+	account := remoteAccessKeyringAccount(cfg, path)
+	cfg.Remote.Auth = crawlremote.AuthConfig{TokenSource: "keyring", KeyringService: config.DefaultRemoteTokenKeyringService, KeyringAccount: account}
+	if err := keyring.Set(cfg.Remote.Auth.KeyringService, account, "prior-session"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	app := New()
+	app.Stdout = io.Discard
+	if err := app.Run(context.Background(), []string{"--config", path, "remote", "login", "--endpoint", server.URL, "--github-token-env", "FIXTURE_GITHUB_TOKEN", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CloudflareAccess.TokenEnv != "" || updated.CloudflareAccess.Endpoint != "" || updated.Remote.Auth.KeyringAccount == account || requests.Load() != 1 {
+		t.Fatal("endpoint switch retained stale Access/session binding")
+	}
+	prior, err := keyring.Get(cfg.Remote.Auth.KeyringService, account)
+	if err != nil || prior != "prior-session" {
+		t.Fatal("endpoint switch overwrote prior reader session")
+	}
+	current, err := keyring.Get(updated.Remote.Auth.KeyringService, updated.Remote.Auth.KeyringAccount)
+	if err != nil || current != "new-session" {
+		t.Fatal("endpoint switch failed to retain the new session separately")
+	}
+}
+
+func TestRemoteAccessAcceptsCaseInsensitiveLoopback(t *testing.T) {
+	t.Setenv("FIXTURE_WORKER_TOKEN", "worker-secret")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer worker-secret" {
+			t.Error("missing reader credential")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"org":"fixture","login":"fixture","roles":["reader"]}`))
+	}))
+	defer server.Close()
+	cfg := config.Default()
+	cfg.Remote.Mode, cfg.Remote.Endpoint, cfg.Remote.TokenEnv = "cloud", strings.Replace(server.URL, "127.0.0.1", "LOCALHOST", 1), "FIXTURE_WORKER_TOKEN"
+	client, err := New().remoteClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Whoami(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 {
+		t.Fatal("uppercase loopback did not reach the configured reader")
 	}
 }
