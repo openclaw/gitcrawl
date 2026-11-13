@@ -44,7 +44,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - `internal/cluster`: bounded similarity-graph grouping; `internal/store` owns durable cluster persistence and governance
 - Search orchestration lives in `internal/cli/search.go`; SQLite keyword queries live in `internal/store/search.go`.
 - `internal/portable`: compact snapshot export, profiles, manifests, artifact I/O, and deterministic identity
-- `internal/remotedelivery`: pure private native-report projection and bounded exact seed request packing; no delivery or baseline registration
+- `internal/remotedelivery`: private native-report projection, bounded exact seed request packing and a separate local seed outbox; no HTTP delivery or CLI activation
 
 TUI guidance:
 
@@ -53,6 +53,54 @@ TUI guidance:
 - mouse support is optional polish
 - right-click must not be required for primary actions because terminal mouse support is inconsistent
 - avoid decorative glyph noise or transient rendering debris in dense panes
+
+### Private seed custody
+
+`CreateSeedOutbox` takes an explicit `SeedRegistration`, an unmodified successful
+`CaptureNativeReport` result and positive `StageLimits.MaxEncodedBytes`. It calls
+the existing private projector and seed packer before claiming a new, literal
+absolute path. Registration fixes the service origin, archive, binding ID,
+repository and captured physical file identity. Origins must use HTTPS or
+literal loopback HTTP; no credentials, query, fragment or path beyond `/`.
+This registration records a target, not permission to send private content.
+
+One separate private SQLite file owns three tables: binding, capture and ordered
+parts. The complete manifest, chunks and completion request are stored once as
+exact BLOB bytes with SHA-256 hashes in one `BEGIN IMMEDIATE` transaction. Each
+checked-out write connection uses `synchronous=FULL`. Native physical identity,
+repository/scope, full logical cursor, inventory digest and captured row/byte
+counts remain local and survive reopen. The logical seed token includes the
+inventory digest, so equal native sequence numbers do not collapse changed
+inventories. Physical identity never enters the wire requests.
+
+The existing codec owns the 4 MiB request, 500-row chunk and 8,192-chunk limits.
+The caller's aggregate byte cap bounds encoded bodies, not SQLite disk usage or
+process RSS. Capture, projection and prepared bodies can coexist in memory.
+Preparation failure creates no file; after an exclusive 0600 claim, failure
+retains the task-created partial file for diagnosis. Existing files are never
+replaced or automatically retried. Newly needed parents use 0700 without
+changing existing directory modes. `OpenSeedOutbox` recognizes the current
+outbox read-only before a writable helper may change permissions or journal
+mode. Unknown/native files and other versions are refused; no migration, reset,
+rebinding, pruning or automatic cleanup is implemented. The owner must keep the
+outbox pathname bound to one physical file throughout its use.
+
+`NextPart` returns the first unreceipted exact body after closing its read
+transaction. Multiple workers can see the same part. `RecordReceipt` accepts
+only the matching app/archive/binding/batch/cursor/hash and pristine-bootstrap
+sequence (part index plus one), in order. Matching replay is a no-op, including
+a changed `replayed` flag; original receipt bytes remain retained. The final
+receipt, capture completion and saved baseline advance atomically. A qualified
+baseline means **completed seed delivery only**, never provider coverage,
+freshness or current exclusion authority. The receipt caller owns transport
+authentication; recording a receipt itself makes no network request.
+
+There is no sender, native source open, credential storage, CLI, scheduler or
+delta path in this slice. Before a future sender transmits or replays any part,
+the native exclusion owner must validate current policy at that outbound
+effect; staged bytes or their hashes cannot authorize delivery. Receiver policy
+remains independent. Future delta support must extend this one durable owner
+through an explicit migration, not introduce another checkpoint.
 
 ## Command Surface
 

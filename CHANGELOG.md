@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a separate private seed outbox with exclusive creation, exact request bytes and native provenance across reopen, and atomic receipt-only baseline qualification. No sender, native writes or CLI is activated.
+
 - Add bounded in-memory packing of private native reports into deterministic GitHub seed requests, preserving native identity and typed rows without delivering or qualifying a baseline.
 
 - Add a pure private projection of native report captures, preserving typed scalars, raw evidence and publication timestamps while keeping physical file identity local.
