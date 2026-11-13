@@ -133,11 +133,16 @@ func TestOutboxInventoryMigrationExactSeedAndOwnership(t *testing.T) {
 	ctx, native := nativeFixture(t)
 	rawValues := []string{`{"node_id":9007199254740993}`, `{"node_id":1e30}`, `{"node_id":true}`, `invalid`, `{"node_id":null}`, `{}`, `{"node_id":"nul\u0000snow☃"}`}
 	// Cross the real 500-row seed chunk boundary while retaining bounded rows.
-	for i := range 501 {
-		raw := rawValues[i%len(rawValues)]
-		if _, err := native.UpsertComment(ctx, store.Comment{ThreadID: 1, GitHubID: strconv.Itoa(i + 1), CommentType: "issue_comment", Body: "private\x00body☃", RawJSON: raw}); err != nil {
-			t.Fatal(err)
+	if err := native.WithTx(ctx, func(tx *store.Store) error {
+		for i := range 501 {
+			raw := rawValues[i%len(rawValues)]
+			if _, err := tx.UpsertComment(ctx, store.Comment{ThreadID: 1, GitHubID: strconv.Itoa(i + 1), CommentType: "issue_comment", Body: "private\x00body☃", RawJSON: raw}); err != nil {
+				return err
+			}
 		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := native.ReserveThreadChildObservation(ctx, 1, store.ThreadChildComments, "2026-01-01", 1); err != nil {
 		t.Fatal(err)
