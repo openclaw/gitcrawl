@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -174,6 +175,8 @@ func TestQualifiedReportIndexRetainsDeletedParentAndPinsSnapshot(t *testing.T) {
 		if err := index.ThreadNumbers(ctx, []int64{10}, func(ref store.NativeReportRef) error { numbered = append(numbered, ref); return nil }); err != nil {
 			return err
 		}
+		slices.SortFunc(subtree, func(a, b store.NativeReportRef) int { return strings.Compare(a.Key.Table, b.Key.Table) })
+		slices.SortFunc(numbered, func(a, b store.NativeReportRef) int { return strings.Compare(a.Key.Table, b.Key.Table) })
 		if !reflect.DeepEqual(subtree, numbered) {
 			t.Fatal("number lookup differs from parent closure")
 		}

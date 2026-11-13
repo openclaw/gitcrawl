@@ -55,14 +55,14 @@ func (v *qualifiedReportIndex) Keys(ctx context.Context, keys []store.NativeRepo
 		}
 		groups[key.Table] = append(groups[key.Table], encoded)
 	}
-	// Fixed profile order keeps callback order deterministic across tables.
+	// Bound key lookups to each fixed-profile table. Capture sorts final keys.
 	for _, layout := range privateLayouts {
 		keys := groups[layout.name]
 		if len(keys) == 0 {
 			continue
 		}
 		args := append([]any{layout.name}, keys...)
-		if err := v.read(ctx, "table_name=? and encoded_key in ("+inventoryPlaceholders(len(keys))+")", args, yield); err != nil {
+		if err := v.read(ctx, "", "table_name=? and encoded_key in ("+inventoryPlaceholders(len(keys))+")", args, yield); err != nil {
 			return err
 		}
 	}
@@ -88,7 +88,7 @@ func (v *qualifiedReportIndex) threads(ctx context.Context, column string, ids [
 	for i, id := range ids {
 		args[i] = id
 	}
-	return v.read(ctx, "table_name in ('threads','comments','thread_child_observation_reservations','thread_child_observation_memberships') and "+column+" in ("+inventoryPlaceholders(len(ids))+")", args, yield)
+	return v.read(ctx, "inventory_"+column, "table_name in ('threads','comments','thread_child_observation_reservations','thread_child_observation_memberships') and "+column+" in ("+inventoryPlaceholders(len(ids))+")", args, yield)
 }
 
 func (v *qualifiedReportIndex) Nodes(ctx context.Context, nodes []string, yield func(store.NativeReportRef) error) error {
@@ -102,13 +102,20 @@ func (v *qualifiedReportIndex) Nodes(ctx context.Context, nodes []string, yield 
 	for i, node := range nodes {
 		args[i] = node
 	}
-	return v.read(ctx, "table_name in ('threads','comments') and node_id in ("+inventoryPlaceholders(len(nodes))+")", args, yield)
+	return v.read(ctx, "inventory_node_id", "table_name in ('threads','comments') and node_id in ("+inventoryPlaceholders(len(nodes))+")", args, yield)
 }
 
 func inventoryPlaceholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 
-func (v *qualifiedReportIndex) read(ctx context.Context, predicate string, args []any, yield func(store.NativeReportRef) error) error {
-	rows, err := v.tx.QueryContext(ctx, `select table_name,encoded_key,key_json,repository_id,coalesce(thread_id,0),coalesce(thread_number,0),node_id from inventory_rows where `+predicate+` order by table_name collate binary,encoded_key`, args...)
+func (v *qualifiedReportIndex) read(ctx context.Context, index, predicate string, args []any, yield func(store.NativeReportRef) error) error {
+	// Stream indexed matches so the caller can stop at its lookup budget. A
+	// global ordering can sort an entire high-fan-out subtree before yielding.
+	from := "inventory_rows"
+	if index != "" {
+		// These names come only from the fixed lookup methods above.
+		from += " indexed by " + index
+	}
+	rows, err := v.tx.QueryContext(ctx, `select table_name,encoded_key,key_json,repository_id,coalesce(thread_id,0),coalesce(thread_number,0),node_id from `+from+` where `+predicate, args...)
 	if err != nil {
 		return err
 	}
