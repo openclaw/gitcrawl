@@ -1,5 +1,6 @@
-// Package remotedelivery owns private native-report projection, seed packing
-// and local receipt-backed seed custody. It does not acquire or send data.
+// Package remotedelivery owns private native-report projection, seed packing,
+// receipt-backed seed custody and explicit policy-checked delivery. It does not
+// acquire upstream data or schedule collection.
 package remotedelivery
 
 import (

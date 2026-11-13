@@ -88,16 +88,20 @@ func TestNativeReportDeliveryGlobalNodesUseNativeJSONSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []int{10, 20} {
-		if _, err := s.UpsertThread(ctx, Thread{RepoID: repo, GitHubID: fmt.Sprint(n), Number: n, Kind: "issue", State: "open", Title: "retained", RawJSON: fmt.Sprintf(`{"node_id":"foreign-%d"}`, n), LabelsJSON: "[]", AssigneesJSON: "[]", ContentHash: fmt.Sprint(n), UpdatedAt: "2026-01-01"}); err != nil {
+	for _, n := range []int{10, 20, 30} {
+		raw := fmt.Sprintf(`{"node_id":"foreign-%d"}`, n)
+		if n == 20 {
+			raw = `{"node_id":123}`
+		}
+		if _, err := s.UpsertThread(ctx, Thread{RepoID: repo, GitHubID: fmt.Sprint(n), Number: n, Kind: "issue", State: "open", Title: "retained", RawJSON: raw, LabelsJSON: "[]", AssigneesJSON: "[]", ContentHash: fmt.Sprint(n), UpdatedAt: "2026-01-01"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	plan, err := s.PlanThreadPurge(ctx, "fixture/other", []int{10})
+	plan, err := s.PlanThreadPurge(ctx, "fixture/other", []int{10, 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.PurgeThreads(ctx, "fixture/other", []int{10}, plan.PlanID); err != nil {
+	if _, err = s.PurgeThreads(ctx, "fixture/other", []int{10, 20}, plan.PlanID); err != nil {
 		t.Fatal(err)
 	}
 	// Nodes are global, even when the owner exclusion belongs to another repo.
@@ -106,6 +110,8 @@ func TestNativeReportDeliveryGlobalNodesUseNativeJSONSemantics(t *testing.T) {
 		excluded bool
 	}{
 		{`{"node_id":"foreign-10"}`, true},
+		{`{"node_id":123}`, true}, {`{"node_id":"123"}`, true},
+		{`{"node_id":123.0}`, false},
 		{`{"node_id":"foreign-10","node_id":"allowed"}`, true},
 		{`{"node_id":"allowed","node_id":"foreign-10"}`, false},
 		{`{"id":"foreign-10","_graphql":{"id":"foreign-10"}}`, false},
@@ -141,6 +147,38 @@ func TestNativeReportDeliveryOneSnapshotAcrossConcurrentPurge(t *testing.T) {
 	}
 	if err := CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, deliveryLimits(), deliveryWalk(e)); !errors.Is(err, ErrThreadExcluded) {
 		t.Fatal("success reused as later grant", err)
+	}
+}
+
+func TestNativeReportDeliveryChecksAfterSQLBatchBoundary(t *testing.T) {
+	s, ctx, c := deliveryFixture(t)
+	e := NativeReportDeliveryEvidence{}
+	for range 501 {
+		e.ThreadNumbers = append(e.ThreadNumbers, 20)
+		e.RawJSON = append(e.RawJSON, `{"node_id":"comment-2"}`)
+	}
+	limits := NativeReportDeliveryLimits{MaxRows: 1002, MaxBytes: 64 << 10}
+	check := func(e NativeReportDeliveryEvidence) error {
+		return CheckNativeReportDelivery(ctx, s.Path(), c.Anchor, limits, deliveryWalk(e))
+	}
+	if err := check(e); err != nil {
+		t.Fatal("allowed references across batches", err)
+	}
+	plan, err := s.PlanThreadPurge(ctx, "fixture/repo", []int{10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PurgeThreads(ctx, "fixture/repo", []int{10}, plan.PlanID); err != nil {
+		t.Fatal(err)
+	}
+	e.ThreadNumbers[500] = 10
+	if err := check(e); !errors.Is(err, ErrThreadExcluded) {
+		t.Fatal("last number escaped batching", err)
+	}
+	e.ThreadNumbers[500] = 20
+	e.RawJSON[500] = `{"node_id":"comment-1"}`
+	if err := check(e); !errors.Is(err, ErrThreadExcluded) {
+		t.Fatal("last raw node escaped batching", err)
 	}
 }
 

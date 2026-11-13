@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit resumable native GitHub seed delivery with current-policy checks after credential acquisition, whole-seed completion checks, exact-byte retries and receipt-only qualification. No collector or schedule is activated.
+
 - Add a bounded read-only native delivery policy checker for staged thread/raw-node references, preserving source incarnation checks and global owner exclusions while allowing ordinary acquisition progress.
 
 - Add a separate private seed outbox with exclusive creation, exact request bytes and native provenance across reopen, and atomic receipt-only baseline qualification. No sender, native writes or CLI is activated.

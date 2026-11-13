@@ -57,18 +57,6 @@ func CheckNativeReportDelivery(ctx context.Context, path string, anchor NativeRe
 	if err := checkNativeReportDeliveryAnchor(ctx, tx, anchor); err != nil {
 		return err
 	}
-	thread, err := tx.PrepareContext(ctx, `select exists(select 1 from thread_exclusions where repository=lower(?) and number=?)`)
-	if err != nil {
-		return err
-	}
-	defer thread.Close()
-	// Match the native purge/capture owner's exact top-level node interpretation.
-	// Nodes are excluded globally; the captured repository ledger is insufficient.
-	node, err := tx.PrepareContext(ctx, `select exists(select 1 from thread_excluded_nodes where node_id=json_extract(case when json_valid(?1) then ?1 else '{}' end,'$.node_id'))`)
-	if err != nil {
-		return err
-	}
-	defer node.Close()
 	var rows, rawBytes int64
 	var yieldErr error
 	err = walk(func(e NativeReportDeliveryEvidence) error {
@@ -95,24 +83,8 @@ func CheckNativeReportDelivery(ctx context.Context, path string, anchor NativeRe
 				if number <= 0 {
 					return ErrNativeReportSource
 				}
-				var excluded bool
-				if err := thread.QueryRowContext(ctx, anchor.Repository, number).Scan(&excluded); err != nil {
-					return err
-				}
-				if excluded {
-					return ErrThreadExcluded
-				}
 			}
-			for _, raw := range e.RawJSON {
-				var excluded bool
-				if err := node.QueryRowContext(ctx, raw).Scan(&excluded); err != nil {
-					return err
-				}
-				if excluded {
-					return ErrThreadExcluded
-				}
-			}
-			return nil
+			return checkNativeDeliveryEvidence(ctx, tx, anchor.Repository, e)
 		}()
 		return yieldErr
 	})
@@ -127,6 +99,48 @@ func CheckNativeReportDelivery(ctx context.Context, path string, anchor NativeRe
 		return ErrNativeReportSource
 	}
 	return ctx.Err()
+}
+
+func checkNativeDeliveryEvidence(ctx context.Context, tx *sql.Tx, repository string, e NativeReportDeliveryEvidence) error {
+	// Keep parameters below SQLite's baseline limit and avoid one SQL round trip
+	// per archived row. Bound strings directly: JSON re-encoding could replace
+	// invalid UTF-8 and change the native node interpretation.
+	const batchSize = 500
+	for start := 0; start < len(e.ThreadNumbers); start += batchSize {
+		end := min(start+batchSize, len(e.ThreadNumbers))
+		args := make([]any, 1, end-start+1)
+		args[0] = repository
+		for _, number := range e.ThreadNumbers[start:end] {
+			args = append(args, number)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", end-start), ",")
+		var excluded bool
+		if err := tx.QueryRowContext(ctx, `select exists(select 1 from thread_exclusions where repository=lower(?) and number in (`+placeholders+`))`, args...).Scan(&excluded); err != nil {
+			return err
+		}
+		if excluded {
+			return ErrThreadExcluded
+		}
+	}
+	for start := 0; start < len(e.RawJSON); start += batchSize {
+		end := min(start+batchSize, len(e.RawJSON))
+		args := make([]any, 0, end-start)
+		for _, raw := range e.RawJSON[start:end] {
+			args = append(args, raw)
+		}
+		values := strings.TrimSuffix(strings.Repeat("(?),", end-start), ",")
+		// Match the native purge/capture owner's top-level node interpretation.
+		// Nodes are excluded globally, including policy owned by other repos.
+		query := `with evidence(raw) as (values ` + values + `) select exists(select 1 from thread_excluded_nodes where node_id in (select json_extract(case when json_valid(raw) then raw else '{}' end,'$.node_id') from evidence))`
+		var excluded bool
+		if err := tx.QueryRowContext(ctx, query, args...).Scan(&excluded); err != nil {
+			return err
+		}
+		if excluded {
+			return ErrThreadExcluded
+		}
+	}
+	return nil
 }
 
 func checkNativeReportDeliveryAnchor(ctx context.Context, tx *sql.Tx, anchor NativeReportAnchor) error {

@@ -44,7 +44,7 @@ The target is a compact, local SQLite workflow for syncing, searching, clusterin
 - `internal/cluster`: bounded similarity-graph grouping; `internal/store` owns durable cluster persistence and governance
 - Search orchestration lives in `internal/cli/search.go`; SQLite keyword queries live in `internal/store/search.go`.
 - `internal/portable`: compact snapshot export, profiles, manifests, artifact I/O, and deterministic identity
-- `internal/remotedelivery`: private native-report projection, bounded exact seed request packing and a separate local seed outbox; no HTTP delivery or CLI activation
+- `internal/remotedelivery`: private native-report projection, bounded exact seed packing, a separate local seed outbox and explicit policy-checked HTTP delivery; no CLI or schedule activation
 
 TUI guidance:
 
@@ -95,12 +95,11 @@ baseline means **completed seed delivery only**, never provider coverage,
 freshness or current exclusion authority. The receipt caller owns transport
 authentication; recording a receipt itself makes no network request.
 
-There is no sender, native source open, credential storage, CLI, scheduler or
-delta path in this slice. Before a future sender transmits or replays any part,
-the native exclusion owner must validate current policy at that outbound
-effect; staged bytes or their hashes cannot authorize delivery. Receiver policy
-remains independent. Future delta support must extend this one durable owner
-through an explicit migration, not introduce another checkpoint.
+Outbox creation and receipt APIs do not open native sources or store
+credentials. Delivery is explicit through `DeliverSeed` below; there is no CLI,
+scheduler or delta path. Staged bytes or their hashes cannot authorize delivery.
+Receiver policy remains independent. Future delta support must extend this one
+durable owner through an explicit migration, not introduce another checkpoint.
 
 ### Native delivery policy checks
 
@@ -111,6 +110,8 @@ and comments; exclusion-ledger rows are metadata, not content references.
 The checker uses the native repository/number exclusion and global node ledger,
 with the purge owner's exact SQLite top-level `$.node_id` interpretation and
 invalid-JSON-as-`{}` behavior. A repository-scoped ledger digest is insufficient.
+Checks bind up to 500 references per SQL statement rather than querying each
+archived row. Raw strings remain bound verbatim, without JSON re-encoding.
 
 The physical file, repository ID/scope, schema cookie, epoch, generation and
 armed change contract must match. Current sequence must be at least the captured
@@ -130,8 +131,36 @@ snapshot, not reusable authorization, provider coverage or a delivery receipt.
 The checker issues no SQL writes, migrations or checkpoints. Normal read-only
 SQLite access can create or leave WAL/SHM reader sidecars. It does not switch to
 immutable mode, change journal mode, checkpoint or unlink source files; current
-WAL policy must remain visible. A future sender must invoke it at outbound effect
-and keep receiver policy and authenticated receipt settlement separate.
+WAL policy must remain visible. The sender invokes it at outbound effect and
+keeps receiver policy and authenticated receipt settlement separate.
+
+
+### Explicit native seed delivery
+
+`Outbox.DeliverSeed` uses the saved origin, archive and binding, caller-owned
+credentials/HTTP client, a deadline and positive part/row/byte limits. Before
+credentials, it validates the bounded persisted seed and indexes parent thread
+numbers from those saved rows. Current native rows cannot replace that mapping
+after a purge. Bodies stream one at a time; limits bound encoded bytes and
+staged row counts, not RSS. A default HTTP client has a 30-second timeout; a
+supplied client is copied without changing it and remains bounded by context.
+
+A request-local transport calls the native checker after token acquisition and
+before each outbound attempt, including allowed redirects. Content chunks check
+their staged references. Completion, including replay after a lost response,
+checks every staged content chunk in one native read snapshot. An exclusion
+added after an earlier chunk was acknowledged therefore holds completion.
+The native read transaction closes before HTTP; receiver policy independently
+checks the request at the service. A concurrent policy change is not serialized
+across the network by the client.
+
+Crawlkit sends exact stored bytes and validates the response; the outbox settles
+only matching receipts. Any uncertain HTTP result or receipt error stops the
+invocation without automatic retry or restaging. The pending bytes remain for an
+explicit retry. The result counts receipt settlements, including replays, rather
+than unique remote effects. An already completed outbox returns its saved result
+without opening the native source or acquiring credentials. No collector,
+scheduler, native checkpoint, upstream fetch or public endpoint is activated.
 
 ## Command Surface
 
