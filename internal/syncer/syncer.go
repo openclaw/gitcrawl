@@ -270,9 +270,15 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 	}
 	var failures []error
 	var reserveErr *gh.RateLimitReserveError
+	// Stop acquiring further rows after the quota reserve fires or GitHub's own
+	// rate limit outlasts the client's retry; GitHub asks clients to stop
+	// sending requests while rate limited.
+	stopAcquisition := false
 	recordFailure := func(number int, row map[string]any, cause error, operations ...string) error {
 		failures = append(failures, fmt.Errorf("%s #%d: %w", strings.Join(operations, ", "), number, cause))
-		errors.As(cause, &reserveErr)
+		if errors.As(cause, &reserveErr) || gh.IsRateLimited(cause) {
+			stopAcquisition = true
+		}
 		if err := s.recordSyncFailure(ctx, options, repoRaw, row, number, cause, operations...); err != nil {
 			failures = append(failures, fmt.Errorf("record sync attempt failure: %w", err))
 			return errors.Join(failures...)
@@ -290,10 +296,13 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 		}
 	} else if len(numbers) > 0 {
 		for _, number := range numbers {
-			if reserveErr != nil {
+			if stopAcquisition {
 				break
 			}
 			row, err := s.client.GetIssue(ctx, options.Owner, options.Repo, number, options.Reporter)
+			if err == nil {
+				err = requestedIssueIdentity(repoRaw, row, number)
+			}
 			if err != nil {
 				if err := recordFailure(number, nil, err, "issue"); err != nil {
 					return Stats{}, err
@@ -408,7 +417,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			}
 			continue
 		}
-		if reserveErr != nil && (options.IncludeComments ||
+		if stopAcquisition && (options.IncludeComments ||
 			kind == "pull_request" && (options.IncludePRMetadata || options.IncludePRDetails)) {
 			continue
 		}
@@ -474,7 +483,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 			return Stats{}, err
 		}
 	}
-	groupFailures := s.consolidateWorkflowSnapshots(ctx, options, payloads, reserveErr == nil)
+	groupFailures := s.consolidateWorkflowSnapshots(ctx, options, payloads, !stopAcquisition)
 	completed := payloads[:0]
 	for index, payload := range payloads {
 		if cause, excluded := groupFailures[index]; excluded {
@@ -968,6 +977,29 @@ func uniquePositiveNumbers(numbers []int) []int {
 		out = append(out, number)
 	}
 	return out
+}
+
+// GitHub answers a transferred issue with a redirect to its new repository and
+// number. Accept only the requested issue from the requested repository; a
+// renamed repository redirects both requests, so its URLs still agree.
+func requestedIssueIdentity(repoRaw, row map[string]any, number int) error {
+	repoURL := stringValue(repoRaw["url"])
+	rowRepoURL := stringValue(row["repository_url"])
+	if intValue(row["number"]) == number &&
+		(repoURL == "" || rowRepoURL == "" || strings.EqualFold(repoURL, rowRepoURL)) {
+		return nil
+	}
+	location := stringValue(row["html_url"])
+	if location == "" {
+		location = fmt.Sprintf("#%d in %s", intValue(row["number"]), rowRepoURL)
+	}
+	next := "sync the destination repository to mirror it there"
+	if i := strings.LastIndex(rowRepoURL, "/repos/"); i >= 0 {
+		if destination := rowRepoURL[i+len("/repos/"):]; strings.Count(destination, "/") == 1 {
+			next = fmt.Sprintf("run `gitcrawl sync %s --numbers %d` to mirror it there", destination, intValue(row["number"]))
+		}
+	}
+	return fmt.Errorf("requested #%d resolved to %s; it was likely transferred to another repository: %s", number, location, next)
 }
 
 func mergeIssueRows(primary, overlap []map[string]any) []map[string]any {

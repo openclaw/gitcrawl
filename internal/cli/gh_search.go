@@ -55,6 +55,9 @@ func (a *App) runGHSearch(ctx context.Context, args []string) error {
 		return usageErr(err)
 	}
 
+	if err := rejectUnappliedGHSearchQualifiers(strings.Join(fs.Args(), " "), kind); err != nil {
+		return usageErr(err)
+	}
 	query, qualifierRepo, qualifierState := parseGHSearchQuery(strings.Join(fs.Args(), " "))
 	repoValue := firstNonEmpty(*repoShort, *repoLong, qualifierRepo)
 	if strings.TrimSpace(repoValue) == "" {
@@ -222,6 +225,56 @@ func parseGHSearchQuery(value string) (query string, repo string, state string) 
 		}
 	}
 	return strings.TrimSpace(strings.Join(queryParts, " ")), repo, state
+}
+
+// ghSearchQualifiers are GitHub issue and pull request search qualifiers that
+// local search does not apply. Searching for them as text would silently return
+// unrelated rows, so they are rejected instead.
+var ghSearchQualifiers = map[string]bool{
+	"archived": true, "assignee": true, "author": true, "base": true, "closed": true,
+	"commenter": true, "comments": true, "created": true, "draft": true, "head": true,
+	"in": true, "interactions": true, "involves": true, "label": true, "language": true,
+	"linked": true, "mentions": true, "merged": true, "milestone": true, "no": true,
+	"org": true, "project": true, "reactions": true, "reason": true, "review": true,
+	"review-requested": true, "reviewed-by": true, "sort": true, "status": true,
+	"team": true, "team-review-requested": true, "type": true, "updated": true,
+	"user": true, "user-review-requested": true,
+}
+
+func rejectUnappliedGHSearchQualifiers(value, kind string) error {
+	for _, part := range strings.Fields(value) {
+		lower := strings.ToLower(part)
+		name, qualifierValue, ok := strings.Cut(strings.TrimPrefix(lower, "-"), ":")
+		if !ok || qualifierValue == "" {
+			continue
+		}
+		negated := strings.HasPrefix(lower, "-")
+		switch {
+		case name == "is":
+			switch qualifierValue {
+			case "open", "closed":
+				if !negated {
+					continue
+				}
+			case "issue":
+				if !negated && kind == "issue" {
+					continue
+				}
+			case "pr", "pull-request":
+				if !negated && kind == "pull_request" {
+					continue
+				}
+			}
+		case name == "repo" || name == "state":
+			if !negated {
+				continue
+			}
+		case !ghSearchQualifiers[name]:
+			continue
+		}
+		return fmt.Errorf("search qualifier %q is not supported by local search; remove it or use plain search terms", part)
+	}
+	return nil
 }
 
 func validateGHSearchState(state string) error {

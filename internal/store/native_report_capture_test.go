@@ -273,9 +273,17 @@ func TestNativeReportSnapshotWithConcurrentWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	writerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		for i := 1; ; i++ {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			default:
+			}
 			err := s.WithTx(writerCtx, func(tx *Store) error {
 				text := fmt.Sprintf("generation-%d", i)
 				if _, err := tx.q().ExecContext(writerCtx, "update threads set title=? where id=1", text); err != nil {
@@ -291,7 +299,8 @@ func TestNativeReportSnapshotWithConcurrentWriter(t *testing.T) {
 		}
 	}()
 	defer func() {
-		cancel()
+		// Finish the in-flight commit before canceling its context.
+		close(stop)
 		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 			t.Error(err)
 		}

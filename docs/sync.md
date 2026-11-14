@@ -193,6 +193,11 @@ gitcrawl sync owner/repo --numbers https://github.com/owner/repo/issues/123 --wi
 
 `--numbers` is the safest way to refresh specific issues or PRs — it bypasses list ordering and the updated-time window, fetching exactly the rows you ask for. Pair it with `--include-comments` and/or `--include-pr-details` to hydrate the conversation and PR-only data at the same time.
 
+GitHub redirects a transferred issue to its new repository and number. Such a
+selection fails as an `issue` fetch, and local threads are left unchanged. The
+error names the new location and the `gitcrawl sync <owner/repo> --numbers <n>`
+command that mirrors it there. Renamed repositories still follow their redirects.
+
 `--numbers` accepts comma-separated thread references, not just integers:
 `123`, `#123`, `issues/123`, `pull/123`, `owner/repo#123`, and full GitHub
 issue or pull request URLs.
@@ -232,7 +237,11 @@ Supervisors should retry failed selections in isolation. Empty reviews remain
 retained, including approvals without bodies. Minimized comments and null
 (deleted) authors are retained as returned by GitHub; deleted comments that
 GitHub no longer returns cannot be reconstructed. The ordinary empty-comment
-filtering contract is unchanged.
+filtering contract is unchanged. The authenticated user's own unsubmitted (`PENDING`)
+review and its draft inline comments are visible only to that user, so this profile
+omits them everywhere, including from the retained `_graphql` object.
+
+Analytics review-state recovery applies the same draft filtering after validating the full review-thread connections. Previously published snapshots and derived artifacts are not retroactively sanitized by this change.
 
 Stored raw maps are explicitly labelled projections: `_gitcrawl_source` is
 `graphql`, and `_graphql` retains the hydrated provider object. Existing thread
@@ -299,6 +308,10 @@ add `--include-comments` when needed. Selecting both hydration modes uses full
 or fingerprints. It resolves PR metadata-fetch failures, not failures of omitted
 child collections.
 
+The authenticated user's own unsubmitted (`PENDING`) review and its draft review-thread
+comments are visible only to that user, and their author can still discard them.
+REST sync therefore does not archive them; they appear once the review is submitted.
+
 Full PR details also populate `pull_request_files`, `pull_request_commits`,
 `pull_request_checks`, and `github_workflow_runs` for local review and search.
 
@@ -362,7 +375,9 @@ An item fetch failure records its actual operation: `issue`, `issue_comments`,
 not create a thread stub. Failed child fetches can retain the observed parent
 metadata, but do not replace incomplete child collections or certify complete
 evidence. Cancellation stops further work; transactions already committed remain.
-A quota-reserve failure also stops new acquisition, including quota probes.
+A quota-reserve failure, or a GitHub primary or secondary rate limit that
+outlasts the client's own wait and retry, also stops new acquisition, including
+quota probes.
 Completed payloads can still commit. Skipped requests are not recorded as
 failures; shared-head groups that still need verification remain uncommitted.
 
@@ -413,7 +428,7 @@ contains credentials, issue content, request URLs, or raw diagnostics.
 gitcrawl sync owner/repo --limit 200
 ```
 
-`--limit` caps the number of rows fetched in this invocation. The underlying GitHub paginator surfaces total page counts in run records and honors GitHub's `Retry-After` and rate-limit response headers, so partial syncs interrupted by rate limiting resume cleanly.
+`--limit` caps the number of rows fetched in this invocation. The underlying GitHub paginator surfaces total page counts in run records and honors GitHub's `Retry-After` and rate-limit response headers, so partial syncs interrupted by rate limiting resume cleanly. A secondary rate limit with no `Retry-After` and quota still remaining waits one minute, as GitHub documents, before its single retry.
 
 REST pagination stops with an error if a `next` link returns to an already
 fetched page. This prevents repeated requests and avoids treating a cyclic

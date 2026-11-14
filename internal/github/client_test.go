@@ -1264,3 +1264,53 @@ func serverURL(r *http.Request) string {
 	}
 	return scheme + "://" + r.Host + r.URL.Path
 }
+
+// GitHub documents that a secondary rate limit may arrive as 403 or 429 with
+// quota remaining and no Retry-After; clients should then wait at least one
+// minute before retrying instead of failing or retrying immediately.
+func TestRateLimitWaitsOneMinuteForSecondaryLimitWithoutRetryAfter(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests} {
+		headers := make(http.Header)
+		headers.Set("X-RateLimit-Remaining", "4900")
+		wait, ok := rateLimitWait(&RequestError{
+			Status:  status,
+			Headers: headers,
+			Body:    `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits","status":"403"}`,
+		})
+		if !ok || wait != time.Minute {
+			t.Fatalf("status %d: wait = %s ok=%t, want 1m0s", status, wait, ok)
+		}
+	}
+	headers := make(http.Header)
+	headers.Set("X-RateLimit-Remaining", "4900")
+	if wait, ok := rateLimitWait(&RequestError{Status: http.StatusForbidden, Headers: headers, Body: `{"message":"Resource not accessible by integration"}`}); ok {
+		t.Fatalf("permission failure retried after %s", wait)
+	}
+}
+
+func TestRateLimitClientWaitsForSecondaryLimitWithoutRetryAfter(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("X-RateLimit-Remaining", "4900")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`)
+	}))
+	defer server.Close()
+
+	client := New(Options{BaseURL: server.URL, PageDelay: -1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var waited string
+	reporter := Reporter(func(message string) {
+		if strings.Contains(message, "rate-limit retry wait=") {
+			waited = message
+			cancel()
+		}
+	})
+	_, err := client.GetRepo(ctx, "openclaw", "gitcrawl", reporter)
+	if !errors.Is(err, context.Canceled) || waited != "[github] rate-limit retry wait=1m0s" || calls.Load() != 1 {
+		t.Fatalf("err=%v wait=%q requests=%d, want one request then a one-minute wait", err, waited, calls.Load())
+	}
+}

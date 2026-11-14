@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Reject transferred issues during exact-number sync before they can overwrite another archived thread; preserve repository-rename redirects. Thanks @saariuslystoned.
+- Retry secondary GitHub rate limits without `Retry-After` after one minute, and stop further sync acquisition when REST or GraphQL rate limiting persists. Thanks @saariuslystoned.
+- Exclude unsubmitted review bodies and draft inline comments from REST sync, GraphQL history, and analytics review-state collection. Thanks @saariuslystoned.
+- Explain missing local repositories with a sync command, and reject unsupported GitHub search qualifiers instead of silently returning misleading results. Thanks @saariuslystoned.
+- Clarify that refresh embeds and clusters open threads by default, isolate the configured-host quota test from ambient credentials, and stabilize concurrent snapshot test cleanup. Thanks @saariuslystoned.
+
 - Add inactive Octopool acquisition service/timer templates that resume qualified incremental checkpoints, with per-source locking and bounded execution. No collector or scheduler is activated.
 
 - Add inactive per-source Linux delivery service/timer templates with explicit measured limits, persistent locking and publisher-only credentials. Installation and activation remain separate operator steps.

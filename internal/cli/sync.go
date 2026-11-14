@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -206,6 +207,9 @@ func (a *App) runFillPRDetails(ctx context.Context, args []string) error {
 	repo, err := rt.repository(ctx, owner, repoName)
 	if err != nil {
 		_ = rt.Store.Close()
+		if errors.Is(err, sql.ErrNoRows) {
+			return err // already names the repository and the sync command
+		}
 		return fmt.Errorf("repository %s/%s is not in the local archive; run gitcrawl sync first: %w", owner, repoName, err)
 	}
 	numbers, err := rt.Store.MissingPullRequestDetailNumbers(ctx, repo.ID, store.MissingPullRequestDetailOptions{Limit: limit, Order: *order})
