@@ -95,6 +95,20 @@ retention behavior. All providers in tests are synthetic. Initial live acceptanc
 must demonstrate an ordinary committed run and resumed core collection before
 claiming the fleet is caught up.
 
+The read-only quarantine-plan phase has a 60-second deadline inside the existing
+300-second controller preparation ceiling. Its complete preserved row image
+includes retained event history; growth in that history must not be mistaken for
+an identity conflict or solved by omitting evidence. This does not extend the
+90-second settled-write deadline, five-minute freshness gate, controller cadence,
+or any quarantine acceptance rule. Preparation failure leaves analytics running
+and retains the pending broker envelope for normal resumable maintenance.
+The exact immediate predecessor cache producer
+`a5d597e44f5c4b1bd7fff7683b7d5701af5d5de957a5eb99583cd5e93d1c4f4b`
+is bound by source `75f2b25425bdbc790e907cd97594769ceadddc09` and its immutable
+membership-lookup deployment manifest. Its unchanged pair computation and
+encoding permit reuse without clearing the cache or relabelling parent bytes;
+unknown producer hashes still refuse.
+
 ## Quarantine proof and reader status
 
 A complete metadata-only candidate partition, active relation graph, exact write

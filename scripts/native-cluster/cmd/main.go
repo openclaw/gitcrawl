@@ -127,7 +127,10 @@ func run() error {
 	if current.InputSHA256 != snap.InputSHA256 || current.StateSHA256 != snap.StateSHA256 {
 		return fmt.Errorf("native combined input/curation changed during compute; cache retained")
 	}
-	planCtx, planDone := context.WithTimeout(context.Background(), 15*time.Second)
+	// Preserved row images include retained event history. This read-only
+	// budget stays within the controller's existing 300s prepare ceiling;
+	// the separate 90s settled-write deadline remains unchanged.
+	planCtx, planDone := context.WithTimeout(context.Background(), 60*time.Second)
 	planStore, planErr := store.OpenReadOnly(planCtx, *db)
 	var plan store.ClusterQuarantinePlan
 	if planErr == nil {

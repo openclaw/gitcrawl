@@ -39,8 +39,13 @@ const reviewedCandidateV3CacheProducer = "107a402976844d8e5f3cad1a974f3801acc66b
 // correction changes only the identity-reconciliation lookup join order.
 const reviewedSplitCacheProducer = "9b50cfe6bbbc27f5cc71b5f298ce66049ebe4ef93fa414b27b5a4a2ab56a0461"
 
+// reviewedMembershipCacheProducer is the immutable source75f2b25425bd
+// membership-lookup deployment, bound by its MANIFEST.json. The next change
+// widens only read-only planning time; pair computation and encoding are exact.
+const reviewedMembershipCacheProducer = "a5d597e44f5c4b1bd7fff7683b7d5701af5d5de957a5eb99583cd5e93d1c4f4b"
+
 func reviewedCacheProducer(hash string) bool {
-	return hash == reviewedSubsetCacheProducer || hash == reviewedQuarantineCacheProducer || hash == reviewedCandidateV3CacheProducer || hash == reviewedSplitCacheProducer
+	return hash == reviewedSubsetCacheProducer || hash == reviewedQuarantineCacheProducer || hash == reviewedCandidateV3CacheProducer || hash == reviewedSplitCacheProducer || hash == reviewedMembershipCacheProducer
 }
 
 type pairCacheFile struct {
