@@ -2,13 +2,15 @@ package github
 
 // The history API batches complete conversations through GraphQL. The maps
 // consumed by syncer are explicit projections; _graphql retains the unmodified
-// provider object and _gitcrawl_source identifies its transport. No REST fallback.
+// provider object excluding the authenticated user's unsubmitted review drafts, and
+// _gitcrawl_source identifies its transport. No REST fallback.
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"strconv"
 	"strings"
@@ -345,6 +347,9 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 	if typ != "Issue" && typ != "PullRequest" {
 		return item, fmt.Errorf("invalid history item type")
 	}
+	if typ == "PullRequest" {
+		node = withoutPendingHistoryDrafts(node)
+	}
 	row := historyProjection(node)
 	// A PR database ID belongs to the PullRequest, not its backing Issue.
 	// Leave it unresolved for the syncer; retain both provider IDs as evidence.
@@ -425,6 +430,69 @@ func historyItem(node map[string]any) (HistoryItem, error) {
 	}
 	item.Thread = row
 	return item, nil
+}
+
+// withoutPendingHistoryDrafts removes those drafts from a hydrated pull request
+// before any projection, including the retained _graphql object. Connections
+// that change keep a consistent count; unchanged ones are returned as is.
+func withoutPendingHistoryDrafts(node map[string]any) map[string]any {
+	reviews, reviewsChanged := filteredHistoryConnection(historyMap(node["reviews"]), func(review map[string]any) (map[string]any, bool, bool) {
+		return review, !isPendingReview(review["state"]), false
+	})
+	threads, threadsChanged := filteredHistoryConnection(historyMap(node["reviewThreads"]), func(thread map[string]any) (map[string]any, bool, bool) {
+		comments, changed := filteredHistoryConnection(historyMap(thread["comments"]), func(comment map[string]any) (map[string]any, bool, bool) {
+			return comment, !isPendingReview(comment["state"]), false
+		})
+		if !changed {
+			return thread, true, false
+		}
+		if nodes, _ := comments["nodes"].([]any); len(nodes) == 0 {
+			return nil, false, true // the thread exists only in the draft
+		}
+		filtered := maps.Clone(thread)
+		filtered["comments"] = comments
+		return filtered, true, true
+	})
+	if !reviewsChanged && !threadsChanged {
+		return node
+	}
+	out := maps.Clone(node)
+	if reviewsChanged {
+		out["reviews"] = reviews
+	}
+	if threadsChanged {
+		out["reviewThreads"] = threads
+	}
+	return out
+}
+
+func filteredHistoryConnection(conn map[string]any, keep func(map[string]any) (map[string]any, bool, bool)) (map[string]any, bool) {
+	nodes, ok := conn["nodes"].([]any)
+	if !ok {
+		return conn, false
+	}
+	kept := make([]any, 0, len(nodes))
+	changed := false
+	for _, node := range nodes {
+		child, retain, replaced := keep(historyMap(node))
+		if !retain {
+			changed = true
+			continue
+		}
+		if replaced {
+			changed = true
+			kept = append(kept, child)
+			continue
+		}
+		kept = append(kept, node)
+	}
+	if !changed {
+		return conn, false
+	}
+	out := maps.Clone(conn)
+	out["nodes"] = kept
+	out["totalCount"] = len(kept)
+	return out, true
 }
 
 func historyInlineProjection(comment map[string]any) map[string]any {

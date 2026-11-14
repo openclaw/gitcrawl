@@ -385,7 +385,11 @@ func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, numb
 
 func (c *Client) ListPullReviews(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", pathEscape(owner), pathEscape(repo), number)
-	return c.paginate(ctx, path, 0, 0, reporter)
+	rows, err := c.paginate(ctx, path, 0, 0, reporter)
+	if err != nil {
+		return nil, err
+	}
+	return withoutPendingReviews(rows), nil
 }
 
 func (c *Client) ListPullReviewComments(ctx context.Context, owner, repo string, number int, reporter Reporter) ([]map[string]any, error) {
@@ -922,6 +926,8 @@ func rateLimitHostForBaseURL(baseURL string) string {
 // huge or malicious header cannot hang sync indefinitely.
 const maxRateLimitWait = 5 * time.Minute
 
+const secondaryRateLimitWait = time.Minute
+
 func rateLimitWait(err error) (time.Duration, bool) {
 	reqErr, ok := err.(*RequestError)
 	if !ok {
@@ -936,6 +942,11 @@ func rateLimitWait(err error) (time.Duration, bool) {
 		}
 	}
 	if reqErr.Headers.Get("X-RateLimit-Remaining") != "0" {
+		// GitHub may report a secondary rate limit with primary quota remaining
+		// and no Retry-After; its documented fallback is to wait one minute.
+		if strings.Contains(strings.ToLower(reqErr.Body), "secondary rate limit") {
+			return secondaryRateLimitWait, true
+		}
 		return 0, false
 	}
 	secs, err := strconv.ParseInt(strings.TrimSpace(reqErr.Headers.Get("X-RateLimit-Reset")), 10, 64)

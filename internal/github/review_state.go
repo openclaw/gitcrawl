@@ -62,6 +62,7 @@ func (c *Client) FetchGraphQLReviewState(ctx context.Context, owner, repo string
 		if err = h.hydrateConnections(ctx, map[string]any{"__typename": "PullRequest", "id": node["id"], "reviewThreads": node["reviewThreads"]}); err != nil {
 			return nil, historyFailure("validation", n, node, err)
 		}
+		node = withoutPendingHistoryDrafts(node)
 		out = append(out, ReviewStateItem{Number: n, RepositoryID: fmt.Sprint(repoID), RepositoryNodeID: historyString(r["id"]), NodeID: historyString(node["id"]), UpdatedAt: updated, Threads: historyNodes(node, "reviewThreads")})
 	}
 	return out, nil

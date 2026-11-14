@@ -7055,6 +7055,7 @@ func TestCurrentFillRateLimitUsesConfiguredAPIHost(t *testing.T) {
 		t.Fatalf("init: %v", err)
 	}
 	configureTestGitHubCache(t, configPath, cacheDir, "test-gh-token")
+	t.Setenv("GITHUB_TOKEN", "test-gh-token")
 	t.Setenv("GH_HOST", "")
 	t.Setenv("GITCRAWL_GITHUB_BASE_URL", "https://ghe.example/api/v3")
 	t.Setenv("GITCRAWL_GH_RATE_LIMIT_MAX_AGE", "1h")

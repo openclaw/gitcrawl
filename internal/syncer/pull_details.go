@@ -327,7 +327,7 @@ func (s *Syncer) consolidateWorkflowSnapshots(
 			failures = make(map[int]error)
 		}
 		var reserveErr *gh.RateLimitReserveError
-		if errors.As(err, &reserveErr) || ctx.Err() != nil {
+		if errors.As(err, &reserveErr) || gh.IsRateLimited(err) || ctx.Err() != nil {
 			allowRequests = false
 		}
 		if errors.Is(err, errWorkflowVerificationNotAttempted) {
