@@ -85,6 +85,10 @@ not start GitHub acquisition or install a schedule. Inactive Linux units
 under `operations/` require separate source, limit and credential qualification
 before installation.
 
+For separately qualified GitHub acquisition, the inactive
+[`gitcrawl-acquire@` templates](docs/sync.md#scheduled-acquisition) resume the
+existing Octopool checkpoint without a historical rebuild.
+
 ## Public cluster context export
 
 `gitcrawl delivery export-clusters` prepares a bounded, offline public cluster

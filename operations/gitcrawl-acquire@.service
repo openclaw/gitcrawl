@@ -1,0 +1,28 @@
+[Unit]
+Description=Acquire qualified gitcrawl source %i through Octopool
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=gitcrawl
+Group=gitcrawl
+WorkingDirectory=/var/lib/gitcrawl/%i
+EnvironmentFile=/etc/gitcrawl/acquire-%i.env
+ExecStartPre=/usr/bin/test -s /etc/gitcrawl/acquire-%i.toml
+ExecStartPre=/usr/bin/test -s /var/lib/gitcrawl/%i/native.sqlite
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code=75 /var/lib/gitcrawl/%i/acquire.lock /usr/local/bin/gitcrawl --config /etc/gitcrawl/acquire-%i.toml sync ${GITCRAWL_REPOSITORY} --octopool --state all --include-comments --incremental --json
+TimeoutStartSec=4min
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gitcrawl/%i
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+CPUQuota=100%
+StandardOutput=journal
+StandardError=journal

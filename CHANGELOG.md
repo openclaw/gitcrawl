@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add inactive Octopool acquisition service/timer templates that resume qualified incremental checkpoints, with per-source locking and bounded execution. No collector or scheduler is activated.
+
 - Add inactive per-source Linux delivery service/timer templates with explicit measured limits, persistent locking and publisher-only credentials. Installation and activation remain separate operator steps.
 
 - Add bounded `delivery cycle` for qualified incremental outboxes: resume saved changes, capture one native interval, then deliver under one deadline, with phase results and stable-idle suppression. No acquisition or schedule is activated.

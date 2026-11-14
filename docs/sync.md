@@ -133,6 +133,57 @@ or report-publication authority. The overlap is not a provider snapshot
 consistency guarantee. No scheduler state, source journal rearm, index build or
 outbox migration is performed. A timer firing alone is not proof of catch-up.
 
+## Scheduled acquisition
+
+`operations/gitcrawl-acquire@.service` and `.timer` are inactive Linux
+systemd templates for the qualified incremental profile above. They neither
+install themselves nor bootstrap a checkpoint. Keep the existing collector
+until the replacement source, scope and recovery path are qualified.
+
+Each instance runs as `gitcrawl`, with `/var/lib/gitcrawl/<instance>` as its
+working directory. Before installation, qualify a readable existing
+`native.sqlite` there and the exact matching Octopool checkpoint. The service
+refuses a missing or empty native file. Configure the root-owned, group-readable
+`/etc/gitcrawl/acquire-<instance>.toml` with absolute paths for that database and
+its cache, vector and log directories inside the instance directory. Confirm
+that environment overrides do not select a different database or runtime path.
+Do not configure a portable store or remote publication in this acquisition
+instance. Preserve the current exclusions and qualify their owner before use.
+
+A root-owned mode-0600 `/etc/gitcrawl/acquire-<instance>.env` supplies:
+
+- `GITCRAWL_REPOSITORY`: one qualified public `owner/repo`.
+- `OCTOPOOL_TOKEN`: the existing relay caller session, kept out of argv.
+- `OCTOPOOL_URL` and `OCTOPOOL_POOL`, when overriding the documented defaults.
+
+The command always selects `--octopool --state all --include-comments
+--incremental`. There is no direct GitHub fallback, historical bootstrap,
+summary generation or report publication. Missing or incompatible checkpoints
+fail through the normal sync contract. Do not use a rolling `--since` window to
+hide a failed checkpoint. Private repositories and PR-detail enrichment remain
+outside this relay profile.
+
+The persistent `acquire.lock` prevents concurrent invocations using the same
+instance; manual acquisition must take that same lock. Do not assign two
+instances to one native database, and stop for ownership review if an existing
+collector can still write it. Delivery uses its separate `delivery.lock` and
+native snapshot contract; it may read committed progress while acquisition
+continues. The timer starts two minutes after boot, then five minutes after the
+previous run completes, with up to15seconds jitter. Acquisition does not depend
+on archive availability; the separate delivery timer resumes retained requests.
+
+The template caps acquisition at four minutes, allows30seconds for termination,
+and limits memory to512MiB and CPU to one core. These are bounded starting
+settings, not evidence that a source fits: qualify them on the intended host
+before activation. A timeout can retain completed native writes but cannot
+advance the qualified checkpoint for an incomplete traversal. Repeated timeouts
+mean the scope or budget needs review; never reset the checkpoint or silently
+expand a budget. There is no immediate restart loop.
+
+Validate exact units with `systemd-analyze verify --man=no` before installation.
+After separately admitted activation, measure the successful checkpoint's
+`through` time and query-visible watermark. Timer firings do not prove freshness.
+
 ## Exact rows
 
 ```bash
