@@ -5,6 +5,26 @@ permalink: /releasing/
 
 # Releasing Gitcrawl
 
+## Change verification
+
+Before delivering a change:
+
+- Pin the complete candidate (base commit, staged/unstaged diff and task-owned
+  untracked files) and required unchanged source context.
+- Request independent P0–P3 review through an ordinary OpenClaw subagent with
+  isolated context. Restrict its task to reading and reporting; no edits,
+  provider calls, publication or deployment. Do not use repository review scripts,
+  automated reviewer dispatch or separate review-runner authentication.
+- Require findings with file/line evidence and impact, or an explicit no-findings
+  result, together with scope coverage and limitations. Collect the complete
+  result, verify findings, and re-review any resulting changed boundaries.
+- Run the relevant tests/build and documentation/link checks. Retain the pinned
+  candidate hashes, reviewer result and validation evidence outside the checkout.
+- Verify the delivered artifact and ordinary runtime outcome for an operational
+  repair; a review, commit, push or running process alone is not acceptance.
+
+## Official release path
+
 `.github/workflows/release-unified.yml` is the only official release path. It calls `openclaw/release-workflows@v1` from protected `main`, verifies the immutable fleet-signed annotated version tag, preserves Gitcrawl's six thin platform archives and `checksums.txt`, signs and notarizes both macOS binaries as `org.openclaw.gitcrawl`, verifies the complete asset inventory independently on arm64 and Intel macOS, and waits for `openclaw/homebrew-tap` to update successfully.
 
 The public compatibility contract remains:
