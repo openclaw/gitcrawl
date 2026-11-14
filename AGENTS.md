@@ -1,10 +1,15 @@
 # AGENTS.md
 
-## Autoreview priority
+## Independent review
 
-Use `--max-priority P3` with the shared autoreview helper to preserve this
-repository's existing P0–P3 review gate. Follow the
-[shared skill setup](.agents/skills/autoreview/SKILL.md) before running it.
+Use an ordinary OpenClaw subagent with isolated context for independent P0–P3
+review of the complete pinned candidate. The reviewer is read-only: no edits,
+provider work, releases or deployment. Include staged, unstaged and task-owned
+untracked changes, required unchanged context, and explicit scope/limitations.
+Resolve findings and re-review changed boundaries before delivery. Do not require
+a review script, wrapper, automated reviewer dispatch, separate CLI authentication
+or replacement helper.
+Follow the [verification checklist](docs/releasing.md#change-verification).
 
 ## Development workspace
 

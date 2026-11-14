@@ -30,7 +30,7 @@ requested scope, or the user asks for current external context.
 - Legacy installs may still resolve config, database, cache, vectors, and logs
   under `~/.config/gitcrawl/`; check the active config before assuming a
   migrated path.
-- Repo: `openclaw/gitcrawl`; on ClawSweeper this is checked out at `~/clawsweeper-workspace/gitcrawl`
+- Repo: `openclaw/gitcrawl`; use the existing canonical checkout on the current host.
 - Preferred CLI: `gitcrawl`; fallback to `go run ./cmd/gitcrawl` from a verified repo checkout if the installed binary is stale
 
 ## Freshness
