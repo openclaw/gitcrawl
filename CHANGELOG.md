@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded `delivery cycle` for qualified incremental outboxes: resume saved changes, capture one native interval, then deliver under one deadline, with phase results and stable-idle suppression. No acquisition or schedule is activated.
+
 - Add copy-only `portable export --since` with open and uncertain thread retention, recent comment parent selection, child closure, explicit subset metadata and cleared repository completeness checkpoints. Ordinary exports are unchanged; no collector or publication is activated.
 
 - Add explicit resumable `delivery deliver-clusters` with full saved-bundle validation, current native public/exclusion checks at each request, exact receipt offsets for repeated snapshots and receipt-validated staged/partial/complete status. No provider acquisition or schedule is activated.

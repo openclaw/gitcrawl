@@ -364,6 +364,7 @@ func TestReportDeliveryCLIRejectsFlagsAndMissingPreparation(t *testing.T) {
 		{"delivery", "upgrade", "--outbox", missing, "--timeout", "1s", "--to-version", "2"},
 		{"delivery", "upgrade", "--outbox", missing, "--timeout", "1s", "--to-version", "3", "--max-rows", "1"},
 		{"delivery", "stage-changes", "--outbox", missing, "--timeout", "1s"},
+		{"delivery", "cycle", "--outbox", missing, "--timeout", "1s"},
 		{"delivery", "deliver-changes", "--outbox", missing, "--timeout", "1s", "--token-env", "credential-command-secret"},
 	} {
 		if _, err := reportDeliveryApp(t, ctx, args...); err == nil {
@@ -389,6 +390,10 @@ func TestReportDeliveryCLIRejectsFlagsAndMissingPreparation(t *testing.T) {
 	}
 	if _, err := reportDeliveryApp(t, ctx, reportStageArgs(native, path)...); !errors.Is(err, store.ErrNativeReportSource) {
 		t.Fatal("missing native preparation accepted", err)
+	}
+	cycle, err := reportCycleApp(t, ctx, reportCycleArgs(native, path, 10)...)
+	if !errors.Is(err, store.ErrNativeReportSource) || len(cycle) != 2 || cycle[0].Status != "idle" || cycle[1].Phase != "capture" || cycle[1].Status != "failed" {
+		t.Fatal("cycle hid failed capture or changed custody", cycle, err)
 	}
 	after, err := os.ReadFile(native)
 	if err != nil || !bytes.Equal(before, after) {

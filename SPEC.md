@@ -200,6 +200,22 @@ are content-free. Context and known native/outbox error classifications survive.
 Failed claimed files and uncertain sends remain for explicit reconciliation;
 there is no cleanup, automatic retry or implicit source capture during delivery.
 
+`delivery cycle` accepts the combined `stage-changes` and `deliver-changes`
+bounds, native path, outbox, token environment name and one positive timeout.
+It resumes a pending capture, captures one native interval, then delivers it.
+All phases share the deadline. Errors stop immediately; a drain reaching its
+part limit exits successfully with `part_limit`, leaving remaining saved work
+for the next invocation and never capturing over it. JSON emits separate
+`resume`, `capture` and `deliver` phase records with existing custody fields.
+
+Cycle suppresses a zero-row interval only when native From equals Through and
+the saved wire anchor is already v2. The initial empty v1-to-v2 transition and
+advancing empty checkpoints still publish. Explicit `stage-changes` retains its
+existing empty-transition behavior. The cycle opens the existing outbox for
+each operation, preserving exact predecessor checks and saved-byte recovery.
+Use one external lock per source/outbox; it never initializes, migrates, changes
+scope, starts acquisition or installs a schedule.
+
 ### Public durable cluster context
 
 `CaptureNativeClusterContext` reads one bounded native schema-16 transaction

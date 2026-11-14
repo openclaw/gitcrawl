@@ -35,7 +35,7 @@ func (a *App) runDelivery(ctx context.Context, args []string) error {
 		return a.runClusterStage(ctx, args)
 	case "export-clusters":
 		return a.runClusterExport(ctx, args[1:])
-	case "report-status", "upgrade", "stage-changes", "deliver-changes":
+	case "report-status", "upgrade", "stage-changes", "deliver-changes", "cycle":
 		return a.runReportDelivery(ctx, args)
 	}
 	if command != "stage-seed" && command != "status" && command != "deliver" {

@@ -420,6 +420,7 @@ gitcrawl delivery upgrade --outbox PATH --to-version 2 --max-rows N --max-encode
 gitcrawl delivery upgrade --outbox PATH --to-version 3 --timeout D [--json]
 gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
 gitcrawl delivery deliver-changes --db PATH --outbox PATH --max-rows N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
+gitcrawl delivery cycle --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
 ```
 
 `report-status` opens schema2/3 read-only and returns the qualified native token,
@@ -454,3 +455,15 @@ than stage again. Final contiguous receipt settlement promotes the inventory,
 native token and receiver checkpoint atomically. No retry, migration, cleanup
 or successor capture is implicit. Qualified custody is not provider freshness,
 coverage, current privacy authority or publication approval.
+
+
+`cycle` explicitly resumes saved changes, captures one bounded native interval,
+and delivers it under one shared timeout. A failed or part-limited resume stops
+before capture. JSON output has one record per attempted phase (`resume`,
+`capture`, `deliver`); completed receipts remain durable if a later phase fails.
+Bounds apply to each phase, and a new capture must fit the selected part limit.
+
+A stable empty v2 interval is idle. The first empty v1-to-v2 wire transition and
+advancing empty checkpoints still publish. Use an external lock per source and
+outbox when scheduling cycles. The command never installs a schedule, acquires
+GitHub data, initializes or upgrades an outbox, or changes its saved scope.

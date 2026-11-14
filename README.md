@@ -77,7 +77,11 @@ coverage or publication permission. Retain failed outboxes for reconciliation;
 there is no automatic retry or cleanup. Seed-only operations recheck the outbox
 schema in each transaction, including handles opened before an explicit migration.
 The [delivery contract](SPEC.md#explicit-private-delivery-commands)
-describes limits and partial results.
+describes limits and partial results. For a qualified incremental outbox,
+`gitcrawl delivery cycle` resumes pending changes, captures one bounded native
+interval, then delivers it under one deadline. It stops before capture on a
+failed or incomplete resume. Use an external per-source lock; the command does
+not start GitHub acquisition or install a schedule.
 
 ## Public cluster context export
 

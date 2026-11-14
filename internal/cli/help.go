@@ -240,6 +240,7 @@ Usage:
   gitcrawl delivery upgrade --outbox PATH --to-version 3 --timeout D [--json]
   gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
   gitcrawl delivery deliver-changes --db PATH --outbox PATH --max-rows N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
+  gitcrawl delivery cycle --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D --token-env NAME [--json]
 
 export-clusters is offline: it reads the native public durable-active/v1 view
 and emits JSON containing base64 exact manifest, chunk and completion bytes.
@@ -288,6 +289,14 @@ per invocation (1..64). It resolves --token-env lazily only for actual HTTP and
 rechecks native policy. idle needs no token or source access. Partial/error output
 reports only that pinned capture and this invocation's durable receipts; inspect
 report-status and resume explicitly. No automatic retry or successor capture runs.
+
+cycle resumes pending changes, captures one bounded interval, then delivers it
+under one timeout. A failed or incomplete resume stops before capture. JSON emits
+one record per attempted phase (resume, capture, deliver), including partial send
+results. Stable empty v2 intervals are idle; initial v1-to-v2 transitions and
+advancing empty checkpoints still publish. Bounds apply to each phase; a capture
+must fit --max-parts. It never initializes, upgrades, acquires GitHub data or
+installs a schedule. Use a single operator/scheduler lock per source/outbox.
 `,
 	"capture": `gitcrawl capture exports a stable code-free conversation snapshot.
 

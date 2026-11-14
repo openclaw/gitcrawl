@@ -15,6 +15,7 @@ import (
 
 type reportDeliveryOutput struct {
 	Status           string `json:"status"`
+	Phase            string `json:"phase,omitempty"`
 	ToVersion        int    `json:"to_version,omitempty"`
 	CaptureID        string `json:"capture_id,omitempty"`
 	ActiveCaptureID  string `json:"active_capture_id,omitempty"`
@@ -30,6 +31,8 @@ type reportDeliveryOutput struct {
 
 func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 	command := args[0]
+	staging := command == "stage-changes" || command == "cycle"
+	sending := command == "deliver-changes" || command == "cycle"
 	fs := flag.NewFlagSet("delivery "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	outboxPath := fs.String("outbox", "", "explicit private outbox path")
@@ -45,17 +48,17 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 		fs.Int64Var(&maxRows, "max-rows", 0, "positive captured row bound")
 		fs.Int64Var(&maxEncodedBytes, "max-encoded-bytes", 0, "positive saved/request byte bound")
 	}
-	if command == "stage-changes" || command == "deliver-changes" {
+	if staging || sending {
 		fs.StringVar(&db, "db", "", "explicit existing native archive")
 		fs.IntVar(&maxParts, "max-parts", 0, "positive change-part bound")
 	}
-	if command == "stage-changes" {
+	if staging {
 		fs.Int64Var(&maxJournal, "max-journal-records", 0, "positive journal record bound")
 		fs.Int64Var(&maxKeys, "max-affected-keys", 0, "positive affected-key bound")
 		fs.Int64Var(&maxLookups, "max-lookup-rows", 0, "positive dependency lookup bound")
 		fs.Int64Var(&maxNativeBytes, "max-native-bytes", 0, "positive native capture work byte bound")
 	}
-	if command == "deliver-changes" {
+	if sending {
 		fs.StringVar(&tokenEnv, "token-env", "", "explicit service-token environment variable name")
 	}
 	if err := fs.Parse(args[1:]); err != nil {
@@ -78,15 +81,15 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 			return usageErr(errors.New("upgrade to version 3 is schema-only; omit row and byte bounds"))
 		}
 	}
-	if command == "stage-changes" || command == "deliver-changes" {
+	if staging || sending {
 		if db == "" || maxRows <= 0 || maxEncodedBytes <= 0 || maxEncodedBytes > int64(remote.MaxChangeBytes)*remote.MaxChangeParts || maxParts <= 0 || maxParts > remote.MaxChangeParts {
 			return usageErr(errors.New("changes require --db, positive --max-rows and --max-encoded-bytes within the wire maximum, and --max-parts between 1 and 64"))
 		}
 	}
-	if command == "stage-changes" && (maxJournal <= 0 || maxKeys <= 0 || maxLookups <= 0 || maxNativeBytes <= 0) {
+	if staging && (maxJournal <= 0 || maxKeys <= 0 || maxLookups <= 0 || maxNativeBytes <= 0) {
 		return usageErr(errors.New("stage-changes requires positive journal, affected-key, lookup-row, and native-byte bounds"))
 	}
-	if command == "deliver-changes" && (strings.TrimSpace(tokenEnv) == "" || strings.ContainsAny(tokenEnv, "=\x00")) {
+	if sending && (strings.TrimSpace(tokenEnv) == "" || strings.ContainsAny(tokenEnv, "=\x00")) {
 		return usageErr(errors.New("deliver-changes requires an explicit --token-env name"))
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -114,19 +117,73 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 		}
 		return a.writeOutput("delivery", reportDeliveryOutput{Status: "upgraded", ToVersion: toVersion}, false)
 	}
-	outbox, err := remotedelivery.OpenReportOutbox(ctx, *outboxPath)
+	request := reportDeliveryRequest{
+		outbox: *outboxPath, db: db, tokenEnv: tokenEnv,
+		capture:  store.NativeReportDeltaLimits{MaxJournalRecords: maxJournal, MaxAffectedKeys: maxKeys, MaxLookupRows: maxLookups, MaxRows: maxRows, MaxNativeBytes: maxNativeBytes},
+		stage:    remotedelivery.ChangeStageLimits{MaxRows: maxRows, MaxBytes: maxEncodedBytes, MaxParts: maxParts},
+		delivery: remotedelivery.DeliveryLimits{MaxParts: maxParts, MaxRows: maxRows, MaxBytes: maxEncodedBytes},
+	}
+	if command != "cycle" {
+		output, err := executeReportDelivery(ctx, command, request, false)
+		if output.Status != "" {
+			if writeErr := a.writeOutput("delivery", output, false); writeErr != nil {
+				return writeErr
+			}
+		}
+		if err != nil {
+			return reportDeliveryCommandError(err)
+		}
+		return nil
+	}
+	for _, phase := range []string{"resume", "capture", "deliver"} {
+		operation := "deliver-changes"
+		if phase == "capture" {
+			operation = "stage-changes"
+		}
+		var output reportDeliveryOutput
+		err := ctx.Err()
+		if err == nil {
+			output, err = executeReportDelivery(ctx, operation, request, true)
+		}
+		if output.Status == "" {
+			output.Status = "failed"
+		}
+		output.Phase = phase
+		if writeErr := a.writeOutput("delivery", output, false); writeErr != nil {
+			return writeErr
+		}
+		if err != nil {
+			return reportDeliveryCommandError(err)
+		}
+		// A bounded drain may leave saved parts. Never capture over them.
+		if output.Status == "part_limit" {
+			return nil
+		}
+	}
+	return nil
+}
+
+type reportDeliveryRequest struct {
+	outbox, db, tokenEnv string
+	capture              store.NativeReportDeltaLimits
+	stage                remotedelivery.ChangeStageLimits
+	delivery             remotedelivery.DeliveryLimits
+}
+
+func executeReportDelivery(ctx context.Context, command string, request reportDeliveryRequest, skipStableIdle bool) (reportDeliveryOutput, error) {
+	outbox, err := remotedelivery.OpenReportOutbox(ctx, request.outbox)
 	if err != nil {
-		return reportDeliveryCommandError(err)
+		return reportDeliveryOutput{}, err
 	}
 	defer outbox.Close()
 	if command == "stage-changes" {
 		// This read-only owner call admits schema3 before any native capture.
 		pending, err := outbox.NextChangePart(ctx)
 		if err != nil {
-			return reportDeliveryCommandError(err)
+			return reportDeliveryOutput{}, err
 		}
 		if pending != nil {
-			return remotedelivery.ErrSeedOutbox
+			return reportDeliveryOutput{}, remotedelivery.ErrSeedOutbox
 		}
 		var expected remotedelivery.ReportOutboxState
 		var delta store.NativeReportDelta
@@ -136,26 +193,35 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 			}
 			expected = state
 			var err error
-			delta, err = store.CaptureNativeReportChanges(ctx, db, store.NativeReportDeltaRequest{Baseline: state.BaselineAnchor, Limits: store.NativeReportDeltaLimits{MaxJournalRecords: maxJournal, MaxAffectedKeys: maxKeys, MaxLookupRows: maxLookups, MaxRows: maxRows, MaxNativeBytes: maxNativeBytes}}, index)
+			delta, err = store.CaptureNativeReportChanges(ctx, request.db, store.NativeReportDeltaRequest{Baseline: state.BaselineAnchor, Limits: request.capture}, index)
 			return err
 		})
 		if err != nil {
-			return reportDeliveryCommandError(err)
+			return reportDeliveryOutput{}, err
+		}
+		if skipStableIdle && delta.Rows == 0 && delta.From == delta.Through {
+			anchor, err := remote.ParseGitHubNativeAnchor(expected.BaselineNative)
+			if err != nil {
+				return reportDeliveryOutput{}, err
+			}
+			// The first empty capture still upgrades the v1 wire anchor to v2.
+			if anchor.Version == remote.GitHubNativeV2 {
+				return reportDeliveryOutput{Status: "idle"}, outbox.Close()
+			}
 		}
 		// Both native and outbox read transactions have closed. Staging compares
 		// their exact predecessor again under the outbox's writer transaction.
-		id, err := outbox.StageReportChanges(ctx, expected, delta, remotedelivery.ChangeStageLimits{MaxRows: maxRows, MaxBytes: maxEncodedBytes, MaxParts: maxParts})
+		id, err := outbox.StageReportChanges(ctx, expected, delta, request.stage)
 		if err != nil {
-			return reportDeliveryCommandError(err)
+			return reportDeliveryOutput{}, err
 		}
 		if err := outbox.Close(); err != nil {
-			return reportDeliveryCommandError(err)
+			return reportDeliveryOutput{}, err
 		}
-		return a.writeOutput("delivery", reportDeliveryOutput{Status: "staged", CaptureID: id, Rows: delta.Rows, NativeBytes: delta.Bytes}, false)
+		return reportDeliveryOutput{Status: "staged", CaptureID: id, Rows: delta.Rows, NativeBytes: delta.Bytes}, nil
 	}
-	// EnvTokenProvider resolves only inside the sender's actual request path.
-	// An idle/corrupt/over-budget outbox never requires service credentials.
-	result, sendErr := outbox.DeliverReportChanges(ctx, db, remote.EnvTokenProvider{Name: tokenEnv}, nil, remotedelivery.DeliveryLimits{MaxParts: maxParts, MaxRows: maxRows, MaxBytes: maxEncodedBytes})
+	// The token is resolved only inside the sender's actual request path.
+	result, sendErr := outbox.DeliverReportChanges(ctx, request.db, remote.EnvTokenProvider{Name: request.tokenEnv}, nil, request.delivery)
 	if closeErr := outbox.Close(); sendErr == nil {
 		sendErr = closeErr
 	}
@@ -168,15 +234,8 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 	if sendErr != nil {
 		status = "partial"
 	}
-	// Use only this invocation's pinned capture and durable settlement count;
-	// a concurrent successor must never be attached to this result.
-	if err := a.writeOutput("delivery", reportDeliveryOutput{Status: status, CaptureID: result.CaptureID, Receipts: &result.Receipts}, false); err != nil {
-		return err
-	}
-	if sendErr != nil {
-		return reportDeliveryCommandError(sendErr)
-	}
-	return nil
+	// Use only this invocation's pinned capture and durable settlement count.
+	return reportDeliveryOutput{Status: status, CaptureID: result.CaptureID, Receipts: &result.Receipts}, sendErr
 }
 
 func reportDeliveryCommandError(err error) error {
