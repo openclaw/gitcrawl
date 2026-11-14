@@ -81,7 +81,9 @@ describes limits and partial results. For a qualified incremental outbox,
 `gitcrawl delivery cycle` resumes pending changes, captures one bounded native
 interval, then delivers it under one deadline. It stops before capture on a
 failed or incomplete resume. Use an external per-source lock; the command does
-not start GitHub acquisition or install a schedule.
+not start GitHub acquisition or install a schedule. Inactive Linux units
+under `operations/` require separate source, limit and credential qualification
+before installation.
 
 ## Public cluster context export
 

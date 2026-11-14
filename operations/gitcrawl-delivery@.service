@@ -1,0 +1,25 @@
+[Unit]
+Description=Deliver qualified gitcrawl source %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=gitcrawl
+Group=gitcrawl
+WorkingDirectory=/var/lib/gitcrawl/%i
+EnvironmentFile=/etc/gitcrawl/delivery-%i.env
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code=75 /var/lib/gitcrawl/%i/delivery.lock /usr/local/bin/gitcrawl delivery cycle --db /var/lib/gitcrawl/%i/native.sqlite --outbox /var/lib/gitcrawl/%i/outbox.sqlite --max-journal-records ${GITCRAWL_MAX_JOURNAL_RECORDS} --max-affected-keys ${GITCRAWL_MAX_AFFECTED_KEYS} --max-lookup-rows ${GITCRAWL_MAX_LOOKUP_ROWS} --max-rows ${GITCRAWL_MAX_ROWS} --max-native-bytes ${GITCRAWL_MAX_NATIVE_BYTES} --max-encoded-bytes ${GITCRAWL_MAX_ENCODED_BYTES} --max-parts ${GITCRAWL_MAX_PARTS} --token-env GITCRAWL_PUBLISHER_TOKEN --timeout 90s --json
+TimeoutStartSec=120s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gitcrawl/%i
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+CPUQuota=100%
+StandardOutput=journal
+StandardError=journal

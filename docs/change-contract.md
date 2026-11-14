@@ -467,3 +467,44 @@ A stable empty v2 interval is idle. The first empty v1-to-v2 wire transition and
 advancing empty checkpoints still publish. Use an external lock per source and
 outbox when scheduling cycles. The command never installs a schedule, acquires
 GitHub data, initializes or upgrades an outbox, or changes its saved scope.
+
+
+## Scheduled delivery
+
+`operations/gitcrawl-delivery@.service` and `.timer` are inactive Linux templates.
+They do not install themselves or initialize, migrate, collect or change scope.
+Before installation, qualify the native source and outbox, delivery credentials,
+resource limits and restart/recovery behavior on the intended host. Retain the
+existing collector until a separately approved cutover.
+
+An instance uses the `gitcrawl` user/group and `/var/lib/gitcrawl/<instance>` for
+`native.sqlite`, `outbox.sqlite` and a persistent `delivery.lock`.
+The root-owned mode-0600 `/etc/gitcrawl/delivery-<instance>.env` supplies
+`GITCRAWL_PUBLISHER_TOKEN` and these measured positive limits:
+
+- `GITCRAWL_MAX_JOURNAL_RECORDS` for `--max-journal-records`.
+- `GITCRAWL_MAX_AFFECTED_KEYS` for `--max-affected-keys`.
+- `GITCRAWL_MAX_LOOKUP_ROWS` for `--max-lookup-rows`.
+- `GITCRAWL_MAX_ROWS` for `--max-rows`.
+- `GITCRAWL_MAX_NATIVE_BYTES` for `--max-native-bytes`.
+- `GITCRAWL_MAX_ENCODED_BYTES` for `--max-encoded-bytes`.
+- `GITCRAWL_MAX_PARTS` for `--max-parts`.
+
+Missing, invalid or excessive limits fail CLI admission; no automatic limit
+increase occurs. The token is read by name, never expanded into command-line
+arguments. Keep provider acquisition credentials separate from this publisher
+credential. GitHub acquisition continues through its qualified Octopool owner;
+current exclusion-policy authority remains required for source admission.
+
+The timer runs two minutes after boot, then five minutes after completion with
+up to15seconds jitter. The service has a90-second CLI deadline,120-second
+process timeout,512MiB memory cap and one-core CPU quota. Its persistent flock
+also covers manual cycles: operators must use the same lock. Exit75 reports
+contention; do not delete the lock file or configure competing instances for
+one source/outbox. No restart loop is configured.
+
+Validate exact units with `systemd-analyze verify --man=no` before installation.
+Installing/enabling an instance requires separate source/credential/capacity
+admission. Observe completed source/service cursors and journal results after
+activation; timer firing alone does not prove freshness. Retain failed outboxes
+and reconcile through their existing owners rather than deleting/recreating them.
