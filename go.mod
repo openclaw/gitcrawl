@@ -14,8 +14,8 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/openclaw/crawlkit v0.17.5-0.20261113151307-653b46f63cf0
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/sys v0.49.0
-	modernc.org/sqlite v1.61.1
+	golang.org/x/sys v0.50.0
+	modernc.org/sqlite v1.62.0
 )
 
 require (
@@ -46,7 +46,7 @@ require (
 	github.com/xo/terminfo v1.2.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	// Match the exact libc version required by modernc.org/sqlite's generated runtime.
-	modernc.org/libc v1.79.0 // indirect
+	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )

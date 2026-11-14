@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update SQLite to v1.62.0 with its matching libc v1.80.1 and x/sys to v0.50.0, retaining the Go 1.27.2 minimum. Thanks @dependabot.
+
 - Reject transferred issues during exact-number sync before they can overwrite another archived thread; preserve repository-rename redirects. Thanks @saariuslystoned.
 - Retry secondary GitHub rate limits without `Retry-After` after one minute, and stop further sync acquisition when REST or GraphQL rate limiting persists. Thanks @saariuslystoned.
 - Exclude unsubmitted review bodies and draft inline comments from REST sync, GraphQL history, and analytics review-state collection. Thanks @saariuslystoned.
