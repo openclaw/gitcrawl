@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run documentation checks on a single-CPU Ubuntu container, preserving the existing tests, link validation, and five-minute limit.
+
 - Update SQLite to v1.62.0 with its matching libc v1.80.1 and x/sys to v0.50.0, retaining the Go 1.27.2 minimum. Thanks @dependabot.
 
 - Reject transferred issues during exact-number sync before they can overwrite another archived thread; preserve repository-rename redirects. Thanks @saariuslystoned.
