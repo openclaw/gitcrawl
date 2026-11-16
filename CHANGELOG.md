@@ -2,74 +2,47 @@
 
 ## Unreleased
 
+## 0.19.0 - 2026-11-15
+
+**Highlights:** Opt-in Octopool sync, bounded resumable native delivery, filtered portable exports, and sync privacy and Go security fixes.
+
+- Add explicit `sync --octopool` REST acquisition for public repositories using an existing caller session, without direct GitHub fallback or GraphQL/PR-detail enrichment.
+- Build with Go 1.27.4 to include the standard-library fix reported by GO-2026-6859.
 - Use direct independent OpenClaw subagent review, removing the repository's scripted review integration and automated reviewer dispatch while retaining P0–P3 review and validation.
-
 - Run documentation checks on a single-CPU Ubuntu container, preserving the existing tests, link validation, and five-minute limit.
-
 - Update SQLite to v1.62.0 with its matching libc v1.80.1 and x/sys to v0.50.0, retaining the Go 1.27.2 minimum. Thanks @dependabot.
-
 - Reject transferred issues during exact-number sync before they can overwrite another archived thread; preserve repository-rename redirects. Thanks @saariuslystoned.
 - Retry secondary GitHub rate limits without `Retry-After` after one minute, and stop further sync acquisition when REST or GraphQL rate limiting persists. Thanks @saariuslystoned.
 - Exclude unsubmitted review bodies and draft inline comments from REST sync, GraphQL history, and analytics review-state collection. Thanks @saariuslystoned.
 - Explain missing local repositories with a sync command, and reject unsupported GitHub search qualifiers instead of silently returning misleading results. Thanks @saariuslystoned.
 - Clarify that refresh embeds and clusters open threads by default, isolate the configured-host quota test from ambient credentials, and stabilize concurrent snapshot test cleanup. Thanks @saariuslystoned.
-
 - Add inactive Octopool acquisition service/timer templates that resume qualified incremental checkpoints, with per-source locking and bounded execution. No collector or scheduler is activated.
-
 - Add inactive per-source Linux delivery service/timer templates with explicit measured limits, persistent locking and publisher-only credentials. Installation and activation remain separate operator steps.
-
 - Add bounded `delivery cycle` for qualified incremental outboxes: resume saved changes, capture one native interval, then deliver under one deadline, with phase results and stable-idle suppression. No acquisition or schedule is activated.
-
 - Add copy-only `portable export --since` with open and uncertain thread retention, recent comment parent selection, child closure, explicit subset metadata and cleared repository completeness checkpoints. Ordinary exports are unchanged; no collector or publication is activated.
-
 - Add explicit resumable `delivery deliver-clusters` with full saved-bundle validation, current native public/exclusion checks at each request, exact receipt offsets for repeated snapshots and receipt-validated staged/partial/complete status. No provider acquisition or schedule is activated.
-
 - Add bounded offline `delivery stage-clusters` and read-only `cluster-status`, preserving exact exported request bytes, explicit current source custody and private outbox isolation. No sender, source migration or publication is activated.
-
 - Add bounded offline public durable-cluster export from existing native data, preserving membership, representatives, exclusions and unknown historical qualification. The four-table seed uses exact request bytes and a content digest without inventing a journal cursor; no receiver, collector or schedule is activated.
-
 - Add explicit Octopool incremental sync from qualified native checkpoints. Complete all-state comment runs preserve their initial coverage cutoff and advance only after successful acquisition; missing checkpoints require an explicit bootstrap instead of a full crawl. No schedule is activated.
-
 - Add an explicit schema-3 report outbox upgrade with bounded native change staging, exact multipart retries and atomic baseline promotion after final receipt. The incremental sender rechecks current policy before each request and retains unfinished captures for resumption; no schedule is activated.
-
 - Recheck retained parent node identities before seed and incremental child delivery, including globally excluded nodes whose native parent has since been removed.
-
 - Add bounded native incremental report capture against a pinned qualified inventory, including parent/exclusion dependency changes, snapshot-consistent typed rows and explicit stale-source holds. No ingestion schedule is activated.
-
 - Add an explicit, bounded seed-outbox inventory migration that reuses fully receipted saved requests, retains original seed evidence and native tokens, and atomically builds compact typed fingerprints and parent/node lookup metadata.
-
 - Add bounded private native change-request preparation with typed v1-to-v2 range validation, exact multipart cursor chaining, duplicate-key refusal and explicit empty checkpoint batches. No delivery or collector is activated.
-
 - Recheck seed-outbox schema identity inside every operation so an already-open seed-only handle refuses an explicitly migrated or foreign outbox without exposing requests or recording receipts.
-
 - Bind private report inventory fingerprints to the existing seven-table wire layout with shared typed key/row hashing and receiver-matched vectors.
-
 - Add explicit, deadline-bound native report index preparation for reverse node-policy lookups, preserving SQLite scalar comparison semantics without index construction on ordinary archive open.
-
 - Journal native comment keys, child observation memberships and global node exclusions for incremental reporting; repair legacy tracking modes on writable open, report stored modes, and require complete row tracking before native capture.
-
 - Add explicit private `delivery stage-seed`, read-only `delivery status`, and resumable `delivery deliver` commands with required bounds, lazy named service credentials and content-free partial results. Runtime config, GitHub auth, release checks and implicit upgrades are bypassed.
-
 - Add explicit resumable native GitHub seed delivery with current-policy checks after credential acquisition, whole-seed completion checks, exact-byte retries and receipt-only qualification. No collector or schedule is activated.
-
 - Add a bounded read-only native delivery policy checker for staged thread/raw-node references, preserving source incarnation checks and global owner exclusions while allowing ordinary acquisition progress.
-
 - Add a separate private seed outbox with exclusive creation, exact request bytes and native provenance across reopen, and atomic receipt-only baseline qualification. No sender, native writes or CLI is activated.
-
 - Add bounded in-memory packing of private native reports into deterministic GitHub seed requests, preserving native identity and typed rows without delivering or qualifying a baseline.
-
 - Add a pure private projection of native report captures, preserving typed scalars, raw evidence and publication timestamps while keeping physical file identity local.
-
 - Add a bounded read-only native report snapshot API with complete scoped inventories, publication timestamps and exclusion evidence, without advancing acquisition or delivery state.
-
-- Add explicit `sync --octopool` REST acquisition for public repositories using an existing caller session, without direct GitHub fallback or GraphQL/PR-detail enrichment.
-
 - Support human Cloudflare Access reader login with endpoint-bound gateway requests and separate reader-session keyring storage.
 - Retry transient HTTP 502/503/504 responses for bodyless content GETs with bounded waits, without replaying completed pages or bypassing quota and credential guards.
-- Build with Go 1.27.4 to include the standard-library fix reported by GO-2026-6859.
-
 - Use decimal REST Issue IDs for every synced thread, including GraphQL PR history, while retaining provider PR/node IDs as evidence and stable local row IDs.
-
 - Show opener failures when opening a representative URL from the TUI action menu.
 - Run Linux coverage, SIMD and scalar fallback suites, and durable SIMD parity concurrently while preserving every failure gate.
 
