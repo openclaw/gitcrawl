@@ -4,14 +4,19 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/openclaw/gitcrawl/internal/github"
 	"github.com/openclaw/gitcrawl/internal/store"
@@ -29,9 +34,19 @@ func run() error {
 	repository := flag.String("repo", "", "owner/repository")
 	numbersFile := flag.String("numbers-file", "", "file containing issue/PR numbers separated by whitespace or commas")
 	batchSize := flag.Int("batch-size", 25, "conversations per request (1..25)")
+	selectedOutput := flag.String("selected-numbers-output", "", "write the frozen selected roster to a new private file before hydration")
+	includeDiscovered := flag.Bool("include-discovered", false, "include every current REST inventory number alongside requested historical numbers")
+	fetchWorkers := flag.Int("fetch-workers", 1, "concurrent acquisition batches (1..8); native writes remain serial")
 	flag.Parse()
-	if *database == "" || *repository == "" || *numbersFile == "" || *batchSize < 1 || *batchSize > 25 {
-		return fmt.Errorf("--db, --repo, --numbers-file and batch-size 1..25 are required")
+	if *database == "" || *repository == "" || *numbersFile == "" || *batchSize < 1 || *batchSize > 25 || *fetchWorkers < 1 || *fetchWorkers > 8 {
+		return fmt.Errorf("--db, --repo, --numbers-file and batch-size 1..25 and fetch-workers 1..8 are required")
+	}
+	if *selectedOutput != "" {
+		if _, err := os.Lstat(*selectedOutput); err == nil {
+			return fmt.Errorf("selected-numbers-output already exists")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	if _, err := os.Stat(*database); err != nil {
 		return err
@@ -67,11 +82,12 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+	requestedCount := len(numbers)
 	numbers, err = st.FilterExcludedNumbers(ctx, *repository, numbers)
 	if err != nil {
 		return err
 	}
-	if len(numbers) == 0 {
+	if len(numbers) == 0 && !*includeDiscovered {
 		return fmt.Errorf("all requested numbers are excluded")
 	}
 	client, err := github.NewOctopoolConversations(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repository)
@@ -79,7 +95,8 @@ func run() error {
 		return err
 	}
 	reporter := github.Reporter(func(message string) { fmt.Fprintln(os.Stderr, message) })
-	if len(numbers) <= *batchSize {
+	inventoryStarted := time.Now().UTC()
+	if len(numbers) <= 25 && len(numbers) <= *batchSize**fetchWorkers && !*includeDiscovered {
 		err = client.InventoryNumbers(ctx, numbers, reporter)
 	} else {
 		err = client.Inventory(ctx, reporter)
@@ -88,27 +105,159 @@ func run() error {
 		return err
 	}
 	encoder := json.NewEncoder(os.Stdout)
-	for offset := 0; offset < len(numbers); offset += *batchSize {
-		batch := numbers[offset:min(offset+*batchSize, len(numbers))]
-		// Recheck owner policy immediately before acquisition. Native sync also
-		// rechecks it before persistence, including concurrent policy changes.
-		batch, err = st.FilterExcludedNumbers(ctx, *repository, batch)
+	available := client.IssueNumbers()
+	selected, missing, discovered := selectNumbers(numbers, available, *includeDiscovered)
+	if len(missing) > 0 && !*includeDiscovered {
+		return fmt.Errorf("%d requested numbers absent from REST inventory, first #%d", len(missing), missing[0])
+	}
+	selectedBeforePolicy := len(selected)
+	selected, err = st.FilterExcludedNumbers(ctx, *repository, selected)
+	if err != nil {
+		return err
+	}
+	selectionDigest := ""
+	if *selectedOutput != "" {
+		selectionDigest, err = writeSelectedNumbers(*selectedOutput, selected)
 		if err != nil {
-			return err
-		}
-		if len(batch) == 0 {
-			continue
-		}
-		if err := client.Prepare(ctx, batch, reporter); err != nil {
-			return err
-		}
-		stats, err := syncer.New(client, st).Sync(ctx, syncer.Options{Octopool: true, Owner: owner, Repo: repo, State: "all", Numbers: batch, IncludeComments: true, Force: true, Reporter: reporter})
-		if err != nil {
-			return err
-		}
-		if err := encoder.Encode(stats); err != nil {
 			return err
 		}
 	}
+	if err = encoder.Encode(map[string]any{"event": "inventory", "started_at": inventoryStarted.Format(time.RFC3339Nano), "finished_at": time.Now().UTC().Format(time.RFC3339Nano), "requested": requestedCount, "excluded_requested": requestedCount - len(numbers), "excluded_selected": selectedBeforePolicy - len(selected), "available": len(available), "selected": len(selected), "selected_numbers_sha256": selectionDigest, "discovered": discovered, "missing_requested": len(missing), "include_discovered": *includeDiscovered}); err != nil {
+		return err
+	}
+	for _, number := range missing {
+		if err = encoder.Encode(map[string]any{"event": "unresolved", "number": number, "reason": "absent_from_current_rest_inventory"}); err != nil {
+			return err
+		}
+	}
+	windowSize := *batchSize * *fetchWorkers
+	for offset := 0; offset < len(selected); offset += windowSize {
+		end := min(offset+windowSize, len(selected))
+		var batches [][]int
+		for start := offset; start < end; start += *batchSize {
+			batch, err := st.FilterExcludedNumbers(ctx, *repository, selected[start:min(start+*batchSize, end)])
+			if err != nil {
+				return err
+			}
+			if len(batch) > 0 {
+				batches = append(batches, batch)
+			}
+		}
+		prepared, err := prepareWindow(ctx, client, batches, reporter)
+		if err != nil {
+			return err
+		}
+		for index, batch := range batches {
+			stats, err := syncer.New(prepared[index], st).Sync(ctx, syncer.Options{Octopool: true, Owner: owner, Repo: repo, State: "all", Numbers: batch, IncludeComments: true, Force: true, Reporter: reporter})
+			if err != nil {
+				return err
+			}
+			if err := writeBatchComplete(encoder, stats); err != nil {
+				return err
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("hydrated available records; %d historical numbers remain unresolved", len(missing))
+	}
 	return nil
+}
+
+func selectNumbers(requested, available []int, includeDiscovered bool) (selected, missing []int, discovered int) {
+	known := make(map[int]bool, len(available))
+	for _, number := range available {
+		known[number] = true
+	}
+	wanted := make(map[int]bool, len(requested))
+	for _, number := range requested {
+		wanted[number] = true
+		if known[number] {
+			selected = append(selected, number)
+		} else {
+			missing = append(missing, number)
+		}
+	}
+	if includeDiscovered {
+		for _, number := range available {
+			if !wanted[number] {
+				selected = append(selected, number)
+				discovered++
+			}
+		}
+	}
+	slices.Sort(selected)
+	slices.Sort(missing)
+	return
+}
+
+func prepareWindow(ctx context.Context, client *github.OctopoolConversations, batches [][]int, reporter github.Reporter) ([]*github.OctopoolConversations, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	prepared := make([]*github.OctopoolConversations, len(batches))
+	failures := make([]error, len(batches))
+	var workers sync.WaitGroup
+	for index, batch := range batches {
+		workers.Go(func() {
+			prepared[index], failures[index] = client.PrepareBatch(ctx, batch, reporter)
+			if failures[index] != nil {
+				cancel()
+			}
+		})
+	}
+	workers.Wait()
+	for index, err := range failures {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return nil, fmt.Errorf("acquire batch %v: %w", batches[index], err)
+		}
+	}
+	for index, err := range failures {
+		if err != nil {
+			return nil, fmt.Errorf("acquire batch %v: %w", batches[index], err)
+		}
+	}
+	return prepared, nil
+}
+
+// A completion receipt is emitted only after native sync settles the whole
+// selected batch. Concurrent policy changes leave it retryable rather than
+// claiming that excluded keys were persisted.
+func writeBatchComplete(encoder *json.Encoder, stats syncer.Stats) error {
+	if stats.OwnerExcluded != 0 {
+		return fmt.Errorf("batch policy changed; completion receipt withheld for retry")
+	}
+	return encoder.Encode(struct {
+		Event   string       `json:"event"`
+		Numbers []int        `json:"numbers"`
+		Stats   syncer.Stats `json:"stats"`
+	}{"batch_complete", stats.Numbers, stats})
+}
+
+// The inventory receipt binds this frozen roster to its acquisition start.
+// Exclusive creation prevents a retry from overwriting the original selection.
+func writeSelectedNumbers(path string, numbers []int) (digest string, err error) {
+	var content strings.Builder
+	for _, number := range numbers {
+		fmt.Fprintln(&content, number)
+	}
+	raw := []byte(content.String())
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			file.Close()
+			os.Remove(path)
+		}
+	}()
+	if _, err = file.Write(raw); err != nil {
+		return "", err
+	}
+	if err = file.Sync(); err != nil {
+		return "", err
+	}
+	if err = file.Close(); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
 }

@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // OctopoolConversations is a bounded acquisition adapter for native sync. REST
@@ -135,11 +137,45 @@ func (c *OctopoolConversations) ListPullReviewComments(ctx context.Context, owne
 
 const conversationComments = `comments(first:10) { totalCount pageInfo { hasNextPage } nodes { ` + historyComment + ` } }`
 const conversationInline = `comments(first:10) { totalCount pageInfo { hasNextPage } nodes { ` + historyInline + ` } }`
-const conversationFields = `__typename id number repository { nameWithOwner } ` + conversationComments + ` ... on PullRequest { reviews(first:10) { totalCount pageInfo { hasNextPage } nodes { ` + historyComment + ` state submittedAt commit { oid } ` + conversationInline + ` } } reviewThreads(first:10) { totalCount pageInfo { hasNextPage } nodes { id ` + conversationInline + ` } } }`
+const conversationFields = `__typename id number updatedAt repository { nameWithOwner } ` + conversationComments + ` ... on PullRequest { reviews(first:10) { totalCount pageInfo { hasNextPage } nodes { ` + historyComment + ` state submittedAt commit { oid } ` + conversationInline + ` } } reviewThreads(first:10) { totalCount pageInfo { hasNextPage } nodes { id ` + conversationInline + ` } } }`
 
 // Prepare replaces the bounded child cache only after the entire batch succeeds.
 // Large conversations use the existing fully paginated same-pool REST reader.
+var errConversationParentRefreshed = errors.New("conversation parent refreshed")
+
 func (c *OctopoolConversations) Prepare(ctx context.Context, numbers []int, reporter Reporter) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := c.prepareOnce(ctx, numbers, reporter)
+		if !errors.Is(err, errConversationParentRefreshed) {
+			return err
+		}
+	}
+	return errors.New("conversation parent kept changing across three acquisition attempts")
+}
+
+// PrepareBatch keeps each acquisition worker's refreshed parent and child maps
+// private. Shared inventory rows and the pooled HTTP client are read-only.
+func (c *OctopoolConversations) PrepareBatch(ctx context.Context, numbers []int, reporter Reporter) (*OctopoolConversations, error) {
+	batch := &OctopoolConversations{Client: c.Client, relay: c.relay, repository: c.repository, metadata: c.metadata, issues: make(map[int]map[string]any, len(numbers)), conversations: map[int]HistoryItem{}}
+	for _, number := range numbers {
+		batch.issues[number] = c.issues[number]
+	}
+	if err := batch.Prepare(ctx, numbers, reporter); err != nil {
+		return nil, err
+	}
+	return batch, nil
+}
+
+func (c *OctopoolConversations) IssueNumbers() []int {
+	numbers := make([]int, 0, len(c.issues))
+	for number := range c.issues {
+		numbers = append(numbers, number)
+	}
+	slices.Sort(numbers)
+	return numbers
+}
+
+func (c *OctopoolConversations) prepareOnce(ctx context.Context, numbers []int, reporter Reporter) error {
 	if len(numbers) == 0 || len(numbers) > 25 {
 		return errors.New("conversation batch must contain 1..25 numbers")
 	}
@@ -153,22 +189,50 @@ func (c *OctopoolConversations) Prepare(ctx context.Context, numbers []int, repo
 		seen[n] = true
 		fmt.Fprintf(&query, " n%d: issueOrPullRequest(number:%d) { ...ConversationIssue ...ConversationPull }", i, n)
 	}
-	query.WriteString(" } } fragment ConversationIssue on Issue { __typename id number repository { nameWithOwner } " + conversationComments + " } fragment ConversationPull on PullRequest { " + conversationFields + " }")
+	query.WriteString(" } } fragment ConversationIssue on Issue { __typename id number updatedAt repository { nameWithOwner } " + conversationComments + " } fragment ConversationPull on PullRequest { " + conversationFields + " }")
 	owner, repo, _ := strings.Cut(c.repository, "/")
 	data, err := c.requestConversations(ctx, query.String(), map[string]any{"owner": owner, "repo": repo}, reporter)
 	if err != nil {
 		return err
 	}
 	repository := historyMap(data["repository"])
+	refreshed := false
+	for i, n := range numbers {
+		node := historyMap(repository[fmt.Sprintf("n%d", i)])
+		if err := c.validateConversationIdentity(n, node); err != nil {
+			return err
+		}
+		restTime, err := time.Parse(time.RFC3339Nano, historyString(c.issues[n]["updated_at"]))
+		if err != nil {
+			return fmt.Errorf("invalid REST update timestamp for #%d", n)
+		}
+		graphTime, err := time.Parse(time.RFC3339Nano, historyString(node["updatedAt"]))
+		if err != nil {
+			return fmt.Errorf("invalid GraphQL update timestamp for #%d", n)
+		}
+		if !restTime.Equal(graphTime) {
+			old := c.issues[n]
+			fresh, err := c.Client.GetIssue(ctx, owner, repo, n, reporter)
+			if err != nil {
+				return err
+			}
+			got, ok := historyInt(fresh["number"])
+			_, oldPull := old["pull_request"]
+			_, freshPull := fresh["pull_request"]
+			if !ok || got != n || fmt.Sprint(old["id"]) != fmt.Sprint(fresh["id"]) || old["node_id"] != fresh["node_id"] || oldPull != freshPull || !strings.EqualFold(historyString(fresh["repository_url"]), "https://api.github.com/repos/"+c.repository) {
+				return fmt.Errorf("REST parent identity changed for #%d", n)
+			}
+			c.issues[n] = fresh
+			refreshed = true
+		}
+	}
+	if refreshed {
+		return errConversationParentRefreshed
+	}
 	prepared := make(map[int]HistoryItem, len(numbers))
 	for i, n := range numbers {
 		node := historyMap(repository[fmt.Sprintf("n%d", i)])
-		typ := historyString(node["__typename"])
-		number, ok := historyInt(node["number"])
 		_, isPull := c.issues[n]["pull_request"]
-		if !ok || number != n || historyString(node["id"]) != historyString(c.issues[n]["node_id"]) || historyString(historyMap(node["repository"])["nameWithOwner"]) != c.repository || (typ != "Issue" && typ != "PullRequest") || (typ == "PullRequest") != isPull {
-			return fmt.Errorf("GraphQL identity mismatch or missing node for #%d", n)
-		}
 		complete := completeConversationConnection(node, "comments")
 		if isPull {
 			for _, family := range []string{"reviews", "reviewThreads"} {
@@ -196,6 +260,16 @@ func (c *OctopoolConversations) Prepare(ctx context.Context, numbers []int, repo
 		prepared[n] = item
 	}
 	c.conversations = prepared
+	return nil
+}
+
+func (c *OctopoolConversations) validateConversationIdentity(n int, node map[string]any) error {
+	typ := historyString(node["__typename"])
+	number, ok := historyInt(node["number"])
+	_, isPull := c.issues[n]["pull_request"]
+	if !ok || number != n || historyString(node["id"]) != historyString(c.issues[n]["node_id"]) || historyString(historyMap(node["repository"])["nameWithOwner"]) != c.repository || (typ != "Issue" && typ != "PullRequest") || (typ == "PullRequest") != isPull {
+		return fmt.Errorf("GraphQL identity mismatch or missing node for #%d", n)
+	}
 	return nil
 }
 

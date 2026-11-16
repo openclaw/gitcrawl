@@ -28,7 +28,7 @@ func TestOctopoolHydrationUsesNativePersistenceWithRESTIdentity(t *testing.T) {
 		}
 		return map[string]any{"totalCount": len(nodes), "nodes": nodes, "pageInfo": map[string]any{"hasNextPage": false}}
 	}
-	node := map[string]any{"id": "PR_fixture", "__typename": "PullRequest", "number": 8, "repository": map[string]any{"nameWithOwner": "openclaw/gitcrawl"}, "comments": connection(map[string]any{"id": "IC_fixture", "fullDatabaseId": "9007199254740994", "body": ""}), "reviews": connection(), "reviewThreads": connection()}
+	node := map[string]any{"id": "PR_fixture", "__typename": "PullRequest", "number": 8, "updatedAt": row["updated_at"], "repository": map[string]any{"nameWithOwner": "openclaw/gitcrawl"}, "comments": connection(map[string]any{"id": "IC_fixture", "fullDatabaseId": "9007199254740994", "body": ""}), "reviews": connection(), "reviewThreads": connection()}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Path string `json:"path"`

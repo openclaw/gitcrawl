@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit discovered-ID reconciliation, bounded parallel acquisition with serial native writes, and parent freshness checks for long-running Octopool hydration.
+
 - Bound single-batch hydration pilots to selected REST issue metadata instead of scanning the whole repository.
 
 - Add an operator-only, bounded Octopool conversation hydration tool using fresh REST identities and complete pooled GraphQL or REST child data. Preserve live empty-body comments and edits during native sync.

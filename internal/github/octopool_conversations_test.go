@@ -17,7 +17,7 @@ func conversationConnection(nodes ...any) map[string]any {
 	return map[string]any{"nodes": nodes, "totalCount": len(nodes), "pageInfo": map[string]any{"hasNextPage": false}}
 }
 func conversationFixture() map[string]any {
-	return map[string]any{"__typename": "PullRequest", "id": "PR_fixture", "number": 7, "repository": map[string]any{"nameWithOwner": "fixture/repo"}, "comments": conversationConnection(map[string]any{"id": "IC_fixture", "fullDatabaseId": json.Number("9007199254740993"), "body": strings.Repeat("full λ body ", 1000)}), "reviews": conversationConnection(), "reviewThreads": conversationConnection()}
+	return map[string]any{"__typename": "PullRequest", "id": "PR_fixture", "number": 7, "updatedAt": "2026-01-01T00:00:00Z", "repository": map[string]any{"nameWithOwner": "fixture/repo"}, "comments": conversationConnection(map[string]any{"id": "IC_fixture", "fullDatabaseId": json.Number("9007199254740993"), "body": strings.Repeat("full λ body ", 1000)}), "reviews": conversationConnection(), "reviewThreads": conversationConnection()}
 }
 func conversationTestClient(t *testing.T, node map[string]any, route, identity string, graphqlErrors []any) (*OctopoolConversations, *int) {
 	t.Helper()
@@ -47,7 +47,7 @@ func conversationTestClient(t *testing.T, node map[string]any, route, identity s
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.issues[7] = map[string]any{"id": json.Number("12345678912345678"), "node_id": "PR_fixture", "number": 7, "pull_request": map[string]any{}}
+	client.issues[7] = map[string]any{"id": json.Number("12345678912345678"), "node_id": "PR_fixture", "updated_at": "2026-01-01T00:00:00.000Z", "number": 7, "pull_request": map[string]any{}}
 	client.metadata = map[string]any{"id": 1}
 	return client, calls
 }
@@ -134,7 +134,7 @@ func TestOctopoolConversationFallsBackToPaginatedPoolREST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.issues[7] = map[string]any{"node_id": "PR_fixture", "pull_request": map[string]any{}}
+	client.issues[7] = map[string]any{"node_id": "PR_fixture", "updated_at": "2026-01-01T00:00:00.000Z", "pull_request": map[string]any{}}
 	if err := client.Prepare(context.Background(), []int{7}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -220,5 +220,55 @@ func TestTargetedInventoryAvoidsRepositoryTraversal(t *testing.T) {
 	}
 	if err = client.InventoryNumbers(context.Background(), []int{7, 7}, nil); err == nil {
 		t.Fatal("accepted duplicate selected numbers")
+	}
+}
+
+func TestPrepareBatchRefreshesChangedParentsWithoutMutatingInventory(t *testing.T) {
+	for _, mode := range []string{"refresh", "identity", "churn"} {
+		t.Run(mode, func(t *testing.T) {
+			node := conversationFixture()
+			node["updatedAt"] = "2026-01-02T00:00:00Z"
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Path string `json:"path"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&request)
+				calls++
+				var body any
+				if request.Path == "/graphql" {
+					if mode == "churn" {
+						node["updatedAt"] = fmt.Sprintf("2026-01-%02dT00:00:00Z", calls+1)
+					}
+					body = map[string]any{"data": map[string]any{"repository": map[string]any{"n0": node}}}
+				} else if request.Path == "/repos/fixture/repo/issues/7" {
+					id := "123"
+					if mode == "identity" {
+						id = "124"
+					}
+					body = map[string]any{"id": json.Number(id), "node_id": "PR_fixture", "number": 7, "pull_request": map[string]any{}, "updated_at": node["updatedAt"], "repository_url": "https://api.github.com/repos/fixture/repo"}
+				} else {
+					t.Errorf("unexpected path %s", request.Path)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "body": body, "relay": map[string]any{"route_kind": "graphql_read", "cache": "miss"}, "identity": map[string]any{"kind": "github_app"}})
+			}))
+			defer server.Close()
+			client, err := NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.issues[7] = map[string]any{"id": json.Number("123"), "node_id": "PR_fixture", "number": 7, "pull_request": map[string]any{}, "updated_at": "2026-01-01T00:00:00Z"}
+			batch, err := client.PrepareBatch(context.Background(), []int{7}, nil)
+			if mode == "refresh" {
+				if err != nil || calls != 3 || batch.issues[7]["updated_at"] != "2026-01-02T00:00:00Z" {
+					t.Fatalf("refresh failed: calls=%d err=%v", calls, err)
+				}
+			} else if err == nil {
+				t.Fatalf("accepted %s", mode)
+			}
+			if client.issues[7]["updated_at"] != "2026-01-01T00:00:00Z" {
+				t.Fatal("worker mutated shared inventory")
+			}
+		})
 	}
 }
