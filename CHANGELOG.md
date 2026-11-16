@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve selected-repository Octopool pagination when GitHub returns immutable numeric repository URLs.
+
 ## 0.19.0 - 2026-11-15
 
 **Highlights:** Opt-in Octopool sync, bounded resumable native delivery, filtered portable exports, and sync privacy and Go security fixes.

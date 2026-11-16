@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,11 +50,23 @@ func NewOctopool(endpoint, pool, token, repository string) (*Client, error) {
 type octopoolTransport struct {
 	endpoint, pool, token, repositoryPath string
 	client                                *http.Client
+	repositoryMu                          sync.RWMutex
+	repositoryID                          string
 }
 
 func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	path := req.URL.EscapedPath()
+	t.repositoryMu.RLock()
+	repositoryID := t.repositoryID
+	t.repositoryMu.RUnlock()
+	if repositoryID != "" {
+		numericPath := "/repositories/" + repositoryID
+		if path == numericPath || strings.HasPrefix(path, numericPath+"/") {
+			path = t.repositoryPath + strings.TrimPrefix(path, numericPath)
+		}
+	}
 	if req.Method != http.MethodGet || req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil ||
-		(req.URL.Path != t.repositoryPath && !strings.HasPrefix(req.URL.Path, t.repositoryPath+"/")) {
+		(path != t.repositoryPath && !strings.HasPrefix(path, t.repositoryPath+"/")) {
 		return nil, errors.New("Octopool sync supports only REST reads of the selected repository")
 	}
 	payload, err := json.Marshal(struct {
@@ -61,7 +75,7 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		Path    string            `json:"path"`
 		Query   url.Values        `json:"query"`
 		Headers map[string]string `json:"headers"`
-	}{t.pool, req.Method, req.URL.EscapedPath(), req.URL.Query(), map[string]string{
+	}{t.pool, req.Method, path, req.URL.Query(), map[string]string{
 		"accept": req.Header.Get("Accept"), "x-github-api-version": req.Header.Get("X-GitHub-Api-Version"),
 		"cache-control": "max-age=0",
 	}})
@@ -132,6 +146,27 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 	default:
 		return nil, errors.New("unsupported Octopool body encoding")
+	}
+	if path == t.repositoryPath && envelope.Status == http.StatusOK {
+		var repository struct {
+			ID json.Number `json:"id"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+		if err := decoder.Decode(&repository); err != nil {
+			return nil, errors.New("invalid Octopool repository identity")
+		}
+		id, err := strconv.ParseInt(string(repository.ID), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, errors.New("invalid Octopool repository identity")
+		}
+		t.repositoryMu.Lock()
+		if t.repositoryID != "" && t.repositoryID != string(repository.ID) {
+			t.repositoryMu.Unlock()
+			return nil, errors.New("Octopool repository identity changed")
+		}
+		t.repositoryID = string(repository.ID)
+		t.repositoryMu.Unlock()
 	}
 	headers := make(http.Header)
 	for key, value := range envelope.Headers {

@@ -2,7 +2,9 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -43,5 +45,56 @@ func TestOctopoolRejectsCredentialBearingOrInsecureEndpoints(t *testing.T) {
 		if _, err := NewOctopool(endpoint, "fixture", "fixture-caller", "fixture/repo"); err == nil {
 			t.Errorf("accepted unsafe endpoint")
 		}
+	}
+}
+
+func TestOctopoolNumericPaginationIsBoundToVerifiedRepository(t *testing.T) {
+	var paths []string
+	var pages [][]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Path  string              `json:"path"`
+			Query map[string][]string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		paths = append(paths, request.Path)
+		pages = append(pages, request.Query["page"])
+		body := `[]`
+		headers := `{}`
+		if request.Path == "/repos/fixture/repo" {
+			body = `{"id":123}`
+		} else if len(paths) == 2 {
+			headers = `{"link":"<https://api.github.com/repositories/123/issues/7/comments?page=2>; rel=\"next\""}`
+		}
+		_, _ = fmt.Fprintf(w, `{"status":200,"body_encoding":"json","body":%s,"headers":%s,"relay":{"cache":"miss"}}`, body, headers)
+	}))
+	defer server.Close()
+	client, err := NewOctopool(server.URL, "fixture", "fixture-token", "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.GetRepo(context.Background(), "fixture", "repo", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.ListIssueComments(context.Background(), "fixture", "repo", 7, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 3 || paths[2] != "/repos/fixture/repo/issues/7/comments" {
+		t.Fatalf("pagination not normalized: %v", paths)
+	}
+	if len(pages[2]) != 1 || pages[2][0] != "2" {
+		t.Fatalf("pagination cursor lost: %v", pages)
+	}
+	transport := client.httpClient.Transport.(*octopoolTransport)
+	for _, path := range []string{"/repositories/124/issues/7/comments", "/repositories/1234/issues/7/comments", "/repositories/123%2fissues/7/comments"} {
+		request, _ := http.NewRequest(http.MethodGet, "https://api.github.com"+path, nil)
+		if _, err = transport.RoundTrip(request); err == nil {
+			t.Fatalf("accepted foreign repository path %s", path)
+		}
+	}
+	if len(paths) != 3 {
+		t.Fatal("foreign numeric path reached relay")
 	}
 }
