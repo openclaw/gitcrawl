@@ -1282,8 +1282,8 @@ func persistComments(
 			continue
 		}
 		comment := mapComment(thread.ID, row.kind, row.raw)
-		if comment.Body == "" && row.kind != "pull_review" && comment.DeletedAt == "" {
-			continue
+		if comment.Body == "" && row.kind != "pull_review" && comment.DeletedAt == "" && comment.GitHubID == "" {
+			return nil, 0, fmt.Errorf("live empty %s comment is missing GitHub identity", row.kind)
 		}
 		commentID, err := st.UpsertComment(ctx, comment)
 		if err != nil {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an operator-only, bounded Octopool conversation hydration tool using fresh REST identities and complete pooled GraphQL or REST child data. Preserve live empty-body comments and edits during native sync.
+
 - Preserve selected-repository Octopool pagination when GitHub returns immutable numeric repository URLs.
 
 ## 0.19.0 - 2026-11-15

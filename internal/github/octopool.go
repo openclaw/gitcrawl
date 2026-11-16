@@ -126,26 +126,9 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if envelope.Relay.StaleOK || envelope.Relay.Cache == "stale" {
 		return nil, errors.New("Octopool returned stale data; sync remains incomplete")
 	}
-	body := []byte(envelope.Body)
-	switch envelope.BodyEncoding {
-	case "json":
-		if len(body) == 0 {
-			return nil, errors.New("Octopool JSON body is missing")
-		}
-	case "text", "base64":
-		var text string
-		if err := json.Unmarshal(envelope.Body, &text); err != nil {
-			return nil, errors.New("invalid Octopool body encoding")
-		}
-		body = []byte(text)
-		if envelope.BodyEncoding == "base64" {
-			body, err = base64.StdEncoding.DecodeString(text)
-			if err != nil {
-				return nil, errors.New("invalid Octopool base64 body")
-			}
-		}
-	default:
-		return nil, errors.New("unsupported Octopool body encoding")
+	body, err := decodeOctopoolBody(envelope.Body, envelope.BodyEncoding)
+	if err != nil {
+		return nil, err
 	}
 	if path == t.repositoryPath && envelope.Status == http.StatusOK {
 		var repository struct {
@@ -173,6 +156,32 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		headers.Set(key, value)
 	}
 	return octopoolResponse(req, envelope.Status, headers, body), nil
+}
+
+func decodeOctopoolBody(raw json.RawMessage, encoding string) ([]byte, error) {
+	body := []byte(raw)
+	var err error
+	switch encoding {
+	case "json":
+		if len(body) == 0 {
+			return nil, errors.New("Octopool JSON body is missing")
+		}
+	case "text", "base64":
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, errors.New("invalid Octopool body encoding")
+		}
+		body = []byte(text)
+		if encoding == "base64" {
+			body, err = base64.StdEncoding.DecodeString(text)
+			if err != nil {
+				return nil, errors.New("invalid Octopool base64 body")
+			}
+		}
+	default:
+		return nil, errors.New("unsupported Octopool body encoding")
+	}
+	return body, nil
 }
 
 func octopoolResponse(req *http.Request, status int, headers http.Header, body []byte) *http.Response {
