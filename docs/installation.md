@@ -21,9 +21,9 @@ permalink: /installation/
 gitcrawl runs on macOS 13 Ventura or newer and Linux. Windows is not actively tested.
 
 CrawlKit v0.17.0 requires Go 1.27. The module keeps Go 1.27.2 as its language
-minimum and selects the patched Go 1.27.3 toolchain for source builds; keep
+minimum and selects the patched Go 1.27.4 toolchain for source builds; keep
 `GOTOOLCHAIN=auto` (the default) to allow that download. Docker also builds with
-Go 1.27.3. This fixes the reachable crypto/x509 vulnerability GO-2026-6809.
+Go 1.27.4. This includes the standard-library fixes for GO-2026-6809 and GO-2026-6859.
 Go 1.27 also raises the minimum macOS version for newly built binaries
 to macOS 13; the previous Go 1.26 build baseline no longer applies.
 
@@ -42,7 +42,7 @@ Official macOS archives are signed as `org.openclaw.gitcrawl` by `Developer ID A
 
 ```bash
 # Replace VERSION and PLATFORM with the values you want.
-VERSION=v0.16.0
+VERSION=v0.19.0
 PLATFORM=darwin_arm64
 mkdir -p "$HOME/bin"
 curl -L "https://github.com/openclaw/gitcrawl/releases/download/${VERSION}/gitcrawl_${VERSION#v}_${PLATFORM}.tar.gz" \
