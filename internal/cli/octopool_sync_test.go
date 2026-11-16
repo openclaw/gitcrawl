@@ -23,6 +23,7 @@ import (
 )
 
 type pooledSyncRequest struct {
+	ctx     context.Context
 	Pool    string              `json:"pool"`
 	Method  string              `json:"method"`
 	Path    string              `json:"path"`
@@ -64,6 +65,7 @@ func newPooledSyncFixture(t *testing.T, handler func(http.ResponseWriter, pooled
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		req.ctx = r.Context()
 		handler(w, req)
 	}))
 	t.Cleanup(relay.Close)
@@ -323,7 +325,7 @@ func TestOctopoolIncrementalCLIRecoversFromRetainedCheckpoint(t *testing.T) {
 	var recreated atomic.Bool
 	var expected atomic.Value
 	expected.Store("")
-	cancelRequested, cancelled := make(chan struct{}, 1), make(chan struct{})
+	cancelRequested := make(chan struct{}, 1)
 	configPath, dbPath := newPooledSyncFixture(t, func(w http.ResponseWriter, req pooledSyncRequest) {
 		calls.Add(1)
 		switch req.Path {
@@ -354,8 +356,8 @@ func TestOctopoolIncrementalCLIRecoversFromRetainedCheckpoint(t *testing.T) {
 			}
 			if phase.Load() == 3 {
 				cancelRequested <- struct{}{}
-				<-cancelled
-				w.WriteHeader(424)
+				// Wait for transport cancellation instead of racing it with a response.
+				<-req.ctx.Done()
 				return
 			}
 			pooledReply(t, w, 200, []any{githubCommentJSON(1, "fixture")}, nil, "json")
@@ -448,9 +450,7 @@ func TestOctopoolIncrementalCLIRecoversFromRetainedCheckpoint(t *testing.T) {
 				select {
 				case <-cancelRequested:
 					c()
-					close(cancelled)
 				case <-ctx.Done():
-					close(cancelled)
 				}
 			}()
 		}
