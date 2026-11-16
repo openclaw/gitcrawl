@@ -79,7 +79,12 @@ func run() error {
 		return err
 	}
 	reporter := github.Reporter(func(message string) { fmt.Fprintln(os.Stderr, message) })
-	if err := client.Inventory(ctx, reporter); err != nil {
+	if len(numbers) <= *batchSize {
+		err = client.InventoryNumbers(ctx, numbers, reporter)
+	} else {
+		err = client.Inventory(ctx, reporter)
+	}
+	if err != nil {
 		return err
 	}
 	encoder := json.NewEncoder(os.Stdout)

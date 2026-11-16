@@ -176,3 +176,49 @@ func TestConversationConnectionRejectsDuplicateOrMissingNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestTargetedInventoryAvoidsRepositoryTraversal(t *testing.T) {
+	var paths []string
+	wrongNumber := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Path string `json:"path"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		paths = append(paths, request.Path)
+		var body any
+		switch request.Path {
+		case "/repos/fixture/repo":
+			body = map[string]any{"id": 123}
+		case "/repos/fixture/repo/issues/7":
+			number := 7
+			if wrongNumber {
+				number = 8
+			}
+			body = map[string]any{"id": 456, "number": number, "node_id": "I_fixture"}
+		default:
+			t.Errorf("unexpected traversal: %s", request.Path)
+			w.WriteHeader(400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "body": body, "relay": map[string]any{"cache": "miss"}})
+	}))
+	defer server.Close()
+	client, err := NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.InventoryNumbers(context.Background(), []int{7}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || len(client.issues) != 1 || client.issues[7] == nil {
+		t.Fatalf("unexpected inventory: %v", paths)
+	}
+	wrongNumber = true
+	if err = client.InventoryNumbers(context.Background(), []int{7}, nil); err == nil {
+		t.Fatal("accepted a different returned issue")
+	}
+	if err = client.InventoryNumbers(context.Background(), []int{7, 7}, nil); err == nil {
+		t.Fatal("accepted duplicate selected numbers")
+	}
+}

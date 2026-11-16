@@ -24,8 +24,9 @@ commas. Duplicate numbers are rejected. `OCTOPOOL_TOKEN`, `OCTOPOOL_POOL` (defau
 `maintainers`), and `OCTOPOOL_URL` (default `https://octopool.dev`) select the
 existing relay. No direct GitHub fallback exists.
 
-Each invocation reads one fresh, fully paginated REST issue inventory. That
-inventory owns thread metadata, full bodies, raw REST objects, and backing issue
+Large invocations read one fresh, fully paginated REST issue inventory. A repair
+that fits in one batch fetches only its selected issue records. That inventory
+owns thread metadata, full bodies, raw REST objects, and backing issue
 IDs, including for pull requests. A requested number absent from the inventory
 fails visibly; historical deleted or transferred records need a separate
 reconciliation decision. The tool never removes them.

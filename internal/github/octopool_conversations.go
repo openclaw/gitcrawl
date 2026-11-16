@@ -36,6 +36,26 @@ func NewOctopoolConversations(endpoint, pool, token, repository string) (*Octopo
 // Inventory performs one fresh, paginated REST traversal. In particular, a PR's
 // backing issue ID must never be replaced by its GraphQL PullRequest database ID.
 func (c *OctopoolConversations) Inventory(ctx context.Context, reporter Reporter) error {
+	return c.inventory(ctx, nil, reporter)
+}
+
+// InventoryNumbers bounds a small repair or pilot to one conversation batch.
+// Large runs still use one shared repository inventory through Inventory.
+func (c *OctopoolConversations) InventoryNumbers(ctx context.Context, numbers []int, reporter Reporter) error {
+	if len(numbers) == 0 || len(numbers) > 25 {
+		return errors.New("targeted inventory requires 1..25 numbers")
+	}
+	seen := map[int]bool{}
+	for _, number := range numbers {
+		if number <= 0 || seen[number] {
+			return errors.New("targeted inventory requires unique positive numbers")
+		}
+		seen[number] = true
+	}
+	return c.inventory(ctx, numbers, reporter)
+}
+
+func (c *OctopoolConversations) inventory(ctx context.Context, numbers []int, reporter Reporter) error {
 	owner, repo, ok := strings.Cut(c.repository, "/")
 	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 		return errors.New("expected owner/repository")
@@ -44,9 +64,24 @@ func (c *OctopoolConversations) Inventory(ctx context.Context, reporter Reporter
 	if err != nil {
 		return err
 	}
-	rows, err := c.Client.ListRepositoryIssues(ctx, owner, repo, ListIssuesOptions{State: "all"}, reporter)
-	if err != nil {
-		return err
+	var rows []map[string]any
+	if len(numbers) == 0 {
+		rows, err = c.Client.ListRepositoryIssues(ctx, owner, repo, ListIssuesOptions{State: "all"}, reporter)
+		if err != nil {
+			return err
+		}
+	} else {
+		for _, number := range numbers {
+			row, err := c.Client.GetIssue(ctx, owner, repo, number, reporter)
+			if err != nil {
+				return err
+			}
+			got, ok := historyInt(row["number"])
+			if !ok || got != number {
+				return fmt.Errorf("targeted REST inventory number mismatch for #%d", number)
+			}
+			rows = append(rows, row)
+		}
 	}
 	issues := make(map[int]map[string]any, len(rows))
 	for _, row := range rows {

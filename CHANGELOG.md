@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound single-batch hydration pilots to selected REST issue metadata instead of scanning the whole repository.
+
 - Add an operator-only, bounded Octopool conversation hydration tool using fresh REST identities and complete pooled GraphQL or REST child data. Preserve live empty-body comments and edits during native sync.
 
 - Preserve selected-repository Octopool pagination when GitHub returns immutable numeric repository URLs.
