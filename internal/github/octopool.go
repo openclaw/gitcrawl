@@ -102,10 +102,8 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		// Relay diagnostics are not GitHub content and may include private data.
-		// Preserve status/backoff for the native retry owner without logging them.
-		return octopoolResponse(req, response.StatusCode, response.Header,
-			[]byte("Octopool relay rejected the request; no direct GitHub fallback")), nil
+		// Preserve status/backoff while exposing only known, content-free diagnostics.
+		return octopoolResponse(req, response.StatusCode, response.Header, octopoolRejectionBody(response)), nil
 	}
 	const maxEnvelopeBytes = 8 << 20
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxEnvelopeBytes+1))
@@ -161,6 +159,43 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		headers.Set(key, value)
 	}
 	return octopoolResponse(req, envelope.Status, headers, body), nil
+}
+
+// Only fixed fallback reason literals from Octopool's error contract may reach
+// logs. Messages, request IDs, arbitrary details and future codes stay private.
+func octopoolRejectionBody(response *http.Response) []byte {
+	const generic = "Octopool relay rejected the request; no direct GitHub fallback"
+	if response.StatusCode != http.StatusFailedDependency {
+		return []byte(generic)
+	}
+	const limit = 16 << 10
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil || len(body) > limit {
+		return []byte(generic)
+	}
+	var failure struct {
+		Error struct {
+			Code    string `json:"code"`
+			Details struct {
+				Reason string `json:"reason"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &failure) != nil || failure.Error.Code != "fallback_local" {
+		return []byte(generic)
+	}
+	reason := failure.Error.Details.Reason
+	switch reason {
+	case "github_response_too_large", "identities_cooling_down", "logs_denied", "no_identity",
+		"owner_denied", "relay_overloaded", "repo_not_public", "repo_public_check_failed",
+		"route_denied", "search_denied", "relay_storage_unavailable", "github_identity_unauthorized",
+		"github_rate_limited", "github_identity_depleted", "github_identity_forbidden",
+		"github_app_repo_token_unavailable", "local_credentials_required", "web_only_unavailable",
+		"pagination_exhausted":
+		return []byte(generic + " (fallback_local: " + reason + ")")
+	default:
+		return []byte(generic)
+	}
 }
 
 func decodeOctopoolBody(raw json.RawMessage, encoding string) ([]byte, error) {

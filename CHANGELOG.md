@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show known, bounded Octopool HTTP 424 fallback reasons while keeping private relay messages and unknown diagnostics hidden.
+
 - Preserve REST Octopool transport error causes for timeout and cancellation classification without exposing private diagnostics.
 
 - Preserve safe transport failure details and cancellation identity during concurrent Octopool hydration, and cap conversation batches at 20 to fit the relay fragment-expansion limit.
