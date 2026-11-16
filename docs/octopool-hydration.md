@@ -16,7 +16,7 @@ Use an approved staged archive and the existing Octopool caller credential:
 
 ```sh
 ./gitcrawl-hydrate --db /path/to/staged/native.sqlite \
-  --repo owner/repository --numbers-file /path/to/numbers.txt --batch-size 25 \
+  --repo owner/repository --numbers-file /path/to/numbers.txt --batch-size 20 \
   --inventory-checkpoint /path/to/inventory.sqlite
 ```
 
@@ -34,8 +34,10 @@ reported as unresolved after available records are hydrated. Deleted or
 transferred records need a separate reconciliation decision; this tool never
 removes them.
 
-Batches retrieve complete issue comments, submitted reviews, and inline comments
-through the repository-scoped GraphQL relay. Inline comments are collected from
+Conversation batches default to 20 and cannot exceed 20, keeping expanded
+GraphQL selections below the relay admission limit. Batches retrieve complete
+issue comments, submitted reviews, and inline comments through the
+repository-scoped GraphQL relay. Inline comments are collected from
 both reviews and review threads, including empty bodies. Larger conversations
 fall back to the existing fully paginated REST readers through the same pool.
 The tool rejects incomplete GraphQL responses, unqualified relay identities,

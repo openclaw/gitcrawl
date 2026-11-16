@@ -160,3 +160,64 @@ func TestSelectedRosterIsPrivateExclusiveAndDigestBound(t *testing.T) {
 		t.Fatal("original roster changed")
 	}
 }
+
+func TestCanceledSiblingDoesNotMaskAdmissionFailure(t *testing.T) {
+	for _, path := range []string{"numbers", "rows"} {
+		t.Run(path, func(t *testing.T) {
+			firstStarted := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Path    string `json:"path"`
+					GraphQL struct {
+						Query string `json:"query"`
+					} `json:"graphql"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&request)
+				var body any
+				switch request.Path {
+				case "/repos/fixture/repo":
+					body = map[string]any{"id": 123}
+				case "/repos/fixture/repo/issues/7", "/repos/fixture/repo/issues/8":
+					n := 7
+					if strings.HasSuffix(request.Path, "/8") {
+						n = 8
+					}
+					body = map[string]any{"id": n, "node_id": fmt.Sprint("I_", n), "number": n, "updated_at": "2026-01-01T00:00:00Z"}
+				case "/graphql":
+					if strings.Contains(request.GraphQL.Query, "number:7") {
+						close(firstStarted)
+						<-r.Context().Done()
+						return
+					}
+					<-firstStarted
+					w.WriteHeader(http.StatusForbidden)
+					return
+				default:
+					t.Errorf("unexpected path %s", request.Path)
+					w.WriteHeader(400)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "body": body, "relay": map[string]any{"cache": "miss"}})
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			client, err := github.NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = client.InventoryNumbers(ctx, []int{7, 8}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if path == "numbers" {
+				_, err = prepareWindow(ctx, client, [][]int{{7}, {8}}, nil)
+			} else {
+				batches := [][]map[string]any{{{"id": 7, "node_id": "I_7", "number": 7, "updated_at": "2026-01-01T00:00:00Z"}}, {{"id": 8, "node_id": "I_8", "number": 8, "updated_at": "2026-01-01T00:00:00Z"}}}
+				_, err = prepareRowWindow(ctx, client, batches, nil)
+			}
+			if err == nil || !strings.Contains(err.Error(), "relay status 403") {
+				t.Fatalf("admission error masked by canceled sibling: %v", err)
+			}
+		})
+	}
+}

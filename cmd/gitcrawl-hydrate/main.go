@@ -33,14 +33,14 @@ func run() error {
 	database := flag.String("db", "", "existing staged native SQLite archive")
 	repository := flag.String("repo", "", "owner/repository")
 	numbersFile := flag.String("numbers-file", "", "file containing issue/PR numbers separated by whitespace or commas")
-	batchSize := flag.Int("batch-size", 25, "conversations per request (1..25)")
+	batchSize := flag.Int("batch-size", github.MaxConversationBatch, "conversations per request (1..20)")
 	checkpointPath := flag.String("inventory-checkpoint", "", "private SQLite page and completion checkpoint for full inventory")
 	selectedOutput := flag.String("selected-numbers-output", "", "write the final selected roster to a new private file")
 	includeDiscovered := flag.Bool("include-discovered", false, "include every current REST inventory number alongside requested historical numbers")
 	fetchWorkers := flag.Int("fetch-workers", 1, "concurrent acquisition batches (1..8); native writes remain serial")
 	flag.Parse()
-	if *database == "" || *repository == "" || *numbersFile == "" || *batchSize < 1 || *batchSize > 25 || *fetchWorkers < 1 || *fetchWorkers > 8 {
-		return fmt.Errorf("--db, --repo, --numbers-file and batch-size 1..25 and fetch-workers 1..8 are required")
+	if *database == "" || *repository == "" || *numbersFile == "" || *batchSize < 1 || *batchSize > github.MaxConversationBatch || *fetchWorkers < 1 || *fetchWorkers > 8 {
+		return fmt.Errorf("--db, --repo, --numbers-file and batch-size 1..20 and fetch-workers 1..8 are required")
 	}
 	if *selectedOutput != "" {
 		if _, err := os.Lstat(*selectedOutput); err == nil {

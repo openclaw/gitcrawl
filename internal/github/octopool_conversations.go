@@ -15,6 +15,9 @@ import (
 	"time"
 )
 
+// MaxConversationBatch keeps fragment expansion below the relay selection limit.
+const MaxConversationBatch = 20
+
 // OctopoolConversations is a bounded acquisition adapter for native sync. REST
 // owns thread identity and metadata; GraphQL only supplies complete child sets.
 // It deliberately does not implement the broader GraphQL history profile.
@@ -199,8 +202,8 @@ func (c *OctopoolConversations) IssueNumbers() []int {
 }
 
 func (c *OctopoolConversations) prepareOnce(ctx context.Context, numbers []int, reporter Reporter) error {
-	if len(numbers) == 0 || len(numbers) > 25 {
-		return errors.New("conversation batch must contain 1..25 numbers")
+	if len(numbers) == 0 || len(numbers) > MaxConversationBatch {
+		return fmt.Errorf("conversation batch must contain 1..%d numbers", MaxConversationBatch)
 	}
 	var query strings.Builder
 	query.WriteString(`query($owner:String!,$repo:String!) { repository(owner:$owner,name:$repo) {`)
@@ -404,7 +407,7 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.relay.client.Do(request)
 	if err != nil {
-		return nil, errors.New("Octopool GraphQL request failed")
+		return nil, &conversationTransportError{cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
