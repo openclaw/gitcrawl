@@ -99,7 +99,7 @@ func run() error {
 	if len(numbers) <= 25 && len(numbers) <= *batchSize**fetchWorkers && !*includeDiscovered {
 		err = client.InventoryNumbers(ctx, numbers, reporter)
 	} else {
-		err = client.Inventory(ctx, reporter)
+		err = client.InventoryWithWorkers(ctx, *fetchWorkers, reporter)
 	}
 	if err != nil {
 		return err

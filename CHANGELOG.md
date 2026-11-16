@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fetch full Octopool inventories in bounded, ordered page windows while retaining canonical identities, validating repository links, and rejecting incomplete page results.
+
 - Add explicit discovered-ID reconciliation, bounded parallel acquisition with serial native writes, and parent freshness checks for long-running Octopool hydration.
 
 - Bound single-batch hydration pilots to selected REST issue metadata instead of scanning the whole repository.

@@ -75,6 +75,14 @@ present conversations from being processed. The command exits unsuccessfully
 after processing available records if any historical number remains unresolved.
 Ordinary selected-number mode fails before hydration if an input is missing.
 
+The full REST inventory uses the same worker bound for creation-ascending,
+numbered pages through Octopool. It assembles pages in order and stops only at a
+verified short or empty tail. Provider cursor links are validated but not
+constructed; numbered-page equivalence is qualified separately. Duplicate
+identities, failed pages, or contradictory tails fail without publishing a
+partial inventory. The inventory itself remains in memory and restarts after an
+interruption; completed hydration still uses the frozen roster and receipts.
+
 Use `--fetch-workers 4` to acquire up to four batches concurrently after a small
 pilot has qualified quota use; the limit is eight and the default is one. Only
 one window of batches is held in memory. Native writes remain serial and ordered,

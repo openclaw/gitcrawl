@@ -38,7 +38,13 @@ func NewOctopoolConversations(endpoint, pool, token, repository string) (*Octopo
 // Inventory performs one fresh, paginated REST traversal. In particular, a PR's
 // backing issue ID must never be replaced by its GraphQL PullRequest database ID.
 func (c *OctopoolConversations) Inventory(ctx context.Context, reporter Reporter) error {
-	return c.inventory(ctx, nil, reporter)
+	return c.inventory(ctx, nil, 1, reporter)
+}
+
+// InventoryWithWorkers bounds full-inventory page acquisition independently of
+// native writes; workers use the same pooled client and ordered page assembly.
+func (c *OctopoolConversations) InventoryWithWorkers(ctx context.Context, workers int, reporter Reporter) error {
+	return c.inventory(ctx, nil, workers, reporter)
 }
 
 // InventoryNumbers bounds a small repair or pilot to one conversation batch.
@@ -54,10 +60,10 @@ func (c *OctopoolConversations) InventoryNumbers(ctx context.Context, numbers []
 		}
 		seen[number] = true
 	}
-	return c.inventory(ctx, numbers, reporter)
+	return c.inventory(ctx, numbers, 1, reporter)
 }
 
-func (c *OctopoolConversations) inventory(ctx context.Context, numbers []int, reporter Reporter) error {
+func (c *OctopoolConversations) inventory(ctx context.Context, numbers []int, workers int, reporter Reporter) error {
 	owner, repo, ok := strings.Cut(c.repository, "/")
 	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 		return errors.New("expected owner/repository")
@@ -68,7 +74,7 @@ func (c *OctopoolConversations) inventory(ctx context.Context, numbers []int, re
 	}
 	var rows []map[string]any
 	if len(numbers) == 0 {
-		rows, err = c.Client.ListRepositoryIssues(ctx, owner, repo, ListIssuesOptions{State: "all"}, reporter)
+		rows, err = c.Client.listRepositoryInventory(ctx, owner, repo, fmt.Sprint(metadata["id"]), workers, reporter)
 		if err != nil {
 			return err
 		}
