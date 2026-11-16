@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve REST Octopool transport error causes for timeout and cancellation classification without exposing private diagnostics.
+
 - Preserve safe transport failure details and cancellation identity during concurrent Octopool hydration, and cap conversation batches at 20 to fit the relay fragment-expansion limit.
 
 - Stream full Octopool inventories through authentic GitHub cursors and a private SQLite page/completion checkpoint, overlapping acquisition with bounded native hydration and resuming without refetching completed pages.

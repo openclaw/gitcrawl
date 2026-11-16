@@ -54,6 +54,14 @@ type octopoolTransport struct {
 	repositoryID                          string
 }
 
+// Preserve transport classification without exposing private URLs or diagnostics.
+type octopoolTransportError struct{ cause error }
+
+func (e *octopoolTransportError) Unwrap() error { return e.cause }
+func (e *octopoolTransportError) Error() string {
+	return "Octopool relay request failed; no direct GitHub fallback"
+}
+
 func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	path := req.URL.EscapedPath()
 	t.repositoryMu.RLock()
@@ -90,10 +98,7 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	relayRequest.Header.Set("Content-Type", "application/json")
 	response, err := t.client.Do(relayRequest)
 	if err != nil {
-		if req.Context().Err() != nil {
-			return nil, req.Context().Err()
-		}
-		return nil, errors.New("Octopool relay request failed; no direct GitHub fallback")
+		return nil, &octopoolTransportError{cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {

@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 )
 
@@ -96,5 +100,38 @@ func TestOctopoolNumericPaginationIsBoundToVerifiedRepository(t *testing.T) {
 	}
 	if len(paths) != 3 {
 		t.Fatal("foreign numeric path reached relay")
+	}
+}
+
+func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing.T) {
+	for _, cause := range []error{
+		context.Canceled,
+		context.DeadlineExceeded,
+		&net.OpError{Op: "private-operation", Net: "private-network", Err: os.ErrDeadlineExceeded},
+		syscall.ECONNRESET,
+		errors.New("private-token-and-response"),
+	} {
+		transport := &octopoolTransport{
+			endpoint: "https://private.invalid/relay", pool: "fixture", token: "private-token",
+			repositoryPath: "/repos/fixture/repo",
+			client: &http.Client{Transport: contentRetryTransport(func(*http.Request) (*http.Response, error) {
+				return nil, &url.Error{Op: "Post", URL: "https://private.invalid/private-token", Err: cause}
+			})},
+		}
+		request, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/fixture/repo", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = transport.RoundTrip(request)
+		if !errors.Is(err, cause) {
+			t.Fatalf("lost transport cause: %v", err)
+		}
+		var want, got net.Error
+		if errors.As(cause, &want) && (!errors.As(err, &got) || got.Timeout() != want.Timeout()) {
+			t.Fatalf("lost network classification: %v", err)
+		}
+		if err.Error() != "Octopool relay request failed; no direct GitHub fallback" {
+			t.Fatalf("private diagnostics exposed: %s", err)
+		}
 	}
 }
