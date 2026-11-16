@@ -1,213 +1,268 @@
 package github
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
-// listRepositoryInventory keeps the ordinary incremental reader unchanged.
-// Creation order avoids moving old rows when issue metadata changes. This is
-// still a traversal, not a snapshot: catch-up must start at the original scan.
-func (c *Client) listRepositoryInventory(ctx context.Context, owner, repo, repositoryID string, workers int, reporter Reporter) ([]map[string]any, error) {
-	if workers < 1 || workers > 8 {
-		return nil, errors.New("inventory workers must be 1..8")
-	}
-	path := "/repos/" + pathEscape(owner) + "/" + pathEscape(repo) + "/issues"
-	values := url.Values{"state": {"all"}, "sort": {"created"}, "direction": {"asc"}, "per_page": {"100"}}
-	fetch := func(ctx context.Context, page int) ([]map[string]any, string, error) {
-		query := values.Clone()
-		query.Set("page", strconv.Itoa(page))
-		response, err := c.do(ctx, http.MethodGet, path+"?"+query.Encode(), nil, reporter)
-		if err != nil {
-			return nil, "", err
-		}
-		defer response.Body.Close()
-		var rows []map[string]any
-		if err = decodeJSON(response.Body, &rows); err != nil {
-			return nil, "", fmt.Errorf("decode inventory page %d: %w", page, err)
-		}
-		if rows == nil {
-			return nil, "", fmt.Errorf("inventory page %d is not an array", page)
-		}
-		if len(rows) > 100 {
-			return nil, "", fmt.Errorf("inventory page %d exceeded page size", page)
-		}
-		return rows, response.Header.Get("Link"), nil
-	}
-	var rows []map[string]any
-	seen := map[int]bool{}
-	seenIDs := map[string]bool{}
-	appendPage := func(page int, items []map[string]any, links string) (bool, error) {
-		_, next, err := c.inventoryLinks(links, path, repositoryID, values)
-		if err != nil {
-			return false, err
-		}
-		if next != 0 && next != page+1 {
-			return false, errors.New("inventory pagination skipped a page")
-		}
-		if len(items) == 0 && next != 0 {
-			return false, errors.New("empty inventory page has a next link")
-		}
-		for _, row := range items {
-			number, ok := historyInt(row["number"])
-			if !ok || number <= 0 || row["id"] == nil {
-				return false, errors.New("inventory row has invalid issue identity")
-			}
-			if seen[number] {
-				return false, fmt.Errorf("inventory repeated issue #%d across pages", number)
-			}
-			id := fmt.Sprint(row["id"])
-			numericID, idErr := strconv.ParseInt(id, 10, 64)
-			if idErr != nil || numericID <= 0 || strconv.FormatInt(numericID, 10) != id || seenIDs[id] {
-				return false, errors.New("inventory has invalid or duplicate canonical ID")
-			}
-			seenIDs[id] = true
-			seen[number] = true
-		}
-		rows = append(rows, items...)
-		reporter.Printf("[github] inventory page %d fetched count=%d accumulated=%d", page, len(items), len(rows))
-		return len(items) < 100 && next == 0, nil
-	}
-	first, links, err := fetch(ctx, 1)
-	if err != nil {
-		return nil, err
-	}
-	tail, err := appendPage(1, first, links)
-	if err != nil {
-		return nil, err
-	}
-	if tail {
-		return rows, nil
-	}
-	for start := 2; ; start += workers {
-		type pageResult struct {
-			rows  []map[string]any
-			links string
-			err   error
-		}
-		results := make([]pageResult, workers)
-		window, cancel := context.WithCancel(ctx)
-		var pending sync.WaitGroup
-		for index := range workers {
-			page := start + index
-			pending.Go(func() {
-				results[index].rows, results[index].links, results[index].err = fetch(window, page)
-				if results[index].err != nil {
-					cancel()
-				}
-			})
-		}
-		pending.Wait()
-		cancel()
-		for _, result := range results {
-			if result.err != nil && !errors.Is(result.err, context.Canceled) {
-				return nil, result.err
-			}
-		}
-		for index, result := range results {
-			if result.err != nil {
-				return nil, result.err
-			}
-			tail, err = appendPage(start+index, result.rows, result.links)
-			if err != nil {
-				return nil, err
-			}
-			if tail {
-				for _, later := range results[index+1:] {
-					if len(later.rows) > 0 {
-						return nil, errors.New("inventory returned records after a terminal short page")
-					}
-					_, next, linkErr := c.inventoryLinks(later.links, path, repositoryID, values)
-					if linkErr != nil {
-						return nil, linkErr
-					}
-					if next != 0 {
-						return nil, errors.New("empty inventory tail has next page")
-					}
-				}
-				return rows, nil
-			}
-		}
-	}
+// InventoryScope binds recovery to the same native archive and requested work.
+// NativeIdentity comes from the existing native file-identity owner, not a path.
+type InventoryScope struct {
+	Checkpoint        string
+	NativeIdentity    string
+	SelectionSHA256   string
+	IncludeDiscovered bool
+	StartedAt         time.Time
+}
+type InventoryPage struct {
+	Index     int
+	Rows      []map[string]any
+	Completed []int
+}
+type InventoryStream struct {
+	client     *OctopoolConversations
+	checkpoint *inventoryCheckpoint
+	path       string
+	query      url.Values
 }
 
-// Numbered offset requests are the provider's documented API, qualified against
-// its cursor-next response. We validate returned continuation links but never
-// construct or reuse their opaque cursors. Numeric paths require GetRepo's ID.
-func (c *Client) inventoryLinks(header, path, repositoryID string, values url.Values) (last, next int, err error) {
+func (c *OctopoolConversations) OpenInventory(ctx context.Context, scope InventoryScope, reporter Reporter) (*InventoryStream, error) {
+	if scope.NativeIdentity == "" || scope.SelectionSHA256 == "" || scope.StartedAt.IsZero() {
+		return nil, errors.New("inventory checkpoint requires archive, selection and start identity")
+	}
+	owner, repo, ok := strings.Cut(c.repository, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return nil, errors.New("expected owner/repository")
+	}
+	metadata, err := c.Client.GetRepo(ctx, owner, repo, reporter)
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"state": {"all"}, "sort": {"created"}, "direction": {"asc"}, "per_page": {"100"}}
+	path := "/repos/" + pathEscape(owner) + "/" + pathEscape(repo) + "/issues"
+	descriptor, err := json.Marshal(struct {
+		Profile, Endpoint, Pool, CallerSHA256, Repository, RepositoryID, Query, NativeIdentity, SelectionSHA256 string
+		IncludeDiscovered                                                                                       bool
+	}{
+		"cursor-inventory-v1", c.relay.endpoint, c.relay.pool, fmt.Sprintf("%x", sha256.Sum256([]byte("gitcrawl-inventory-caller-v1\x00"+c.relay.token))), c.repository, fmt.Sprint(metadata["id"]), query.Encode(), scope.NativeIdentity, scope.SelectionSHA256, scope.IncludeDiscovered,
+	})
+	if err != nil {
+		return nil, err
+	}
+	checkpoint, err := openInventoryCheckpoint(ctx, scope.Checkpoint, string(descriptor), path+"?"+query.Encode(), scope.StartedAt)
+	if err != nil {
+		return nil, err
+	}
+	c.metadata = metadata
+	return &InventoryStream{client: c, checkpoint: checkpoint, path: path, query: query}, nil
+}
+func (s *InventoryStream) Close() error         { return s.checkpoint.Close() }
+func (s *InventoryStream) StartedAt() time.Time { return s.checkpoint.started }
+
+// Complete follows a successful native transaction; a crash before this commit
+// only repeats that bounded batch. It never precedes native persistence.
+func (s *InventoryStream) Complete(ctx context.Context, page int, numbers []int) error {
+	return s.checkpoint.complete(ctx, page, numbers)
+}
+
+// Walk first replays saved full pages, then follows only provider-issued cursors.
+// A page and its next cursor commit together before it is sent to a consumer.
+func (s *InventoryStream) Walk(ctx context.Context, reporter Reporter, yield func(InventoryPage) error) error {
+	next, finished, saved, err := s.checkpoint.state(ctx)
+	if err != nil {
+		return err
+	}
+	for index := 1; index <= saved; index++ {
+		raw, completed, err := s.checkpoint.page(ctx, index)
+		if err != nil {
+			return err
+		}
+		rows, err := decodeInventoryPage(raw)
+		if err != nil {
+			return err
+		}
+		reporter.Printf("[github] inventory page %d replayed count=%d completed=%d", index, len(rows), len(completed))
+		if err = yield(InventoryPage{index, rows, completed}); err != nil {
+			return err
+		}
+	}
+	for index := saved + 1; !finished; index++ {
+		response, err := s.client.Client.do(ctx, http.MethodGet, next, nil, reporter)
+		if err != nil {
+			return err
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, (8<<20)+1))
+		response.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if len(raw) > 8<<20 {
+			return errors.New("inventory page exceeds 8 MiB")
+		}
+		rows, err := decodeInventoryPage(raw)
+		if err != nil {
+			return err
+		}
+		following, err := s.client.Client.inventoryNext(response.Header.Get("Link"), s.path, fmt.Sprint(s.client.metadata["id"]), s.query)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 && following != "" {
+			return errors.New("empty inventory page has a next cursor")
+		}
+		if err = s.checkpoint.savePage(ctx, index, next, following, raw); err != nil {
+			return err
+		}
+		reporter.Printf("[github] inventory page %d saved count=%d", index, len(rows))
+		if err = yield(InventoryPage{Index: index, Rows: rows}); err != nil {
+			return err
+		}
+		next = following
+		finished = following == ""
+	}
+	return nil
+}
+func decodeInventoryPage(raw []byte) ([]map[string]any, error) {
+	var rows []map[string]any
+	if err := decodeJSON(bytes.NewReader(raw), &rows); err != nil {
+		return nil, err
+	}
+	if rows == nil || len(rows) > 100 {
+		return nil, errors.New("invalid inventory page array")
+	}
+	for _, row := range rows {
+		number, ok := historyInt(row["number"])
+		id := fmt.Sprint(row["id"])
+		numeric, err := strconv.ParseInt(id, 10, 64)
+		if !ok || number <= 0 || err != nil || numeric <= 0 || strconv.FormatInt(numeric, 10) != id || historyString(row["node_id"]) == "" {
+			return nil, errors.New("inventory row has invalid canonical identity")
+		}
+	}
+	return rows, nil
+}
+
+// inventoryNext validates provider scope before retaining its opaque cursor.
+// Numeric paths remain native reads: the existing transport normalizes them to
+// the selected repository. No offset page or cursor is constructed here.
+func (c *Client) inventoryNext(header, path, repositoryID string, query url.Values) (string, error) {
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return 0, 0, err
+		return "", err
 	}
-	seen := map[string]bool{}
+	next := ""
 	for _, part := range strings.Split(header, ",") {
 		fields := strings.Split(part, ";")
 		if len(fields) < 2 {
 			continue
 		}
-		relation := ""
+		isNext := false
 		for _, field := range fields[1:] {
-			field = strings.TrimSpace(field)
-			if field == `rel="last"` {
-				relation = "last"
-			}
-			if field == `rel="next"` {
-				relation = "next"
+			if strings.TrimSpace(field) == `rel="next"` {
+				isNext = true
 			}
 		}
-		if relation == "" {
+		if !isNext {
 			continue
 		}
-		if seen[relation] {
-			return 0, 0, errors.New("duplicate inventory pagination relation")
+		if next != "" {
+			return "", errors.New("duplicate next cursor")
 		}
-		seen[relation] = true
-		target, parseErr := url.Parse(strings.Trim(strings.TrimSpace(fields[0]), "<>"))
-		if parseErr != nil || target.Scheme != base.Scheme || !strings.EqualFold(target.Host, base.Host) || target.User != nil || target.Fragment != "" {
-			return 0, 0, errors.New("inventory pagination changed origin")
+		target, err := url.Parse(strings.Trim(strings.TrimSpace(fields[0]), "<>"))
+		if err != nil {
+			return "", err
 		}
-		expectedPath := strings.TrimRight(base.EscapedPath(), "/") + path
-		numericPath := strings.TrimRight(base.EscapedPath(), "/") + "/repositories/" + repositoryID + "/issues"
-		if target.EscapedPath() != expectedPath && (repositoryID == "" || target.EscapedPath() != numericPath) {
-			return 0, 0, errors.New("inventory pagination changed repository")
+		if target.Scheme != base.Scheme || !strings.EqualFold(target.Host, base.Host) || target.User != nil || target.Fragment != "" {
+			return "", errors.New("inventory cursor changed origin")
 		}
-		query, parseErr := url.ParseQuery(target.RawQuery)
-		if parseErr != nil || (len(query) != len(values)+1 && len(query) != len(values)+2) {
-			return 0, 0, errors.New("inventory pagination changed query")
+		prefix := strings.TrimRight(base.EscapedPath(), "/")
+		if target.EscapedPath() != prefix+path && target.EscapedPath() != prefix+"/repositories/"+repositoryID+"/issues" {
+			return "", errors.New("inventory cursor changed repository")
 		}
-		if after, ok := query["after"]; ok && (len(after) != 1 || after[0] == "") {
-			return 0, 0, errors.New("invalid inventory continuation cursor")
+		actual, err := url.ParseQuery(target.RawQuery)
+		if err != nil {
+			return "", err
 		}
-		for key := range query {
-			if _, ok := values[key]; !ok && key != "page" && key != "after" {
-				return 0, 0, errors.New("inventory pagination changed query")
-			}
-		}
-		for key, want := range values {
-			got := query[key]
+		for key, want := range query {
+			got := actual[key]
 			if len(got) != 1 || got[0] != want[0] {
-				return 0, 0, errors.New("inventory pagination changed query")
+				return "", errors.New("inventory cursor changed query")
 			}
 		}
-		pageValues := query["page"]
-		if len(pageValues) != 1 {
-			return 0, 0, errors.New("inventory pagination lacks one page number")
+		for key, values := range actual {
+			if len(values) != 1 {
+				return "", errors.New("duplicate inventory query value")
+			}
+			if _, ok := query[key]; !ok && key != "page" && key != "after" {
+				return "", errors.New("unexpected inventory cursor query")
+			}
 		}
-		page, parseErr := strconv.Atoi(pageValues[0])
-		if parseErr != nil || page < 1 || strconv.Itoa(page) != pageValues[0] {
-			return 0, 0, errors.New("invalid inventory page number")
+		if actual.Get("after") == "" {
+			return "", errors.New("inventory next link lacks authentic cursor")
 		}
-		if relation == "last" {
-			last = page
-		} else {
-			next = page
+		if page := actual.Get("page"); page != "" {
+			n, err := strconv.Atoi(page)
+			if err != nil || n <= 0 || strconv.Itoa(n) != page {
+				return "", errors.New("invalid cursor page label")
+			}
+		}
+		next = target.EscapedPath()
+		if target.RawQuery != "" {
+			next += "?" + target.RawQuery
 		}
 	}
-	return last, next, nil
+	return next, nil
+}
+
+// The library inventory reader is deliberately serial: large GitHub datasets
+// require authentic cursors. The operator command uses the durable stream.
+func (c *Client) listRepositoryInventory(ctx context.Context, owner, repo, repositoryID string, workers int, reporter Reporter) ([]map[string]any, error) {
+	if workers < 1 || workers > 8 {
+		return nil, errors.New("inventory workers must be 1..8")
+	}
+	path := "/repos/" + pathEscape(owner) + "/" + pathEscape(repo) + "/issues"
+	query := url.Values{"state": {"all"}, "sort": {"created"}, "direction": {"asc"}, "per_page": {"100"}}
+	next := path + "?" + query.Encode()
+	seen := map[string]bool{}
+	var out []map[string]any
+	for next != "" {
+		if seen[next] {
+			return nil, errors.New("inventory cursor repeated")
+		}
+		seen[next] = true
+		response, err := c.do(ctx, http.MethodGet, next, nil, reporter)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := io.ReadAll(io.LimitReader(response.Body, (8<<20)+1))
+		response.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) > 8<<20 {
+			return nil, errors.New("inventory page exceeds 8 MiB")
+		}
+		rows, err := decodeInventoryPage(raw)
+		if err != nil {
+			return nil, err
+		}
+		next, err = c.inventoryNext(response.Header.Get("Link"), path, repositoryID, query)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 && next != "" {
+			return nil, errors.New("empty inventory page has a next cursor")
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
 }

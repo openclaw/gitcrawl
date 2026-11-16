@@ -41,8 +41,8 @@ func (c *OctopoolConversations) Inventory(ctx context.Context, reporter Reporter
 	return c.inventory(ctx, nil, 1, reporter)
 }
 
-// InventoryWithWorkers bounds full-inventory page acquisition independently of
-// native writes; workers use the same pooled client and ordered page assembly.
+// InventoryWithWorkers retains the existing caller contract. Inventory reads
+// follow one authentic cursor chain; concurrency applies only to child batches.
 func (c *OctopoolConversations) InventoryWithWorkers(ctx context.Context, workers int, reporter Reporter) error {
 	return c.inventory(ctx, nil, workers, reporter)
 }
@@ -165,6 +165,23 @@ func (c *OctopoolConversations) PrepareBatch(ctx context.Context, numbers []int,
 	batch := &OctopoolConversations{Client: c.Client, relay: c.relay, repository: c.repository, metadata: c.metadata, issues: make(map[int]map[string]any, len(numbers)), conversations: map[int]HistoryItem{}}
 	for _, number := range numbers {
 		batch.issues[number] = c.issues[number]
+	}
+	if err := batch.Prepare(ctx, numbers, reporter); err != nil {
+		return nil, err
+	}
+	return batch, nil
+}
+
+func (c *OctopoolConversations) PrepareRows(ctx context.Context, rows []map[string]any, reporter Reporter) (*OctopoolConversations, error) {
+	batch := &OctopoolConversations{Client: c.Client, relay: c.relay, repository: c.repository, metadata: c.metadata, issues: map[int]map[string]any{}, conversations: map[int]HistoryItem{}}
+	var numbers []int
+	for _, row := range rows {
+		number, ok := historyInt(row["number"])
+		if !ok || batch.issues[number] != nil {
+			return nil, errors.New("invalid or duplicate streamed number")
+		}
+		numbers = append(numbers, number)
+		batch.issues[number] = row
 	}
 	if err := batch.Prepare(ctx, numbers, reporter); err != nil {
 		return nil, err

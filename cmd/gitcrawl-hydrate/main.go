@@ -34,7 +34,8 @@ func run() error {
 	repository := flag.String("repo", "", "owner/repository")
 	numbersFile := flag.String("numbers-file", "", "file containing issue/PR numbers separated by whitespace or commas")
 	batchSize := flag.Int("batch-size", 25, "conversations per request (1..25)")
-	selectedOutput := flag.String("selected-numbers-output", "", "write the frozen selected roster to a new private file before hydration")
+	checkpointPath := flag.String("inventory-checkpoint", "", "private SQLite page and completion checkpoint for full inventory")
+	selectedOutput := flag.String("selected-numbers-output", "", "write the final selected roster to a new private file")
 	includeDiscovered := flag.Bool("include-discovered", false, "include every current REST inventory number alongside requested historical numbers")
 	fetchWorkers := flag.Int("fetch-workers", 1, "concurrent acquisition batches (1..8); native writes remain serial")
 	flag.Parse()
@@ -82,6 +83,7 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+	originalNumbers := slices.Clone(numbers)
 	requestedCount := len(numbers)
 	numbers, err = st.FilterExcludedNumbers(ctx, *repository, numbers)
 	if err != nil {
@@ -95,12 +97,22 @@ func run() error {
 		return err
 	}
 	reporter := github.Reporter(func(message string) { fmt.Fprintln(os.Stderr, message) })
-	inventoryStarted := time.Now().UTC()
-	if len(numbers) <= 25 && len(numbers) <= *batchSize**fetchWorkers && !*includeDiscovered {
-		err = client.InventoryNumbers(ctx, numbers, reporter)
-	} else {
-		err = client.InventoryWithWorkers(ctx, *fetchWorkers, reporter)
+	if *checkpointPath != "" || *includeDiscovered || len(originalNumbers) > 25 || len(originalNumbers) > *batchSize**fetchWorkers {
+		native, err := store.NativeReportFileIdentity(*database)
+		if err != nil {
+			return err
+		}
+		identity, err := json.Marshal(native)
+		if err != nil {
+			return err
+		}
+		sorted := slices.Clone(originalNumbers)
+		slices.Sort(sorted)
+		input, _ := json.Marshal(sorted)
+		return hydrateStream(ctx, client, st, *repository, originalNumbers, *batchSize, *fetchWorkers, github.InventoryScope{Checkpoint: *checkpointPath, NativeIdentity: string(identity), SelectionSHA256: fmt.Sprintf("%x", sha256.Sum256(input)), IncludeDiscovered: *includeDiscovered, StartedAt: time.Now().UTC()}, *selectedOutput, reporter, json.NewEncoder(os.Stdout))
 	}
+	inventoryStarted := time.Now().UTC()
+	err = client.InventoryNumbers(ctx, numbers, reporter)
 	if err != nil {
 		return err
 	}

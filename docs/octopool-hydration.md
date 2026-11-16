@@ -16,7 +16,8 @@ Use an approved staged archive and the existing Octopool caller credential:
 
 ```sh
 ./gitcrawl-hydrate --db /path/to/staged/native.sqlite \
-  --repo owner/repository --numbers-file /path/to/numbers.txt --batch-size 25
+  --repo owner/repository --numbers-file /path/to/numbers.txt --batch-size 25 \
+  --inventory-checkpoint /path/to/inventory.sqlite
 ```
 
 The number file contains positive issue/PR numbers separated by whitespace or
@@ -24,13 +25,14 @@ commas. Duplicate numbers are rejected. `OCTOPOOL_TOKEN`, `OCTOPOOL_POOL` (defau
 `maintainers`), and `OCTOPOOL_URL` (default `https://octopool.dev`) select the
 existing relay. No direct GitHub fallback exists.
 
-Large invocations read one fresh, fully paginated REST issue inventory. A repair
-that fits in one acquisition window (at most 25 numbers) fetches only its selected
-issue records. That inventory
-owns thread metadata, full bodies, raw REST objects, and backing issue
-IDs, including for pull requests. A requested number absent from the inventory
-fails visibly; historical deleted or transferred records need a separate
-reconciliation decision. The tool never removes them.
+Large invocations stream a fresh REST issue inventory through a private SQLite
+checkpoint. A repair that fits in one acquisition window (at most 25 numbers)
+fetches only its selected issue records unless a checkpoint is supplied. REST
+owns thread metadata, full bodies, raw objects, and backing issue IDs, including
+for pull requests. Historical numbers absent from the completed inventory are
+reported as unresolved after available records are hydrated. Deleted or
+transferred records need a separate reconciliation decision; this tool never
+removes them.
 
 Batches retrieve complete issue comments, submitted reviews, and inline comments
 through the repository-scoped GraphQL relay. Inline comments are collected from
@@ -73,15 +75,21 @@ In discovery mode, missing historical numbers are emitted individually as
 `unresolved` results, remain untouched in the native archive, and do not prevent
 present conversations from being processed. The command exits unsuccessfully
 after processing available records if any historical number remains unresolved.
-Ordinary selected-number mode fails before hydration if an input is missing.
+Small selected-number repairs fail before hydration if an input is missing.
 
-The full REST inventory uses the same worker bound for creation-ascending,
-numbered pages through Octopool. It assembles pages in order and stops only at a
-verified short or empty tail. Provider cursor links are validated but not
-constructed; numbered-page equivalence is qualified separately. Duplicate
-identities, failed pages, or contradictory tails fail without publishing a
-partial inventory. The inventory itself remains in memory and restarts after an
-interruption; completed hydration still uses the frozen roster and receipts.
+The full inventory follows one creation-ascending chain of provider-issued
+cursors through Octopool. It never constructs offset pages: GitHub rejects
+large-dataset offsets. Each full REST page and its next cursor (or end-of-stream)
+commit atomically to `--inventory-checkpoint` before hydration starts. Acquisition
+overlaps hydration through a bounded page queue. A failed request preserves all
+previous pages and native progress; it does not claim a complete inventory.
+
+The checkpoint binds endpoint, pool, caller credential fingerprint, repository
+name and immutable ID, query profile, original input selection, discovery mode,
+and native file identity. It retains the original scan start on resume. Tokens
+are not stored. Keep the checkpoint private and use one helper process per
+checkpoint/native archive. A changed source, caller, selection or physical
+archive is rejected rather than silently reusing another run's completion state.
 
 Use `--fetch-workers 4` to acquire up to four batches concurrently after a small
 pilot has qualified quota use; the limit is eight and the default is one. Only
@@ -101,12 +109,25 @@ reserve (for example, 25 GiB) available throughout the run and stop the owned
 helper process if it is crossed. A retained-key count alone does not establish
 complete discovery or classify unavailable records as deleted.
 
-For a resumable discovery run, pass `--selected-numbers-output /path/to/selected.txt`.
-The file must not already exist. Before hydration begins, the tool writes the
-sorted selected roster with private permissions and includes its SHA-256 in the
-inventory event. Preserve that file, the inventory start, the batch receipts,
-and their binding to the same native archive. For a retry, subtract completed
-receipt numbers from this frozen roster into a new input and omit
-`--include-discovered`. Otherwise a new discovery union would add completed keys
-back. Later discoveries belong to incremental acquisition from the original
-inventory start with the chosen overlap.
+Resume an interrupted run with the same original number file, discovery flag,
+checkpoint path and native archive. Do not subtract completed keys from that
+input: the checkpoint records exact successful native batches and skips them on
+replay. A crash between native commit and checkpoint completion can repeat one
+bounded batch safely. Newer versions encountered later in the inventory may
+produce another completion event for the same number. Controllers must count
+unique numbers separately from batch events.
+
+Standard output begins with `inventory_started` (`complete: false`,
+`streaming: true`). Native `batch_complete` events can arrive before the final
+`inventory` event. Only true cursor exhaustion produces that final event with
+`complete: true`, the original start, final counts and unresolved historical
+keys. Stderr reports saved or replayed page numbers. Preserve partial receipts
+even when the run ends before the final inventory event.
+
+Optionally pass `--selected-numbers-output /path/to/selected.txt`. At successful
+cursor exhaustion, the tool writes the sorted selected roster to a new private
+file and includes its SHA-256 in the final inventory event. The file must not
+already exist; omit this optional output on resume if it was already produced.
+Preserve the checkpoint, receipts and final roster until native
+and downstream reconciliation is validated. Later discoveries belong to
+incremental acquisition from the original inventory start with the chosen overlap.

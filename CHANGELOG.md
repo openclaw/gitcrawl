@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fetch full Octopool inventories in bounded, ordered page windows while retaining canonical identities, validating repository links, and rejecting incomplete page results.
+- Stream full Octopool inventories through authentic GitHub cursors and a private SQLite page/completion checkpoint, overlapping acquisition with bounded native hydration and resuming without refetching completed pages.
 
 - Add explicit discovered-ID reconciliation, bounded parallel acquisition with serial native writes, and parent freshness checks for long-running Octopool hydration.
 
