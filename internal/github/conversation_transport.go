@@ -16,30 +16,34 @@ type conversationTransportError struct{ cause error }
 
 func (e *conversationTransportError) Unwrap() error { return e.cause }
 func (e *conversationTransportError) Error() string {
+	return "Octopool GraphQL request failed: " + transportFailureReason(e.cause)
+}
+
+func transportFailureReason(cause error) string {
 	reason := "transport failure"
 	var dns *net.DNSError
 	var certificate *tls.CertificateVerificationError
 	var network net.Error
 	var errno syscall.Errno
 	switch {
-	case errors.Is(e.cause, context.Canceled):
+	case errors.Is(cause, context.Canceled):
 		reason = "context canceled"
-	case errors.Is(e.cause, context.DeadlineExceeded):
+	case errors.Is(cause, context.DeadlineExceeded):
 		reason = "context deadline exceeded"
-	case errors.As(e.cause, &dns):
+	case errors.As(cause, &dns):
 		reason = "DNS lookup failed"
-	case errors.As(e.cause, &certificate):
+	case errors.As(cause, &certificate):
 		reason = "TLS certificate verification failed"
-	case errors.As(e.cause, &errno):
+	case errors.As(cause, &errno):
 		reason = errno.Error()
-	case errors.Is(e.cause, io.ErrUnexpectedEOF):
+	case errors.Is(cause, io.ErrUnexpectedEOF):
 		reason = "unexpected EOF"
-	case errors.Is(e.cause, io.EOF):
+	case errors.Is(cause, io.EOF):
 		reason = "EOF"
-	case errors.As(e.cause, &network) && network.Timeout():
+	case errors.As(cause, &network) && network.Timeout():
 		reason = "network timeout"
 	default:
-		reason = fmt.Sprintf("transport failure (%T)", e.cause)
+		reason = fmt.Sprintf("transport failure (%T)", cause)
 	}
-	return "Octopool GraphQL request failed: " + reason
+	return reason
 }

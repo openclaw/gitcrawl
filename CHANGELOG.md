@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show bounded transport failure reasons in REST Octopool acquisition errors, matching GraphQL diagnostics without exposing private relay details or changing retry behavior.
+
 - Show known, bounded Octopool HTTP 424 fallback reasons while keeping private relay messages and unknown diagnostics hidden.
 
 - Preserve REST Octopool transport error causes for timeout and cancellation classification without exposing private diagnostics.

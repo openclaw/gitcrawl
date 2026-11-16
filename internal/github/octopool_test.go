@@ -104,13 +104,19 @@ func TestOctopoolNumericPaginationIsBoundToVerifiedRepository(t *testing.T) {
 }
 
 func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing.T) {
-	for _, cause := range []error{
-		context.Canceled,
-		context.DeadlineExceeded,
-		&net.OpError{Op: "private-operation", Net: "private-network", Err: os.ErrDeadlineExceeded},
-		syscall.ECONNRESET,
-		errors.New("private-token-and-response"),
+	for _, test := range []struct {
+		cause  error
+		reason string
+	}{
+		{context.Canceled, "context canceled"},
+		{context.DeadlineExceeded, "context deadline exceeded"},
+		{&net.OpError{Op: "private-operation", Net: "private-network", Err: os.ErrDeadlineExceeded}, "network timeout"},
+		{syscall.ECONNRESET, syscall.ECONNRESET.Error()},
+		{io.EOF, "EOF"},
+		{io.ErrUnexpectedEOF, "unexpected EOF"},
+		{errors.New("private-token-and-response"), "transport failure (*url.Error)"},
 	} {
+		cause := test.cause
 		transport := &octopoolTransport{
 			endpoint: "https://private.invalid/relay", pool: "fixture", token: "private-token",
 			repositoryPath: "/repos/fixture/repo",
@@ -130,8 +136,13 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 		if errors.As(cause, &want) && (!errors.As(err, &got) || got.Timeout() != want.Timeout()) {
 			t.Fatalf("lost network classification: %v", err)
 		}
-		if err.Error() != "Octopool relay request failed; no direct GitHub fallback" {
-			t.Fatalf("private diagnostics exposed: %s", err)
+		if want := "Octopool relay request failed: " + test.reason + "; no direct GitHub fallback"; err.Error() != want {
+			t.Fatalf("transport diagnosis: got %q, want %q", err, want)
+		}
+		for _, secret := range []string{"private.invalid", "private-token", "private-operation", "private-network"} {
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("private diagnostics exposed: %s", err)
+			}
 		}
 	}
 }

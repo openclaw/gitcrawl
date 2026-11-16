@@ -59,7 +59,7 @@ type octopoolTransportError struct{ cause error }
 
 func (e *octopoolTransportError) Unwrap() error { return e.cause }
 func (e *octopoolTransportError) Error() string {
-	return "Octopool relay request failed; no direct GitHub fallback"
+	return "Octopool relay request failed: " + transportFailureReason(e.cause) + "; no direct GitHub fallback"
 }
 
 func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error) {
