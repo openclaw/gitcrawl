@@ -54,6 +54,55 @@ type octopoolTransport struct {
 	repositoryID                          string
 }
 
+type octopoolReadBudgetKey struct{}
+type octopoolReadBudget struct{ posts int }
+
+// REST's outer content retry loop shares this allowance. A storage rejection
+// followed by a 502 must not multiply the three-post budget. Callers admit only
+// repository GETs or the internally constructed conversation GraphQL query.
+func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) {
+	ctx := request.Context()
+	budget, _ := ctx.Value(octopoolReadBudgetKey{}).(*octopoolReadBudget)
+	if budget == nil {
+		budget = &octopoolReadBudget{}
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		budget.posts++
+		response, err := t.client.Do(request)
+		if err != nil || response.StatusCode != http.StatusFailedDependency {
+			return response, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, (16<<10)+1))
+		response.Body.Close()
+		if readErr != nil {
+			body = nil
+		}
+		response.Body = io.NopCloser(bytes.NewReader(body))
+		if readErr != nil || octopoolRejectionReason(body) != "relay_storage_unavailable" || budget.posts >= 3 || request.GetBody == nil {
+			return response, nil
+		}
+		wait := 250 * time.Millisecond * time.Duration(1<<(budget.posts-1))
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			return response, nil
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		request = request.Clone(ctx)
+		request.Body, err = request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
 // Preserve transport classification without exposing private URLs or diagnostics.
 type octopoolTransportError struct{ cause error }
 
@@ -96,7 +145,7 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	relayRequest.Header.Set("Authorization", "Bearer "+t.token)
 	relayRequest.Header.Set("Content-Type", "application/json")
-	response, err := t.client.Do(relayRequest)
+	response, err := t.read(relayRequest)
 	if err != nil {
 		return nil, &octopoolTransportError{cause: err}
 	}
@@ -173,6 +222,16 @@ func octopoolRejectionBody(response *http.Response) []byte {
 	if err != nil || len(body) > limit {
 		return []byte(generic)
 	}
+	if reason := octopoolRejectionReason(body); reason != "" {
+		return []byte(generic + " (fallback_local: " + reason + ")")
+	}
+	return []byte(generic)
+}
+
+func octopoolRejectionReason(body []byte) string {
+	if len(body) > 16<<10 {
+		return ""
+	}
 	var failure struct {
 		Error struct {
 			Code    string `json:"code"`
@@ -182,7 +241,7 @@ func octopoolRejectionBody(response *http.Response) []byte {
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &failure) != nil || failure.Error.Code != "fallback_local" {
-		return []byte(generic)
+		return ""
 	}
 	reason := failure.Error.Details.Reason
 	switch reason {
@@ -192,9 +251,9 @@ func octopoolRejectionBody(response *http.Response) []byte {
 		"github_rate_limited", "github_identity_depleted", "github_identity_forbidden",
 		"github_app_repo_token_unavailable", "local_credentials_required", "web_only_unavailable",
 		"pagination_exhausted":
-		return []byte(generic + " (fallback_local: " + reason + ")")
+		return reason
 	default:
-		return []byte(generic)
+		return ""
 	}
 }
 

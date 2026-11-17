@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retry typed Octopool relay storage failures for read-only REST and conversation GraphQL acquisition, with at most three relay requests per read and cancellation-aware bounded backoff. Other relay rejections remain terminal; no direct GitHub fallback is used.
+
 - Preserve the same bounded, allowlisted relay rejection reasons in Octopool GraphQL acquisition as REST, without exposing private details or changing retries.
 
 - Avoid exhausting Octopool acquisition retries when a PR and its unchanged REST backing issue have different update timestamps; retain fresh parent metadata and retry actual REST changes.

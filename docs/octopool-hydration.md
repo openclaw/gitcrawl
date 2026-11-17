@@ -25,6 +25,13 @@ commas. Duplicate numbers are rejected. `OCTOPOOL_TOKEN`, `OCTOPOOL_POOL` (defau
 `maintainers`), and `OCTOPOOL_URL` (default `https://octopool.dev`) select the
 existing relay. No direct GitHub fallback exists.
 
+REST and conversation GraphQL reads retry only HTTP 424 `fallback_local`
+rejections whose typed reason is `relay_storage_unavailable`, waiting 250 ms
+then 500 ms. Each read has at most three relay requests, shared with existing
+REST content retries, and never extends its context deadline. Other relay
+rejection reasons remain terminal. Persistent failures preserve their bounded
+diagnostic and leave the checkpoint available for a later controlled resume.
+
 Large invocations stream a fresh REST issue inventory through a private SQLite
 checkpoint. A repair that fits in one acquisition window (at most 25 numbers)
 fetches only its selected issue records unless a checkpoint is supplied. REST

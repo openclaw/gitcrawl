@@ -411,7 +411,7 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 	}
 	request.Header.Set("Authorization", "Bearer "+c.relay.token)
 	request.Header.Set("Content-Type", "application/json")
-	response, err := c.relay.client.Do(request)
+	response, err := c.relay.read(request)
 	if err != nil {
 		return nil, &conversationTransportError{cause: err}
 	}

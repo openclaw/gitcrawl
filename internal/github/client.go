@@ -553,6 +553,11 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, re
 }
 
 func (c *Client) doWithToken(ctx context.Context, method, path string, body io.Reader, reporter Reporter, selectedToken *string) (*http.Response, error) {
+	var relayBudget *octopoolReadBudget
+	if _, ok := c.httpClient.Transport.(*octopoolTransport); ok {
+		relayBudget = &octopoolReadBudget{}
+		ctx = context.WithValue(ctx, octopoolReadBudgetKey{}, relayBudget)
+	}
 	var bodyBytes []byte
 	if body != nil {
 		var err error
@@ -588,7 +593,7 @@ func (c *Client) doWithToken(ctx context.Context, method, path string, body io.R
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		if attempt >= maxAttempts {
+		if attempt >= maxAttempts || relayBudget != nil && relayBudget.posts >= 3 {
 			return nil, err
 		}
 		wait, limited := rateLimitWait(err)
