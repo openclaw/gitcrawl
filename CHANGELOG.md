@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add read-only `delivery verify-report` to compare all seven full current API tables with a frozen qualified outbox, using canonical typed inventory hashes, one publication pin and explicit row/byte/deadline bounds. No capture, delivery or source mutation runs.
+
 - Retry typed Octopool relay storage failures for read-only REST and conversation GraphQL acquisition, with at most three relay requests per read and cancellation-aware bounded backoff. Other relay rejections remain terminal; no direct GitHub fallback is used.
 
 - Preserve the same bounded, allowlisted relay rejection reasons in Octopool GraphQL acquisition as REST, without exposing private details or changing retries.
