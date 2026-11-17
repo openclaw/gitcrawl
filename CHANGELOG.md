@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Avoid exhausting Octopool acquisition retries when a PR and its unchanged REST backing issue have different update timestamps; retain fresh parent metadata and retry actual REST changes.
+
 - Show bounded transport failure reasons in REST Octopool acquisition errors, matching GraphQL diagnostics without exposing private relay details or changing retry behavior.
 
 - Show known, bounded Octopool HTTP 424 fallback reasons while keeping private relay messages and unknown diagnostics hidden.

@@ -100,10 +100,11 @@ and only successfully persisted batches produce sync results. An acquisition
 failure prevents that window from writing; previous successful windows remain.
 
 Each batch compares GraphQL parent update timestamps with its REST inventory.
-Changed parents are refreshed through the same pool, their immutable identities
-are checked, and the batch is queried again. Three changing attempts fail visibly.
-This prevents an hours-old inventory row from accompanying newly fetched child
-content; it does not claim an atomic snapshot across GitHub requests.
+A mismatch refreshes the REST parent through the same pool and checks its immutable
+identity. The batch is queried again only if the REST timestamp changed; a PR and
+its backing issue can have different timestamps. Three changing REST attempts fail
+visibly. This prevents an hours-old inventory row from accompanying newly fetched
+child content; it does not claim an atomic snapshot across GitHub requests.
 
 The launch controller must check and monitor disk headroom for the native
 archive, PostgreSQL import, and backup to coexist. Keep the operator's chosen

@@ -224,7 +224,7 @@ func TestTargetedInventoryAvoidsRepositoryTraversal(t *testing.T) {
 }
 
 func TestPrepareBatchRefreshesChangedParentsWithoutMutatingInventory(t *testing.T) {
-	for _, mode := range []string{"refresh", "identity", "churn"} {
+	for _, mode := range []string{"refresh", "stable mismatch", "invalid timestamp", "identity", "churn"} {
 		t.Run(mode, func(t *testing.T) {
 			node := conversationFixture()
 			node["updatedAt"] = "2026-01-02T00:00:00Z"
@@ -246,7 +246,13 @@ func TestPrepareBatchRefreshesChangedParentsWithoutMutatingInventory(t *testing.
 					if mode == "identity" {
 						id = "124"
 					}
-					body = map[string]any{"id": json.Number(id), "node_id": "PR_fixture", "number": 7, "pull_request": map[string]any{}, "updated_at": node["updatedAt"], "repository_url": "https://api.github.com/repos/fixture/repo"}
+					timestamp := node["updatedAt"]
+					if mode == "stable mismatch" {
+						timestamp = "2026-01-01T00:00:00Z"
+					} else if mode == "invalid timestamp" {
+						timestamp = "invalid"
+					}
+					body = map[string]any{"id": json.Number(id), "node_id": "PR_fixture", "number": 7, "pull_request": map[string]any{}, "updated_at": timestamp, "title": "fresh parent", "repository_url": "https://api.github.com/repos/fixture/repo"}
 				} else {
 					t.Errorf("unexpected path %s", request.Path)
 				}
@@ -262,6 +268,10 @@ func TestPrepareBatchRefreshesChangedParentsWithoutMutatingInventory(t *testing.
 			if mode == "refresh" {
 				if err != nil || calls != 3 || batch.issues[7]["updated_at"] != "2026-01-02T00:00:00Z" {
 					t.Fatalf("refresh failed: calls=%d err=%v", calls, err)
+				}
+			} else if mode == "stable mismatch" {
+				if err != nil || calls != 2 || batch.issues[7]["title"] != "fresh parent" || len(batch.conversations[7].Comments) != 1 {
+					t.Fatalf("stable timestamp mismatch failed: calls=%d err=%v", calls, err)
 				}
 			} else if err == nil {
 				t.Fatalf("accepted %s", mode)

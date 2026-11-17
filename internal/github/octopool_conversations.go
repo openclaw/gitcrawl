@@ -159,7 +159,7 @@ func (c *OctopoolConversations) Prepare(ctx context.Context, numbers []int, repo
 			return err
 		}
 	}
-	return errors.New("conversation parent kept changing across three acquisition attempts")
+	return errors.New("REST conversation parent kept changing across three acquisition attempts")
 }
 
 // PrepareBatch keeps each acquisition worker's refreshed parent and child maps
@@ -248,8 +248,14 @@ func (c *OctopoolConversations) prepareOnce(ctx context.Context, numbers []int, 
 			if !ok || got != n || fmt.Sprint(old["id"]) != fmt.Sprint(fresh["id"]) || old["node_id"] != fresh["node_id"] || oldPull != freshPull || !strings.EqualFold(historyString(fresh["repository_url"]), "https://api.github.com/repos/"+c.repository) {
 				return fmt.Errorf("REST parent identity changed for #%d", n)
 			}
+			freshTime, err := time.Parse(time.RFC3339Nano, historyString(fresh["updated_at"]))
+			if err != nil {
+				return fmt.Errorf("invalid refreshed REST update timestamp for #%d", n)
+			}
 			c.issues[n] = fresh
-			refreshed = true
+			// A PR's GraphQL timestamp can differ from its backing issue's
+			// timestamp. Retry only when REST confirms the parent changed.
+			refreshed = refreshed || !freshTime.Equal(restTime)
 		}
 	}
 	if refreshed {
