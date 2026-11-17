@@ -1,6 +1,8 @@
 package github
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +52,16 @@ func TestOctopoolRelayRejectionOnlyExposesKnown424Reason(t *testing.T) {
 			if response.StatusCode != test.status || response.Header.Get("Retry-After") != "17" || response.Header.Get("X-RateLimit-Remaining") != "3" {
 				t.Fatal("relay status or retry headers changed")
 			}
+			conversations, err := NewOctopoolConversations(server.URL, "fixture", "private-token-canary", "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = conversations.requestConversations(context.Background(), "query { viewer { login } }", nil, nil)
+			want := fmt.Sprintf("Octopool GraphQL relay status %d: %s", test.status, test.want)
+			if err == nil || err.Error() != want {
+				t.Fatalf("GraphQL rejection = %v, want %q", err, want)
+			}
+
 		})
 	}
 }

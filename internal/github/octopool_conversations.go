@@ -417,7 +417,7 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Octopool GraphQL relay status %d; no direct fallback", response.StatusCode)
+		return nil, fmt.Errorf("Octopool GraphQL relay status %d: %s", response.StatusCode, octopoolRejectionBody(response))
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (3<<20)+1))
 	if err != nil {
