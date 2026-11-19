@@ -33,6 +33,7 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 	command := args[0]
 	staging := command == "stage-changes" || command == "cycle"
 	sending := command == "deliver-changes" || command == "cycle"
+	verifying := command == "verify-report"
 	fs := flag.NewFlagSet("delivery "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	outboxPath := fs.String("outbox", "", "explicit private outbox path")
@@ -58,7 +59,7 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 		fs.Int64Var(&maxLookups, "max-lookup-rows", 0, "positive dependency lookup bound")
 		fs.Int64Var(&maxNativeBytes, "max-native-bytes", 0, "positive native capture work byte bound")
 	}
-	if sending {
+	if sending || verifying {
 		fs.StringVar(&tokenEnv, "token-env", "", "explicit service-token environment variable name")
 	}
 	if err := fs.Parse(args[1:]); err != nil {
@@ -89,14 +90,27 @@ func (a *App) runReportDelivery(ctx context.Context, args []string) error {
 	if staging && (maxJournal <= 0 || maxKeys <= 0 || maxLookups <= 0 || maxNativeBytes <= 0) {
 		return usageErr(errors.New("stage-changes requires positive journal, affected-key, lookup-row, and native-byte bounds"))
 	}
-	if sending && (strings.TrimSpace(tokenEnv) == "" || strings.ContainsAny(tokenEnv, "=\x00")) {
-		return usageErr(errors.New("deliver-changes requires an explicit --token-env name"))
+	if (sending || verifying) && (strings.TrimSpace(tokenEnv) == "" || strings.ContainsAny(tokenEnv, "=\x00")) {
+		return usageErr(errors.New("delivery reader/sender requires an explicit --token-env name"))
+	}
+	if verifying && (maxRows <= 0 || maxEncodedBytes <= 0) {
+		return usageErr(errors.New("verify-report requires positive --max-rows and --max-encoded-bytes"))
 	}
 	a.applyCommandJSON(*jsonOut)
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if verifying {
+		result, err := remotedelivery.VerifyReport(ctx, *outboxPath, remote.EnvTokenProvider{Name: tokenEnv}, nil, remotedelivery.VerificationLimits{MaxRows: maxRows, MaxBytes: maxEncodedBytes})
+		if err != nil {
+			return reportDeliveryCommandError(err)
+		}
+		return a.writeOutput("delivery", struct {
+			Status string `json:"status"`
+			remotedelivery.ReportVerification
+		}{Status: "verified", ReportVerification: result}, false)
 	}
 	if command == "report-status" {
 		s, err := remotedelivery.ReadReportOutboxState(ctx, *outboxPath)
@@ -239,7 +253,7 @@ func executeReportDelivery(ctx context.Context, command string, request reportDe
 }
 
 func reportDeliveryCommandError(err error) error {
-	for _, known := range []error{remotedelivery.ErrPrivateChanges, remotedelivery.ErrPrivateChangesLimit, remotedelivery.ErrReportDelivery, store.ErrThreadExcluded} {
+	for _, known := range []error{remotedelivery.ErrPrivateChanges, remotedelivery.ErrPrivateChangesLimit, remotedelivery.ErrReportDelivery, remotedelivery.ErrReportVerification, remotedelivery.ErrReportVerificationLimit, store.ErrThreadExcluded} {
 		if errors.Is(err, known) {
 			return known
 		}

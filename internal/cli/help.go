@@ -236,6 +236,7 @@ Usage:
   gitcrawl delivery status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
   gitcrawl delivery report-status --outbox PATH --timeout D [--json]
+  gitcrawl delivery verify-report --outbox PATH --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
   gitcrawl delivery upgrade --outbox PATH --to-version 2 --max-rows N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery upgrade --outbox PATH --to-version 3 --timeout D [--json]
   gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
@@ -265,6 +266,12 @@ schema 16 and an armed change
 contract; no config discovery, automatic migration, provider sync,
 release check, or credential helper runs. stage-seed exclusively creates a new outbox;
 failed owned files are retained. status opens the current outbox read-only.
+verify-report compares all seven full current API tables with a frozen qualified
+schema2/3 outbox under one publication pin. It requires no pending capture or
+delivery and checks complete typed rows, not body excerpts. It opens no native
+source and writes no application state. Its byte bound covers total response
+bytes and retained compact key/hash bytes; each response is at most 8 MiB.
+Success proves current-row parity only, not acquisition freshness or history.
 deliver sends saved bytes only to the saved destination and checks current native
 policy after lazy service-token acquisition. There is no automatic retry.
 Output contains custody/count fields only; bytes counts captured native scalar

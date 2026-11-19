@@ -416,6 +416,7 @@ the source journal, or builds native indexes.
 
 ```text
 gitcrawl delivery report-status --outbox PATH --timeout D [--json]
+gitcrawl delivery verify-report --outbox PATH --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
 gitcrawl delivery upgrade --outbox PATH --to-version 2 --max-rows N --max-encoded-bytes N --timeout D [--json]
 gitcrawl delivery upgrade --outbox PATH --to-version 3 --timeout D [--json]
 gitcrawl delivery stage-changes --db PATH --outbox PATH --max-journal-records N --max-affected-keys N --max-lookup-rows N --max-rows N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--json]
@@ -428,6 +429,28 @@ compact digest/layout, receiver cursor/sequence and active capture ID. It does
 not open the native source, acquire a token, or write application state. Normal
 SQLite WAL reader coordination may still create sidecars. Receiver sequence is
 an exact decimal string; the active capture has not yet replaced that baseline.
+
+`verify-report` compares a frozen qualified schema2/3 outbox with all seven
+complete current API tables. Freeze capture and delivery for the whole run;
+pending local deliveries and remote captures fail admission. The command
+recomputes the compact inventory digest, checks publication/native/binding and
+receiver identity, and pins every page to that publication. Canonical typed
+keys and full row hashes distinguish NULL, empty text and signed 64-bit values;
+missing, extra, duplicate or changed rows fail. Cursor loops, changed snapshots,
+out-of-order sequence/ordinal coordinates and changed binding metadata also fail.
+The outbox's physical identity, SQLite data version and qualified state must
+remain unchanged through the final check. Normal read-only SQLite coordination
+may create WAL reader sidecars; no application state is written.
+
+`--max-rows` bounds the complete inventory and returned rows.
+`--max-encoded-bytes` independently bounds retained compact key/hash bytes and
+the sum of actual HTTP response bytes, including metadata, with at most 8 MiB
+per response. The command resolves only the explicitly named reader token and
+queries only the saved destination. It never opens the native source, performs
+sync or delivery, or retries failed requests. JSON success includes the pinned
+snapshot, native token, inventory digest, receiver sequence and verified counts.
+This proves full current-row parity, not acquisition freshness, revision/history
+coverage, or permission to retire preserved stores.
 
 `upgrade` performs one explicitly selected transition. Version2 requires a fully
 receipted seed, validates every saved request/receipt, and builds its compact
