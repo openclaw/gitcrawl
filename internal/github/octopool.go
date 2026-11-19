@@ -225,11 +225,6 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 // Only fixed fallback reason literals from Octopool's error contract may reach
 // logs. Messages, request IDs, arbitrary details and future codes stay private.
-func octopoolRejectionBody(response *http.Response) []byte {
-	body, _ := octopoolRejection(response)
-	return body
-}
-
 func octopoolRejection(response *http.Response) ([]byte, string) {
 	const generic = "Octopool relay rejected the request; no direct GitHub fallback"
 	if response.StatusCode != http.StatusFailedDependency {
