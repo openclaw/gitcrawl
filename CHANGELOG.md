@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover oversized Octopool conversation responses with a compact identity/freshness query and complete same-pool REST pagination, without changing other rejection behavior or clipping content.
+
 - Retry typed Octopool relay storage failures for read-only REST and conversation GraphQL acquisition, with at most three relay requests per read and cancellation-aware bounded backoff. Other relay rejections remain terminal; no direct GitHub fallback is used.
 
 - Preserve the same bounded, allowlisted relay rejection reasons in Octopool GraphQL acquisition as REST, without exposing private details or changing retries.

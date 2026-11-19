@@ -28,8 +28,9 @@ existing relay. No direct GitHub fallback exists.
 REST and conversation GraphQL reads retry only HTTP 424 `fallback_local`
 rejections whose typed reason is `relay_storage_unavailable`, waiting 250 ms
 then 500 ms. Each read has at most three relay requests, shared with existing
-REST content retries, and never extends its context deadline. Other relay
-rejection reasons remain terminal. Persistent failures preserve their bounded
+REST content retries, and never extends its context deadline. Conversation
+GraphQL handles the exact `github_response_too_large` reason as described below;
+other relay rejection reasons remain terminal. Persistent failures preserve their bounded
 diagnostic and leave the checkpoint available for a later controlled resume.
 
 Large invocations stream a fresh REST issue inventory through a private SQLite
@@ -47,9 +48,16 @@ issue comments, submitted reviews, and inline comments through the
 repository-scoped GraphQL relay. Inline comments are collected from
 both reviews and review threads, including empty bodies. Larger conversations
 fall back to the existing fully paginated REST readers through the same pool.
+If Octopool rejects the response with HTTP 424 `fallback_local` and the exact
+`github_response_too_large` reason, or the response exceeds the local 3 MiB
+GraphQL envelope limit, the batch first requests only GraphQL identity and
+update timestamps. After the same identity and freshness checks, it uses
+those full REST readers for every child collection. Full thread fields remain
+owned by the REST inventory; no body or child collection is clipped.
 The tool rejects incomplete GraphQL responses, unqualified relay identities,
-stale responses, conflicting duplicates, and moved or mismatched nodes. A large
-response fails with no batch write; reduce the batch size before retrying.
+stale responses, conflicting duplicates, and moved or mismatched nodes. A compact
+query or REST failure leaves the batch unwritten; other response-size limits
+remain unchanged.
 
 Native sync persists each complete conversation with its existing exclusion,
 observation ordering, membership, raw JSON, and revision rules. Only the current

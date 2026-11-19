@@ -103,43 +103,146 @@ func TestOctopoolConversationRejectsUnqualifiedResponses(t *testing.T) {
 	}
 }
 func TestOctopoolConversationFallsBackToPaginatedPoolREST(t *testing.T) {
-	node := conversationFixture()
-	historyMap(historyMap(node["comments"])["pageInfo"])["hasNextPage"] = true
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Path  string              `json:"path"`
-			Query map[string][]string `json:"query"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&request)
-		paths = append(paths, request.Path)
-		var body any
-		headers := map[string]string{}
-		if request.Path == "/graphql" {
-			body = map[string]any{"data": map[string]any{"repository": map[string]any{"n0": node}}}
-		} else if strings.HasSuffix(request.Path, "/issues/7/comments") {
-			if len(request.Query["page"]) == 0 {
-				body = []any{map[string]any{"id": 1, "body": "page one"}}
-				headers["link"] = `<https://api.github.com/repos/fixture/repo/issues/7/comments?page=2>; rel="next"`
-			} else {
-				body = []any{map[string]any{"id": 2, "body": ""}}
+	for _, mode := range []string{"incomplete", "oversized", "local oversized", "oversized wrong identity", "oversized REST failure"} {
+		t.Run(mode, func(t *testing.T) {
+			node := conversationFixture()
+			historyMap(historyMap(node["comments"])["pageInfo"])["hasNextPage"] = true
+			var paths []string
+			graphqlCalls := 0
+			fullBody := strings.Repeat("full λ body ", 1000)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Pool    string              `json:"pool"`
+					Path    string              `json:"path"`
+					Query   map[string][]string `json:"query"`
+					GraphQL struct {
+						Query string `json:"query"`
+					} `json:"graphql"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if request.Pool != "fixture" || r.Header.Get("Authorization") != "Bearer fixture-token" {
+					t.Error("request escaped the selected pool identity")
+				}
+				paths = append(paths, request.Path)
+				var body any
+				headers := map[string]string{}
+				if request.Path == "/graphql" {
+					graphqlCalls++
+					if mode == "local oversized" && graphqlCalls == 1 {
+						large := conversationFixture()
+						historyNodes(large, "comments")[0]["body"] = strings.Repeat("x", 3<<20)
+						_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "text", "body": conversationResponseText(t, large, nil), "relay": map[string]any{"route_kind": "graphql_read", "cache": "miss"}, "identity": map[string]any{"kind": "github_app"}})
+						return
+					}
+					if mode != "incomplete" && graphqlCalls == 1 {
+						w.WriteHeader(http.StatusFailedDependency)
+						_, _ = w.Write([]byte(`{"error":{"code":"fallback_local","details":{"reason":"github_response_too_large"}}}`))
+						return
+					}
+					if mode != "incomplete" {
+						// The recovery response has identity only, never a clipped child set.
+						if strings.Contains(request.GraphQL.Query, "comments") || strings.Contains(request.GraphQL.Query, "reviews") || strings.Contains(request.GraphQL.Query, "body") {
+							t.Error("recovery still requests child content")
+						}
+						delete(node, "comments")
+						delete(node, "reviews")
+						delete(node, "reviewThreads")
+						if mode == "oversized wrong identity" {
+							node["id"] = "PR_other"
+						}
+					}
+					body = map[string]any{"data": map[string]any{"repository": map[string]any{"n0": node}}}
+				} else if strings.HasSuffix(request.Path, "/issues/7/comments") {
+					if len(request.Query["page"]) == 0 {
+						body = []any{map[string]any{"id": json.Number("9007199254740993"), "body": fullBody}}
+						headers["link"] = `<https://api.github.com/repos/fixture/repo/issues/7/comments?page=2>; rel="next"`
+					} else {
+						body = []any{map[string]any{"id": 2, "body": ""}}
+					}
+				} else if strings.HasSuffix(request.Path, "/pulls/7/reviews") {
+					body = []any{map[string]any{"id": 3, "body": fullBody, "state": "APPROVED"}}
+				} else if strings.HasSuffix(request.Path, "/pulls/7/comments") {
+					if mode == "oversized REST failure" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					body = []any{map[string]any{"id": 4, "body": fullBody, "diff_hunk": fullBody}}
+				} else {
+					t.Errorf("unexpected route %s", request.Path)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "headers": headers, "body": body, "relay": map[string]any{"route_kind": "graphql_read", "cache": "miss"}, "identity": map[string]any{"kind": "github_app"}})
+			}))
+			defer server.Close()
+			client, err := NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
 			}
-		} else {
-			body = []any{}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "headers": headers, "body": body, "relay": map[string]any{"route_kind": "graphql_read", "cache": "miss"}, "identity": map[string]any{"kind": "github_app"}})
-	}))
-	defer server.Close()
-	client, err := NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
-	if err != nil {
-		t.Fatal(err)
+			client.issues[7] = map[string]any{"node_id": "PR_fixture", "updated_at": "2026-01-01T00:00:00.000Z", "pull_request": map[string]any{}}
+			err = client.Prepare(context.Background(), []int{7}, nil)
+			if mode == "oversized wrong identity" || mode == "oversized REST failure" {
+				if err == nil || len(client.conversations) != 0 {
+					t.Fatal("published an unqualified or incomplete conversation")
+				}
+				expected := 6
+				if mode == "oversized wrong identity" {
+					expected = 2
+				}
+				if len(paths) != expected {
+					t.Fatalf("wrong failure boundary: %v", paths)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := client.conversations[7]
+			if len(item.Comments) != 2 || fmt.Sprint(item.Comments[0]["id"]) != "9007199254740993" || item.Comments[0]["body"] != fullBody || item.Comments[1]["body"] != "" || len(item.Reviews) != 1 || item.Reviews[0]["body"] != fullBody || len(item.ReviewComments) != 1 || item.ReviewComments[0]["body"] != fullBody || item.ReviewComments[0]["diff_hunk"] != fullBody {
+				t.Fatal("fallback lost complete child content or exact identities")
+			}
+			expected := 5
+			if mode != "incomplete" {
+				expected++
+			}
+			if len(paths) != expected {
+				t.Fatalf("incomplete fallback: %v", paths)
+			}
+		})
 	}
-	client.issues[7] = map[string]any{"node_id": "PR_fixture", "updated_at": "2026-01-01T00:00:00.000Z", "pull_request": map[string]any{}}
-	if err := client.Prepare(context.Background(), []int{7}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if len(client.conversations[7].Comments) != 2 || len(paths) != 5 {
-		t.Fatalf("incomplete fallback: %v %v", client.conversations[7], paths)
+}
+
+func TestOctopoolConversationDoesNotRecoverOtherRejections(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"unauthorized", http.StatusUnauthorized, `{"error":{"code":"fallback_local","details":{"reason":"github_response_too_large"}}}`},
+		{"generic dependency", http.StatusFailedDependency, `{}`},
+		{"denied", http.StatusFailedDependency, `{"error":{"code":"fallback_local","details":{"reason":"owner_denied"}}}`},
+		{"wrong code", http.StatusFailedDependency, `{"error":{"code":"other","details":{"reason":"github_response_too_large"}}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			client, err := NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.issues[7] = map[string]any{"node_id": "PR_fixture"}
+			if err := client.Prepare(context.Background(), []int{7}, nil); err == nil {
+				t.Fatal("accepted relay rejection")
+			}
+			if calls != 1 || len(client.conversations) != 0 {
+				t.Fatal("retried or published rejected acquisition")
+			}
+		})
 	}
 }
 func TestProjectConversationRetainsEmptyAndRejectsConflictingDuplicates(t *testing.T) {

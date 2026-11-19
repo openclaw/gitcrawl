@@ -152,6 +152,10 @@ const conversationFields = `__typename id number updatedAt repository { nameWith
 // Large conversations use the existing fully paginated same-pool REST reader.
 var errConversationParentRefreshed = errors.New("conversation parent refreshed")
 
+// Only response-size failures permit a smaller query. Authentication and
+// other dependency failures must not select another acquisition path.
+type conversationResponseTooLargeError struct{ error }
+
 func (c *OctopoolConversations) Prepare(ctx context.Context, numbers []int, reporter Reporter) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		err := c.prepareOnce(ctx, numbers, reporter)
@@ -217,7 +221,20 @@ func (c *OctopoolConversations) prepareOnce(ctx context.Context, numbers []int, 
 	}
 	query.WriteString(" } } fragment ConversationIssue on Issue { __typename id number updatedAt repository { nameWithOwner } " + conversationComments + " } fragment ConversationPull on PullRequest { " + conversationFields + " }")
 	owner, repo, _ := strings.Cut(c.repository, "/")
-	data, err := c.requestConversations(ctx, query.String(), map[string]any{"owner": owner, "repo": repo}, reporter)
+	variables := map[string]any{"owner": owner, "repo": repo}
+	data, err := c.requestConversations(ctx, query.String(), variables, reporter)
+	var oversized *conversationResponseTooLargeError
+	if errors.As(err, &oversized) {
+		// Keep identity/freshness validation before the existing complete REST
+		// reader; omit child connections rather than accepting clipped content.
+		query.Reset()
+		query.WriteString(`query($owner:String!,$repo:String!) { repository(owner:$owner,name:$repo) {`)
+		for i, n := range numbers {
+			fmt.Fprintf(&query, " n%d: issueOrPullRequest(number:%d) { __typename ... on Issue { id number updatedAt repository { nameWithOwner } } ... on PullRequest { id number updatedAt repository { nameWithOwner } } }", i, n)
+		}
+		query.WriteString(" } }")
+		data, err = c.requestConversations(ctx, query.String(), variables, reporter)
+	}
 	if err != nil {
 		return err
 	}
@@ -417,14 +434,19 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Octopool GraphQL relay status %d: %s", response.StatusCode, octopoolRejectionBody(response))
+		body, reason := octopoolRejection(response)
+		err := fmt.Errorf("Octopool GraphQL relay status %d: %s", response.StatusCode, body)
+		if response.StatusCode == http.StatusFailedDependency && reason == "github_response_too_large" {
+			return nil, &conversationResponseTooLargeError{err}
+		}
+		return nil, err
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (3<<20)+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(raw) > 3<<20 {
-		return nil, errors.New("Octopool GraphQL response too large; reduce batch size")
+		return nil, &conversationResponseTooLargeError{errors.New("Octopool GraphQL response exceeds 3 MiB")}
 	}
 	var envelope struct {
 		Status       int               `json:"status"`
