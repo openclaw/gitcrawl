@@ -154,3 +154,10 @@ already exist; omit this optional output on resume if it was already produced.
 Preserve the checkpoint, receipts and final roster until native
 and downstream reconciliation is validated. Later discoveries belong to
 incremental acquisition from the original inventory start with the chosen overlap.
+
+The operator-only `gitcrawl-hydrate` exits with status 75 when every failed
+acquisition in its window exhausted all three Octopool attempts on connection
+resets. Its supervisor may resume the same durable checkpoint after that status.
+Authentication, quota, storage, data, cancellation, deadline, and mixed failures
+retain status 1; ordinary `gitcrawl` exit behavior is unchanged. A canceled sibling
+is not another failure, but external cancellation always prevents status 75.

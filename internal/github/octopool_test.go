@@ -114,6 +114,7 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 		{&net.OpError{Op: "private-operation", Net: "private-network", Err: os.ErrDeadlineExceeded}, "network timeout"},
 		{syscall.ECONNRESET, syscall.ECONNRESET.Error()},
 		{syscall.EPIPE, syscall.EPIPE.Error()},
+		{errors.Join(syscall.ECONNRESET, errors.New("private-token-and-response")), syscall.ECONNRESET.Error()},
 		{io.EOF, "EOF"},
 		{io.ErrUnexpectedEOF, "unexpected EOF"},
 		{errors.New("private-token-and-response"), "transport failure (*url.Error)"},
@@ -142,6 +143,9 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 		}
 		if !errors.Is(err, cause) {
 			t.Fatalf("lost transport cause: %v", err)
+		}
+		if got := IsExhaustedOctopoolReset(err); got != (cause == syscall.ECONNRESET) {
+			t.Fatalf("unsafe exhausted-reset classification: %t for %v", got, cause)
 		}
 		var want, got net.Error
 		if errors.As(cause, &want) && (!errors.As(err, &got) || got.Timeout() != want.Timeout()) {

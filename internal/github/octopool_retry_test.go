@@ -92,6 +92,13 @@ func TestOctopoolStorageRetryReadPaths(t *testing.T) {
 				if int(calls.Load()) != wantCalls {
 					t.Fatalf("calls=%d want=%d error=%v", calls.Load(), wantCalls, err)
 				}
+				resetOnly := wantCalls == 3
+				for _, status := range sequence[:wantCalls] {
+					resetOnly = resetOnly && status == 0
+				}
+				if IsExhaustedOctopoolReset(err) != resetOnly {
+					t.Fatalf("exhausted reset classification=%t want=%t error=%v", IsExhaustedOctopoolReset(err), resetOnly, err)
+				}
 				if sequence[wantCalls-1] == 200 {
 					if err != nil {
 						t.Fatal(err)
@@ -213,6 +220,9 @@ func TestOctopoolResetHonorsDeadlineAndCancellation(t *testing.T) {
 				err := octopoolRetryRead(t, server.URL, protocol)(ctx)
 				if calls.Load() != 1 || err == nil {
 					t.Fatalf("retried bounded request: calls=%d error=%v", calls.Load(), err)
+				}
+				if IsExhaustedOctopoolReset(err) {
+					t.Fatal("incomplete retry budget classified as exhausted")
 				}
 				if cancelDuringRequest {
 					if !errors.Is(err, context.Canceled) {

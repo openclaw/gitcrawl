@@ -57,7 +57,10 @@ type octopoolTransport struct {
 }
 
 type octopoolReadBudgetKey struct{}
-type octopoolReadBudget struct{ posts int }
+type octopoolReadBudget struct {
+	posts           int
+	hadOtherFailure bool
+}
 
 // REST's outer content retry loop shares this allowance. Storage rejections,
 // connection resets and 502s must not multiply the three-post budget. Callers admit only
@@ -75,10 +78,14 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 		budget.posts++
 		response, err := t.client.Do(request)
 		if err != nil {
+			if !everyErrorLeaf(err, isConnectionReset) {
+				budget.hadOtherFailure = true
+			}
 			if !isConnectionReset(err) {
 				return response, err
 			}
 		} else {
+			budget.hadOtherFailure = true
 			if response.StatusCode != http.StatusFailedDependency {
 				return response, nil
 			}
@@ -93,6 +100,9 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 			}
 		}
 		if budget.posts >= 3 || request.GetBody == nil {
+			if budget.posts >= 3 && request.GetBody != nil && !budget.hadOtherFailure && ctx.Err() == nil {
+				return response, &exhaustedOctopoolReset{cause: err}
+			}
 			return response, err
 		}
 		wait := 250 * time.Millisecond * time.Duration(1<<(budget.posts-1))
@@ -119,6 +129,58 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 func isConnectionReset(err error) bool {
 	return errors.Is(err, syscall.ECONNRESET) ||
 		(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10054)))
+}
+
+// Only the read owner can certify that all three admitted attempts failed with
+// connection resets. Arbitrary wrapped syscall errors do not grant job retries.
+type exhaustedOctopoolReset struct{ cause error }
+
+func (e *exhaustedOctopoolReset) Error() string {
+	return "Octopool connection reset retry budget exhausted"
+}
+func (e *exhaustedOctopoolReset) Unwrap() error { return e.cause }
+
+// IsExhaustedOctopoolReset reports whether every substantive failure carries the
+// read owner's exhausted-reset certificate, including joined worker failures.
+func IsExhaustedOctopoolReset(err error) bool {
+	if _, ok := err.(*exhaustedOctopoolReset); ok {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !IsExhaustedOctopoolReset(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return IsExhaustedOctopoolReset(wrapped.Unwrap())
+	}
+	return false
+}
+
+func everyErrorLeaf(err error, matches func(error) bool) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !everyErrorLeaf(child, matches) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return everyErrorLeaf(wrapped.Unwrap(), matches)
+	}
+	return err != nil && matches(err)
 }
 
 // Retain the HTTP failure while allowing pagination to distinguish the relay's

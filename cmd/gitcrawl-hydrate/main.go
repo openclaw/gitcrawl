@@ -26,6 +26,9 @@ import (
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if github.IsExhaustedOctopoolReset(err) {
+			os.Exit(75)
+		}
 		os.Exit(1)
 	}
 }
@@ -202,8 +205,8 @@ func selectNumbers(requested, available []int, includeDiscovered bool) (selected
 	return
 }
 
-func prepareWindow(ctx context.Context, client *github.OctopoolConversations, batches [][]int, reporter github.Reporter) ([]*github.OctopoolConversations, error) {
-	ctx, cancel := context.WithCancel(ctx)
+func prepareWindow(parent context.Context, client *github.OctopoolConversations, batches [][]int, reporter github.Reporter) ([]*github.OctopoolConversations, error) {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	prepared := make([]*github.OctopoolConversations, len(batches))
 	failures := make([]error, len(batches))
@@ -218,14 +221,12 @@ func prepareWindow(ctx context.Context, client *github.OctopoolConversations, ba
 	}
 	workers.Wait()
 	for index, err := range failures {
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return nil, fmt.Errorf("acquire batch %v: %w", batches[index], err)
+		if err != nil {
+			failures[index] = fmt.Errorf("acquire batch %v: %w", batches[index], err)
 		}
 	}
-	for index, err := range failures {
-		if err != nil {
-			return nil, fmt.Errorf("acquire batch %v: %w", batches[index], err)
-		}
+	if err := preparationFailure(parent, failures); err != nil {
+		return nil, err
 	}
 	return prepared, nil
 }
@@ -272,4 +273,41 @@ func writeSelectedNumbers(path string, numbers []int) (digest string, err error)
 		return "", err
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
+}
+
+// Sibling cancellation is a consequence of the first failure, not another
+// failure class. External cancellation and every substantive worker error stay.
+func preparationFailure(parent context.Context, failures []error) error {
+	var substantive []error
+	if err := parent.Err(); err != nil {
+		substantive = append(substantive, err)
+	}
+	for _, err := range failures {
+		if err != nil && !onlySiblingCancellation(err) {
+			substantive = append(substantive, err)
+		}
+	}
+	if len(substantive) > 0 {
+		return errors.Join(substantive...)
+	}
+	return errors.Join(failures...)
+}
+
+func onlySiblingCancellation(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !onlySiblingCancellation(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return onlySiblingCancellation(wrapped.Unwrap())
+	}
+	return err == context.Canceled
 }

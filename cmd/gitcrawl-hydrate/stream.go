@@ -31,7 +31,8 @@ func hydrateStream(ctx context.Context, client *github.OctopoolConversations, st
 		return err
 	}
 	defer stream.Close()
-	ctx, cancel := context.WithCancel(ctx)
+	parent := ctx
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	pages := make(chan github.InventoryPage, 1)
 	result := make(chan error, 1)
@@ -160,8 +161,7 @@ func hydrateStream(ctx context.Context, client *github.OctopoolConversations, st
 	for page := range pages {
 		if err = process(page); err != nil {
 			cancel()
-			<-result
-			return err
+			return preparationFailure(parent, []error{err, <-result})
 		}
 	}
 	if err = <-result; err != nil {
@@ -226,8 +226,8 @@ func inventoryRow(row map[string]any) (inventoryRecord, error) {
 	}
 	return inventoryRecord{fmt.Sprint(row["id"]), fmt.Sprint(row["node_id"]), kind, fmt.Sprintf("%x", sha256.Sum256(raw)), updated}, nil
 }
-func prepareRowWindow(ctx context.Context, client *github.OctopoolConversations, batches [][]map[string]any, reporter github.Reporter) ([]*github.OctopoolConversations, error) {
-	ctx, cancel := context.WithCancel(ctx)
+func prepareRowWindow(parent context.Context, client *github.OctopoolConversations, batches [][]map[string]any, reporter github.Reporter) ([]*github.OctopoolConversations, error) {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	prepared := make([]*github.OctopoolConversations, len(batches))
 	failures := make([]error, len(batches))
@@ -241,15 +241,8 @@ func prepareRowWindow(ctx context.Context, client *github.OctopoolConversations,
 		})
 	}
 	workers.Wait()
-	for _, err := range failures {
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return nil, err
-		}
-	}
-	for _, err := range failures {
-		if err != nil {
-			return nil, err
-		}
+	if err := preparationFailure(parent, failures); err != nil {
+		return nil, err
 	}
 	return prepared, nil
 }
