@@ -65,7 +65,7 @@ type octopoolReadBudget struct {
 // REST's outer content retry loop shares this allowance. Storage rejections,
 // connection resets and 502s must not multiply the three-post budget. Callers admit only
 // repository GETs or the internally constructed conversation GraphQL query.
-func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) {
+func (t *octopoolTransport) read(request *http.Request, maxBodyBytes int64) (*http.Response, []byte, error) {
 	ctx := request.Context()
 	budget, _ := ctx.Value(octopoolReadBudgetKey{}).(*octopoolReadBudget)
 	if budget == nil {
@@ -73,7 +73,7 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		budget.posts++
 		response, err := t.client.Do(request)
@@ -82,12 +82,26 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 				budget.hadOtherFailure = true
 			}
 			if !isConnectionReset(err) {
-				return response, err
+				return response, nil, err
+			}
+		} else if response.StatusCode == http.StatusOK {
+			// Complete the bounded envelope read inside this same post budget.
+			// Headers alone do not establish a successful relay response.
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes+1))
+			response.Body.Close()
+			if readErr == nil {
+				budget.hadOtherFailure = true
+				return response, body, nil
+			}
+			err = &octopoolBodyReadError{cause: readErr}
+			if !everyErrorLeaf(readErr, isIncompleteResponse) {
+				budget.hadOtherFailure = true
+				return nil, nil, err
 			}
 		} else {
 			budget.hadOtherFailure = true
 			if response.StatusCode != http.StatusFailedDependency {
-				return response, nil
+				return response, nil, nil
 			}
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, (16<<10)+1))
 			response.Body.Close()
@@ -96,33 +110,43 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 			}
 			response.Body = io.NopCloser(bytes.NewReader(body))
 			if readErr != nil || octopoolRejectionReason(body) != "relay_storage_unavailable" {
-				return response, nil
+				return response, nil, nil
 			}
 		}
 		if budget.posts >= 3 || request.GetBody == nil {
 			if budget.posts >= 3 && request.GetBody != nil && !budget.hadOtherFailure && ctx.Err() == nil {
-				return response, &exhaustedOctopoolReset{cause: err}
+				return response, nil, &exhaustedOctopoolRead{cause: err}
 			}
-			return response, err
+			return response, nil, err
 		}
 		wait := 250 * time.Millisecond * time.Duration(1<<(budget.posts-1))
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
-			return response, err
+			return response, nil, err
 		}
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		case <-timer.C:
 		}
 		request = request.Clone(ctx)
 		request.Body, err = request.GetBody()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 }
+
+func isIncompleteResponse(err error) bool {
+	return isConnectionReset(err) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// Keep the cause for retry classification; response diagnostics stay private.
+type octopoolBodyReadError struct{ cause error }
+
+func (e *octopoolBodyReadError) Error() string { return "read Octopool response failed" }
+func (e *octopoolBodyReadError) Unwrap() error { return e.cause }
 
 // Windows exposes socket resets as WSAECONNRESET rather than its synthetic
 // syscall.ECONNRESET. Do not interpret that numeric errno on other platforms.
@@ -132,18 +156,19 @@ func isConnectionReset(err error) bool {
 }
 
 // Only the read owner can certify that all three admitted attempts failed with
-// connection resets. Arbitrary wrapped syscall errors do not grant job retries.
-type exhaustedOctopoolReset struct{ cause error }
+// connection resets or incomplete response bodies. Arbitrary wrapped syscall
+// errors do not grant job retries.
+type exhaustedOctopoolRead struct{ cause error }
 
-func (e *exhaustedOctopoolReset) Error() string {
-	return "Octopool connection reset retry budget exhausted"
+func (e *exhaustedOctopoolRead) Error() string {
+	return "Octopool incomplete read retry budget exhausted"
 }
-func (e *exhaustedOctopoolReset) Unwrap() error { return e.cause }
+func (e *exhaustedOctopoolRead) Unwrap() error { return e.cause }
 
-// IsExhaustedOctopoolReset reports whether every substantive failure carries the
-// read owner's exhausted-reset certificate, including joined worker failures.
-func IsExhaustedOctopoolReset(err error) bool {
-	if _, ok := err.(*exhaustedOctopoolReset); ok {
+// IsExhaustedOctopoolRead reports whether every substantive failure carries the
+// read owner's exhausted-read certificate, including joined worker failures.
+func IsExhaustedOctopoolRead(err error) bool {
+	if _, ok := err.(*exhaustedOctopoolRead); ok {
 		return true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -152,14 +177,14 @@ func IsExhaustedOctopoolReset(err error) bool {
 			return false
 		}
 		for _, child := range children {
-			if !IsExhaustedOctopoolReset(child) {
+			if !IsExhaustedOctopoolRead(child) {
 				return false
 			}
 		}
 		return true
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		return IsExhaustedOctopoolReset(wrapped.Unwrap())
+		return IsExhaustedOctopoolRead(wrapped.Unwrap())
 	}
 	return false
 }
@@ -231,7 +256,8 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	relayRequest.Header.Set("Authorization", "Bearer "+t.token)
 	relayRequest.Header.Set("Content-Type", "application/json")
-	response, err := t.read(relayRequest)
+	const maxEnvelopeBytes = 8 << 20
+	response, data, err := t.read(relayRequest, maxEnvelopeBytes)
 	if err != nil {
 		return nil, &octopoolTransportError{cause: err}
 	}
@@ -246,11 +272,6 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			}}
 		}
 		return octopoolResponse(req, response.StatusCode, response.Header, body), nil
-	}
-	const maxEnvelopeBytes = 8 << 20
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxEnvelopeBytes+1))
-	if err != nil {
-		return nil, errors.New("read Octopool response failed")
 	}
 	if len(data) > maxEnvelopeBytes {
 		return nil, errors.New("Octopool response exceeds 8 MiB")

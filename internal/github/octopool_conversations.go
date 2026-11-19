@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"reflect"
 	"slices"
@@ -428,7 +427,7 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 	}
 	request.Header.Set("Authorization", "Bearer "+c.relay.token)
 	request.Header.Set("Content-Type", "application/json")
-	response, err := c.relay.read(request)
+	response, raw, err := c.relay.read(request, 3<<20)
 	if err != nil {
 		return nil, &conversationTransportError{cause: err}
 	}
@@ -439,10 +438,6 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 		if response.StatusCode == http.StatusFailedDependency && reason == "github_response_too_large" {
 			return nil, &conversationResponseTooLargeError{err}
 		}
-		return nil, err
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, (3<<20)+1))
-	if err != nil {
 		return nil, err
 	}
 	if len(raw) > 3<<20 {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retry truncated or reset Octopool response bodies within the existing three-post allowance, retain private error causes, and let the hydration operator return exit 75 only when all attempts fail with eligible transport errors.
+
 - Let the bounded hydration operator distinguish exhausted connection-reset retries (exit 75) while retaining every substantive parallel failure.
 
 - Retry pre-response Octopool connection resets within the existing three-request read budget and backoff, preserving credentials, deadlines and terminal handling of other transport failures.

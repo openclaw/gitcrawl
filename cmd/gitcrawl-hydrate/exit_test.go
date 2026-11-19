@@ -47,6 +47,10 @@ func TestHydrateExitStatus(t *testing.T) {
 	}{
 		{"REST reset exhausted", "REST", []int{0, 0, 0}, 75},
 		{"GraphQL reset exhausted", "GraphQL", []int{0, 0, 0}, 75},
+		{"REST incomplete bodies exhausted", "REST", []int{-1, -2, -1}, 75},
+		{"GraphQL incomplete bodies exhausted", "GraphQL", []int{-2, -1, -2}, 75},
+		{"REST storage then incomplete bodies", "REST", []int{424, -1, -2}, 1},
+		{"GraphQL incomplete body then authentication", "GraphQL", []int{-1, 403}, 1},
 		{"authentication", "GraphQL", []int{403}, 1},
 		{"quota", "GraphQL", []int{429}, 1},
 		{"storage then resets", "GraphQL", []int{424, 0, 0}, 1},
@@ -72,6 +76,10 @@ func TestHydrateExitStatus(t *testing.T) {
 						return
 					}
 					status := scenario.statuses[i]
+					if status < 0 {
+						truncateHydrateBody(t, w, status == -2)
+						return
+					}
 					if status == 0 {
 						resetHydrateConnection(t, w)
 						return
@@ -166,7 +174,7 @@ func TestPreparationFailureKeepsEverySubstantiveError(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, reset := client.Client.GetIssue(context.Background(), "fixture", "repo", 7, nil)
-	if !github.IsExhaustedOctopoolReset(reset) {
+	if !github.IsExhaustedOctopoolRead(reset) {
 		t.Fatalf("fixture did not exhaust native reset budget: %v", reset)
 	}
 	fatal := errors.New("fixture authentication failure")
@@ -190,7 +198,7 @@ func TestPreparationFailureKeepsEverySubstantiveError(t *testing.T) {
 				cancel()
 			}
 			got := preparationFailure(ctx, test.failures)
-			if github.IsExhaustedOctopoolReset(got) != test.retry {
+			if github.IsExhaustedOctopoolRead(got) != test.retry {
 				t.Fatalf("retry=%t error=%v", !test.retry, got)
 			}
 			for _, failure := range test.failures {
@@ -202,5 +210,29 @@ func TestPreparationFailureKeepsEverySubstantiveError(t *testing.T) {
 				t.Fatal("lost external cancellation")
 			}
 		})
+	}
+}
+
+func truncateHydrateBody(t *testing.T, w http.ResponseWriter, reset bool) {
+	t.Helper()
+	conn, buf, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer conn.Close()
+	if _, err = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n{\"private-fixture\":"); err != nil {
+		t.Error(err)
+		return
+	}
+	if err = buf.Flush(); err != nil {
+		t.Error(err)
+		return
+	}
+	if reset {
+		time.Sleep(20 * time.Millisecond)
+		if err = conn.(*net.TCPConn).SetLinger(0); err != nil {
+			t.Error(err)
+		}
 	}
 }

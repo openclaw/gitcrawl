@@ -26,7 +26,7 @@ import (
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		if github.IsExhaustedOctopoolReset(err) {
+		if github.IsExhaustedOctopoolRead(err) {
 			os.Exit(75)
 		}
 		os.Exit(1)

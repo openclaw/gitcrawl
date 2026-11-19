@@ -144,7 +144,7 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 		if !errors.Is(err, cause) {
 			t.Fatalf("lost transport cause: %v", err)
 		}
-		if got := IsExhaustedOctopoolReset(err); got != (cause == syscall.ECONNRESET) {
+		if got := IsExhaustedOctopoolRead(err); got != (cause == syscall.ECONNRESET) {
 			t.Fatalf("unsafe exhausted-reset classification: %t for %v", got, cause)
 		}
 		var want, got net.Error
@@ -178,3 +178,39 @@ func TestConnectionResetPlatformCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestOctopoolBodyReadCauseIsPrivateAndTerminal(t *testing.T) {
+	for _, cause := range []error{errors.New("private-token-and-response"), context.Canceled, context.DeadlineExceeded,
+		errors.Join(io.ErrUnexpectedEOF, errors.New("private-token-and-response"))} {
+		client, err := NewOctopoolConversations("https://private.invalid", "fixture", "private-token", "fixture/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls, closes := 0, 0
+		client.relay.client.Transport = contentRetryTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: &failingOctopoolBody{cause: cause, closes: &closes}, Request: r}, nil
+		})
+		_, err = client.Client.ListPullReviews(context.Background(), "fixture", "repo", 7, nil)
+		if calls != 1 || closes != 1 || !errors.Is(err, cause) || IsExhaustedOctopoolRead(err) {
+			t.Fatalf("unsafe read failure: calls=%d closes=%d err=%v", calls, closes, err)
+		}
+		var bodyError *octopoolBodyReadError
+		if !errors.As(err, &bodyError) || bodyError.Error() != "read Octopool response failed" {
+			t.Fatalf("lost private body error: %v", err)
+		}
+		for _, private := range []string{"private-token", "private.invalid"} {
+			if strings.Contains(err.Error(), private) {
+				t.Fatalf("private error escaped: %v", err)
+			}
+		}
+	}
+}
+
+type failingOctopoolBody struct {
+	cause  error
+	closes *int
+}
+
+func (b *failingOctopoolBody) Read([]byte) (int, error) { return 0, b.cause }
+func (b *failingOctopoolBody) Close() error             { *b.closes++; return nil }
