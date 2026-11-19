@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -112,15 +113,18 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 		{context.DeadlineExceeded, "context deadline exceeded"},
 		{&net.OpError{Op: "private-operation", Net: "private-network", Err: os.ErrDeadlineExceeded}, "network timeout"},
 		{syscall.ECONNRESET, syscall.ECONNRESET.Error()},
+		{syscall.EPIPE, syscall.EPIPE.Error()},
 		{io.EOF, "EOF"},
 		{io.ErrUnexpectedEOF, "unexpected EOF"},
 		{errors.New("private-token-and-response"), "transport failure (*url.Error)"},
 	} {
 		cause := test.cause
+		calls := 0
 		transport := &octopoolTransport{
 			endpoint: "https://private.invalid/relay", pool: "fixture", token: "private-token",
 			repositoryPath: "/repos/fixture/repo",
 			client: &http.Client{Transport: contentRetryTransport(func(*http.Request) (*http.Response, error) {
+				calls++
 				return nil, &url.Error{Op: "Post", URL: "https://private.invalid/private-token", Err: cause}
 			})},
 		}
@@ -129,6 +133,13 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 			t.Fatal(err)
 		}
 		_, err = transport.RoundTrip(request)
+		wantCalls := 1
+		if errors.Is(cause, syscall.ECONNRESET) {
+			wantCalls = 3
+		}
+		if calls != wantCalls {
+			t.Fatalf("transport attempts=%d want=%d", calls, wantCalls)
+		}
 		if !errors.Is(err, cause) {
 			t.Fatalf("lost transport cause: %v", err)
 		}
@@ -143,6 +154,23 @@ func TestOctopoolRESTTransportPreservesCauseWithoutPrivateDiagnostics(t *testing
 			if strings.Contains(err.Error(), secret) {
 				t.Fatalf("private diagnostics exposed: %s", err)
 			}
+		}
+	}
+}
+
+func TestConnectionResetPlatformCodes(t *testing.T) {
+	for _, test := range []struct {
+		cause error
+		want  bool
+	}{
+		{syscall.ECONNRESET, true},
+		{syscall.Errno(10054), runtime.GOOS == "windows"},
+		{syscall.EPIPE, false},
+		{context.Canceled, false},
+		{errors.New("connection reset by peer"), false},
+	} {
+		if got := isConnectionReset(fmt.Errorf("wrapped: %w", test.cause)); got != test.want {
+			t.Fatalf("cause %v: reset=%t want=%t", test.cause, got, test.want)
 		}
 	}
 }

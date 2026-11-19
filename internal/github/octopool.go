@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -57,8 +59,8 @@ type octopoolTransport struct {
 type octopoolReadBudgetKey struct{}
 type octopoolReadBudget struct{ posts int }
 
-// REST's outer content retry loop shares this allowance. A storage rejection
-// followed by a 502 must not multiply the three-post budget. Callers admit only
+// REST's outer content retry loop shares this allowance. Storage rejections,
+// connection resets and 502s must not multiply the three-post budget. Callers admit only
 // repository GETs or the internally constructed conversation GraphQL query.
 func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) {
 	ctx := request.Context()
@@ -72,21 +74,30 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 		}
 		budget.posts++
 		response, err := t.client.Do(request)
-		if err != nil || response.StatusCode != http.StatusFailedDependency {
+		if err != nil {
+			if !isConnectionReset(err) {
+				return response, err
+			}
+		} else {
+			if response.StatusCode != http.StatusFailedDependency {
+				return response, nil
+			}
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, (16<<10)+1))
+			response.Body.Close()
+			if readErr != nil {
+				body = nil
+			}
+			response.Body = io.NopCloser(bytes.NewReader(body))
+			if readErr != nil || octopoolRejectionReason(body) != "relay_storage_unavailable" {
+				return response, nil
+			}
+		}
+		if budget.posts >= 3 || request.GetBody == nil {
 			return response, err
-		}
-		body, readErr := io.ReadAll(io.LimitReader(response.Body, (16<<10)+1))
-		response.Body.Close()
-		if readErr != nil {
-			body = nil
-		}
-		response.Body = io.NopCloser(bytes.NewReader(body))
-		if readErr != nil || octopoolRejectionReason(body) != "relay_storage_unavailable" || budget.posts >= 3 || request.GetBody == nil {
-			return response, nil
 		}
 		wait := 250 * time.Millisecond * time.Duration(1<<(budget.posts-1))
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
-			return response, nil
+			return response, err
 		}
 		timer := time.NewTimer(wait)
 		select {
@@ -101,6 +112,13 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 			return nil, err
 		}
 	}
+}
+
+// Windows exposes socket resets as WSAECONNRESET rather than its synthetic
+// syscall.ECONNRESET. Do not interpret that numeric errno on other platforms.
+func isConnectionReset(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) ||
+		(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10054)))
 }
 
 // Retain the HTTP failure while allowing pagination to distinguish the relay's

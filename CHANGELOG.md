@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retry pre-response Octopool connection resets within the existing three-request read budget and backoff, preserving credentials, deadlines and terminal handling of other transport failures.
+
 - Add read-only `delivery measure-seed` sizing for the exact native seed scope, without materializing rows, creating an outbox or contacting a provider.
 
 - Recover exact Octopool oversized REST-page rejections by restarting pagination at smaller page sizes down to one, preserving complete rows and provider Link ordering. Other errors remain terminal.

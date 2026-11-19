@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,7 +39,8 @@ func octopoolRetryRead(t *testing.T, endpoint, protocol string) func(context.Con
 
 func TestOctopoolStorageRetryReadPaths(t *testing.T) {
 	for _, protocol := range []string{"REST", "GraphQL"} {
-		for _, sequence := range [][]int{{424, 424, 200}, {424, 424, 424}, {424, 403}, {424, 502, 424}, {502, 424, 424}} {
+		for _, sequence := range [][]int{{424, 424, 200}, {424, 424, 424}, {424, 403}, {424, 502, 424}, {502, 424, 424},
+			{0, 200}, {0, 0, 200}, {0, 0, 0}, {0, 424, 200}, {424, 0, 502}, {502, 0, 424}, {0, 403}} {
 			t.Run(fmt.Sprintf("%s/%v", protocol, sequence), func(t *testing.T) {
 				var calls atomic.Int32
 				var first []byte
@@ -59,6 +61,10 @@ func TestOctopoolStorageRetryReadPaths(t *testing.T) {
 						return
 					}
 					status := sequence[call-1]
+					if status == 0 {
+						resetOctopoolConnection(t, w)
+						return
+					}
 					if status != 200 {
 						w.Header().Set("X-RateLimit-Remaining", "17")
 						w.WriteHeader(status)
@@ -77,7 +83,7 @@ func TestOctopoolStorageRetryReadPaths(t *testing.T) {
 				wantCalls := len(sequence)
 				if protocol == "GraphQL" {
 					for i, status := range sequence {
-						if status != 424 {
+						if status != 424 && status != 0 {
 							wantCalls = i + 1
 							break
 						}
@@ -93,6 +99,9 @@ func TestOctopoolStorageRetryReadPaths(t *testing.T) {
 				} else {
 					if err == nil || strings.Contains(err.Error(), "private-canary") {
 						t.Fatalf("unsafe/missing failure: %v", err)
+					}
+					if sequence[wantCalls-1] == 0 && !isConnectionReset(err) {
+						t.Fatalf("lost connection reset: %v", err)
 					}
 					if sequence[wantCalls-1] == 424 && !strings.Contains(err.Error(), "fallback_local: relay_storage_unavailable") {
 						t.Fatalf("lost final typed rejection: %v", err)
@@ -168,5 +177,51 @@ func TestOctopoolStorageRetryClosesBodyAndHonorsCancellation(t *testing.T) {
 	_, err = client.requestConversations(ctx, "query { viewer { login } }", nil, nil)
 	if calls != 1 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation did not stop retry after closing body: calls=%d error=%v", calls, err)
+	}
+}
+
+func resetOctopoolConnection(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	// Send a real TCP reset after reading the complete relay request.
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+		t.Error(err)
+	}
+	conn.Close()
+}
+
+func TestOctopoolResetHonorsDeadlineAndCancellation(t *testing.T) {
+	for _, protocol := range []string{"REST", "GraphQL"} {
+		for _, cancelDuringRequest := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cancel=%t", protocol, cancelDuringRequest), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer cancel()
+				var calls atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					io.Copy(io.Discard, r.Body)
+					if cancelDuringRequest {
+						cancel()
+					}
+					resetOctopoolConnection(t, w)
+				}))
+				defer server.Close()
+				err := octopoolRetryRead(t, server.URL, protocol)(ctx)
+				if calls.Load() != 1 || err == nil {
+					t.Fatalf("retried bounded request: calls=%d error=%v", calls.Load(), err)
+				}
+				if cancelDuringRequest {
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("lost cancellation: %v", err)
+					}
+				} else if !isConnectionReset(err) {
+					t.Fatalf("lost reset when remaining deadline cannot fit backoff: %v", err)
+				}
+			})
+		}
 	}
 }
