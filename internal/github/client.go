@@ -487,6 +487,22 @@ func (c *Client) paginatePages(ctx context.Context, firstPath string, limit int,
 		page++
 		resp, err := c.do(ctx, http.MethodGet, nextPath, nil, reporter)
 		if err != nil {
+			var oversized *octopoolResponseTooLargeError
+			if errors.As(err, &oversized) {
+				first, parseErr := url.Parse(firstPath)
+				if parseErr == nil {
+					query := first.Query()
+					size, _ := strconv.Atoi(query.Get("per_page"))
+					if size > 1 && size <= 100 && (query.Get("page") == "" || query.Get("page") == "1") {
+						// Restart the original range: resizing a later page's offset
+						// would skip or repeat rows. Discard this partial result and
+						// follow the smaller pages' own Link chain down to size one.
+						query.Set("per_page", strconv.Itoa(max(1, size/10)))
+						first.RawQuery = query.Encode()
+						return c.paginatePages(ctx, first.String(), limit, expectedItems, reporter, decode)
+					}
+				}
+			}
 			return nil, err
 		}
 		rows, err := decode(resp)
@@ -763,6 +779,10 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 	reporter.Printf("[github] request %s %s", method, path)
 	resp, err := c.guardedHTTPClient().Do(req)
 	if err != nil {
+		var oversized *octopoolResponseTooLargeError
+		if errors.As(err, &oversized) {
+			return nil, oversized
+		}
 		return nil, requestFailureAt("transport", "", fmt.Errorf("github request: %w", err))
 	}
 	responseResource, responseCost := c.requestRateLimit(resp.Request.Method, resp.Request.URL.String())

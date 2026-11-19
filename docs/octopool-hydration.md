@@ -54,6 +54,11 @@ GraphQL envelope limit, the batch first requests only GraphQL identity and
 update timestamps. After the same identity and freshness checks, it uses
 those full REST readers for every child collection. Full thread fields remain
 owned by the REST inventory; no body or child collection is clipped.
+An exact oversized-response rejection from a REST page restarts that collection
+from its first page at sizes 100, 10, then 1, following each response's own Link
+chain. Partial page results are discarded before restarting, so resizing a later
+page cannot skip or duplicate rows. A single oversized record remains an error;
+other relay failures do not trigger page-size retries.
 The tool rejects incomplete GraphQL responses, unqualified relay identities,
 stale responses, conflicting duplicates, and moved or mismatched nodes. A compact
 query or REST failure leaves the batch unwritten; other response-size limits

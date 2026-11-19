@@ -103,6 +103,12 @@ func (t *octopoolTransport) read(request *http.Request) (*http.Response, error) 
 	}
 }
 
+// Retain the HTTP failure while allowing pagination to distinguish the relay's
+// exact size rejection from other 424 responses or transport failures.
+type octopoolResponseTooLargeError struct{ *RequestError }
+
+func (e *octopoolResponseTooLargeError) Unwrap() error { return e.RequestError }
+
 // Preserve transport classification without exposing private URLs or diagnostics.
 type octopoolTransportError struct{ cause error }
 
@@ -152,7 +158,14 @@ func (t *octopoolTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		// Preserve status/backoff while exposing only known, content-free diagnostics.
-		return octopoolResponse(req, response.StatusCode, response.Header, octopoolRejectionBody(response)), nil
+		body, reason := octopoolRejection(response)
+		if response.StatusCode == http.StatusFailedDependency && reason == "github_response_too_large" {
+			return nil, &octopoolResponseTooLargeError{&RequestError{
+				Method: req.Method, URL: req.URL.RequestURI(), Status: response.StatusCode,
+				Body: string(body), Headers: response.Header,
+			}}
+		}
+		return octopoolResponse(req, response.StatusCode, response.Header, body), nil
 	}
 	const maxEnvelopeBytes = 8 << 20
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxEnvelopeBytes+1))
