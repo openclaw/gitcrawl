@@ -156,6 +156,7 @@ func TestNativeReportExclusionsAndLocalAbsence(t *testing.T) {
 		}
 	}
 	before := takeNativeReport(t, ctx, s, req)
+	checkNativeReportMeasurement(t, s)
 	plan, err := s.PlanThreadPurge(ctx, req.Repository, []int{10})
 	if err != nil {
 		t.Fatal(err)
@@ -164,6 +165,7 @@ func TestNativeReportExclusionsAndLocalAbsence(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := takeNativeReport(t, ctx, s, req)
+	checkNativeReportMeasurement(t, s)
 	if len(nativeReportTable(t, before, "threads").Rows) != 2 || len(nativeReportTable(t, after, "threads").Rows) != 1 || len(nativeReportTable(t, after, "comments").Rows) != 1 {
 		t.Fatal("incomplete scoped inventory")
 	}
@@ -188,11 +190,15 @@ func TestNativeReportExclusionsAndLocalAbsence(t *testing.T) {
 	if !errors.Is(err, ErrNativeReportSource) || !reflect.DeepEqual(conflict, NativeReportCapture{}) {
 		t.Fatal("retained excluded node did not refuse the entire capture", err)
 	}
+	if _, err := MeasureNativeReport(ctx, s.Path(), req); !errors.Is(err, ErrNativeReportSource) {
+		t.Fatal("measurement accepted global excluded-node conflict", err)
+	}
 	// A raw SQL client can retain excluded content despite the ingestion guard.
 	// Capture must filter it, not rely on the producer having purged already.
 	if _, err = s.db.ExecContext(ctx, `insert into thread_exclusions values('fixture/repo',20,'pull_request',2,'gh20','2026-01-01','owner_requested','fixture')`); err != nil {
 		t.Fatal(err)
 	}
+	checkNativeReportMeasurement(t, s)
 	filtered := takeNativeReport(t, ctx, s, req)
 	if len(nativeReportTable(t, filtered, "threads").Rows) != 0 || len(nativeReportTable(t, filtered, "comments").Rows) != 0 {
 		t.Fatal("owner-excluded content leaked")
@@ -226,6 +232,10 @@ func TestNativeReportRefusesUnsupportedSourceWithoutPartialResult(t *testing.T) 
 			c, err := CaptureNativeReport(ctx, s.Path(), req)
 			if !errors.Is(err, test.want) || !reflect.DeepEqual(c, NativeReportCapture{}) {
 				t.Fatal("unsupported source accepted or partial result returned", err)
+			}
+			measured, err := MeasureNativeReport(ctx, s.Path(), req)
+			if !errors.Is(err, test.want) || !reflect.DeepEqual(measured, NativeReportMeasurement{}) {
+				t.Fatal("unsupported measurement source accepted or partial result returned", err)
 			}
 		})
 	}

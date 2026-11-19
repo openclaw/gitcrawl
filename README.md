@@ -63,6 +63,13 @@ Octopool owns pooled live `gh` reads. Gitcrawl keeps local mirror, search, clust
 
 ## Private native seed delivery
 
+`gitcrawl delivery measure-seed --db PATH --repo OWNER/REPO --timeout D --json`
+reads the exact seven-table seed scope without materializing rows or creating an
+outbox. It reports scalar sizes, cell types, maximum text/row sizes and stable
+source file metadata. Use it after acquisition is quiescent for resource planning;
+it does not estimate RSS or encoded wire size, validate UTF-8, or qualify a seed.
+Like capture, it requires the current native schema and armed change contract.
+
 `gitcrawl delivery stage-seed`, `status`, and `deliver` operate an explicit private
 outbox for a current native schema-16 archive with an armed change contract.
 Run `gitcrawl help delivery` for the required paths, registered destination and

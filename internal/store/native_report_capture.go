@@ -100,45 +100,58 @@ func NativeReportFileIdentity(path string) (NativeReportFile, error) {
 // Every call scans scoped content. This snapshot API does not use journal keys
 // to skip rows or treat the sequence as a substitute for an inventory digest.
 func CaptureNativeReport(ctx context.Context, path string, request NativeReportRequest) (NativeReportCapture, error) {
-	if err := ctx.Err(); err != nil {
+	var capture NativeReportCapture
+	err := withNativeReportSource(ctx, path, request, func(tx *sql.Tx) error {
+		var err error
+		capture, err = captureNativeReport(ctx, tx, request)
+		return err
+	})
+	if err != nil {
 		return NativeReportCapture{}, err
 	}
+	return capture, nil
+}
+
+// Both capture and measurement use the same admission and read transaction.
+func withNativeReportSource(ctx context.Context, path string, request NativeReportRequest, read func(*sql.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, ok := ctx.Deadline(); !ok {
-		return NativeReportCapture{}, errors.New("native report capture requires a deadline")
+		return errors.New("native report capture requires a deadline")
 	}
 	if request.Limits.MaxRows <= 0 || request.Limits.MaxBytes <= 0 {
-		return NativeReportCapture{}, ErrNativeReportLimit
+		return ErrNativeReportLimit
 	}
 	parts := strings.Split(request.Repository, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(request.Repository, " \t\r\n\\\x00") || strings.ToLower(request.Repository) != request.Repository {
-		return NativeReportCapture{}, ErrNativeReportSource
+		return ErrNativeReportSource
 	}
 	file, err := NativeReportFileIdentity(path)
 	if err != nil || file != request.File {
-		return NativeReportCapture{}, ErrNativeReportSource
+		return ErrNativeReportSource
 	}
 	source, err := OpenReadOnly(ctx, path)
 	if err != nil {
-		return NativeReportCapture{}, fmt.Errorf("open native report source: %w", err)
+		return fmt.Errorf("open native report source: %w", err)
 	}
 	defer source.Close()
 	tx, err := source.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return NativeReportCapture{}, err
+		return err
 	}
 	defer tx.Rollback()
-	capture, err := captureNativeReport(ctx, tx, request)
-	if err != nil {
-		return NativeReportCapture{}, err
+	if err := read(tx); err != nil {
+		return err
 	}
 	after, err := NativeReportFileIdentity(path)
 	if err != nil || after != file {
-		return NativeReportCapture{}, ErrNativeReportSource
+		return ErrNativeReportSource
 	}
 	if err := ctx.Err(); err != nil {
-		return NativeReportCapture{}, err
+		return err
 	}
-	return capture, nil
+	return nil
 }
 
 type nativeReportTableSpec struct {
@@ -159,8 +172,8 @@ var nativeReportTables = []nativeReportTableSpec{
 
 const nativeReportThreads = `select t.id from threads t join repositories r on r.id=t.repo_id where t.repo_id=? and not exists(select 1 from thread_exclusions e where e.repository=lower(r.full_name) and e.number=t.number)`
 
-func captureNativeReport(ctx context.Context, tx *sql.Tx, request NativeReportRequest) (NativeReportCapture, error) {
-	out := NativeReportCapture{Anchor: NativeReportAnchor{File: request.File, Repository: request.Repository}}
+func nativeReportAnchor(ctx context.Context, tx *sql.Tx, request NativeReportRequest) (NativeReportAnchor, error) {
+	out := NativeReportAnchor{File: request.File, Repository: request.Repository}
 	var version int
 	if err := tx.QueryRowContext(ctx, "pragma user_version").Scan(&version); err != nil {
 		return out, err
@@ -172,7 +185,7 @@ func captureNativeReport(ctx context.Context, tx *sql.Tx, request NativeReportRe
 	if version != schemaVersion || portable {
 		return out, ErrNativeReportSource
 	}
-	cursor := &out.Anchor.Cursor
+	cursor := &out.Cursor
 	if err := tx.QueryRowContext(ctx, "pragma schema_version").Scan(&cursor.SchemaVersion); err != nil {
 		return out, err
 	}
@@ -190,16 +203,25 @@ func captureNativeReport(ctx context.Context, tx *sql.Tx, request NativeReportRe
 		return out, ErrNativeReportSource
 	}
 	var count int
-	if err := tx.QueryRowContext(ctx, "select count(*),coalesce(min(id),0) from repositories where lower(full_name)=?", request.Repository).Scan(&count, &out.Anchor.RepositoryID); err != nil {
+	if err := tx.QueryRowContext(ctx, "select count(*),coalesce(min(id),0) from repositories where lower(full_name)=?", request.Repository).Scan(&count, &out.RepositoryID); err != nil {
 		return out, err
 	}
-	if count != 1 || out.Anchor.RepositoryID <= 0 {
+	if count != 1 || out.RepositoryID <= 0 {
 		return out, ErrNativeReportSource
 	}
 	scope := sha256.New()
 	nativeReportHashText(scope, NativeReportProfile)
 	nativeReportHashText(scope, request.Repository)
-	out.Anchor.ScopeSHA256 = hex.EncodeToString(scope.Sum(nil))
+	out.ScopeSHA256 = hex.EncodeToString(scope.Sum(nil))
+	return out, nil
+}
+
+func captureNativeReport(ctx context.Context, tx *sql.Tx, request NativeReportRequest) (NativeReportCapture, error) {
+	anchor, err := nativeReportAnchor(ctx, tx, request)
+	if err != nil {
+		return NativeReportCapture{}, err
+	}
+	out := NativeReportCapture{Anchor: anchor}
 	snapshot := sha256.New()
 	nativeReportHashText(snapshot, out.Anchor.ScopeSHA256)
 	for _, spec := range nativeReportTables {
@@ -265,12 +287,11 @@ func nativeReportTableDefinition(ctx context.Context, tx *sql.Tx, spec nativeRep
 	return table, nil
 }
 
-func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, limits NativeReportLimits, totalRows, totalBytes *int64) (NativeReportTable, error) {
+func nativeReportTableForRead(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64) (NativeReportTable, error) {
 	table, err := nativeReportTableDefinition(ctx, tx, spec)
 	if err != nil {
 		return table, err
 	}
-	keys := table.KeyColumns
 	if spec.name == "threads" || spec.name == "comments" {
 		// Match the purge owner's native $.node_id interpretation and global
 		// NodeExcluded policy. A retained conflict outside the parent filter
@@ -286,10 +307,26 @@ func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTab
 			return table, ErrNativeReportSource
 		}
 	}
-	columns, sizes := make([]string, len(table.Columns)), make([]string, len(table.Columns))
+	return table, nil
+}
+
+func nativeReportScalarExpressions(table NativeReportTable) (columns, sizes []string) {
+	columns, sizes = make([]string, len(table.Columns)), make([]string, len(table.Columns))
 	for i, name := range table.Columns {
 		columns[i] = "x." + sqliteQuotedIdentifier(name)
 		sizes[i] = "case typeof(" + columns[i] + ") when 'null' then 1 when 'integer' then 9 else 9+length(cast(" + columns[i] + " as blob)) end"
+	}
+	return columns, sizes
+}
+
+func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, limits NativeReportLimits, totalRows, totalBytes *int64) (NativeReportTable, error) {
+	table, err := nativeReportTableForRead(ctx, tx, spec, repoID)
+	if err != nil {
+		return table, err
+	}
+	keys := table.KeyColumns
+	columns, sizes := nativeReportScalarExpressions(table)
+	for _, name := range table.Columns {
 		if int64(len(name)) > limits.MaxBytes-*totalBytes {
 			return table, ErrNativeReportLimit
 		}

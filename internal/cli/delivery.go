@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/openclaw/crawlkit/remote"
@@ -29,6 +30,8 @@ func (a *App) runDelivery(ctx context.Context, args []string) error {
 	}
 	command := args[0]
 	switch command {
+	case "measure-seed":
+		return a.runMeasureSeed(ctx, args[1:])
 	case "deliver-clusters":
 		return a.runClusterDeliver(ctx, args[1:])
 	case "stage-clusters", "cluster-status":
@@ -144,6 +147,38 @@ func (a *App) runDelivery(ctx context.Context, args []string) error {
 		return deliveryCommandError(err)
 	}
 	return a.writeOutput("delivery", deliveryStateOutput(status, state), false)
+}
+
+func (a *App) runMeasureSeed(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("delivery measure-seed", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	db := fs.String("db", "", "explicit existing native archive")
+	repo := fs.String("repo", "", "explicit owner/repository")
+	timeout := fs.Duration("timeout", 0, "positive operation deadline")
+	jsonOut := fs.Bool("json", false, "write JSON output")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return a.printCommandUsage("delivery")
+		}
+		return usageErr(errors.New("invalid measure-seed flags; see gitcrawl help delivery"))
+	}
+	if fs.NArg() != 0 || *db == "" || *repo == "" || *timeout <= 0 {
+		return usageErr(errors.New("measure-seed requires --db, --repo and positive --timeout, with no positional arguments"))
+	}
+	a.applyCommandJSON(*jsonOut)
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	file, err := store.NativeReportFileIdentity(*db)
+	if err != nil {
+		return deliveryCommandError(err)
+	}
+	result, err := store.MeasureNativeReport(ctx, *db, store.NativeReportRequest{
+		Repository: *repo, File: file, Limits: store.NativeReportLimits{MaxRows: math.MaxInt64, MaxBytes: math.MaxInt64},
+	})
+	if err != nil {
+		return deliveryCommandError(err)
+	}
+	return a.writeOutput("delivery", result, false)
 }
 
 func deliveryStateOutput(status string, state remotedelivery.SeedState) deliveryOutput {

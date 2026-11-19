@@ -232,6 +232,7 @@ Usage:
   gitcrawl delivery stage-clusters --db PATH --bundle PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery cluster-status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver-clusters --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
+  gitcrawl delivery measure-seed --db PATH --repo OWNER/REPO --timeout D [--json]
   gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
@@ -260,6 +261,14 @@ Status is staged, partial or complete; complete proves receiver acknowledgement,
 not upstream freshness or a private report baseline. Cluster bytes counts decoded
 wire bytes. No source capture, provider sync or scheduler runs.
 Retain the original bundle and any failed owned file; no retry or cleanup runs.
+
+measure-seed reads the same seven-table scope in one read-only transaction without
+materializing rows or creating an outbox. It reports rows, scalar/cell types, text
+bytes, maximum text/row sizes and source file metadata. Native bytes count NULL
+as 1, integers as 9, text as 9 plus stored bytes, and column names once per table.
+These are not encoded wire sizes, an RSS estimate, UTF-8 validation or seed
+qualification. Keep acquisition stopped while using the measurement for admission;
+changed source file size/mtime causes refusal.
 
 All paths and positive bounds are explicit. Seed/change commands require native
 schema 16 and an armed change
