@@ -15,12 +15,13 @@ import (
 )
 
 type CommitScope struct {
-	Schema           string    `json:"schema"`
-	Repository       string    `json:"repository"`
-	RepositoryNodeID string    `json:"repositoryNodeId"`
-	Branch           string    `json:"branch"`
-	HeadOID          string    `json:"headOid"`
-	Since            time.Time `json:"since"`
+	Schema           string          `json:"schema"`
+	Repository       string          `json:"repository"`
+	RepositoryNodeID string          `json:"repositoryNodeId"`
+	Branch           string          `json:"branch"`
+	HeadOID          string          `json:"headOid"`
+	Since            time.Time       `json:"since"`
+	ParentCheckpoint json.RawMessage `json:"parentCheckpoint"`
 }
 type CommitAttributionPage struct {
 	Cursor     string `json:"cursor"`
@@ -80,11 +81,26 @@ func RunCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 		if json.Unmarshal(run.Scope, &scope) != nil || scope.Schema != "github-commits-scope/v1" || scope.Repository != o.Repository || !run.Horizon.Equal(*state.CompletedThrough) || !o.Since.IsZero() && !scope.Since.Equal(o.Since) {
 			return result, errors.New("commit resume scope changed")
 		}
+		if err := validateParentProgress(scope.ParentCheckpoint); err != nil {
+			return result, err
+		}
 	} else {
+		completed, hasCompleted, e := completedCommitScope(state, o.Repository)
+		if e != nil {
+			return result, e
+		}
+		// Omitting --since means recovery of the exact completed run, never a
+		// new scan against a branch that may have advanced after the lost ACK.
+		if hasCompleted && o.Since.IsZero() {
+			return Result{RunID: state.CompletedRun.ID, Revision: state.Revision, Complete: true}, nil
+		}
 		if o.Since.IsZero() || !o.Since.Before(*state.CompletedThrough) || o.Since.Nanosecond()%1000 != 0 {
 			return result, errors.New("commit scan requires prior --since")
 		}
-		var e error
+		parent, e := parentProgressCheckpoint(state, o.Repository)
+		if e != nil {
+			return result, e
+		}
 		head, e = provider.ReadCommitHead(ctx, nil)
 		if e != nil {
 			return result, e
@@ -92,13 +108,9 @@ func RunCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 		if head.Repository != o.Repository {
 			return result, errors.New("commit repository changed")
 		}
-		scope = CommitScope{Schema: "github-commits-scope/v1", Repository: o.Repository, RepositoryNodeID: head.NodeID, Branch: head.Branch, HeadOID: head.OID, Since: o.Since.UTC()}
-		if state.CompletedRun != nil && state.CompletedRun.Mode == "commits" && state.CompletedRun.Horizon.Equal(*state.CompletedThrough) {
-			var old CommitScope
-			var cp commitCheckpoint
-			if json.Unmarshal(state.CompletedRun.Scope, &old) == nil && old == scope && json.Unmarshal(state.Checkpoint, &cp) == nil && cp.Schema == "github-commits-checkpoint/v1" && cp.Complete && cp.NextCursor == "" {
-				return Result{RunID: state.CompletedRun.ID, Revision: state.Revision, Complete: true}, nil
-			}
+		scope = CommitScope{Schema: "github-commits-scope/v1", Repository: o.Repository, RepositoryNodeID: head.NodeID, Branch: head.Branch, HeadOID: head.OID, Since: o.Since.UTC(), ParentCheckpoint: parent}
+		if hasCompleted && completed.RepositoryNodeID == scope.RepositoryNodeID && completed.Branch == scope.Branch && completed.HeadOID == scope.HeadOID && completed.Since.Equal(scope.Since) {
+			return Result{RunID: state.CompletedRun.ID, Revision: state.Revision, Complete: true}, nil
 		}
 		raw, _ := json.Marshal(scope)
 		sum := sha256.Sum256(append(raw, []byte(fmt.Sprintf("/%d/%s", state.Revision, state.CompletedThrough.Format(time.RFC3339Nano)))...))
@@ -184,4 +196,72 @@ func RunCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 		}
 	}
 	return result, nil
+}
+
+// Completed commit scans retain the preceding parent checkpoint in their
+// immutable run scope. A mode switch restores that exact progress, not zero.
+func completedCommitScope(state State, repository string) (CommitScope, bool, error) {
+	var scope CommitScope
+	var cp commitCheckpoint
+	isCheckpoint := json.Unmarshal(state.Checkpoint, &cp) == nil && cp.Schema == "github-commits-checkpoint/v1"
+	if state.ActiveRun != nil || state.CompletedRun == nil || state.CompletedRun.Mode != "commits" {
+		if state.ActiveRun == nil && isCheckpoint {
+			return scope, false, errors.New("completed commit metadata unavailable")
+		}
+		return scope, false, nil
+	}
+	run := state.CompletedRun
+	if !isCheckpoint || !cp.Complete || cp.NextCursor != "" || state.CompletedThrough == nil || !run.Horizon.Equal(*state.CompletedThrough) || state.Revision <= run.ExpectedRevision || json.Unmarshal(run.Scope, &scope) != nil || scope.Schema != "github-commits-scope/v1" || scope.Repository != repository || scope.RepositoryNodeID == "" || scope.HeadOID == "" || scope.Branch == "" || scope.Since.IsZero() || !scope.Since.Before(run.Horizon) {
+		return scope, false, errors.New("completed commit checkpoint mismatch")
+	}
+	if err := validateParentProgress(scope.ParentCheckpoint); err != nil {
+		return scope, false, err
+	}
+	return scope, true, nil
+}
+func validateParentProgress(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return errors.New("parent checkpoint unavailable; reconcile the previous scan")
+	}
+	var object map[string]json.RawMessage
+	if len(raw) > 65536 || json.Unmarshal(raw, &object) != nil || object == nil {
+		return errors.New("invalid retained parent checkpoint")
+	}
+	if len(object) == 0 {
+		return nil
+	}
+	var version int
+	if json.Unmarshal(object["version"], &version) != nil || version != 1 {
+		return errors.New("unknown retained parent checkpoint; reconcile the previous scan")
+	}
+	return nil
+}
+func parentProgressCheckpoint(state State, repository string) (json.RawMessage, error) {
+	if state.ActiveRun == nil && state.CompletedRun != nil && state.CompletedRun.Mode == "lifecycle" {
+		run := state.CompletedRun
+		var scope LifecycleScope
+		var cp lifecycleCheckpoint
+		if state.CompletedThrough == nil || !run.Horizon.Equal(*state.CompletedThrough) || state.Revision <= run.ExpectedRevision || json.Unmarshal(run.Scope, &scope) != nil || scope.Schema != "github-lifecycle-scope/v1" || len(scope.Threads) == 0 || json.Unmarshal(state.Checkpoint, &cp) != nil || cp.Schema != "github-lifecycle-checkpoint/v1" || cp.ThreadIndex != len(scope.Threads) || cp.NextCursor != "" {
+			return nil, errors.New("completed lifecycle checkpoint mismatch")
+		}
+		if err := validateParentProgress(scope.ParentCheckpoint); err != nil {
+			return nil, err
+		}
+		return scope.ParentCheckpoint, nil
+	}
+	completed, ok, err := completedCommitScope(state, repository)
+	if err != nil {
+		return nil, err
+	}
+	raw := state.Checkpoint
+	if ok {
+		raw = completed.ParentCheckpoint
+	}
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	if err = validateParentProgress(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }

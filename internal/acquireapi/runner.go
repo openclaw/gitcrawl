@@ -107,9 +107,13 @@ func Run(ctx context.Context, api API, provider Provider, options Options) (Resu
 	if err != nil {
 		return result, err
 	}
+	parentCheckpoint, err := parentProgressCheckpoint(state, options.Repository)
+	if err != nil {
+		return result, err
+	}
 	var cp checkpoint
-	if len(state.Checkpoint) > 0 && string(state.Checkpoint) != "{}" {
-		if err = json.Unmarshal(state.Checkpoint, &cp); err != nil || cp.Version != 1 {
+	if len(parentCheckpoint) > 0 && string(parentCheckpoint) != "{}" {
+		if err = json.Unmarshal(parentCheckpoint, &cp); err != nil || cp.Version != 1 {
 			return result, errors.New("unknown acquisition checkpoint")
 		}
 	}

@@ -124,7 +124,7 @@ func (c *OctopoolConversations) ReadCommitAttribution(ctx context.Context, nodeI
 	if cursor != "" {
 		after = cursor
 	}
-	raw, err := c.requestConversationData(ctx, `query($id:ID!,$cursor:String){node(id:$id){... on Commit{id oid associatedPullRequests(first:100,after:$cursor){nodes{id mergedAt mergedBy{login} mergeCommit{oid} repository{id nameWithOwner}} pageInfo{hasNextPage endCursor}}}}}`, map[string]any{"id": nodeID, "cursor": after}, reporter)
+	raw, err := c.requestConversationData(ctx, `query($id:ID!,$cursor:String){node(id:$id){... on Commit{id oid associatedPullRequests(first:100,after:$cursor){nodes{id number mergedAt mergedBy{login} mergeCommit{oid} repository{id nameWithOwner}} pageInfo{hasNextPage endCursor}}}}}`, map[string]any{"id": nodeID, "cursor": after}, reporter)
 	if err != nil {
 		return out, err
 	}

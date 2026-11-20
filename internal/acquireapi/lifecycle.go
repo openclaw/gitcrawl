@@ -36,9 +36,10 @@ type LifecycleThread struct {
 	NodeID         string `json:"nodeId"`
 }
 type LifecycleScope struct {
-	Schema  string            `json:"schema"`
-	Since   time.Time         `json:"since"`
-	Threads []LifecycleThread `json:"threads"`
+	Schema           string            `json:"schema"`
+	Since            time.Time         `json:"since"`
+	Threads          []LifecycleThread `json:"threads"`
+	ParentCheckpoint json.RawMessage   `json:"parentCheckpoint"`
 }
 type lifecycleCheckpoint struct {
 	Schema      string `json:"schema"`
@@ -227,6 +228,12 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 		scope.Threads[i] = p.LifecycleThread
 	}
 	run := state.ActiveRun
+	if run == nil {
+		scope.ParentCheckpoint, err = parentProgressCheckpoint(state, o.Repository)
+		if err != nil {
+			return result, err
+		}
+	}
 	if run == nil && state.CompletedRun == nil {
 		var prior lifecycleCheckpoint
 		if json.Unmarshal(state.Checkpoint, &prior) == nil && prior.Schema == "github-lifecycle-checkpoint/v1" {
@@ -263,6 +270,9 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 		var original LifecycleScope
 		if json.Unmarshal(run.Scope, &original) != nil || original.Schema != scope.Schema || !slices.Equal(original.Threads, scope.Threads) || !run.Horizon.Equal(*state.CompletedThrough) || (!o.Since.IsZero() && !original.Since.Equal(scope.Since)) {
 			return result, errors.New("resume requires original lifecycle selection, window and parent versions")
+		}
+		if err := validateParentProgress(original.ParentCheckpoint); err != nil {
+			return result, err
 		}
 		scope = original
 	}

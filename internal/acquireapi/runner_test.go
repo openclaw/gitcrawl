@@ -123,6 +123,7 @@ func (f *fixtureAPI) serve(w http.ResponseWriter, r *http.Request) {
 			if request.Final {
 				h := f.state.ActiveRun.Horizon
 				f.state.CompletedThrough = &h
+				f.state.CompletedRun = f.state.ActiveRun
 				f.state.ActiveRun = nil
 			}
 		}

@@ -325,3 +325,13 @@ commit's checkpoint advances. Provider response limits still apply; payloads
 are never clipped. Incomplete runs stay invisible to the completed-only
 `gitcrawl.report-window.commits` query. This mode opens no SQLite archive and
 requires the server's commit migration and explicit role grants before use.
+
+
+Commit and lifecycle scans preserve the exact preceding parent checkpoint in
+their immutable run scope. Switching back to conversation or parent-only work
+restores its historical selection and offset. A completed legacy scan without
+that saved checkpoint requires reconciliation; the collector never assumes
+empty progress. An identical `--commits` retry may omit `--since` only to recover
+the recorded completed run. Starting a new commit scan still requires `--since`.
+Associated PR receipts include their repository and number so the PostgreSQL
+owner can reject source-excluded associations before any progress is committed.
