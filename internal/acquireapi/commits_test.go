@@ -262,6 +262,10 @@ func TestSupplementalCheckpointBeforeFirstParentPage(t *testing.T) {
 					t.Fatal("failure did not retain page-zero run", f.state)
 				}
 				id := f.state.ActiveRun.ID
+				// Match the actual server: only the frozen parent checkpoint is
+				// returned during this page-zero transition, not CompletedRun.
+				f.state.ParentCheckpoint = prior
+				f.state.CompletedRun = nil
 				result, err := retry()
 				if err != nil || !result.Complete || result.RunID != id || f.begins != begins+1 {
 					t.Fatal("page-zero resume failed", result, err)

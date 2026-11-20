@@ -37,6 +37,7 @@ type State struct {
 	CompletedThrough *time.Time      `json:"completedThrough"`
 	ActiveRun        *RunRequest     `json:"activeRun,omitempty"`
 	CompletedRun     *RunRequest     `json:"completedRun,omitempty"`
+	ParentCheckpoint json.RawMessage `json:"parentCheckpoint,omitempty"`
 }
 type ChildObservation struct {
 	ThreadID   string `json:"threadId"`

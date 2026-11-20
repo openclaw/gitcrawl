@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover interrupted parent scans from the API's bounded progress field when the preceding supplemental run is omitted from active state.
+
 - Preserve resume and completion recovery for existing lifecycle runs that predate parent-checkpoint retention.
 
 - Resume a parent acquisition interrupted before its first page after a completed lifecycle or commit scan.

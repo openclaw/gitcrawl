@@ -245,10 +245,13 @@ func parentProgressCheckpoint(state State, repository string) (json.RawMessage, 
 		// Begin does not replace the preceding page checkpoint. Only a parent
 		// run with no accepted pages may still inherit that completed scope.
 		run := state.ActiveRun
-		if (run.Mode != "" && run.Mode != "historical-parents") || state.Revision != run.ExpectedRevision || state.CompletedRun == nil || state.CompletedRun.ID == run.ID {
+		if (run.Mode != "" && run.Mode != "historical-parents") || state.Revision != run.ExpectedRevision {
 			return nil, errors.New("active run does not own the preceding parent checkpoint")
 		}
-		state.ActiveRun = nil
+		if err := validateParentProgress(state.ParentCheckpoint); err != nil {
+			return nil, err
+		}
+		return state.ParentCheckpoint, nil
 	}
 	if state.ActiveRun == nil && state.CompletedRun != nil && state.CompletedRun.Mode == "lifecycle" {
 		run := state.CompletedRun
