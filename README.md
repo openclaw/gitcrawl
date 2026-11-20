@@ -94,7 +94,7 @@ before installation.
 
 For separately qualified GitHub acquisition, the inactive
 [`gitcrawl-acquire@` templates](docs/sync.md#scheduled-acquisition) resume the
-existing Octopool checkpoint without a historical rebuild.
+PostgreSQL-owned checkpoint through Octopool without a historical rebuild.
 
 ## Public cluster context export
 

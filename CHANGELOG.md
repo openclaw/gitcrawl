@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Route the inactive five-minute GitHub acquisition service through the PostgreSQL API and Octopool, with separate API/provider credentials and no SQLite or delivery dependency.
+
 - Read `threads` from the configured PostgreSQL archive in cloud mode, preserving selected numbers, local closure filters, limits and full native fields without a SQLite fallback. Remote status reports the service schema.
 
 - Add PostgreSQL parent-only repair from audited identities, with batched Octopool reads, resumable progress, and preserved child evidence and coverage horizon.

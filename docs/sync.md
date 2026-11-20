@@ -136,53 +136,46 @@ outbox migration is performed. A timer firing alone is not proof of catch-up.
 ## Scheduled acquisition
 
 `operations/gitcrawl-acquire@.service` and `.timer` are inactive Linux
-systemd templates for the qualified incremental profile above. They neither
-install themselves nor bootstrap a checkpoint. Keep the existing collector
-until the replacement source, scope and recovery path are qualified.
+systemd templates for PostgreSQL-owned incremental acquisition through Octopool.
+They neither install themselves nor bootstrap a checkpoint. Before activation,
+qualify the API source, repository identity, completed horizon and recovery path.
+Retire the old SQLite acquisition and delivery schedule for that source when
+its replacement is accepted.
 
 Each instance runs as `gitcrawl`, with `/var/lib/gitcrawl/<instance>` as its
-working directory. Before installation, qualify a readable existing
-`native.sqlite` there and the exact matching Octopool checkpoint. The service
-refuses a missing or empty native file. Configure the root-owned, group-readable
-`/etc/gitcrawl/acquire-<instance>.toml` with absolute paths for that database and
-its cache, vector and log directories inside the instance directory. Confirm
-that environment overrides do not select a different database or runtime path.
-Do not configure a portable store or remote publication in this acquisition
-instance. Preserve the current exclusions and qualify their owner before use.
+working directory. Its persistent `acquire.lock` serializes invocations for that
+source; manual acquisition must use the same lock. Configure the root-owned
+`/etc/gitcrawl/acquire-<instance>.toml` only for any required Cloudflare Access
+settings. `acquire-api` does not open its configured SQLite database or use
+local archive checkpoints, caches, Git shares or delivery outboxes.
 
-A root-owned mode-0600 `/etc/gitcrawl/acquire-<instance>.env` supplies:
+The root-owned mode-0600 `/etc/gitcrawl/acquire-<instance>.env` supplies:
 
+- `GITCRAWL_ORIGIN`: the qualified PostgreSQL API origin.
+- `GITCRAWL_ARCHIVE`: the canonical registered source ID.
 - `GITCRAWL_REPOSITORY`: one qualified public `owner/repo`.
-- `OCTOPOOL_TOKEN`: the existing relay caller session, kept out of argv.
-- `OCTOPOOL_URL` and `OCTOPOOL_POOL`, when overriding the documented defaults.
+- `GITCRAWL_PUBLISHER_TOKEN` and `GITCRAWL_READER_TOKEN`: separate API credentials.
 
-The command always selects `--octopool --state all --include-comments
---incremental`. There is no direct GitHub fallback, historical bootstrap,
-summary generation or report publication. Missing or incompatible checkpoints
-fail through the normal sync contract. Do not use a rolling `--since` window to
-hide a failed checkpoint. Private repositories and PR-detail enrichment remain
-outside this relay profile.
+A separate root-owned mode-0600 `/etc/gitcrawl/provider-<instance>.env` supplies
+`OCTOPOOL_TOKEN`, plus `OCTOPOOL_URL` and `OCTOPOOL_POOL` when overriding their
+normal defaults. No personal GitHub token is required or resolved.
 
-The persistent `acquire.lock` prevents concurrent invocations using the same
-instance; manual acquisition must take that same lock. Do not assign two
-instances to one native database, and stop for ownership review if an existing
-collector can still write it. Delivery uses its separate `delivery.lock` and
-native snapshot contract; it may read committed progress while acquisition
-continues. The timer starts two minutes after boot, then five minutes after the
-previous run completes, with up to15seconds jitter. Acquisition does not depend
-on archive availability; the separate delivery timer resumes retained requests.
+The command resumes its run and checkpoints from the API. It processes at most
+100 complete threads per invocation, with 100-parent and 20-child page bounds,
+and a three-minute command deadline inside the four-minute service timeout.
+An interrupted run retains API progress for the next invocation. Missing initial
+coverage fails visibly: provision its reviewed starting horizon separately;
+never add a rolling `--since` or reset progress to hide a failure.
 
-The template caps acquisition at four minutes, allows30seconds for termination,
-and limits memory to512MiB and CPU to one core. These are bounded starting
-settings, not evidence that a source fits: qualify them on the intended host
-before activation. A timeout can retain completed native writes but cannot
-advance the qualified checkpoint for an incomplete traversal. Repeated timeouts
-mean the scope or budget needs review; never reset the checkpoint or silently
-expand a budget. There is no immediate restart loop.
+The timer starts two minutes after boot, then five minutes after the previous
+run completes, with up to15seconds jitter. The service allows30seconds for
+termination, limits memory to512MiB and CPU to one core, and has no immediate
+restart loop. Qualify these limits on the intended host before activation.
+API or Octopool failure does not fall back to SQLite or direct GitHub access.
 
 Validate exact units with `systemd-analyze verify --man=no` before installation.
-After separately admitted activation, measure the successful checkpoint's
-`through` time and query-visible watermark. Timer firings do not prove freshness.
+After activation, measure the API's completed horizon and query-visible watermark;
+timer firings alone do not prove freshness.
 
 ## Exact rows
 
