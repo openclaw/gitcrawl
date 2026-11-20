@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a bounded Octopool GraphQL parent reader for up to 50 selected issue or pull-request numbers, preserving full returned fields and distinct provider identities without fetching children.
+
 - Add bounded PostgreSQL-only `acquire-api` collection through Octopool, with durable run and child-page checkpoints, stable native identities, and fixed historical selections that preserve the incremental horizon.
 
 - Expose bounded repository REST pages and reusable full-field mappings for acquisition through an external checkpoint owner, without opening a SQLite checkpoint.
