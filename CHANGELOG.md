@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Resume a parent acquisition interrupted before its first page after a completed lifecycle or commit scan.
+
 - Preserve parent progress across lifecycle and commit scans, and recover a lost final commit acknowledgement without requiring a new lower bound.
 
 - Collect pinned default-branch commits and complete associated-PR attribution through Octopool into resumable PostgreSQL pages, without local archive writes or advancing parent coverage.

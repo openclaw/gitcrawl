@@ -237,6 +237,19 @@ func validateParentProgress(raw json.RawMessage) error {
 	return nil
 }
 func parentProgressCheckpoint(state State, repository string) (json.RawMessage, error) {
+	var kind struct {
+		Schema string `json:"schema"`
+	}
+	_ = json.Unmarshal(state.Checkpoint, &kind)
+	if state.ActiveRun != nil && (kind.Schema == "github-commits-checkpoint/v1" || kind.Schema == "github-lifecycle-checkpoint/v1") {
+		// Begin does not replace the preceding page checkpoint. Only a parent
+		// run with no accepted pages may still inherit that completed scope.
+		run := state.ActiveRun
+		if (run.Mode != "" && run.Mode != "historical-parents") || state.Revision != run.ExpectedRevision || state.CompletedRun == nil || state.CompletedRun.ID == run.ID {
+			return nil, errors.New("active run does not own the preceding parent checkpoint")
+		}
+		state.ActiveRun = nil
+	}
 	if state.ActiveRun == nil && state.CompletedRun != nil && state.CompletedRun.Mode == "lifecycle" {
 		run := state.CompletedRun
 		var scope LifecycleScope

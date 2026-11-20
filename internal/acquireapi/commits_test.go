@@ -211,3 +211,87 @@ func TestLifecycleCommitsModeCycleRetainsParentProgress(t *testing.T) {
 		t.Fatal("legacy progress fabricated", err, provider.calls)
 	}
 }
+
+// The server accepts Begin without changing the last durable page checkpoint.
+// A provider failure before page one must resume that same run and prior progress.
+func TestSupplementalCheckpointBeforeFirstParentPage(t *testing.T) {
+	for _, previous := range []string{"commits", "lifecycle"} {
+		for _, mode := range []string{"parents", "historical", "incremental"} {
+			t.Run(previous+"/"+mode, func(t *testing.T) {
+				f, c, _, close := parentFixture(t)
+				defer close()
+				optionsParents := parentOptions(3)
+				digest, _ := parentSelectionHash(optionsParents.Selection, optionsParents.Selection.Repository)
+				if mode != "parents" {
+					digest, _ = selectionHash([]int{7, 8})
+				}
+				prior, _ := json.Marshal(checkpoint{Version: 1, Phase: "done", History: history{SHA: digest, Offset: 1}})
+				f.state.Checkpoint = prior
+				ctx, cancel := runContext()
+				defer cancel()
+				if _, err := RunCommits(ctx, c, &emptyCommitProvider{}, CommitOptions{Repository: "example/project", Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), MaxPages: 1}); err != nil {
+					t.Fatal(err)
+				}
+				if previous == "lifecycle" {
+					raw, _ := json.Marshal(LifecycleScope{Schema: "github-lifecycle-scope/v1", Threads: []LifecycleThread{{ID: "107"}}, ParentCheckpoint: prior})
+					f.state.CompletedRun = &RunRequest{ID: "previous-lifecycle", Mode: "lifecycle", ExpectedRevision: f.state.Revision - 1, Horizon: *f.state.CompletedThrough, Scope: raw}
+					f.state.Checkpoint, _ = json.Marshal(lifecycleCheckpoint{Schema: "github-lifecycle-checkpoint/v1", ThreadIndex: 1})
+				}
+				revision, begins := f.state.Revision, f.begins
+				var retry func() (Result, error)
+				if mode == "parents" {
+					p := &parentProvider{failAbove: 1}
+					optionsParents.MaxParents = 2
+					if _, err := RunParents(ctx, c, p, optionsParents); err == nil {
+						t.Fatal("expected first provider page failure")
+					}
+					p.failAbove = 0
+					retry = func() (Result, error) { return RunParents(ctx, c, p, optionsParents) }
+				} else {
+					p := &transitionFailureProvider{fixtureProvider: &fixtureProvider{body: "full", empty: mode == "incremental"}, fail: true}
+					o := options()
+					if mode == "historical" {
+						o.Numbers = []int{7, 8}
+					}
+					if _, err := Run(ctx, c, p, o); err == nil {
+						t.Fatal("expected first provider page failure")
+					}
+					retry = func() (Result, error) { return Run(ctx, c, p, o) }
+				}
+				if f.state.ActiveRun == nil || f.state.Revision != revision || f.begins != begins+1 {
+					t.Fatal("failure did not retain page-zero run", f.state)
+				}
+				id := f.state.ActiveRun.ID
+				result, err := retry()
+				if err != nil || !result.Complete || result.RunID != id || f.begins != begins+1 {
+					t.Fatal("page-zero resume failed", result, err)
+				}
+				var cp checkpoint
+				_ = json.Unmarshal(f.state.Checkpoint, &cp)
+				if cp.History.SHA != digest || cp.History.Offset < 1 {
+					t.Fatal("prior history discarded", cp)
+				}
+			})
+		}
+	}
+}
+
+type transitionFailureProvider struct {
+	*fixtureProvider
+	fail bool
+}
+
+func (p *transitionFailureProvider) GetIssue(ctx context.Context, owner, repo string, n int, r github.Reporter) (map[string]any, error) {
+	if p.fail {
+		p.fail = false
+		return nil, fmt.Errorf("fixture first page unavailable")
+	}
+	return p.fixtureProvider.GetIssue(ctx, owner, repo, n, r)
+}
+func (p *transitionFailureProvider) ReadRESTPage(ctx context.Context, q github.RESTPageRequest, r github.Reporter) (github.RESTPage, error) {
+	if p.fail {
+		p.fail = false
+		return github.RESTPage{}, fmt.Errorf("fixture first page unavailable")
+	}
+	return p.fixtureProvider.ReadRESTPage(ctx, q, r)
+}
