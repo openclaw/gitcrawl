@@ -55,6 +55,7 @@ Core commands:
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
   acquire-api          acquire full conversations through the PostgreSQL API
+  discover-parents     export missing parent identities through Octopool
   analytics            repair publication dates, enrich identities, or watch GraphQL updates
   sync-failures        list failed sync hydration attempts
   coverage             report local archive PR-detail completeness
@@ -97,6 +98,17 @@ No API server is provided. There is intentionally no serve command.
 `
 
 var commandUsageTexts = map[string]string{
+	"discover-parents": `gitcrawl discover-parents exports selected REST backing Issue IDs through Octopool.
+
+Usage:
+  gitcrawl discover-parents --repo owner/repo --numbers-file PATH [--cursor CURSOR] [--max-pages 20] [--timeout 10m] [--json]
+
+Uses OCTOPOOL_TOKEN and optional OCTOPOOL_URL/OCTOPOOL_POOL; no personal GitHub fallback or SQLite access.
+Output contains selection (input for acquire-api --parent-selection-file), numbersSHA256, nextCursor and page counts.
+Resume with the same number selection and nextCursor. Persist each successful output before continuing.
+The final empty nextCursor means enumeration finished, not that every requested number exists or that report coverage is complete.
+On a provider error the command emits only completed pages and exits nonzero; resume its nextCursor.
+`,
 	"acquire-api": `gitcrawl acquire-api persists Octopool conversations through the PostgreSQL API.
 
 Usage:

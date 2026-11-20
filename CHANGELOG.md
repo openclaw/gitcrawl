@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Discover missing parent identities with bounded, resumable Octopool repository pages, without opening SQLite or using personal GitHub credentials.
+
 - Recover interrupted parent scans from the API's bounded progress field when the preceding supplemental run is omitted from active state.
 
 - Preserve resume and completion recovery for existing lifecycle runs that predate parent-checkpoint retention.

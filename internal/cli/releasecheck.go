@@ -48,7 +48,7 @@ func releaseNotificationAllowed(args []string) bool {
 	}
 	// Metrics and explicit delivery must not touch runtime state or make unrelated
 	// network requests, including during read-only imports and status checks.
-	if len(args) > 0 && (args[0] == "metrics" || args[0] == "delivery" || args[0] == "acquire-api") {
+	if len(args) > 0 && (args[0] == "metrics" || args[0] == "delivery" || args[0] == "acquire-api" || args[0] == "discover-parents") {
 		return false
 	}
 	if len(args) == 0 || args[0] != "fill-pr-details" {
