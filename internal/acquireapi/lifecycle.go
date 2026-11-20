@@ -228,12 +228,6 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 		scope.Threads[i] = p.LifecycleThread
 	}
 	run := state.ActiveRun
-	if run == nil {
-		scope.ParentCheckpoint, err = parentProgressCheckpoint(state, o.Repository)
-		if err != nil {
-			return result, err
-		}
-	}
 	if run == nil && state.CompletedRun == nil {
 		var prior lifecycleCheckpoint
 		if json.Unmarshal(state.Checkpoint, &prior) == nil && prior.Schema == "github-lifecycle-checkpoint/v1" {
@@ -254,6 +248,12 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 		}
 	}
 	if run == nil {
+		scope.ParentCheckpoint, err = parentProgressCheckpoint(state, o.Repository)
+		if err != nil {
+			return result, err
+		}
+	}
+	if run == nil {
 		if o.Since.IsZero() || !scope.Since.Before(*state.CompletedThrough) || scope.Since.Nanosecond()%1000 != 0 {
 			return result, errors.New("new lifecycle run requires a prior UTC --since")
 		}
@@ -271,8 +271,12 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 		if json.Unmarshal(run.Scope, &original) != nil || original.Schema != scope.Schema || !slices.Equal(original.Threads, scope.Threads) || !run.Horizon.Equal(*state.CompletedThrough) || (!o.Since.IsZero() && !original.Since.Equal(scope.Since)) {
 			return result, errors.New("resume requires original lifecycle selection, window and parent versions")
 		}
-		if err := validateParentProgress(original.ParentCheckpoint); err != nil {
-			return result, err
+		// Already accepted legacy runs may lack parent progress. Resume their
+		// exact scope; only a subsequent mode transition needs that evidence.
+		if len(original.ParentCheckpoint) != 0 {
+			if err := validateParentProgress(original.ParentCheckpoint); err != nil {
+				return result, err
+			}
 		}
 		scope = original
 	}

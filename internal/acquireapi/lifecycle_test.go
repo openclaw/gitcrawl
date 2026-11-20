@@ -254,3 +254,41 @@ func TestLifecycleLostFinalACKRecoversWithoutRecollection(t *testing.T) {
 		t.Fatal("changed window silently reused old completion")
 	}
 }
+
+func TestLegacyLifecycleResumesAndAcknowledgesWithoutParentProgress(t *testing.T) {
+	f := newLifecycleFixture(t)
+	ctx, cancel := runContext()
+	defer cancel()
+	o := lifecycleOptions()
+	o.MaxPages = 1
+	if result, err := RunLifecycle(ctx, f.client, f.provider, o); err != nil || result.Complete {
+		t.Fatal(result, err)
+	}
+	var scope map[string]json.RawMessage
+	if err := json.Unmarshal(f.api.state.ActiveRun.Scope, &scope); err != nil {
+		t.Fatal(err)
+	}
+	delete(scope, "parentCheckpoint")
+	f.api.state.ActiveRun.Scope, _ = json.Marshal(scope)
+	original := string(f.api.state.ActiveRun.Scope)
+	horizon := f.api.state.ActiveRun.Horizon
+	f.api.drop = 2
+	o.Since = time.Time{}
+	if _, err := RunLifecycle(ctx, f.client, f.provider, o); err == nil {
+		t.Fatal("expected lost final acknowledgement")
+	}
+	if f.api.state.ActiveRun != nil || f.api.state.CompletedRun == nil || string(f.api.state.CompletedRun.Scope) != original || !f.api.state.CompletedThrough.Equal(horizon) {
+		t.Fatal("legacy scope or completion changed")
+	}
+	calls := len(f.providerCursors)
+	result, err := RunLifecycle(ctx, f.client, f.provider, o)
+	if err != nil || !result.Complete || result.RunID != f.api.state.CompletedRun.ID || len(f.providerCursors) != calls || f.api.begins != 1 {
+		t.Fatal("legacy completion recollected", result, err)
+	}
+	if _, err := parentProgressCheckpoint(f.api.state, o.Repository); err == nil {
+		t.Fatal("legacy run invented parent progress")
+	}
+	if !reflect.DeepEqual(f.providerCursors, []string{"", "next"}) {
+		t.Fatal("legacy cursor changed", f.providerCursors)
+	}
+}
