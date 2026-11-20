@@ -131,7 +131,16 @@ func withNativeReportSource(ctx context.Context, path string, request NativeRepo
 	if err != nil || file != request.File {
 		return ErrNativeReportSource
 	}
-	source, err := OpenReadOnly(ctx, path)
+	return withNativeReportTransaction(ctx, path, request, false, read)
+}
+
+func withNativeReportTransaction(ctx context.Context, path string, request NativeReportRequest, immutable bool, read func(*sql.Tx) error) error {
+	file := request.File
+	open := OpenReadOnly
+	if immutable {
+		open = OpenReadOnlyImmutable
+	}
+	source, err := open(ctx, path)
 	if err != nil {
 		return fmt.Errorf("open native report source: %w", err)
 	}
@@ -237,6 +246,10 @@ func captureNativeReport(ctx context.Context, tx *sql.Tx, request NativeReportRe
 }
 
 func nativeReportTableDefinition(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec) (NativeReportTable, error) {
+	return nativeReportTableSchema(ctx, tx, spec, true)
+}
+
+func nativeReportTableSchema(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, journal bool) (NativeReportTable, error) {
 	table := NativeReportTable{Name: spec.name, Columns: strings.Fields(spec.columns), KeyColumns: strings.Fields(spec.keys)}
 	// Refuse missing/extra columns, including empty tables, instead of silently
 	// omitting a migration-added fact. Column physical order is not significant.
@@ -273,6 +286,9 @@ func nativeReportTableDefinition(ctx context.Context, tx *sql.Tx, spec nativeRep
 	if !slices.Equal(keys, table.KeyColumns) {
 		return table, ErrNativeReportSource
 	}
+	if !journal {
+		return table, nil
+	}
 	var mode string
 	if err := tx.QueryRowContext(ctx, `select mode from change_contract_tables where table_name=?`, spec.name).Scan(&mode); err != nil || mode != ChangeContractModeRows {
 		return table, ErrNativeReportSource
@@ -288,7 +304,11 @@ func nativeReportTableDefinition(ctx context.Context, tx *sql.Tx, spec nativeRep
 }
 
 func nativeReportTableForRead(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64) (NativeReportTable, error) {
-	table, err := nativeReportTableDefinition(ctx, tx, spec)
+	return nativeReportTableRead(ctx, tx, spec, repoID, true)
+}
+
+func nativeReportTableRead(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, journal bool) (NativeReportTable, error) {
+	table, err := nativeReportTableSchema(ctx, tx, spec, journal)
 	if err != nil {
 		return table, err
 	}
@@ -320,7 +340,12 @@ func nativeReportScalarExpressions(table NativeReportTable) (columns, sizes []st
 }
 
 func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, limits NativeReportLimits, totalRows, totalBytes *int64) (NativeReportTable, error) {
-	table, err := nativeReportTableForRead(ctx, tx, spec, repoID)
+	return walkNativeReportTable(ctx, tx, spec, repoID, limits, totalRows, totalBytes, true, nil)
+}
+
+// A visitor consumes one typed row at a time; only ordinary captures retain rows.
+func walkNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTableSpec, repoID int64, limits NativeReportLimits, totalRows, totalBytes *int64, journal bool, visit func(NativeReportTable, []NativeReportValue) error) (NativeReportTable, error) {
+	table, err := nativeReportTableRead(ctx, tx, spec, repoID, journal)
 	if err != nil {
 		return table, err
 	}
@@ -402,7 +427,11 @@ func readNativeReportTable(ctx context.Context, tx *sql.Tx, spec nativeReportTab
 			}
 			values[i] = v
 		}
-		table.Rows = append(table.Rows, values)
+		if visit == nil {
+			table.Rows = append(table.Rows, values)
+		} else if err := visit(table, values); err != nil {
+			return table, err
+		}
 		*totalRows++
 	}
 	if err := rows.Err(); err != nil {

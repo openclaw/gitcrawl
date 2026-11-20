@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add read-only retained snapshot measurement and bounded seven-table seed export without arming a change journal, creating an outbox or contacting a provider.
+
 - Retry truncated or reset Octopool response bodies within the existing three-post allowance, retain private error causes, and let the hydration operator return exit 75 only when all attempts fail with eligible transport errors.
 
 - Let the bounded hydration operator distinguish exhausted connection-reset retries (exit 75) while retaining every substantive parallel failure.

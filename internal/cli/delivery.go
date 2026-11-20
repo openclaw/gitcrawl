@@ -30,6 +30,8 @@ func (a *App) runDelivery(ctx context.Context, args []string) error {
 	}
 	command := args[0]
 	switch command {
+	case "measure-snapshot", "export-snapshot":
+		return a.runRetainedSnapshot(ctx, args)
 	case "measure-seed":
 		return a.runMeasureSeed(ctx, args[1:])
 	case "deliver-clusters":
@@ -189,7 +191,7 @@ func deliveryStateOutput(status string, state remotedelivery.SeedState) delivery
 
 func deliveryCommandError(err error) error {
 	for _, known := range []error{context.Canceled, context.DeadlineExceeded, store.ErrNativeReportSource,
-		store.ErrNativeReportLimit, store.ErrNativeReportBlob, remotedelivery.ErrPrivateProjection,
+		store.ErrNativeReportLimit, store.ErrNativeReportBlob, store.ErrRetainedSnapshot, remotedelivery.ErrSnapshotExport, remotedelivery.ErrPrivateProjection,
 		remotedelivery.ErrPrivateSeed, remotedelivery.ErrPrivateSeedLimit, remotedelivery.ErrSeedOutbox, remote.ErrMissingToken} {
 		if errors.Is(err, known) {
 			return known

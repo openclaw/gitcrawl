@@ -232,6 +232,8 @@ Usage:
   gitcrawl delivery stage-clusters --db PATH --bundle PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery cluster-status --outbox PATH --timeout D [--json]
   gitcrawl delivery deliver-clusters --db PATH --outbox PATH --max-parts N --max-rows N --max-encoded-bytes N --timeout D --token-env NAME [--json]
+  gitcrawl delivery measure-snapshot --db PATH --repo OWNER/REPO --sha256 HEX64 --timeout D [--json]
+  gitcrawl delivery export-snapshot --db PATH --repo OWNER/REPO --sha256 HEX64 --directory NEW_PATH --archive ID --binding ID --seed HEX32 --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery measure-seed --db PATH --repo OWNER/REPO --timeout D [--json]
   gitcrawl delivery stage-seed --db PATH --repo OWNER/REPO --outbox NEW_PATH --origin URL --archive ID --binding ID --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D [--json]
   gitcrawl delivery status --outbox PATH --timeout D [--json]
@@ -270,7 +272,17 @@ These are not encoded wire sizes, an RSS estimate, UTF-8 validation or seed
 qualification. Keep acquisition stopped while using the measurement for admission;
 changed source file size/mtime causes refusal.
 
-All paths and positive bounds are explicit. Seed/change commands require native
+Retained snapshot commands require a stopped schema-16 source with the exact
+whole-file SHA-256. They use immutable SQLite and reject pending WAL or journal
+content. measure-snapshot reports scalar sizes; export-snapshot streams bounded
+chunks into a new private directory and writes manifest.json only after the final
+source hash check. They never arm a journal, create an outbox or contact a provider.
+The seven-table scope includes threads/comments and comments observation evidence,
+not PR files/commits/checks/review-thread state. Export is not coverage qualification
+or a live-change baseline. Retain partial directories after failure; do not replay
+into them. Measurement and export scan/hash the source and require a deadline.
+
+All paths and positive bounds are explicit. Live seed/change commands require native
 schema 16 and an armed change
 contract; no config discovery, automatic migration, provider sync,
 release check, or credential helper runs. stage-seed exclusively creates a new outbox;
