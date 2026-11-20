@@ -21,7 +21,7 @@ type ParentSnapshot struct {
 
 const parentFields = `id __typename fullDatabaseId number title body
  author { login __typename url ... on Node { id } }
- authorAssociation createdAt updatedAt closedAt url state locked activeLockReason
+ authorAssociation createdAt updatedAt closedAt url locked activeLockReason
  repository { nameWithOwner }
  milestone { number title state dueOn createdAt updatedAt url }`
 
@@ -46,8 +46,8 @@ func (c *OctopoolConversations) ReadParents(ctx context.Context, numbers []int, 
 		fmt.Fprintf(&aliases, "n%d: issueOrPullRequest(number:%d) { ...ParentIssue ...ParentPull }\n", i, number)
 	}
 	query := `query($owner:String!,$repo:String!) { repository(owner:$owner,name:$repo) { nameWithOwner ` + aliases.String() + ` } }
- fragment ParentIssue on Issue { ` + parentFields + ` stateReason }
- fragment ParentPull on PullRequest { ` + parentFields + ` isDraft merged mergedAt
+ fragment ParentIssue on Issue { ` + parentFields + ` issueState: state stateReason }
+ fragment ParentPull on PullRequest { ` + parentFields + ` pullState: state isDraft merged mergedAt
  mergedBy { login __typename url ... on Node { id } } mergeCommit { oid }
  mergeable mergeStateStatus maintainerCanModify additions deletions changedFiles
  headRefName headRefOid baseRefName baseRefOid
@@ -85,7 +85,13 @@ func (c *OctopoolConversations) ReadParents(ctx context.Context, numbers []int, 
 				return nil, errors.New("parent batch item missing provider timestamp")
 			}
 		}
-		state := historyString(row["state"])
+		// These fields have different enum types in GitHub's schema. Distinct
+		// response names are required even in mutually exclusive fragments.
+		stateField := "issueState"
+		if kind == "PullRequest" {
+			stateField = "pullState"
+		}
+		state := historyString(row[stateField])
 		if historyString(row["url"]) == "" || (state != "OPEN" && state != "CLOSED" && (kind != "PullRequest" || state != "MERGED")) {
 			return nil, errors.New("parent batch item missing provider metadata")
 		}

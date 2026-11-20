@@ -12,12 +12,16 @@ import (
 )
 
 func parentFixture(number int, kind string) map[string]any {
+	stateField := "issueState"
+	if kind == "PullRequest" {
+		stateField = "pullState"
+	}
 	return map[string]any{"__typename": kind, "id": fmt.Sprintf("node-%d", number),
 		"fullDatabaseId": json.Number("9007199254740993"), "number": json.Number(fmt.Sprint(number)),
 		"repository": map[string]any{"nameWithOwner": "fixture/repo"}, "title": "full title λ\x00",
 		"body": strings.Repeat("full body λ\x00", 1000), "author": nil, "authorAssociation": "NONE",
 		"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z", "closedAt": nil,
-		"url": fmt.Sprintf("https://github.com/fixture/repo/issues/%d", number), "state": "OPEN",
+		"url": fmt.Sprintf("https://github.com/fixture/repo/issues/%d", number), stateField: "OPEN",
 		"locked": false, "activeLockReason": nil, "milestone": nil}
 }
 
@@ -40,6 +44,9 @@ func parentTestClient(t *testing.T, response func(map[string]any) map[string]any
 			t.Error("request was not fresh")
 		}
 		query := historyString(historyMap(request["graphql"])["query"])
+		if !strings.Contains(query, "fragment ParentIssue on Issue { "+parentFields+" issueState: state") || !strings.Contains(query, "fragment ParentPull on PullRequest { "+parentFields+" pullState: state") {
+			t.Error("distinct schema enum fields share a response name")
+		}
 		for _, connection := range []string{"comments(", "reviews(", "reviewThreads(", "labels(", "assignees("} {
 			if strings.Contains(query, connection) {
 				t.Errorf("parent query included %s", connection)
@@ -168,7 +175,7 @@ func TestOctopoolParentsRejectsIncompleteOrUnqualifiedBatch(t *testing.T) {
 				case "invalid-time":
 					second["createdAt"] = "not a timestamp"
 				case "state":
-					second["state"] = "UNKNOWN"
+					second["pullState"] = "UNKNOWN"
 				case "errors":
 					historyMap(envelope["body"])["errors"] = []any{map[string]any{"message": "partial result"}}
 				case "stale":
