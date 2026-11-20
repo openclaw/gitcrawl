@@ -102,6 +102,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if a.githubTokenCommand != nil && rest[0] == "delivery" {
 		return usageErr(fmt.Errorf("delivery does not support --github-token-command; use explicit --token-env for the service"))
 	}
+	if a.githubTokenCommand != nil && rest[0] == "acquire-api" {
+		return usageErr(fmt.Errorf("acquire-api does not support --github-token-command; use explicit service credentials"))
+	}
 	if releaseNotificationAllowed(rest) {
 		a.maybeNotifyRelease(ctx, rest)
 	}
@@ -138,6 +141,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runAnalytics(ctx, rest[1:])
 	case "sync":
 		return a.runSync(ctx, rest[1:])
+	case "acquire-api":
+		return a.runAcquireAPI(ctx, rest[1:])
 	case "fill-pr-details":
 		return a.runFillPRDetails(ctx, rest[1:])
 	case "threads":

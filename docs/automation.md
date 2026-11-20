@@ -139,6 +139,64 @@ octopool gh api repos/openclaw/openclaw/pulls/123
 
 Gitcrawl no longer maintains a runtime `gh` command cache. Use Octopool for org-authenticated pooled GitHub reads, and keep using gitcrawl for local mirror/search/cluster automation.
 
+## PostgreSQL-only acquisition
+
+`acquire-api` collects full GitHub issue, pull request and published child rows
+through Octopool into an existing PostgreSQL acquisition source. It does not
+open a SQLite database, invoke `gh` or run model work.
+The source must already have a completed baseline, acquisition preparation,
+stable native ID mappings and child-observation allocation prepared by the
+CrawlRemote owner. Original ID and observation high-waters must be reconciled
+before those preparation steps.
+
+```bash
+gitcrawl acquire-api \
+  --endpoint https://archive.example \
+  --source github-example \
+  --repo example/project \
+  --publisher-token-env ARCHIVE_PUBLISHER_TOKEN \
+  --reader-token-env ARCHIVE_READER_TOKEN \
+  --since 2026-01-01T00:00:00Z \
+  --timeout 10m --max-threads 100 --json
+```
+
+Supply separate, source-scoped publisher and reader credentials through the
+named environment variables, and the existing `OCTOPOOL_TOKEN` caller session.
+`OCTOPOOL_URL` and `OCTOPOOL_POOL` select the existing relay. The archive endpoint
+requires HTTPS except for loopback tests. An explicitly selected `--config`
+can supply the existing Cloudflare Access binding; archive database settings
+are not consumed. No personal GitHub credential fallback is used.
+
+The first incremental run requires `--since`. Later runs overlap the last
+completed horizon by two minutes. PostgreSQL retains the original run scope,
+observation timestamp, parent queue and child cursor after an interrupted or
+bounded invocation. Repeating the command resumes that run; complete child
+pages and their checkpoints commit together. A lost page acknowledgement gets
+one retry with identical request bytes. Other rejections remain visible.
+`complete: true` means acquisition finalized its requested horizon. Readers
+explicitly configured for acquisition mode then select that completed run
+automatically; partial runs remain invisible. One-time acquisition preparation
+is required, but no per-run legacy snapshot preparation is needed. The horizon
+is the collector's requested bound, not an independent provider coverage proof.
+
+For a fixed historical selection, add `--numbers-file numbers.txt` containing
+unique positive issue/PR numbers separated by whitespace or commas. Keep the
+file and order unchanged across invocations. Each bounded historical run
+retains its offset in PostgreSQL and preserves the previously completed
+incremental horizon. Historical collection therefore requires an established
+horizon. Incremental runs can occur between completed historical batches;
+an active run must finish before another mode starts.
+
+The default parent page contains up to 100 rows, cached for the current process;
+only queued parents after a restart need an individual metadata refetch.
+`--parent-page-size` and `--child-page-size` select 1–100 rows before a new run.
+The default child page size is 20. Provider responses are bounded at 8 MiB;
+acquisition writes are bounded at 500 changes and 4 MiB, including full raw
+provider fields. Oversized rows/pages fail without advancing that checkpoint;
+content is never clipped. The initial runner does not split an oversized child
+page or shrink a recorded page size automatically. A missing selected parent
+also fails visibly rather than silently dropping it from the selection.
+
 ## Multi-repo automation
 
 A single `gitcrawl.db` can hold many repositories. Loop in shell:

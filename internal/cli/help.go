@@ -54,6 +54,7 @@ Core commands:
   init                 create config, optionally from a portable store
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
+  acquire-api          acquire full conversations through the PostgreSQL API
   analytics            repair publication dates, enrich identities, or watch GraphQL updates
   sync-failures        list failed sync hydration attempts
   coverage             report local archive PR-detail completeness
@@ -96,6 +97,16 @@ No API server is provided. There is intentionally no serve command.
 `
 
 var commandUsageTexts = map[string]string{
+	"acquire-api": `gitcrawl acquire-api persists Octopool conversations through the PostgreSQL API.
+
+Usage:
+  gitcrawl acquire-api --endpoint URL --source ID --repo owner/repo --publisher-token-env ENV --reader-token-env ENV --since RFC3339 [--numbers-file PATH] [--max-threads 100] [--timeout 10m] [--json]
+
+The first incremental run requires --since. Later runs use the server horizon;
+active runs always resume their original scope and checkpoint. Historical
+selection requires an established incremental horizon and its unchanged file.
+No SQLite archive is opened and no direct GitHub credential fallback exists.
+`,
 	"metrics": `gitcrawl metrics collects repository headline metrics in a separate SQLite database.
 
 Usage:
