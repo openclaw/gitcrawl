@@ -41,6 +41,17 @@ func (a *App) runInit(ctx context.Context, args []string) error {
 	if nonEmptyCount(localDBPath, isolatedRuntimeDir, portableStoreURL, remoteEndpointValue) > 1 {
 		return usageErr(fmt.Errorf("use only one of --db, --runtime-dir, --portable-store, or --remote"))
 	}
+	// Re-running bare init must not replace an API reader with a local database.
+	// An explicit storage flag still selects the operator's requested target.
+	if nonEmptyCount(localDBPath, isolatedRuntimeDir, portableStoreURL, remoteEndpointValue) == 0 {
+		existing, err := config.LoadRuntime(a.configPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && existing.Remote.Enabled() && existing.Remote.Mode == crawlremote.ModeCloud {
+			return usageErr(fmt.Errorf("init cannot replace a configured cloud archive implicitly; use --remote and --archive to initialize the API reader"))
+		}
+	}
 	if localDBPath == ":memory:" || strings.HasPrefix(localDBPath, "file:") {
 		return usageErr(fmt.Errorf("--db requires a filesystem path; SQLite URIs and :memory: are unsupported"))
 	}

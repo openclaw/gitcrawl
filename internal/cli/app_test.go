@@ -32,6 +32,37 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
+func TestInitPreservesConfiguredCloudArchive(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	configPath := filepath.Join(dir, "remote.toml")
+	cfg := config.Default()
+	cfg.Remote = crawlremote.Config{Mode: crawlremote.ModeCloud, Endpoint: "https://archive.example.com", Archive: "fixture", TokenEnv: "CRAWL_REMOTE_TOKEN"}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New()
+	app.Stdout, app.Stderr = io.Discard, io.Discard
+	err = app.Run(context.Background(), []string{"--config", configPath, "init"})
+	if err == nil || !strings.Contains(err.Error(), "cloud") {
+		t.Fatalf("implicit init replaced cloud archive: %v", err)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("cloud configuration changed: %v", err)
+	}
+	if _, err := os.Stat(cfg.DBPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("created SQLite database: %v", err)
+	}
+}
+
 func TestInitWritesConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
