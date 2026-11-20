@@ -414,6 +414,22 @@ func validateConversationComment(node map[string]any) error {
 }
 
 func (c *OctopoolConversations) requestConversations(ctx context.Context, query string, variables map[string]any, reporter Reporter) (map[string]any, error) {
+	body, err := c.requestConversationData(ctx, query, variables, reporter)
+	if err != nil {
+		return nil, err
+	}
+	var data map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if decoder.Decode(&data) != nil || data == nil {
+		return nil, errors.New("invalid GraphQL response data")
+	}
+	return data, nil
+}
+
+// Keep the provider JSON bytes for evidence consumers. The same relay receipt
+// and GraphQL error checks apply to parsed conversation and raw event readers.
+func (c *OctopoolConversations) requestConversationData(ctx context.Context, query string, variables map[string]any, reporter Reporter) (json.RawMessage, error) {
 	if len(query) > 16<<10 {
 		return nil, errors.New("GraphQL query exceeds relay limit; reduce batch size")
 	}
@@ -471,7 +487,7 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 		reporter.Printf("[github] GraphQL quota remaining=%s used=%s limit=%s reset=%s", headers.Get("X-RateLimit-Remaining"), headers.Get("X-RateLimit-Used"), headers.Get("X-RateLimit-Limit"), headers.Get("X-RateLimit-Reset"))
 	}
 	var result struct {
-		Data   map[string]any    `json:"data"`
+		Data   json.RawMessage   `json:"data"`
 		Errors []json.RawMessage `json:"errors"`
 	}
 	body, err := decodeOctopoolBody(envelope.Body, envelope.BodyEncoding)
@@ -483,7 +499,7 @@ func (c *OctopoolConversations) requestConversations(ctx context.Context, query 
 	if err = decoder.Decode(&result); err != nil {
 		return nil, errors.New("invalid GraphQL response")
 	}
-	if len(result.Errors) > 0 || result.Data == nil {
+	if len(result.Errors) > 0 || len(result.Data) == 0 || bytes.Equal(bytes.TrimSpace(result.Data), []byte("null")) {
 		return nil, errors.New("GraphQL returned errors or missing data; batch remains incomplete")
 	}
 	return result.Data, nil
