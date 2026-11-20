@@ -55,6 +55,7 @@ type PageRequest struct {
 	Final            bool              `json:"final"`
 	ChildObservation *ChildObservation `json:"childObservation,omitempty"`
 	Lifecycle        *LifecyclePage    `json:"lifecycle,omitempty"`
+	Commits          *CommitPage       `json:"commits,omitempty"`
 }
 type Receipt struct {
 	RunID    string `json:"runId"`

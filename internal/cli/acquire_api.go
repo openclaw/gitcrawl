@@ -26,6 +26,8 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	reader := fs.String("reader-token-env", "", "environment variable with archive reader credential")
 	numbers := fs.String("numbers-file", "", "fixed historical number selection (no SQLite)")
 	parents := fs.String("parent-selection-file", "", "audited parent-only identity selection (no child fetches)")
+	commits := fs.Bool("commits", false, "pinned default-branch commit and attribution scan")
+	commitPages := fs.Int("commit-max-pages", 100, "maximum atomic commit pages per invocation")
 	lifecycle := fs.String("lifecycle-numbers-file", "", "fixed lifecycle parent numbers (1..500, no SQLite)")
 	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
 	since := fs.String("since", "", "initial incremental lower bound, RFC3339")
@@ -40,8 +42,22 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if fs.NArg() != 0 || *endpoint == "" || *source == "" || *repo == "" || *timeout <= 0 || *timeout > 12*time.Hour || *publisher == "" || *reader == "" || !validAccessEnvName(*publisher) || !validAccessEnvName(*reader) {
 		return usageErr(errors.New("acquire-api requires endpoint, source, repo and explicit publisher/reader token environment names"))
 	}
+	if *commits && (*lifecycle != "" || *parents != "" || *numbers != "") {
+		return usageErr(errors.New("commits cannot be combined with thread selections"))
+	}
 	if *lifecycle != "" && (*parents != "" || *numbers != "") {
 		return usageErr(errors.New("lifecycle selection cannot be combined with parent-selection-file or numbers-file"))
+	}
+	if !*commits {
+		var set bool
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "commit-max-pages" {
+				set = true
+			}
+		})
+		if set {
+			return usageErr(errors.New("commit-max-pages requires commits"))
+		}
 	}
 	if *lifecycle == "" {
 		var lifecycleFlag bool
@@ -131,12 +147,14 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 	var result acquireapi.Result
-	if *parents != "" || *lifecycle != "" {
+	if *parents != "" || *lifecycle != "" || *commits {
 		provider, providerErr := github.NewOctopoolConversations(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
 		if providerErr != nil {
 			return providerErr
 		}
-		if *lifecycle != "" {
+		if *commits {
+			result, err = acquireapi.RunCommits(ctx, api, provider, acquireapi.CommitOptions{Repository: *repo, Since: options.Since, MaxPages: *commitPages})
+		} else if *lifecycle != "" {
 			if len(options.Numbers) > *limit || *limit < 1 || *limit > 500 {
 				return usageErr(errors.New("lifecycle selection exceeds max-threads (1..500)"))
 			}

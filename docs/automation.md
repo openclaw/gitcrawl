@@ -303,3 +303,25 @@ parent versions. `complete: false` means selected timelines still need another
 invocation. The server's completed-run metadata resolves a lost final response:
 repeating the same latest selection, window and parent versions returns its
 completion without calling the provider again.
+
+
+### Commit history through PostgreSQL
+
+Use `acquire-api --commits --since RFC3339` with the same explicit API tokens and
+Octopool configuration. The source must have an established acquisition horizon;
+commit collection preserves that horizon. This mode cannot be combined with a
+thread selection. It pins the repository identity, default branch OID and lower
+bound in the existing acquisition run, then resumes its saved cursor.
+
+Each atomic page carries one full commit and every associated-PR page, including
+nullable merger identities, merge times, merge commit OIDs and repository names.
+Full messages retain coauthor trailers. Attribution is preserved for the report
+owner; the collector never substitutes author credit for unavailable merger
+proof. It does not claim repository or report coverage.
+
+`--commit-max-pages` defaults to 100. A commit with more than 100 attribution
+pages or a request exceeding the existing 4 MiB page limit fails before that
+commit's checkpoint advances. Provider response limits still apply; payloads
+are never clipped. Incomplete runs stay invisible to the completed-only
+`gitcrawl.report-window.commits` query. This mode opens no SQLite archive and
+requires the server's commit migration and explicit role grants before use.

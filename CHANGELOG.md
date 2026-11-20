@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Collect pinned default-branch commits and complete associated-PR attribution through Octopool into resumable PostgreSQL pages, without local archive writes or advancing parent coverage.
+
 - Collect selected closure and merge timelines with resumable PostgreSQL checkpoints, exact parent versions, and no local archive writes.
 
 - Read bounded GitHub lifecycle pages through Octopool, retaining exact event JSON and cursor metadata for PostgreSQL acquisition without local archive writes.

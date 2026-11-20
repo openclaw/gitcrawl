@@ -76,7 +76,7 @@ func TestAcquireAPILifecycleRejectsMixedSelectors(t *testing.T) {
 	a.Stdout = io.Discard
 	a.Stderr = io.Discard
 	base := []string{"acquire-api", "--endpoint", "https://archive.example", "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "PUB", "--reader-token-env", "READ"}
-	for _, args := range [][]string{{"--lifecycle-numbers-file", "unused", "--numbers-file", "unused"}, {"--lifecycle-numbers-file", "unused", "--parent-selection-file", "unused"}, {"--lifecycle-max-pages", "1"}} {
+	for _, args := range [][]string{{"--commits", "--numbers-file", "unused"}, {"--commits", "--parent-selection-file", "unused"}, {"--commits", "--lifecycle-numbers-file", "unused"}, {"--commit-max-pages", "1"}, {"--lifecycle-numbers-file", "unused", "--numbers-file", "unused"}, {"--lifecycle-numbers-file", "unused", "--parent-selection-file", "unused"}, {"--lifecycle-max-pages", "1"}} {
 		if err := a.Run(context.Background(), append(append([]string{}, base...), args...)); err == nil {
 			t.Fatal("mixed or unselected lifecycle flags accepted", args)
 		}

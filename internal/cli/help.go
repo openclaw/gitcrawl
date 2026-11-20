@@ -108,6 +108,10 @@ selection requires an established incremental horizon and its unchanged file.
 Use --parent-selection-file PATH for audited parent-only identities; this skips
 children and keeps the existing horizon. --parent-page-size is capped at 50 and
 may be reduced to resume after a response-size failure.
+Use --commits --since RFC3339 for a pinned default-branch commit scan with complete
+associated-PR attribution. --commit-max-pages (default 100) bounds each invocation.
+This requires an established acquisition horizon and does not advance it.
+
 Use --lifecycle-numbers-file PATH for 1..500 existing PG parents and --since
 for the event lower bound. This follows closure/reopen/merge timelines only; it
 keeps the completed horizon and does not claim repository-wide coverage.
