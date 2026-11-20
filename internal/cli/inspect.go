@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 
+	crawlremote "github.com/openclaw/crawlkit/remote"
+	"github.com/openclaw/gitcrawl/internal/config"
 	"github.com/openclaw/gitcrawl/internal/store"
 )
 
@@ -240,6 +244,12 @@ func (a *App) runThreads(ctx context.Context, args []string) error {
 	limit, err := parseOptionalPositiveInt(*limitRaw)
 	if err != nil {
 		return usageErr(err)
+	}
+
+	if cfg, err := config.LoadRuntime(a.configPath); err == nil && cfg.Remote.Enabled() && cfg.Remote.Mode == crawlremote.ModeCloud {
+		return a.runRemoteThreads(ctx, cfg, owner+"/"+repoName, *includeClosed, numbers, limit)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 
 	rt, err := a.openLocalRuntimeReadOnly(ctx)

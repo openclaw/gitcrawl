@@ -90,7 +90,13 @@ After cloud initialization and login, supported read commands use the configured
 ```bash
 gitcrawl status --json
 gitcrawl search openclaw/openclaw --query "manifest cache" --json
+gitcrawl threads openclaw/openclaw --numbers 42,73 --include-closed --json
 ```
+
+`threads` requires the service's `gitcrawl.threads.list` query. It preserves full
+native fields, `--numbers`, `--include-closed` (local closure), and `--limit`.
+Pages and split selections share one completed publication pin. With no limit,
+it returns all matching rows; backend errors fail without a local fallback.
 
 Commands that require a writable local database fail in cloud mode instead of silently creating one.
 

@@ -161,7 +161,7 @@ func remoteControlStatus(configPath string, cfg config.Config, status crawlremot
 		out.Warnings = append(out.Warnings, status.Warnings...)
 	}
 	out.Databases = []control.Database{
-		control.RemoteDatabase("primary", "GitHub archive", "archive", "d1", cfg.Remote.Endpoint, firstNonEmpty(status.Archive, cfg.Remote.Archive), true, counts),
+		control.RemoteDatabase("primary", "GitHub archive", "archive", firstNonEmpty(status.SchemaName, "remote"), cfg.Remote.Endpoint, firstNonEmpty(status.Archive, cfg.Remote.Archive), true, counts),
 	}
 	return out
 }

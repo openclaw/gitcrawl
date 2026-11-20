@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Read `threads` from the configured PostgreSQL archive in cloud mode, preserving selected numbers, local closure filters, limits and full native fields without a SQLite fallback. Remote status reports the service schema.
+
 - Add PostgreSQL parent-only repair from audited identities, with batched Octopool reads, resumable progress, and preserved child evidence and coverage horizon.
 
 - Add a bounded Octopool GraphQL parent reader for up to 50 selected issue or pull-request numbers, preserving full returned fields and distinct provider identities without fetching children.
