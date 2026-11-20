@@ -25,6 +25,15 @@ const parentFields = `id __typename fullDatabaseId number title body
  repository { nameWithOwner }
  milestone { number title state dueOn createdAt updatedAt url }`
 
+// ReadParentRepository verifies repository identity without requiring or
+// populating the full conversation inventory used by the native hydrator.
+func (c *OctopoolConversations) ReadParentRepository(ctx context.Context, owner, repo string, reporter Reporter) (map[string]any, error) {
+	if owner+"/"+repo != c.repository {
+		return nil, errors.New("parent repository scope mismatch")
+	}
+	return c.Client.GetRepo(ctx, owner, repo, reporter)
+}
+
 // ReadParents reads only the requested parent records. It does not inventory the
 // repository, fetch child connections, populate conversation caches or infer
 // child completeness. Oversized batches fail for the caller to split explicitly.

@@ -105,6 +105,9 @@ Usage:
 The first incremental run requires --since. Later runs use the server horizon;
 active runs always resume their original scope and checkpoint. Historical
 selection requires an established incremental horizon and its unchanged file.
+Use --parent-selection-file PATH for audited parent-only identities; this skips
+children and keeps the existing horizon. --parent-page-size is capped at 50 and
+may be reduced to resume after a response-size failure.
 No SQLite archive is opened and no direct GitHub credential fallback exists.
 `,
 	"metrics": `gitcrawl metrics collects repository headline metrics in a separate SQLite database.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add PostgreSQL parent-only repair from audited identities, with batched Octopool reads, resumable progress, and preserved child evidence and coverage horizon.
+
 - Add a bounded Octopool GraphQL parent reader for up to 50 selected issue or pull-request numbers, preserving full returned fields and distinct provider identities without fetching children.
 
 - Add bounded PostgreSQL-only `acquire-api` collection through Octopool, with durable run and child-page checkpoints, stable native identities, and fixed historical selections that preserve the incremental horizon.

@@ -198,3 +198,34 @@ func TestOctopoolParentsRejectsIncompleteOrUnqualifiedBatch(t *testing.T) {
 		})
 	}
 }
+
+func TestOctopoolParentRepositoryDoesNotRequireConversationInventory(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request map[string]any
+		json.NewDecoder(r.Body).Decode(&request)
+		if request["path"] != "/repos/fixture/repo" || request["method"] != "GET" || r.Header.Get("Authorization") != "Bearer fixture-token" {
+			t.Fatal("unexpected repository request", request)
+		}
+		fmt.Fprint(w, `{"status":200,"body_encoding":"json","body":{"id":123,"full_name":"fixture/repo"},"relay":{"cache":"miss"}}`)
+	}))
+	defer server.Close()
+	client, err := NewOctopoolConversations(server.URL, "fixture", "fixture-token", "fixture/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.GetRepo(context.Background(), "fixture", "repo", nil); err == nil {
+		t.Fatal("native conversation path bypassed inventory")
+	}
+	repo, err := client.ReadParentRepository(context.Background(), "fixture", "repo", nil)
+	if err != nil || fmt.Sprint(repo["id"]) != "123" || calls != 1 {
+		t.Fatal(repo, calls, err)
+	}
+	if client.metadata != nil || len(client.issues) != 0 || len(client.conversations) != 0 {
+		t.Fatal("parent repository read manufactured inventory")
+	}
+	if _, err = client.ReadParentRepository(context.Background(), "fixture", "other", nil); err == nil || calls != 1 {
+		t.Fatal("foreign repository reached relay")
+	}
+}

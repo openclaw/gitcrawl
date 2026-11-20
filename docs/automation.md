@@ -244,3 +244,34 @@ The artifact gives reviewers a structured view of what changed and how the clust
 - **Set both tokens in a single place.** Either env or `[env]` in `config.toml`. Mixing sources tends to confuse `doctor` reports.
 - **Bound the staleness window.** `--sync-if-stale` on every agent-driven search is cheaper than a hot cron loop.
 - **Re-cluster after a backfill.** A large `--state all` sync should be followed by `gitcrawl refresh --no-sync` (or just `gitcrawl embed && gitcrawl cluster`) so the durable graph reflects the new content.
+
+### Selected parent-only repair
+
+Use `acquire-api --parent-selection-file selection.json` with the same endpoint,
+source and credential flags to refresh only audited parents through Octopool
+GraphQL. Do not combine it with `--numbers-file` or `--since`. The file contains:
+
+```json
+{"schema":"gitcrawl-parent-selection/v1","repository":"example/project","parents":[{"number":7,"kind":"pull_request","backingIssueId":"123456789","nodeId":"PR_example"}]}
+```
+
+Use `issue` or `pull_request` for `kind`. `backingIssueId` is the original REST
+issue ID, including for pull requests; the GraphQL pull-request database ID is a
+different identity. `nodeId` is optional and, when supplied, must match. Select
+identities from the reconciled original inventory, not from guessed numbers.
+
+This mode requires an existing completed incremental horizon and the prepared
+native ID and observation allocators. It cannot initialize coverage. It keeps
+that horizon, fetches no children, and publishes parent rows marked with
+incomplete child observation. Prior child rows and evidence remain retained.
+Existing labels, assignees and local fields survive; newly unobserved collections
+are JSON `null`, not empty lists. Raw metadata identifies the partial GraphQL
+observation explicitly.
+
+The ordered selection and original capture time are frozen in the PostgreSQL
+run. Each accepted page persists its next selection offset. Reuse the unchanged
+file to resume. `--max-threads` bounds each run; `--parent-page-size` controls
+GraphQL batches up to 50. Response-size failures stop without advancing that
+batch; retry with a smaller page size, including 1. An individual row exceeding
+the 4 MiB acquisition limit is rejected without clipping. `complete: true`
+means the selected run completed, not that comments or other history are complete.

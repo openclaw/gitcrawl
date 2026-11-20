@@ -25,6 +25,7 @@ const MaxPageBytes = 4 << 20
 
 type RunRequest struct {
 	ID               string          `json:"id"`
+	Mode             string          `json:"mode,omitempty"`
 	ExpectedRevision int64           `json:"expectedRevision"`
 	Horizon          time.Time       `json:"horizon"`
 	Scope            json.RawMessage `json:"scope"`
@@ -210,6 +211,52 @@ func (c *Client) Parent(ctx context.Context, id int64) (*remote.Change, error) {
 		return nil, err
 	}
 	return remotedelivery.AcquisitionParent(result, id)
+}
+
+// Parents reads one completed snapshot for the selected native IDs. Missing
+// parents remain absent; neither row order nor missing IDs imply identity.
+func (c *Client) Parents(ctx context.Context, ids []int64) (map[int64]remote.Change, error) {
+	if len(ids) == 0 || len(ids) > 50 {
+		return nil, errors.New("parent lookup requires 1..50 IDs")
+	}
+	selected := make([]string, len(ids))
+	wanted := make(map[int64]bool, len(ids))
+	for i, id := range ids {
+		if id <= 0 || wanted[id] {
+			return nil, errors.New("invalid duplicate parent ID")
+		}
+		wanted[id] = true
+		selected[i] = strconv.FormatInt(id, 10)
+	}
+	result, err := c.reader.Query(ctx, "gitcrawl", c.source, remote.QueryRequest{Name: "gitcrawl.threads.current", Args: map[string]any{"ids": selected}, Limit: len(ids)})
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Rows) > len(ids) || result.Cursor != "" || result.Stats.NextCursor != "" {
+		return nil, errors.New("incomplete selected parent lookup")
+	}
+	out := make(map[int64]remote.Change, len(result.Rows))
+	for _, row := range result.Rows {
+		if len(row) == 0 {
+			return nil, errors.New("empty selected parent row")
+		}
+		value, ok := row[0].(string)
+		id, parseErr := strconv.ParseInt(value, 10, 64)
+		if !ok || parseErr != nil || !wanted[id] {
+			return nil, errors.New("unexpected selected parent identity")
+		}
+		if _, duplicate := out[id]; duplicate {
+			return nil, errors.New("duplicate selected parent")
+		}
+		one := result
+		one.Rows = [][]any{row}
+		change, err := remotedelivery.AcquisitionParent(one, id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = *change
+	}
+	return out, nil
 }
 
 // CheckRepository binds the configured PG source to the repository verified by
