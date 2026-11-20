@@ -275,3 +275,31 @@ GraphQL batches up to 50. Response-size failures stop without advancing that
 batch; retry with a smaller page size, including 1. An individual row exceeding
 the 4 MiB acquisition limit is rejected without clipping. `complete: true`
 means the selected run completed, not that comments or other history are complete.
+
+### Selected lifecycle events through PostgreSQL
+
+Use `acquire-api --lifecycle-numbers-file numbers.txt --since RFC3339` to collect
+closure, reopen and merge timeline events for 1–500 existing PostgreSQL parents.
+The number file uses the same comma/whitespace syntax as `--numbers-file`.
+It cannot be combined with parent repair or conversation selection. Set
+`--max-threads` at least as high as the selection size (maximum 500).
+
+This mode uses the same explicit endpoint, source, reader/publisher environment
+names and Octopool credentials as conversation acquisition. It reads full parent
+rows at one completed snapshot and preserves their exact native ID, provider
+node ID and sequence/ordinal pins. Missing parents stop collection; hydrate them
+through the parent owner first. No SQLite archive or local checkpoint is opened.
+
+The source must already have a completed acquisition horizon. Lifecycle work
+keeps that horizon unchanged and retains events in `[since, horizon)`; it does
+not establish repository-wide closure/merge completeness or collect commits,
+security advisories, comments or reviews. Raw event objects retain missing
+actors rather than substituting the parent author.
+
+Each invocation stops after `--lifecycle-max-pages` provider pages (default 100)
+or `--timeout`, preserving acknowledged progress in PostgreSQL. Resume with the
+same number selection; an active run retains its original lower bound and
+parent versions. `complete: false` means selected timelines still need another
+invocation. The server's completed-run metadata resolves a lost final response:
+repeating the same latest selection, window and parent versions returns its
+completion without calling the provider again.

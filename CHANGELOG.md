@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Collect selected closure and merge timelines with resumable PostgreSQL checkpoints, exact parent versions, and no local archive writes.
+
 - Read bounded GitHub lifecycle pages through Octopool, retaining exact event JSON and cursor metadata for PostgreSQL acquisition without local archive writes.
 
 - Preserve configured cloud readers when `init` is run without an explicit storage target, instead of silently creating a local SQLite archive.

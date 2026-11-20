@@ -36,6 +36,7 @@ type State struct {
 	Checkpoint       json.RawMessage `json:"checkpoint"`
 	CompletedThrough *time.Time      `json:"completedThrough"`
 	ActiveRun        *RunRequest     `json:"activeRun,omitempty"`
+	CompletedRun     *RunRequest     `json:"completedRun,omitempty"`
 }
 type ChildObservation struct {
 	ThreadID   string `json:"threadId"`
@@ -53,6 +54,7 @@ type PageRequest struct {
 	Changes          []remote.Change   `json:"changes"`
 	Final            bool              `json:"final"`
 	ChildObservation *ChildObservation `json:"childObservation,omitempty"`
+	Lifecycle        *LifecyclePage    `json:"lifecycle,omitempty"`
 }
 type Receipt struct {
 	RunID    string `json:"runId"`

@@ -26,6 +26,8 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	reader := fs.String("reader-token-env", "", "environment variable with archive reader credential")
 	numbers := fs.String("numbers-file", "", "fixed historical number selection (no SQLite)")
 	parents := fs.String("parent-selection-file", "", "audited parent-only identity selection (no child fetches)")
+	lifecycle := fs.String("lifecycle-numbers-file", "", "fixed lifecycle parent numbers (1..500, no SQLite)")
+	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
 	since := fs.String("since", "", "initial incremental lower bound, RFC3339")
 	timeout := fs.Duration("timeout", 10*time.Minute, "bounded invocation lifetime")
 	limit := fs.Int("max-threads", 100, "maximum complete threads per invocation")
@@ -37,6 +39,20 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	if fs.NArg() != 0 || *endpoint == "" || *source == "" || *repo == "" || *timeout <= 0 || *timeout > 12*time.Hour || *publisher == "" || *reader == "" || !validAccessEnvName(*publisher) || !validAccessEnvName(*reader) {
 		return usageErr(errors.New("acquire-api requires endpoint, source, repo and explicit publisher/reader token environment names"))
+	}
+	if *lifecycle != "" && (*parents != "" || *numbers != "") {
+		return usageErr(errors.New("lifecycle selection cannot be combined with parent-selection-file or numbers-file"))
+	}
+	if *lifecycle == "" {
+		var lifecycleFlag bool
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "lifecycle-max-pages" {
+				lifecycleFlag = true
+			}
+		})
+		if lifecycleFlag {
+			return usageErr(errors.New("lifecycle-max-pages requires lifecycle-numbers-file"))
+		}
 	}
 	options := acquireapi.Options{Repository: *repo, MaxThreads: *limit, ParentPageSize: *parentPage, ChildPageSize: *childPage}
 	var parentSelection acquireapi.ParentSelection
@@ -65,8 +81,12 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 		}
 		options.Since = t
 	}
-	if *numbers != "" {
-		f, err := os.Open(*numbers)
+	numberFile := *numbers
+	if *lifecycle != "" {
+		numberFile = *lifecycle
+	}
+	if numberFile != "" {
+		f, err := os.Open(numberFile)
 		if err != nil {
 			return err
 		}
@@ -111,12 +131,19 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 	var result acquireapi.Result
-	if *parents != "" {
+	if *parents != "" || *lifecycle != "" {
 		provider, providerErr := github.NewOctopoolConversations(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
 		if providerErr != nil {
 			return providerErr
 		}
-		result, err = acquireapi.RunParents(ctx, api, provider, acquireapi.ParentOptions{Selection: parentSelection, MaxParents: *limit, BatchSize: min(*parentPage, 50)})
+		if *lifecycle != "" {
+			if len(options.Numbers) > *limit || *limit < 1 || *limit > 500 {
+				return usageErr(errors.New("lifecycle selection exceeds max-threads (1..500)"))
+			}
+			result, err = acquireapi.RunLifecycle(ctx, api, provider, acquireapi.LifecycleOptions{Repository: *repo, Numbers: options.Numbers, Since: options.Since, MaxPages: *maxPages})
+		} else {
+			result, err = acquireapi.RunParents(ctx, api, provider, acquireapi.ParentOptions{Selection: parentSelection, MaxParents: *limit, BatchSize: min(*parentPage, 50)})
+		}
 	} else {
 		provider, providerErr := github.NewOctopool(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
 		if providerErr != nil {

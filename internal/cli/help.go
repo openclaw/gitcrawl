@@ -108,6 +108,10 @@ selection requires an established incremental horizon and its unchanged file.
 Use --parent-selection-file PATH for audited parent-only identities; this skips
 children and keeps the existing horizon. --parent-page-size is capped at 50 and
 may be reduced to resume after a response-size failure.
+Use --lifecycle-numbers-file PATH for 1..500 existing PG parents and --since
+for the event lower bound. This follows closure/reopen/merge timelines only; it
+keeps the completed horizon and does not claim repository-wide coverage.
+--lifecycle-max-pages (default 100) bounds each resumable invocation.
 No SQLite archive is opened and no direct GitHub credential fallback exists.
 `,
 	"metrics": `gitcrawl metrics collects repository headline metrics in a separate SQLite database.
