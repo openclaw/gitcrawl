@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expose bounded repository REST pages and reusable full-field mappings for acquisition through an external checkpoint owner, without opening a SQLite checkpoint.
+
 - Add read-only retained snapshot measurement and bounded seven-table seed export without arming a change journal, creating an outbox or contacting a provider.
 
 - Retry truncated or reset Octopool response bodies within the existing three-post allowance, retain private error causes, and let the hydration operator return exit 75 only when all attempts fail with eligible transport errors.

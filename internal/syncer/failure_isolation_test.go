@@ -436,7 +436,7 @@ func TestSyncChildFailureResolvesOnlyCommittedParentFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 				row["title"], row["updated_at"] = "newer retained parent", "2026-07-15T00:00:00Z"
-				if _, err := st.UpsertThread(ctx, mapIssueToThread(repo.ID, row, now.Format(time.RFC3339Nano)),
+				if _, err := st.UpsertThread(ctx, MapIssueToThread(repo.ID, row, now.Format(time.RFC3339Nano)),
 					store.UpsertThreadOptions{IncompleteEvidence: true}); err != nil {
 					t.Fatal(err)
 				}
@@ -543,7 +543,7 @@ func TestSyncNoPersistedFamilyDoesNotResolveFailures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		thread := mapIssueToThread(repo.ID, row, time.Now().UTC().Format(time.RFC3339Nano))
+		thread := MapIssueToThread(repo.ID, row, time.Now().UTC().Format(time.RFC3339Nano))
 		if err := st.WithTx(ctx, func(tx *store.Store) error {
 			sequence, err := tx.NextThreadObservationSequence(ctx, thread.UpdatedAt)
 			if err != nil {

@@ -3620,7 +3620,7 @@ func TestPullRequestDetailsUseFetchTimestampWhenPersistedLater(t *testing.T) {
 		t.Fatalf("seed repo: %v", err)
 	}
 	issueRow, err := fakeGitHub{}.GetIssue(ctx, "openclaw", "gitcrawl", 8, nil)
-	thread := mapIssueToThread(repoID, mustIssue(t, issueRow, err), "2026-04-26T00:00:00Z")
+	thread := MapIssueToThread(repoID, mustIssue(t, issueRow, err), "2026-04-26T00:00:00Z")
 	threadID, err := st.UpsertThread(ctx, thread)
 	if err != nil {
 		t.Fatalf("seed thread: %v", err)
@@ -4069,7 +4069,7 @@ func TestMappingHelperBranches(t *testing.T) {
 	if loginFromUser("not-user") != "" || typeFromUser("not-user") != "" {
 		t.Fatal("non-map user should return empty fields")
 	}
-	comment := mapComment(77, "review", map[string]any{
+	comment := MapComment(77, "review", map[string]any{
 		"id":         json.Number("88"),
 		"body":       time.Unix(0, 0).UTC(),
 		"created_at": "2026-04-30T00:00:00Z",
@@ -4097,7 +4097,7 @@ func TestMappingFallbackBranches(t *testing.T) {
 		t.Fatalf("mustJSON marshal fallback = %q", got)
 	}
 
-	thread := mapIssueToThread(99, map[string]any{
+	thread := MapIssueToThread(99, map[string]any{
 		"id":         int64(123),
 		"number":     456,
 		"state":      "closed",

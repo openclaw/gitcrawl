@@ -163,3 +163,36 @@ checkpoint after that status.
 Authentication, quota, storage, data, cancellation, deadline, and mixed failures
 retain status 1; ordinary `gitcrawl` exit behavior is unchanged. A canceled sibling
 is not another failure, but external cancellation always prevents status 75.
+
+## Page reads for external checkpoint owners
+
+The internal `github.Client.ReadRESTPage` API reads one complete REST page of
+repository issues, issue comments, pull reviews or pull review comments. It uses
+the existing transport, including Octopool caller authentication and retry
+limits. It does not open a SQLite archive or checkpoint. This is a library
+boundary for the PostgreSQL collector; no new collector command or schedule is
+installed by it.
+
+The caller selects 1–100 records per page and retains the returned `NextCursor`
+only together with its successfully persisted rows. Resume with that exact cursor
+and the same repository, family, ordering, filter and page size. After creating
+a new Octopool client, call `GetRepo` first to verify the repository ID before
+resuming a provider link that uses `/repositories/{id}`. A page contains
+at most 100 records and 8 MiB of decoded response bytes. Full bodies and numeric
+provider identities remain intact. Pending reviews are excluded using the same
+rule as the existing full-collection reader; an empty filtered page can still
+have a next cursor.
+
+Unlike the aggregate hydration reader, a single-page read never restarts a
+collection at a smaller page size after an oversized response. Previously
+committed pages cannot be discarded by this API. Select a smaller page size
+before starting a traversal, or report the failed page without advancing its
+checkpoint. Repeated cursors across multiple pages, publication and acquisition
+completion remain the checkpoint owner's responsibility.
+
+The existing syncer exports its pure `MapIssueToThread` and `MapComment`
+normalizers for reuse. They preserve full provider fields and raw JSON without
+opening a store. Comment publication timestamps come from the native
+`CommentPublication` owner; a review with no proven publication time stays
+unknown. Persistence still owns existing local state, native IDs and observation
+sequences.

@@ -554,7 +554,7 @@ func (s *Syncer) Sync(ctx context.Context, options Options) (result Stats, resul
 					return fmt.Errorf("saved issue comments changed during sync; retry #%d", intValue(payload.row["number"]))
 				}
 			}
-			thread := mapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
+			thread := MapIssueToThread(repoID, payload.row, s.now().Format(time.RFC3339Nano))
 			_, hasIssueDraft := payload.row["draft"]
 			if payload.hasPullDetails {
 				thread.IsDraft = boolValue(payload.pullDetails.pull["draft"])
@@ -885,7 +885,7 @@ func (s *Syncer) recordSyncFailure(ctx context.Context, options Options, repoRaw
 			if _, err := canonicalIssueID(row["id"]); err != nil {
 				return err
 			}
-			thread := mapIssueToThread(repoID, row, now)
+			thread := MapIssueToThread(repoID, row, now)
 			_, hasDraft := row["draft"]
 			upsert, err := st.UpsertThreadObservation(recordCtx, thread, store.UpsertThreadOptions{
 				IncompleteEvidence: true,
@@ -1117,45 +1117,6 @@ func normalizeSince(value string, now time.Time) (string, error) {
 	return "", fmt.Errorf("invalid --since %q: expected ISO timestamp or relative duration like 15m, 2h, 7d, 1mo", value)
 }
 
-func mapIssueToThread(repoID int64, row map[string]any, pulledAt string) store.Thread {
-	kind := issueKind(row)
-	labelsJSON := mustJSON(row["labels"])
-	if labelsJSON == "null" {
-		labelsJSON = "[]"
-	}
-	assigneesJSON := mustJSON(row["assignees"])
-	if assigneesJSON == "null" {
-		assigneesJSON = "[]"
-	}
-	title := stringValue(row["title"])
-	body := stringValue(row["body"])
-	return store.Thread{
-		RepoID:            repoID,
-		GitHubID:          jsonID(row["id"]),
-		Number:            intValue(row["number"]),
-		Kind:              kind,
-		State:             stringValue(row["state"]),
-		Title:             title,
-		Body:              body,
-		AuthorLogin:       loginFromUser(row["user"]),
-		AuthorType:        typeFromUser(row["user"]),
-		AuthorAssociation: stringValue(row["author_association"]),
-		HTMLURL:           stringValue(row["html_url"]),
-		LabelsJSON:        labelsJSON,
-		AssigneesJSON:     assigneesJSON,
-		RawJSON:           mustJSON(row),
-		ContentHash:       contentHash(title, body, labelsJSON),
-		IsDraft:           boolValue(row["draft"]),
-		CreatedAtGitHub:   stringValue(row["created_at"]),
-		UpdatedAtGitHub:   stringValue(row["updated_at"]),
-		ClosedAtGitHub:    stringValue(row["closed_at"]),
-		MergedAtGitHub:    stringValue(mapValue(row["pull_request"])["merged_at"]),
-		FirstPulledAt:     pulledAt,
-		LastPulledAt:      pulledAt,
-		UpdatedAt:         pulledAt,
-	}
-}
-
 func persistThreadEnrichment(
 	ctx context.Context,
 	st *store.Store,
@@ -1281,7 +1242,7 @@ func persistComments(
 			observedIDs = append(observedIDs, row.reusedID)
 			continue
 		}
-		comment := mapComment(thread.ID, row.kind, row.raw)
+		comment := MapComment(thread.ID, row.kind, row.raw)
 		if comment.Body == "" && row.kind != "pull_review" && comment.DeletedAt == "" && comment.GitHubID == "" {
 			return nil, 0, fmt.Errorf("live empty %s comment is missing GitHub identity", row.kind)
 		}
@@ -1375,26 +1336,6 @@ type commentRow struct {
 	kind     string
 	raw      map[string]any
 	reusedID int64
-}
-
-func mapComment(threadID int64, kind string, row map[string]any) store.Comment {
-	authorLogin := loginFromUser(row["user"])
-	authorType := typeFromUser(row["user"])
-	return store.Comment{
-		ThreadID:        threadID,
-		GitHubID:        jsonID(row["id"]),
-		CommentType:     kind,
-		AuthorLogin:     authorLogin,
-		AuthorType:      authorType,
-		Body:            stringValue(row["body"]),
-		IsBot:           isBot(authorLogin, authorType),
-		ReviewState:     stringValue(row["state"]),
-		RawJSON:         mustJSON(row),
-		CreatedAtGitHub: stringValue(row["created_at"]),
-		UpdatedAtGitHub: stringValue(row["updated_at"]),
-		DeletedAt:       stringValue(row["deleted_at"]),
-		DeletionReason:  stringValue(row["deletion_reason"]),
-	}
 }
 
 func isBot(login, authorType string) bool {

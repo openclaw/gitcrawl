@@ -86,7 +86,7 @@ func TestCanonicalIssueIdentityMixedModesAndPortableRoundtrip(t *testing.T) {
 				for _, n := range []int{7, 8} {
 					row := identityRow(n)
 					row["id"] = fmt.Sprintf("LEGACY_NODE_%d", n)
-					id, err := st.UpsertThread(ctx, mapIssueToThread(repoID, row, "2026-01-01T00:00:00Z"))
+					id, err := st.UpsertThread(ctx, MapIssueToThread(repoID, row, "2026-01-01T00:00:00Z"))
 					if err != nil {
 						t.Fatal(err)
 					}
