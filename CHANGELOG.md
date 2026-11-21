@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the pinned TruffleHog action and scanner image to v3.99.9, plus terminfo, x/text and memory dependencies, preserving the Go minimum and matching SQLite runtime. Thanks @dependabot.
+
 - Discover missing parent identities with bounded, resumable Octopool repository pages, without opening SQLite or using personal GitHub credentials.
 
 - Recover interrupted parent scans from the API's bounded progress field when the preceding supplemental run is omitted from active state.
