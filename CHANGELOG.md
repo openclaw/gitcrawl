@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh the Node.js documentation build, CI snapshot builder, and Dockerfile frontend without changing Gitcrawl runtime dependencies.
+
 - Update the pinned TruffleHog action and scanner image to v3.99.9, plus terminfo, x/text and memory dependencies, preserving the Go minimum and matching SQLite runtime. Thanks @dependabot.
 
 - Discover missing parent identities with bounded, resumable Octopool repository pages, without opening SQLite or using personal GitHub credentials.

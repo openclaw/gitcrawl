@@ -152,7 +152,7 @@ make test
 make check
 ```
 
-`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.12.1 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.18.2 for snapshot builds.
+`make check` runs the formatting, vet, vulnerability, dead-code, coverage, smoke, release-script, documentation, and snapshot gates used by CI. The documentation build uses Node.js 26.13.1 (pinned in `.node-version`); `make docs` runs that gate alone. CI pins GoReleaser v2.20.2 for snapshot builds.
 
 On Linux or macOS, use Python 3 and the Go toolchain declared in `go.mod` to
 compare durable clustering output across scalar, SIMD-enabled and forced-fallback
