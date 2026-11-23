@@ -23,8 +23,13 @@ func lifecycleClient(t *testing.T, response func() string) (*OctopoolConversatio
 		graphql := historyMap(request["graphql"])
 		query := historyString(graphql["query"])
 		if request["method"] != "POST" || request["path"] != "/graphql" || request["pool"] != "fixture" || historyMap(request["headers"])["cache-control"] != "max-age=0" ||
-			!strings.Contains(query, "CLOSED_EVENT,REOPENED_EVENT,MERGED_EVENT") || !strings.Contains(query, "closer {") || strings.Contains(query, "comments(") {
+			!strings.Contains(query, "repository(owner:$owner,name:$repo)") || !strings.Contains(query, "issueOrPullRequest(number:$number)") ||
+			strings.Contains(query, "node(id:") || !strings.Contains(query, "CLOSED_EVENT,REOPENED_EVENT,MERGED_EVENT") || !strings.Contains(query, "closer {") || strings.Contains(query, "comments(") {
 			t.Error("wrong lifecycle query or acquisition boundary")
+		}
+		variables := historyMap(graphql["variables"])
+		if variables["owner"] != "fixture" || variables["repo"] != "repo" || variables["number"] != float64(7) {
+			t.Error("lifecycle selection escaped its repository and thread number")
 		}
 		fmt.Fprint(w, response())
 	}))
@@ -37,7 +42,7 @@ func lifecycleClient(t *testing.T, response func() string) (*OctopoolConversatio
 }
 
 func lifecycleEnvelope(events, page string) string {
-	return `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":{"node":{"id":"PR-node","__typename":"PullRequest","number":7,"repository":{"nameWithOwner":"fixture/repo"},"timelineItems":{"nodes":` + events + `,"pageInfo":` + page + `}}}}}`
+	return `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":{"repository":{"nameWithOwner":"fixture/repo","issueOrPullRequest":{"id":"PR-node","__typename":"PullRequest","number":7,"repository":{"nameWithOwner":"fixture/repo"},"timelineItems":{"nodes":` + events + `,"pageInfo":` + page + `}}}}}}`
 }
 
 func lifecycleQuery() LifecycleQuery {
@@ -60,14 +65,16 @@ func TestOctopoolLifecyclePreservesRawEventsAndCursor(t *testing.T) {
 
 func TestOctopoolLifecycleRejectsIncompletePage(t *testing.T) {
 	base := lifecycleEnvelope(`[{"__typename":"MergedEvent","id":"merge-1","createdAt":"2026-09-08T02:00:00Z","actor":null,"commit":null}]`, `{"hasNextPage":true,"endCursor":"next-page"}`)
-	for _, mode := range []string{"parent", "repository", "kind", "number", "cursor", "empty", "event-kind", "event-id", "event-time", "old-event", "duplicate", "errors", "stale"} {
+	for _, mode := range []string{"parent", "root-repository", "repository", "kind", "number", "cursor", "empty", "event-kind", "event-id", "event-time", "old-event", "duplicate", "errors", "stale"} {
 		t.Run(mode, func(t *testing.T) {
 			body := base
 			switch mode {
 			case "parent":
 				body = strings.Replace(body, `"id":"PR-node"`, `"id":"other"`, 1)
+			case "root-repository":
+				body = strings.Replace(body, `"repository":{"nameWithOwner":"fixture/repo","issueOrPullRequest"`, `"repository":{"nameWithOwner":"other/repo","issueOrPullRequest"`, 1)
 			case "repository":
-				body = strings.Replace(body, "fixture/repo", "other/repo", 1)
+				body = strings.Replace(body, `"repository":{"nameWithOwner":"fixture/repo"},"timelineItems"`, `"repository":{"nameWithOwner":"other/repo"},"timelineItems"`, 1)
 			case "kind":
 				body = strings.Replace(body, "PullRequest", "Issue", 1)
 			case "number":
