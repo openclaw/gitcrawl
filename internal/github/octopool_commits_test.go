@@ -14,6 +14,7 @@ import (
 func TestOctopoolCommitRawAndPinnedPagination(t *testing.T) {
 	oid := strings.Repeat("a", 40)
 	commit := `{ "id":"C_9007199254740993", "oid":"` + oid + `", "committedDate":"2026-01-02T00:00:00Z", "message":"full λ\u0000 text", "repository":{"id":"R1","nameWithOwner":"fixture/repo"},"author":{"name":"someone","user":null},"future":true }`
+	attribution := `{ "id":"C_9007199254740993", "oid":"` + oid + `", "associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":"last"}} }`
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -27,6 +28,9 @@ func TestOctopoolCommitRawAndPinnedPagination(t *testing.T) {
 		if json.NewDecoder(r.Body).Decode(&p) != nil || p.Method != "POST" || p.Path != "/graphql" || r.Header.Get("Authorization") != "Bearer token" {
 			t.Error("wrong transport")
 		}
+		if !strings.Contains(p.GraphQL.Query, "repository(owner:$owner,name:$name)") || p.GraphQL.Variables["owner"] != "fixture" || p.GraphQL.Variables["name"] != "repo" {
+			t.Error("commit query cannot use the repository-scoped Octopool relay")
+		}
 		var data string
 		switch {
 		case strings.Contains(p.GraphQL.Query, "defaultBranchRef"):
@@ -37,7 +41,10 @@ func TestOctopoolCommitRawAndPinnedPagination(t *testing.T) {
 			}
 			data = `{"repository":{"id":"R1","nameWithOwner":"fixture/repo","object":{"__typename":"Commit","oid":"` + oid + `","history":{"nodes":[` + commit + `],"pageInfo":{"hasNextPage":false,"endCursor":"last"}}}}}`
 		default:
-			data = `{"node":{"id":"C_9007199254740993","oid":"` + oid + `","associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":"last"}}}}`
+			if p.GraphQL.Variables["oid"] != oid || !strings.Contains(p.GraphQL.Query, "object(oid:$oid)") {
+				t.Error("attribution query is missing its repository commit selector")
+			}
+			data = `{"repository":{"nameWithOwner":"fixture/repo","object":` + attribution + `}}`
 		}
 		fmt.Fprint(w, `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":`+data+`}}`)
 	}))
@@ -55,7 +62,7 @@ func TestOctopoolCommitRawAndPinnedPagination(t *testing.T) {
 		t.Fatal(p, err)
 	}
 	a, err := c.ReadCommitAttribution(context.Background(), "C_9007199254740993", oid, "", nil)
-	if err != nil || !a.Terminal || a.NextCursor != "" || calls != 3 {
+	if err != nil || !a.Terminal || a.NextCursor != "" || string(a.RawJSON) != attribution || calls != 3 {
 		t.Fatal(a, err, calls)
 	}
 	boundary, err := c.ReadCommit(context.Background(), CommitQuery{Head: h, Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)}, nil)
@@ -88,6 +95,34 @@ func TestOctopoolCommitRejectsPartialAndWrongHead(t *testing.T) {
 			_, err := c.ReadCommit(context.Background(), CommitQuery{Head: CommitHead{Repository: "fixture/repo", NodeID: "R1", OID: oid}, Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)}, nil)
 			if err == nil {
 				t.Fatal("invalid response accepted")
+			}
+		})
+	}
+}
+
+func TestOctopoolCommitAttributionRejectsMismatchedIdentity(t *testing.T) {
+	oid := strings.Repeat("a", 40)
+	for _, mode := range []string{"repository", "node", "oid"} {
+		t.Run(mode, func(t *testing.T) {
+			repository, node, object := "fixture/repo", "C1", oid
+			switch mode {
+			case "repository":
+				repository = "fixture/other"
+			case "node":
+				node = "C2"
+			case "oid":
+				object = strings.Repeat("b", 40)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":{"repository":{"nameWithOwner":%q,"object":{"id":%q,"oid":%q,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}`, repository, node, object)
+			}))
+			defer server.Close()
+			c, err := NewOctopoolConversations(server.URL, "fixture", "token", "fixture/repo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.ReadCommitAttribution(context.Background(), "C1", oid, "", nil); err == nil {
+				t.Fatal("accepted attribution for a different commit or repository")
 			}
 		})
 	}

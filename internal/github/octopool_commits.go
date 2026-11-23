@@ -34,7 +34,7 @@ func (c *OctopoolConversations) ReadCommitHead(ctx context.Context, reporter Rep
 	if !ok {
 		return out, errors.New("invalid repository")
 	}
-	raw, err := c.requestConversationData(ctx, `query($owner:String!,$name:String!){ repository(owner:$owner,name:$name,followRenames:false){id nameWithOwner defaultBranchRef{name target{... on Commit{oid}}}} }`, map[string]any{"owner": owner, "name": name}, reporter)
+	raw, err := c.requestConversationData(ctx, `query($owner:String!,$name:String!){ repository(owner:$owner,name:$name){id nameWithOwner defaultBranchRef{name target{... on Commit{oid}}}} }`, map[string]any{"owner": owner, "name": name}, reporter)
 	if err != nil {
 		return out, err
 	}
@@ -62,7 +62,7 @@ func (c *OctopoolConversations) ReadCommit(ctx context.Context, q CommitQuery, r
 	if q.Cursor != "" {
 		cursor = q.Cursor
 	}
-	raw, err := c.requestConversationData(ctx, `query($owner:String!,$name:String!,$oid:GitObjectID!,$since:GitTimestamp!,$until:GitTimestamp!,$cursor:String){repository(owner:$owner,name:$name,followRenames:false){id nameWithOwner object(oid:$oid){__typename oid ... on Commit{history(first:1,after:$cursor,since:$since,until:$until){nodes{__typename id oid committedDate authoredDate message url author{name user{login}} repository{id nameWithOwner}} pageInfo{hasNextPage endCursor}}}}}}`, map[string]any{"owner": owner, "name": name, "oid": q.Head.OID, "since": q.Since.UTC().Format(time.RFC3339Nano), "until": q.Until.UTC().Format(time.RFC3339Nano), "cursor": cursor}, reporter)
+	raw, err := c.requestConversationData(ctx, `query($owner:String!,$name:String!,$oid:GitObjectID!,$since:GitTimestamp!,$until:GitTimestamp!,$cursor:String){repository(owner:$owner,name:$name){id nameWithOwner object(oid:$oid){__typename oid ... on Commit{history(first:1,after:$cursor,since:$since,until:$until){nodes{__typename id oid committedDate authoredDate message url author{name user{login}} repository{id nameWithOwner}} pageInfo{hasNextPage endCursor}}}}}}`, map[string]any{"owner": owner, "name": name, "oid": q.Head.OID, "since": q.Since.UTC().Format(time.RFC3339Nano), "until": q.Until.UTC().Format(time.RFC3339Nano), "cursor": cursor}, reporter)
 	if err != nil {
 		return out, err
 	}
@@ -124,11 +124,17 @@ func (c *OctopoolConversations) ReadCommitAttribution(ctx context.Context, nodeI
 	if cursor != "" {
 		after = cursor
 	}
-	raw, err := c.requestConversationData(ctx, `query($id:ID!,$cursor:String){node(id:$id){... on Commit{id oid associatedPullRequests(first:100,after:$cursor){nodes{id number mergedAt mergedBy{login} mergeCommit{oid} repository{id nameWithOwner}} pageInfo{hasNextPage endCursor}}}}}`, map[string]any{"id": nodeID, "cursor": after}, reporter)
+	owner, name, _ := strings.Cut(c.repository, "/")
+	raw, err := c.requestConversationData(ctx, `query($owner:String!,$name:String!,$oid:GitObjectID!,$cursor:String){repository(owner:$owner,name:$name){nameWithOwner object(oid:$oid){... on Commit{id oid associatedPullRequests(first:100,after:$cursor){nodes{id number mergedAt mergedBy{login} mergeCommit{oid} repository{id nameWithOwner}} pageInfo{hasNextPage endCursor}}}}}}`, map[string]any{"owner": owner, "name": name, "oid": oid, "cursor": after}, reporter)
 	if err != nil {
 		return out, err
 	}
-	var d struct{ Node json.RawMessage }
+	var d struct {
+		Repository struct {
+			NameWithOwner string
+			Object        json.RawMessage
+		}
+	}
 	var n struct {
 		ID, OID                string
 		AssociatedPullRequests *struct {
@@ -139,7 +145,7 @@ func (c *OctopoolConversations) ReadCommitAttribution(ctx context.Context, nodeI
 			}
 		}
 	}
-	if json.Unmarshal(raw, &d) != nil || json.Unmarshal(d.Node, &n) != nil || n.ID != nodeID || n.OID != oid || n.AssociatedPullRequests == nil || n.AssociatedPullRequests.Nodes == nil || len(n.AssociatedPullRequests.Nodes) > 100 || n.AssociatedPullRequests.PageInfo.HasNextPage == nil {
+	if json.Unmarshal(raw, &d) != nil || !strings.EqualFold(d.Repository.NameWithOwner, c.repository) || json.Unmarshal(d.Repository.Object, &n) != nil || n.ID != nodeID || n.OID != oid || n.AssociatedPullRequests == nil || n.AssociatedPullRequests.Nodes == nil || len(n.AssociatedPullRequests.Nodes) > 100 || n.AssociatedPullRequests.PageInfo.HasNextPage == nil {
 		return out, errors.New("invalid commit attribution page")
 	}
 	p := n.AssociatedPullRequests
@@ -150,6 +156,6 @@ func (c *OctopoolConversations) ReadCommitAttribution(ctx context.Context, nodeI
 		}
 		out.NextCursor = *p.PageInfo.EndCursor
 	}
-	out.RawJSON = d.Node
+	out.RawJSON = d.Repository.Object
 	return out, nil
 }

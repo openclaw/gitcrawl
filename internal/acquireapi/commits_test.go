@@ -55,11 +55,15 @@ func TestCommitsHTTPResumeAndExactACK(t *testing.T) {
 			}
 			data = fmt.Sprintf(`{"repository":{"id":"R1","nameWithOwner":"fixture/repo","object":{"__typename":"Commit","oid":%q,"history":{"nodes":[{ "id":%q,"oid":%q,"committedDate":"2026-01-02T00:00:00Z","message":"body λ\u0000","repository":{"id":"R1","nameWithOwner":"fixture/repo"},"author":null,"url":"https://example.invalid/c"}],"pageInfo":{"hasNextPage":%s,"endCursor":%s}}}}}`, oid, id, commitOID, terminal, next)
 		default:
-			id := req.GraphQL.Variables["id"].(string)
+			commitOID, _ := req.GraphQL.Variables["oid"].(string)
+			id := map[string]string{oid: "C1", strings.Repeat("b", 40): "C2"}[commitOID]
+			if id == "" || req.GraphQL.Variables["owner"] != "fixture" || req.GraphQL.Variables["name"] != "repo" {
+				t.Error("invalid repository-scoped attribution selection")
+			}
 			if broken {
-				data = `{"node":null}`
+				data = `{"repository":{"nameWithOwner":"fixture/repo","object":null}}`
 			} else {
-				data = fmt.Sprintf(`{"node":{"id":%q,"oid":%q,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`, id, map[string]string{"C1": oid, "C2": strings.Repeat("b", 40)}[id])
+				data = fmt.Sprintf(`{"repository":{"nameWithOwner":"fixture/repo","object":{"id":%q,"oid":%q,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`, id, commitOID)
 			}
 		}
 		fmt.Fprint(w, `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":`+data+`}}`)

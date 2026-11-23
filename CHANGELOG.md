@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Route commit history and associated PR reads through Octopool’s repository scope while verifying the pinned commit identity.
+
 - Use repository-scoped Octopool queries for GitHub lifecycle acquisition so issue closures, reopens, and PR merges can reach PostgreSQL.
 
 - Refresh the Node.js documentation build, CI snapshot builder, and Dockerfile frontend without changing Gitcrawl runtime dependencies.
