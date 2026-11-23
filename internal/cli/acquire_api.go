@@ -27,6 +27,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	numbers := fs.String("numbers-file", "", "fixed historical number selection (no SQLite)")
 	parents := fs.String("parent-selection-file", "", "audited parent-only identity selection (no child fetches)")
 	commits := fs.Bool("commits", false, "pinned default-branch commit and attribution scan")
+	cycle := fs.Bool("cycle", false, "one resumable reporting turn: incremental, commits, lifecycle, historical")
 	commitPages := fs.Int("commit-max-pages", 100, "maximum atomic commit pages per invocation")
 	lifecycle := fs.String("lifecycle-numbers-file", "", "fixed lifecycle parent numbers (1..500, no SQLite)")
 	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
@@ -42,13 +43,16 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if fs.NArg() != 0 || *endpoint == "" || *source == "" || *repo == "" || *timeout <= 0 || *timeout > 12*time.Hour || *publisher == "" || *reader == "" || !validAccessEnvName(*publisher) || !validAccessEnvName(*reader) {
 		return usageErr(errors.New("acquire-api requires endpoint, source, repo and explicit publisher/reader token environment names"))
 	}
+	if *cycle && (*commits || *parents != "" || *numbers == "" || *lifecycle == "") {
+		return usageErr(errors.New("cycle requires numbers-file and lifecycle-numbers-file, without commits or parent selection"))
+	}
 	if *commits && (*lifecycle != "" || *parents != "" || *numbers != "") {
 		return usageErr(errors.New("commits cannot be combined with thread selections"))
 	}
-	if *lifecycle != "" && (*parents != "" || *numbers != "") {
+	if !*cycle && *lifecycle != "" && (*parents != "" || *numbers != "") {
 		return usageErr(errors.New("lifecycle selection cannot be combined with parent-selection-file or numbers-file"))
 	}
-	if !*commits {
+	if !*commits && !*cycle {
 		var set bool
 		fs.Visit(func(f *flag.Flag) {
 			if f.Name == "commit-max-pages" {
@@ -98,31 +102,22 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 		options.Since = t
 	}
 	numberFile := *numbers
-	if *lifecycle != "" {
+	if *lifecycle != "" && !*cycle {
 		numberFile = *lifecycle
 	}
+	var lifecycleNumbers []int
 	if numberFile != "" {
-		f, err := os.Open(numberFile)
+		var err error
+		options.Numbers, err = readAcquisitionNumbers(numberFile)
 		if err != nil {
 			return err
 		}
-		raw, err := io.ReadAll(io.LimitReader(f, 16<<20+1))
-		f.Close()
+	}
+	if *cycle {
+		var err error
+		lifecycleNumbers, err = readAcquisitionNumbers(*lifecycle)
 		if err != nil {
 			return err
-		}
-		if len(raw) > 16<<20 {
-			return usageErr(errors.New("historical selection exceeds 16 MiB"))
-		}
-		for _, word := range strings.FieldsFunc(string(raw), func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' }) {
-			n, err := strconv.Atoi(word)
-			if err != nil {
-				return usageErr(errors.New("invalid historical number"))
-			}
-			options.Numbers = append(options.Numbers, n)
-		}
-		if len(options.Numbers) == 0 {
-			return usageErr(errors.New("empty historical selection"))
 		}
 	}
 	// This path never loads archive config or asks gh for a provider credential.
@@ -147,7 +142,25 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 	var result acquireapi.Result
-	if *parents != "" || *lifecycle != "" || *commits {
+	if *cycle {
+		rest, providerErr := github.NewOctopool(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
+		if providerErr != nil {
+			return providerErr
+		}
+		graph, providerErr := github.NewOctopoolConversations(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
+		if providerErr != nil {
+			return providerErr
+		}
+		turn, cycleErr := acquireapi.RunCycle(ctx, api, rest, graph, acquireapi.CycleOptions{Conversations: options, LifecycleNumbers: lifecycleNumbers, CommitMaxPages: *commitPages, LifecycleMaxPages: *maxPages})
+		a.applyCommandJSON(*jsonOut)
+		if outputErr := a.writeOutput("acquire-api", turn, *jsonOut); outputErr != nil {
+			return outputErr
+		}
+		if cycleErr != nil {
+			return fmt.Errorf("acquire-api cycle: %w", cycleErr)
+		}
+		return nil
+	} else if *parents != "" || *lifecycle != "" || *commits {
 		provider, providerErr := github.NewOctopoolConversations(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
 		if providerErr != nil {
 			return providerErr
@@ -177,4 +190,31 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 		return fmt.Errorf("acquire-api: %w", err)
 	}
 	return nil
+}
+
+func readAcquisitionNumbers(path string) ([]int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 16<<20+1))
+	f.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > 16<<20 {
+		return nil, usageErr(errors.New("historical selection exceeds 16 MiB"))
+	}
+	var numbers []int
+	for _, word := range strings.FieldsFunc(string(raw), func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' }) {
+		n, err := strconv.Atoi(word)
+		if err != nil {
+			return nil, usageErr(errors.New("invalid historical number"))
+		}
+		numbers = append(numbers, n)
+	}
+	if len(numbers) == 0 {
+		return nil, usageErr(errors.New("empty historical selection"))
+	}
+	return numbers, nil
 }
