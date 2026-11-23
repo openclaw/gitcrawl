@@ -247,6 +247,27 @@ The artifact gives reviewers a structured view of what changed and how the clust
 
 ### Selected parent-only repair
 
+To enumerate repair candidates with recent activity, use
+`discover-parents --repo owner/repo --updated-since RFC3339 --page-size 20 --json`.
+This follows repository issues pages sorted by update time and includes old
+issues and pull requests updated after the lower bound. It exports only native
+backing IDs, numbers and kinds, plus the lower bound, observation time and cursor
+receipt; provider bodies stay inside the reader. Resume with the same lower
+bound, page size and returned cursor, retaining each successful output. Deduplicate
+the combined selections by number and identity before admitting a fixed batch.
+
+This is a current mutable inventory, not a historical snapshot or coverage proof.
+A thread updated again after the intended report cutoff still belongs in the
+repair cohort. Do not replace this inventory with an opening-date search or drop
+such threads based on their latest update. The terminal cursor proves only that
+this traversal ended; provider changes during traversal can still require a later
+overlapping pass. A page or timeout bound leaves `complete: false` and its cursor
+for continuation. No acquisition checkpoint, existing selection or report pin is
+changed by discovery.
+Validation, credential or repository-binding failures (including a bootstrap
+timeout) emit no discovery receipt. Preserve the previously accepted cursor;
+absence of output does not mean enumeration completed.
+
 Use `acquire-api --parent-selection-file selection.json` with the same endpoint,
 source and credential flags to refresh only audited parents through Octopool
 GraphQL. Do not combine it with `--numbers-file` or `--since`. The file contains:
