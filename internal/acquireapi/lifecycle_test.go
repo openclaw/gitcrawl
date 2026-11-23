@@ -112,8 +112,12 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 		if request.GraphQL.Variables["since"] != f.expectedSince {
 			t.Error("changed since", request.GraphQL.Variables)
 		}
-		node := request.GraphQL.Variables["id"].(string)
-		number, _ := strconv.Atoi(strings.TrimPrefix(node, "PR-"))
+		selected, ok := request.GraphQL.Variables["number"].(float64)
+		number := int(selected)
+		if !ok || number < 1 || request.GraphQL.Variables["owner"] != "example" || request.GraphQL.Variables["repo"] != "project" {
+			t.Error("invalid repository-scoped lifecycle selection")
+		}
+		node := fmt.Sprintf("PR-%d", number)
 		events, page := lifecycleOriginalEvent, `{"hasNextPage":true,"endCursor":"next"}`
 		if f.terminalFirst {
 			page = `{"hasNextPage":false,"endCursor":"last"}`
@@ -122,7 +126,7 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 			events = `{"__typename":"MergedEvent","id":"merge-7","createdAt":"2026-01-03T00:00:00Z","actor":{"login":"merger"}}, {"__typename":"ClosedEvent","id":"later","createdAt":"2026-01-05T00:00:00Z","actor":null}`
 			page = `{"hasNextPage":false,"endCursor":"last"}`
 		}
-		fmt.Fprintf(w, `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":{"node":{"id":%q,"__typename":"PullRequest","number":%d,"repository":{"nameWithOwner":"example/project"},"timelineItems":{"nodes":[%s],"pageInfo":%s}}}}}`, node, number, events, page)
+		fmt.Fprintf(w, `{"status":200,"body_encoding":"json","relay":{"route_kind":"graphql_read","cache":"miss"},"identity":{"kind":"github_app"},"body":{"data":{"repository":{"nameWithOwner":"example/project","issueOrPullRequest":{"id":%q,"__typename":"PullRequest","number":%d,"repository":{"nameWithOwner":"example/project"},"timelineItems":{"nodes":[%s],"pageInfo":%s}}}}}}`, node, number, events, page)
 	}))
 	t.Cleanup(provider.Close)
 	f.provider, err = github.NewOctopoolConversations(provider.URL, "fixture", "relay", "example/project")

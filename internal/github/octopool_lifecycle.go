@@ -33,7 +33,11 @@ func (c *OctopoolConversations) ReadLifecycle(ctx context.Context, q LifecycleQu
 		kind, types = "PullRequest", types+",MERGED_EVENT"
 		extra = "... on MergedEvent { id createdAt actor { login __typename ... on Node { id } } commit { oid } }"
 	}
-	query := `query($id:ID!,$since:DateTime!,$cursor:String) { node(id:$id) { __typename ... on ` + kind + ` {
+	owner, repo, _ := strings.Cut(c.repository, "/")
+	// Octopool mints a repository-scoped App token from the query root.
+	query := `query($owner:String!,$repo:String!,$number:Int!,$since:DateTime!,$cursor:String) {
+ repository(owner:$owner,name:$repo) { nameWithOwner
+ issueOrPullRequest(number:$number) { __typename ... on ` + kind + ` {
  id number repository { nameWithOwner }
  timelineItems(first:100,after:$cursor,since:$since,itemTypes:[` + types + `]) {
   nodes { __typename
@@ -42,37 +46,44 @@ func (c *OctopoolConversations) ReadLifecycle(ctx context.Context, q LifecycleQu
    ` + extra + `
   } pageInfo { hasNextPage endCursor }
  }
-} } }`
+} } } }`
 	var cursor any
 	if q.Cursor != "" {
 		cursor = q.Cursor
 	}
-	raw, err := c.requestConversationData(ctx, query, map[string]any{"id": q.NodeID, "since": q.Since.UTC().Format(time.RFC3339Nano), "cursor": cursor}, reporter)
+	raw, err := c.requestConversationData(ctx, query, map[string]any{"owner": owner, "repo": repo, "number": q.Number, "since": q.Since.UTC().Format(time.RFC3339Nano), "cursor": cursor}, reporter)
 	if err != nil {
 		return empty, err
 	}
 	var data struct {
-		Node *struct {
-			NodeID     string `json:"id"`
-			NodeType   string `json:"__typename"`
-			Number     int    `json:"number"`
-			Repository struct {
-				Name string `json:"nameWithOwner"`
-			} `json:"repository"`
-			Timeline *struct {
-				Nodes []json.RawMessage `json:"nodes"`
-				Page  struct {
-					More *bool   `json:"hasNextPage"`
-					Next *string `json:"endCursor"`
-				} `json:"pageInfo"`
-			} `json:"timelineItems"`
-		} `json:"node"`
+		Repository struct {
+			Name string `json:"nameWithOwner"`
+			Node *struct {
+				NodeID     string `json:"id"`
+				NodeType   string `json:"__typename"`
+				Number     int    `json:"number"`
+				Repository struct {
+					Name string `json:"nameWithOwner"`
+				} `json:"repository"`
+				Timeline *struct {
+					Nodes []json.RawMessage `json:"nodes"`
+					Page  struct {
+						More *bool   `json:"hasNextPage"`
+						Next *string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"timelineItems"`
+			} `json:"issueOrPullRequest"`
+		} `json:"repository"`
 	}
-	if json.Unmarshal(raw, &data) != nil || data.Node == nil || data.Node.NodeID != q.NodeID || data.Node.NodeType != kind ||
-		data.Node.Number != q.Number || !strings.EqualFold(data.Node.Repository.Name, c.repository) || data.Node.Timeline == nil {
+	if json.Unmarshal(raw, &data) != nil || !strings.EqualFold(data.Repository.Name, c.repository) {
+		return empty, errors.New("lifecycle repository identity changed or unavailable")
+	}
+	node := data.Repository.Node
+	if node == nil || node.NodeID != q.NodeID || node.NodeType != kind || node.Number != q.Number ||
+		!strings.EqualFold(node.Repository.Name, c.repository) || node.Timeline == nil {
 		return empty, errors.New("lifecycle parent identity changed or unavailable")
 	}
-	connection := data.Node.Timeline
+	connection := node.Timeline
 	if connection.Nodes == nil || len(connection.Nodes) > 100 || connection.Page.More == nil {
 		return empty, errors.New("invalid lifecycle connection")
 	}

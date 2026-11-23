@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use repository-scoped Octopool queries for GitHub lifecycle acquisition so issue closures, reopens, and PR merges can reach PostgreSQL.
+
 - Refresh the Node.js documentation build, CI snapshot builder, and Dockerfile frontend without changing Gitcrawl runtime dependencies.
 
 - Update the pinned TruffleHog action and scanner image to v3.99.9, plus terminfo, x/text and memory dependencies, preserving the Go minimum and matching SQLite runtime. Thanks @dependabot.
