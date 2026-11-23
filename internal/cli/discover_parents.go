@@ -23,7 +23,9 @@ import (
 // establish source coverage, persist archive state, or fetch child records.
 type parentDiscovery struct {
 	Selection     acquireapi.ParentSelection `json:"selection"`
-	NumbersSHA256 string                     `json:"numbersSHA256"`
+	NumbersSHA256 string                     `json:"numbersSHA256,omitempty"`
+	UpdatedSince  string                     `json:"updatedSince,omitempty"`
+	ObservedAt    string                     `json:"observedAt,omitempty"`
 	NextCursor    string                     `json:"nextCursor"`
 	Pages         int                        `json:"pages"`
 	Scanned       int                        `json:"scanned"`
@@ -35,28 +37,42 @@ func (a *App) runDiscoverParents(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	repo := fs.String("repo", "", "owner/repository")
 	file := fs.String("numbers-file", "", "missing parent numbers, separated by whitespace or commas")
+	updated := fs.String("updated-since", "", "export all currently updated parent identities since RFC3339 (not historical coverage)")
 	cursor := fs.String("cursor", "", "nextCursor from the preceding output for the same selection")
 	pages := fs.Int("max-pages", 20, "maximum repository pages (1..1000)")
+	pageSize := fs.Int("page-size", 100, "repository page size (1..100; preserve on resume)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "bounded invocation lifetime")
 	jsonOut := fs.Bool("json", false, "write JSON output")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
 	owner, name, ok := strings.Cut(*repo, "/")
-	if fs.NArg() != 0 || !ok || owner == "" || name == "" || strings.ContainsAny(owner+name, "/\\?#") || *file == "" || *pages < 1 || *pages > 1000 || *timeout <= 0 || *timeout > time.Hour || len(*cursor) > 4096 {
-		return usageErr(errors.New("discover-parents requires repo, numbers-file and bounded pages/timeout"))
+	if fs.NArg() != 0 || !ok || owner == "" || name == "" || strings.ContainsAny(owner+name, "/\\?#") || (*file == "") == (*updated == "") || *pages < 1 || *pages > 1000 || *pageSize < 1 || *pageSize > 100 || *timeout <= 0 || *timeout > time.Hour || len(*cursor) > 4096 {
+		return usageErr(errors.New("discover-parents requires repo, either numbers-file or updated-since, and bounded pages/timeout"))
 	}
-	f, err := os.Open(*file)
-	if err != nil {
-		return err
+	var since time.Time
+	if *updated != "" {
+		var err error
+		since, err = time.Parse(time.RFC3339Nano, *updated)
+		if err != nil || since.After(time.Now()) {
+			return usageErr(errors.New("updated-since must be a prior RFC3339 time"))
+		}
+		*updated = since.UTC().Format(time.RFC3339Nano)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, (2<<20)+1))
-	f.Close()
-	if err != nil {
-		return err
-	}
-	if len(raw) > 2<<20 {
-		return usageErr(errors.New("number selection exceeds 2 MiB"))
+	var raw []byte
+	if *file != "" {
+		f, err := os.Open(*file)
+		if err != nil {
+			return err
+		}
+		raw, err = io.ReadAll(io.LimitReader(f, (2<<20)+1))
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if len(raw) > 2<<20 {
+			return usageErr(errors.New("number selection exceeds 2 MiB"))
+		}
 	}
 	wanted := map[int]bool{}
 	for _, word := range strings.FieldsFunc(string(raw), func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' }) {
@@ -66,7 +82,7 @@ func (a *App) runDiscoverParents(ctx context.Context, args []string) error {
 		}
 		wanted[n] = true
 	}
-	if len(wanted) == 0 || len(wanted) > 100000 {
+	if *file != "" && (len(wanted) == 0 || len(wanted) > 100000) {
 		return usageErr(errors.New("number selection must contain 1..100000 parents"))
 	}
 	numbers := make([]int, 0, len(wanted))
@@ -77,6 +93,13 @@ func (a *App) runDiscoverParents(ctx context.Context, args []string) error {
 	canonical, _ := json.Marshal(numbers)
 	digest := sha256.Sum256(canonical)
 	result := parentDiscovery{Selection: acquireapi.ParentSelection{Schema: "gitcrawl-parent-selection/v1", Repository: *repo, Parents: []acquireapi.SelectedParent{}}, NumbersSHA256: hex.EncodeToString(digest[:]), NextCursor: *cursor}
+	ordering := "created"
+	if *updated != "" {
+		ordering = "updated"
+		result.NumbersSHA256 = ""
+		result.UpdatedSince = *updated
+		result.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	provider, err := github.NewOctopool(os.Getenv("OCTOPOOL_URL"), os.Getenv("OCTOPOOL_POOL"), os.Getenv("OCTOPOOL_TOKEN"), *repo)
 	if err != nil {
 		return err
@@ -91,8 +114,12 @@ func (a *App) runDiscoverParents(ctx context.Context, args []string) error {
 	cursors := map[string]bool{*cursor: true}
 	for result.Pages < *pages {
 		var page github.RESTPage
-		page, err = provider.ReadRESTPage(ctx, github.RESTPageRequest{Owner: owner, Repo: name, Family: "issues", State: "all", Sort: "created", PerPage: 100, Cursor: result.NextCursor}, nil)
+		page, err = provider.ReadRESTPage(ctx, github.RESTPageRequest{Owner: owner, Repo: name, Family: "issues", State: "all", Sort: ordering, Since: *updated, PerPage: *pageSize, Cursor: result.NextCursor}, nil)
 		if err != nil {
+			break
+		}
+		if len(page.Rows) > *pageSize {
+			err = errors.New("repository page exceeds requested size")
 			break
 		}
 		if page.NextCursor != "" && cursors[page.NextCursor] {
@@ -109,7 +136,14 @@ func (a *App) runDiscoverParents(ctx context.Context, args []string) error {
 				err = errors.New("invalid REST parent identity")
 				break
 			}
-			if !wanted[n] {
+			if *updated != "" {
+				at, _ := row["updated_at"].(string)
+				parsed, parseErr := time.Parse(time.RFC3339Nano, at)
+				if parseErr != nil || parsed.Before(since) {
+					err = errors.New("invalid updated parent timestamp")
+					break
+				}
+			} else if !wanted[n] {
 				continue
 			}
 			kind := "issue"

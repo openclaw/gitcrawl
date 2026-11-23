@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Export bounded, resumable updated-parent identity inventories through Octopool, including older threads with recent activity, without exporting provider bodies or claiming historical coverage.
+
 - Route commit history and associated PR reads through Octopool’s repository scope while verifying the pinned commit identity.
 
 - Use repository-scoped Octopool queries for GitHub lifecycle acquisition so issue closures, reopens, and PR merges can reach PostgreSQL.

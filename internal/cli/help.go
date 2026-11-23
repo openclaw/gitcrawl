@@ -102,12 +102,16 @@ var commandUsageTexts = map[string]string{
 
 Usage:
   gitcrawl discover-parents --repo owner/repo --numbers-file PATH [--cursor CURSOR] [--max-pages 20] [--timeout 10m] [--json]
+  gitcrawl discover-parents --repo owner/repo --updated-since RFC3339 [--cursor CURSOR] [--page-size 100] [--max-pages 20] [--json]
 
 Uses OCTOPOOL_TOKEN and optional OCTOPOOL_URL/OCTOPOOL_POOL; no personal GitHub fallback or SQLite access.
-Output contains selection (input for acquire-api --parent-selection-file), numbersSHA256, nextCursor and page counts.
-Resume with the same number selection and nextCursor. Persist each successful output before continuing.
+Output contains selection (input for acquire-api --parent-selection-file), nextCursor and page counts.
+numbers-file adds numbersSHA256; updated-since adds updatedSince and observedAt, and includes old threads updated later.
+Resume with the same selection or lower bound, page size and nextCursor. Persist each successful output before continuing.
+Updated inventory is mutable, not a historical snapshot. Deduplicate identities across outputs; provider bodies are not exported.
 The final empty nextCursor means enumeration finished, not that every requested number exists or that report coverage is complete.
-On a provider error the command emits only completed pages and exits nonzero; resume its nextCursor.
+Once repository binding succeeds, a provider error emits completed pages and exits nonzero; resume its nextCursor.
+Validation, credentials or repository bootstrap failures emit no discovery receipt; preserve the preceding cursor.
 `,
 	"acquire-api": `gitcrawl acquire-api persists Octopool conversations through the PostgreSQL API.
 

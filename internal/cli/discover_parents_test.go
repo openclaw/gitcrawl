@@ -125,3 +125,89 @@ func TestDiscoverParentsRejectsSelectionBeforeCredentials(t *testing.T) {
 		t.Fatal("unrelated release read enabled")
 	}
 }
+
+func TestDiscoverUpdatedParentsKeepsOldThreadsAndResumeScope(t *testing.T) {
+	t.Setenv("OCTOPOOL_TOKEN", "fixture")
+	t.Setenv("OCTOPOOL_POOL", "fixture")
+	since := "2026-11-19T00:00:00Z"
+	calls := 0
+	oversized := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var q struct {
+			Method, Path string
+			Query        map[string][]string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
+			t.Fatal(err)
+		}
+		if q.Method != "GET" {
+			t.Errorf("method: %s", q.Method)
+		}
+		if q.Path == "/repos/example/project" {
+			json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "body": map[string]any{"id": 42}})
+			return
+		}
+		if q.Path != "/repos/example/project/issues" || strings.Join(q.Query["since"], "") != since || strings.Join(q.Query["sort"], "") != "updated" || strings.Join(q.Query["direction"], "") != "desc" || strings.Join(q.Query["per_page"], "") != "20" {
+			t.Errorf("wrong updated inventory: %+v", q)
+		}
+		row := map[string]any{"number": 7, "id": json.Number("9007199254740993"), "created_at": "2020-01-01T00:00:00Z", "updated_at": "2026-11-22T00:00:00Z", "body": "must not be exported"}
+		headers := map[string]string{}
+		if len(q.Query["page"]) == 0 {
+			headers["Link"] = `<https://api.github.com/repositories/42/issues?state=all&sort=updated&direction=desc&per_page=20&since=2026-11-19T00%3A00%3A00Z&page=2>; rel="next"`
+		} else {
+			row["number"], row["id"], row["pull_request"] = 8, 80, map[string]any{}
+		}
+		rows := []any{row}
+		if oversized {
+			for len(rows) <= 20 {
+				rows = append(rows, row)
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": 200, "body_encoding": "json", "body": rows, "headers": headers})
+	}))
+	defer server.Close()
+	t.Setenv("OCTOPOOL_URL", server.URL)
+	type observedDiscovery struct {
+		Selection                                           acquireapi.ParentSelection
+		NumbersSHA256, UpdatedSince, ObservedAt, NextCursor string
+		Complete                                            bool
+	}
+	run := func(cursor string) observedDiscovery {
+		a := New()
+		var out bytes.Buffer
+		a.Stdout, a.Stderr = &out, io.Discard
+		a.githubAuthTokenLookup = func(context.Context) (string, error) { t.Fatal("personal auth lookup"); return "", nil }
+		if err := a.Run(context.Background(), []string{"discover-parents", "--repo", "example/project", "--updated-since", since, "--cursor", cursor, "--page-size", "20", "--max-pages", "1", "--json"}); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.String(), "must not be exported") || strings.Contains(out.String(), "body") {
+			t.Fatal("raw provider fields escaped")
+		}
+		var result observedDiscovery
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.UpdatedSince != since || result.ObservedAt == "" || result.NumbersSHA256 != "" || len(result.Selection.Parents) != 1 {
+			t.Fatalf("invalid receipt: %+v", result)
+		}
+		return result
+	}
+	first := run("")
+	if first.Complete || first.NextCursor == "" || first.Selection.Parents[0].Number != 7 {
+		t.Fatalf("old updated parent missing: %+v", first)
+	}
+	second := run(first.NextCursor)
+	if !second.Complete || second.NextCursor != "" || second.Selection.Parents[0].Kind != "pull_request" || calls != 4 {
+		t.Fatalf("resume: %+v calls=%d", second, calls)
+	}
+	oversized = true
+	a := New()
+	var out bytes.Buffer
+	a.Stdout, a.Stderr = &out, io.Discard
+	err := a.Run(context.Background(), []string{"discover-parents", "--repo", "example/project", "--updated-since", since, "--page-size", "20", "--json"})
+	var invalid parentDiscovery
+	if json.Unmarshal(out.Bytes(), &invalid) != nil || err == nil || !strings.Contains(err.Error(), "exceeds requested size") || invalid.Complete || invalid.Pages != 0 || invalid.Scanned != 0 || invalid.NextCursor != "" || len(invalid.Selection.Parents) != 0 {
+		t.Fatalf("oversized page advanced: %+v %v", invalid, err)
+	}
+}
