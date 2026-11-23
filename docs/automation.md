@@ -297,6 +297,38 @@ batch; retry with a smaller page size, including 1. An individual row exceeding
 the 4 MiB acquisition limit is rejected without clipping. `complete: true`
 means the selected run completed, not that comments or other history are complete.
 
+### Scheduled reporting turns
+
+`acquire-api --cycle --numbers-file history.txt --lifecycle-numbers-file lifecycle.txt`
+uses the same explicit endpoint and credential options. Each bounded invocation
+dispatches one turn: incremental conversations, default-branch commits, selected
+lifecycle events, then one historical conversation batch. PostgreSQL's active run
+always resumes before another turn starts. Only a completed native receipt advances
+the rotation; a new incremental horizon cannot overtake unfinished supplemental work.
+The commit and lifecycle lower bound comes from that completed incremental run,
+not the scheduler's clock. Supplemental turns preserve its horizon. A new bootstrap
+`--since` must use at most microsecond precision. Existing parent runs with finer
+bounds resume unchanged; supplemental scans round their lower bound down to the
+preceding microsecond so no event is excluded by precision conversion. A legacy
+empty window receives one microsecond of overlap rather than blocking later turns.
+
+Keep both admitted files unchanged. Historical progress retains its existing digest
+and offset; an exhausted selection is skipped, never restarted. Lifecycle admits
+one cohort of at most 500 existing parents. That cohort is explicit scope, not full
+repository lifecycle coverage. A production cadence with broader coverage must
+separately qualify fresh updated cohorts or durable partitions before installation.
+
+Use one scheduler and one source lock. `--timeout`, `--max-threads` and each mode's
+page limit bound an invocation. `--max-threads` applies to conversation and
+historical turns; lifecycle admits its entire fixed cohort of at most 500 parents
+and uses `--lifecycle-max-pages` to bound work per invocation. Commit turns use
+`--commit-max-pages`. They do not impose a deadline on the durable run:
+large incremental inventories can require multiple invocations. `complete: false`
+and `deferredModes` expose that condition. Do not start a second mode or discard its
+checkpoint to obtain apparent fairness. Once the run completes, the other admitted
+turns run before the next incremental scan. Provider failures preserve accepted pages
+for the next invocation. A completed horizon alone is never all-family coverage proof.
+
 ### Selected lifecycle events through PostgreSQL
 
 Use `acquire-api --lifecycle-numbers-file numbers.txt --since RFC3339` to collect

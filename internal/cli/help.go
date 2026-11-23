@@ -132,6 +132,12 @@ Use --lifecycle-numbers-file PATH for 1..500 existing PG parents and --since
 for the event lower bound. This follows closure/reopen/merge timelines only; it
 keeps the completed horizon and does not claim repository-wide coverage.
 --lifecycle-max-pages (default 100) bounds each resumable invocation.
+Use --cycle with both --numbers-file and --lifecycle-numbers-file to run one
+admitted reporting turn. The server's active run resumes first; completed turns
+rotate incremental → commits → lifecycle → historical. Commit/lifecycle windows
+come from the completed incremental turn. An unfinished turn reports deferredModes;
+max-threads/pages bound this invocation, not the lifetime of the durable run.
+The fixed lifecycle cohort is at most 500 parents and is not repository-wide coverage.
 No SQLite archive is opened and no direct GitHub credential fallback exists.
 `,
 	"metrics": `gitcrawl metrics collects repository headline metrics in a separate SQLite database.
