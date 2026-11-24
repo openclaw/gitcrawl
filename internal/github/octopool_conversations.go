@@ -433,6 +433,13 @@ func (c *OctopoolConversations) requestConversationData(ctx context.Context, que
 	if len(query) > 16<<10 {
 		return nil, errors.New("GraphQL query exceeds relay limit; reduce batch size")
 	}
+	if c.relay == nil {
+		var data json.RawMessage
+		if err := c.Client.doGraphQL(ctx, query, variables, reporter, &data); err != nil {
+			return nil, safeAppGraphQLError(err)
+		}
+		return data, nil
+	}
 	payload, err := json.Marshal(map[string]any{"pool": c.relay.pool, "method": "POST", "path": "/graphql", "graphql": map[string]any{"query": query, "variables": variables}, "headers": map[string]string{"cache-control": "max-age=0"}})
 	if err != nil {
 		return nil, err

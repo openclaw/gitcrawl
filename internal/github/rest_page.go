@@ -174,6 +174,9 @@ func (c *Client) restPageCursor(cursor, path string, fixed url.Values) (string, 
 			resource = relay.repositoryPath + strings.TrimPrefix(resource, prefix)
 		}
 	}
+	if app, ok := c.httpClient.Transport.(*appReadTransport); ok {
+		resource = app.repositoryResource(resource)
+	}
 	if resource != path {
 		return invalid()
 	}

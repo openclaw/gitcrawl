@@ -167,6 +167,57 @@ requires HTTPS except for loopback tests. An explicitly selected `--config`
 can supply the existing Cloudflare Access binding; archive database settings
 are not consumed. No personal GitHub credential fallback is used.
 
+### Public-repository App authentication
+
+An unattended supervisor can instead use an existing GitHub App installation.
+Keep the App private key in a root-owned regular file (0400 or 0600), accessible
+only to the rooted mint step. The nonroot collector never needs that key.
+
+The machine-oriented mint command is:
+
+```text
+gitcrawl mint-acquisition-token --app-id ID --installation-id ID \
+  --repo example/project --repository-id ID --private-key-file /secure/app-key.pem
+```
+
+**Its stdout is a credential.** Consume stdout through a private pipe in the
+supervisor. Do not run it in a terminal or capture stdout in a journal, report,
+shell trace or ordinary log. The command makes one mint attempt and writes only
+JSON with `token`, `expires_at`, `app_id`, `installation_id`, `repository_id`,
+`repository` and `permissions`. Errors omit response bodies and credentials.
+An uncertain mint is not automatically retried.
+
+Minting verifies the installation's App ID, repository owner and suspension
+state, then verifies the repository's immutable ID and public visibility. It
+requests exactly one repository ID and `metadata`, `contents`, `issues` and
+`pull_requests` **read** permissions, even when the installation has write
+access. A broader returned token is rejected. `private-*` names are excluded.
+The operator remains responsible for an approved repository allowlist and the
+matching prepared PostgreSQL source; public visibility alone is not admission.
+
+Pass the trusted JSON envelope only to the collector's named environment
+variable and add `--github-app-token-env ENV` to the existing `acquire-api`
+command. Remove `OCTOPOOL_TOKEN`, `OCTOPOOL_URL` and `OCTOPOOL_POOL` from this
+invocation. Use a protected runtime credential handoff such as systemd
+`LoadCredential` for the short-lived envelope, not for the private key. A
+nonroot runner can read that credential into only its Gitcrawl child's
+environment. Never reuse the previous envelope when minting fails.
+
+The token must outlast the entire `--timeout` by at least 60 seconds. For a
+15-minute cycle, mint once immediately before each cycle. There is no token
+refresh daemon or key path in the collector. It verifies the token's accessible
+repository set and current public identity before collection; rejected or
+expired credentials never fall back to Octopool or a personal login.
+
+Direct reads use only `https://api.github.com`, reject redirects and preserve
+half of each observed installation REST and GraphQL limit. Unknown or expired
+quota fails closed. Each GraphQL query admits a conservative 100-point cost;
+REST reads admit one point. Other installation consumers remain concurrent,
+so this is an observed reserve, not an exclusive quota reservation. All cycle
+modes use the same token and existing checkpoint/publication contracts.
+
+### Run and completion boundaries
+
 The first incremental run requires `--since`. Later runs overlap the last
 completed horizon by two minutes. PostgreSQL retains the original run scope,
 observation timestamp, parent queue and child cursor after an interrupted or
