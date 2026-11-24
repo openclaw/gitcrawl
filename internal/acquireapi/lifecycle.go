@@ -84,16 +84,25 @@ func lifecycleNumbers(numbers []int) ([]int, error) {
 // LifecycleParents projects small coordinates from full, validated native rows.
 // Every page is pinned to one completed snapshot, never a whole-table scan.
 func (c *Client) LifecycleParents(ctx context.Context, repository string, numbers []int) ([]LifecycleParent, error) {
-	numbers, err := lifecycleNumbers(numbers)
+	meta, err := c.lifecycleRepository(ctx, repository)
 	if err != nil {
 		return nil, err
 	}
+	return c.lifecycleParents(ctx, meta, numbers)
+}
+
+type lifecycleRepository struct {
+	name, id, pin string
+}
+
+func (c *Client) lifecycleRepository(ctx context.Context, repository string) (lifecycleRepository, error) {
+	var source lifecycleRepository
 	meta, err := c.reader.Query(ctx, "gitcrawl", c.source, remote.QueryRequest{Name: "gitcrawl.repositories.current", Limit: 1})
 	if err != nil {
-		return nil, err
+		return source, err
 	}
 	if len(meta.Rows) != 1 || len(meta.Rows[0]) != len(meta.Columns) || meta.Stats.SnapshotID == "" || meta.Cursor != "" || meta.Stats.NextCursor != "" {
-		return nil, errors.New("invalid lifecycle repository snapshot")
+		return source, errors.New("invalid lifecycle repository snapshot")
 	}
 	fields := map[string]any{}
 	for i, k := range meta.Columns {
@@ -102,9 +111,17 @@ func (c *Client) LifecycleParents(ctx context.Context, repository string, number
 	name, ok := fields["full_name"].(string)
 	repoID, idOK := fields["id"].(string)
 	if !ok || !idOK || !strings.EqualFold(name, repository) {
-		return nil, errors.New("lifecycle source repository mismatch")
+		return source, errors.New("lifecycle source repository mismatch")
 	}
 	if _, err = positiveID(repoID); err != nil {
+		return source, err
+	}
+	return lifecycleRepository{name: name, id: repoID, pin: meta.Stats.SnapshotID}, nil
+}
+
+func (c *Client) lifecycleParents(ctx context.Context, source lifecycleRepository, numbers []int) ([]LifecycleParent, error) {
+	numbers, err := lifecycleNumbers(numbers)
+	if err != nil {
 		return nil, err
 	}
 	wanted := map[int]bool{}
@@ -113,7 +130,7 @@ func (c *Client) LifecycleParents(ctx context.Context, repository string, number
 		selected[i] = strconv.Itoa(n)
 		wanted[n] = true
 	}
-	query := remote.QueryRequest{Name: "gitcrawl.threads.list", SnapshotID: meta.Stats.SnapshotID, Limit: len(numbers), Args: map[string]any{"repository": name, "numbers": selected, "includeClosed": true}}
+	query := remote.QueryRequest{Name: "gitcrawl.threads.list", SnapshotID: source.pin, Limit: len(numbers), Args: map[string]any{"repository": source.name, "numbers": selected, "includeClosed": true}}
 	byNumber := map[int]LifecycleParent{}
 	seenIDs := map[string]bool{}
 	seenCursors := map[string]bool{}
@@ -122,7 +139,7 @@ func (c *Client) LifecycleParents(ctx context.Context, repository string, number
 		if err != nil {
 			return nil, err
 		}
-		if result.Stats.SnapshotID != meta.Stats.SnapshotID || len(result.Rows) > len(numbers) {
+		if result.Stats.SnapshotID != source.pin || len(result.Rows) > len(numbers) {
 			return nil, errors.New("lifecycle parent snapshot changed")
 		}
 		for _, row := range result.Rows {
@@ -159,7 +176,7 @@ func (c *Client) LifecycleParents(ctx context.Context, repository string, number
 			var parent struct {
 				NodeID string `json:"node_id"`
 			}
-			if parentRepo != repoID || (kind != "issue" && kind != "pull_request") || json.Unmarshal([]byte(raw), &parent) != nil || parent.NodeID == "" || len(parent.NodeID) > 512 || strings.ContainsAny(parent.NodeID, "\x00\r\n") || ordErr != nil || ord < 0 || ord > 499 || strconv.Itoa(ord) != ordinal {
+			if parentRepo != source.id || (kind != "issue" && kind != "pull_request") || json.Unmarshal([]byte(raw), &parent) != nil || parent.NodeID == "" || len(parent.NodeID) > 512 || strings.ContainsAny(parent.NodeID, "\x00\r\n") || ordErr != nil || ord < 0 || ord > 499 || strconv.Itoa(ord) != ordinal {
 				return nil, errors.New("invalid lifecycle parent coordinates")
 			}
 			if _, err = positiveID(sequence); err != nil {
@@ -223,6 +240,12 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 	if err != nil {
 		return result, err
 	}
+	return runLifecycle(ctx, api, provider, o, state, parents, "gitcrawl-lifecycle-")
+}
+
+func runLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvider, o LifecycleOptions, state State, parents []LifecycleParent, idPrefix string) (Result, error) {
+	var result Result
+	var err error
 	scope := LifecycleScope{Schema: "github-lifecycle-scope/v1", Since: o.Since.UTC(), Threads: make([]LifecycleThread, len(parents))}
 	for i, p := range parents {
 		scope.Threads[i] = p.LifecycleThread
@@ -262,7 +285,7 @@ func RunLifecycle(ctx context.Context, api LifecycleAPI, provider LifecycleProvi
 			return result, errors.New("lifecycle scope exceeds 64 KiB")
 		}
 		sum := sha256.Sum256(append(raw, []byte(fmt.Sprintf("/%d/%s", state.Revision, state.CompletedThrough.Format(time.RFC3339Nano)))...))
-		run = &RunRequest{ID: "gitcrawl-lifecycle-" + hex.EncodeToString(sum[:16]), Mode: "lifecycle", ExpectedRevision: state.Revision, Horizon: *state.CompletedThrough, Scope: raw}
+		run = &RunRequest{ID: idPrefix + hex.EncodeToString(sum[:16]), Mode: "lifecycle", ExpectedRevision: state.Revision, Horizon: *state.CompletedThrough, Scope: raw}
 		if err = api.Begin(ctx, *run); err != nil {
 			return result, err
 		}

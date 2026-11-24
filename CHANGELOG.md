@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Collect scheduled closure, reopen and merge events for changed PostgreSQL parents, including older issues and pull requests, across bounded resumable batches.
+
 - Keep the verified commit, time and actor of merged pull requests available to PostgreSQL archive readers across issue refreshes.
 
 - Let PostgreSQL acquisition run and page commits wait up to `--commit-timeout` (default 10 minutes) for server-side publication checks, instead of the 30 second bound that canceled large final pages.

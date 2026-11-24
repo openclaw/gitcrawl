@@ -1,9 +1,15 @@
 package acquireapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -57,6 +63,11 @@ func TestCycleResumesBeforeRotatingAndPreservesHistoricalOffset(t *testing.T) {
 	horizon := *f.api.state.CompletedThrough
 	turn("commits", true, false)
 	third := turn("lifecycle", false, false)
+	options.LifecycleNumbers = nil
+	if _, err := RunCycle(ctx, api, rest, graph, options); err == nil || f.api.state.ActiveRun.ID != third.RunID || len(f.providerCursors) != 1 {
+		t.Fatal("a window cycle took over an active fixed selection")
+	}
+	options.LifecycleNumbers = []int{7}
 	fourth := turn("lifecycle", true, true)
 	if third.RunID != fourth.RunID || !reflect.DeepEqual(f.providerCursors, []string{"", "next"}) {
 		t.Fatal("lifecycle turn lost its original cursor")
@@ -109,5 +120,128 @@ func TestCycleRejectsNewNanosecondBoundBeforeEffectsAndRecoversOldWindow(t *test
 	mode, since, err = nextCycleMode(f.api.state, o.Conversations)
 	if err != nil || mode != "commits" || !since.Equal(f.api.state.CompletedThrough.Add(-time.Microsecond)) {
 		t.Fatal("empty legacy window wedged supplemental turns", mode, since, err)
+	}
+}
+
+func TestCycleCollectsPinnedWindowAcrossRunsAndResumesAcceptedPage(t *testing.T) {
+	f := newLifecycleFixture(t)
+	ctx, cancel := runContext()
+	defer cancel()
+	options := CycleOptions{Conversations: options(), CommitMaxPages: 1, LifecycleMaxPages: 1}
+	options.Conversations.Numbers = []int{8}
+	graph := &cycleGraphFixture{&emptyCommitProvider{}, f.provider}
+	api := cycleFixtureAPI{f.client}
+	rest := &fixtureProvider{}
+	if _, err := RunCommits(ctx, api, graph, CommitOptions{Repository: options.Conversations.Repository, Since: options.Conversations.Since, MaxPages: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var readerCalls int
+	reader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var q remote.QueryRequest
+		raw, err := io.ReadAll(r.Body)
+		if err != nil || json.Unmarshal(raw, &q) != nil || q.Name != "gitcrawl.lifecycle.candidates" || r.URL.Path != "/v1/apps/gitcrawl/archives/fixture/query" || r.Header.Get("Authorization") != "Bearer reader" {
+			t.Error("alternate reader received a different operation, source or credential")
+			http.Error(w, "wrong operation", http.StatusBadRequest)
+			return
+		}
+		readerCalls++
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		f.archiveHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(reader.Close)
+	if err := f.client.SetLifecycleReader(reader.URL); err != nil {
+		t.Fatal(err)
+	}
+	f.windowPin = fmt.Sprintf("pg-gitcrawl-current-v1:seed:%d", f.api.state.Sequence)
+	for i := 0; i < 502; i++ {
+		f.windowNumbers = append(f.windowNumbers, 7+i*2)
+	}
+	next := func() CycleResult {
+		t.Helper()
+		got, err := RunCycle(ctx, api, rest, graph, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := next()
+	if first.Mode != "lifecycle" || first.Complete || first.Resumed || first.LifecycleParents < 1 || len(f.providerNumbers) != 1 {
+		t.Fatal("did not start the first window parent", first)
+	}
+	rawParentProgress := `{"version":1,"phase":"previous-mode"}`
+	checkProof := func(run *RunRequest) {
+		t.Helper()
+		var scope LifecycleScope
+		if json.Unmarshal(run.Scope, &scope) != nil || string(scope.ParentCheckpoint) != rawParentProgress || run.Horizon != *f.api.state.CompletedThrough {
+			t.Fatal("window lost original parent progress/horizon")
+		}
+	}
+	checkProof(f.api.state.ActiveRun)
+	all := f.windowNumbers
+	f.windowNumbers = all[1:]
+	if _, err := RunCycle(ctx, api, rest, graph, options); err == nil || len(f.providerNumbers) != 1 || f.api.state.ActiveRun.ID != first.RunID {
+		t.Fatal("changed candidate membership advanced an active run")
+	}
+	f.windowNumbers = all
+	f.terminalFirst = true
+	options.LifecycleMaxPages = 1000
+	resumed := next()
+	if resumed.RunID != first.RunID || !resumed.Resumed || !resumed.Complete || f.providerCursors[1] != "next" {
+		t.Fatal("lost accepted timeline page", resumed)
+	}
+	for i := 0; i < 503; i++ {
+		result := next()
+		if result.Mode == "historical" {
+			break
+		}
+		if result.Mode != "lifecycle" || result.Threads < 1 || !result.Complete {
+			t.Fatal("window did not advance", result)
+		}
+		checkProof(f.api.state.CompletedRun)
+	}
+	want := append([]int{f.windowNumbers[0]}, f.windowNumbers...)
+	if !slices.Equal(f.providerNumbers, want) || len(f.candidateQueries) < 4 || readerCalls != len(f.candidateQueries) || !slices.Equal(rest.requested, []int{8}) {
+		t.Fatalf("more than 500 parents must finish before history: reads=%d candidates=%d history=%v", len(f.providerNumbers), len(f.candidateQueries), rest.requested)
+	}
+	var merged bool
+	for _, page := range f.api.pages {
+		var req PageRequest
+		if json.Unmarshal(page, &req) == nil && req.Lifecycle != nil {
+			for _, event := range req.Lifecycle.Events {
+				var raw struct {
+					Type string `json:"__typename"`
+				}
+				if json.Unmarshal([]byte(event.RawJSON), &raw) == nil && raw.Type == "MergedEvent" {
+					merged = true
+				}
+			}
+		}
+	}
+	if !merged {
+		t.Fatal("provider's merged event did not reach the native page")
+	}
+}
+
+func TestCycleDistinguishesEmptyWindowFromUnavailableInventory(t *testing.T) {
+	f := newLifecycleFixture(t)
+	ctx, cancel := runContext()
+	defer cancel()
+	o := CycleOptions{Conversations: options(), CommitMaxPages: 1, LifecycleMaxPages: 1}
+	o.Conversations.Numbers = []int{8}
+	graph := &cycleGraphFixture{&emptyCommitProvider{}, f.provider}
+	api := cycleFixtureAPI{f.client}
+	rest := &fixtureProvider{}
+	if _, err := RunCommits(ctx, api, graph, CommitOptions{Repository: o.Conversations.Repository, Since: o.Conversations.Since, MaxPages: 1}); err != nil {
+		t.Fatal(err)
+	}
+	f.windowPin = fmt.Sprintf("pg-gitcrawl-current-v1:seed:%d", f.api.state.Sequence)
+	f.failCandidates = true
+	if _, err := RunCycle(ctx, api, rest, graph, o); err == nil || f.api.begins != 1 || len(f.providerNumbers) != 0 {
+		t.Fatal("unavailable candidate query was treated as empty")
+	}
+	f.failCandidates = false
+	got, err := RunCycle(ctx, api, rest, graph, o)
+	if err != nil || got.Mode != "historical" || !got.Complete || f.api.begins != 2 || len(f.providerNumbers) != 0 || !slices.Equal(rest.requested, []int{8}) {
+		t.Fatal("empty window must advance real historical work without creating a lifecycle run", got, err)
 	}
 }

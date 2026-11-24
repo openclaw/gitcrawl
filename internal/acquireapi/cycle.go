@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
-// CycleOptions admits one fixed historical selection and one lifecycle cohort.
+// CycleOptions admits one fixed historical selection. LifecycleNumbers optionally
+// restricts scheduled lifecycle turns to an explicitly selected cohort.
 // PostgreSQL remains the sole run/checkpoint owner; the scheduler has no cursor.
 type CycleOptions struct {
 	Conversations     Options
@@ -20,6 +22,7 @@ type CycleOptions struct {
 type CycleAPI interface {
 	API
 	LifecycleAPI
+	LifecycleWindowParents(ctx context.Context, repository string, since, until time.Time, sequence int64, after int, pinTag string) ([]LifecycleParent, string, error)
 }
 
 type CycleResult struct {
@@ -47,8 +50,10 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface 
 	if _, err := selectionHash(o.Conversations.Numbers); err != nil {
 		return out, err
 	}
-	if _, err := lifecycleNumbers(o.LifecycleNumbers); err != nil {
-		return out, err
+	if len(o.LifecycleNumbers) > 0 {
+		if _, err := lifecycleNumbers(o.LifecycleNumbers); err != nil {
+			return out, err
+		}
 	}
 	state, err := api.State(ctx)
 	if err != nil {
@@ -57,6 +62,19 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface 
 	mode, since, err := nextCycleMode(state, o.Conversations)
 	if err != nil {
 		return out, err
+	}
+	var selection cycleLifecycle
+	if mode == "lifecycle" {
+		selection, err = selectCycleLifecycle(ctx, api, state, o, since)
+		if err != nil {
+			return out, err
+		}
+		if len(selection.parents) == 0 {
+			mode, _, err = afterLifecycle(state, o.Conversations)
+			if err != nil {
+				return out, err
+			}
+		}
 	}
 	out.Mode, out.Resumed, out.LifecycleParents = mode, state.ActiveRun != nil, len(o.LifecycleNumbers)
 	switch mode {
@@ -69,7 +87,9 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface 
 	case "commits":
 		out.Result, err = RunCommits(ctx, api, graph, CommitOptions{Repository: o.Conversations.Repository, Since: since, MaxPages: o.CommitMaxPages})
 	case "lifecycle":
-		out.Result, err = RunLifecycle(ctx, api, graph, LifecycleOptions{Repository: o.Conversations.Repository, Numbers: o.LifecycleNumbers, Since: since, MaxPages: o.LifecycleMaxPages})
+		out.LifecycleParents = len(selection.parents)
+		options := LifecycleOptions{Repository: o.Conversations.Repository, Since: selection.since, MaxPages: o.LifecycleMaxPages}
+		out.Result, err = runLifecycle(ctx, api, graph, options, state, selection.parents, selection.prefix)
 	}
 	if !out.Complete {
 		for _, other := range []string{"incremental", "commits", "lifecycle", "historical"} {
@@ -133,31 +153,39 @@ func nextCycleMode(state State, o Options) (string, time.Time, error) {
 		}
 		return "lifecycle", completed.Since, nil
 	case "lifecycle":
-		raw, err := parentProgressCheckpoint(state, o.Repository)
-		if err != nil {
-			return "", zero, err
+		if strings.HasPrefix(run.ID, lifecycleWindowPrefix) {
+			return "lifecycle", zero, nil
 		}
-		var cp checkpoint
-		if json.Unmarshal(raw, &cp) != nil {
-			return "", zero, errors.New("cycle historical progress unavailable")
-		}
-		sha, err := selectionHash(o.Numbers)
-		if err != nil {
-			return "", zero, err
-		}
-		if cp.History.SHA != "" && cp.History.SHA != sha {
-			return "", zero, errors.New("cycle historical selection changed; explicit admission required")
-		}
-		if cp.History.Offset < 0 || cp.History.Offset > len(o.Numbers) {
-			return "", zero, errors.New("cycle historical offset outside selection")
-		}
-		if cp.History.Offset < len(o.Numbers) {
-			return "historical", zero, nil
-		}
-		return "incremental", zero, nil
+		return afterLifecycle(state, o)
 	case "historical", "historical-parents":
 		return "incremental", zero, nil
 	default:
 		return "", zero, errors.New("completed mode is outside the admitted cycle")
 	}
+}
+
+func afterLifecycle(state State, o Options) (string, time.Time, error) {
+	var zero time.Time
+	raw, err := parentProgressCheckpoint(state, o.Repository)
+	if err != nil {
+		return "", zero, err
+	}
+	var cp checkpoint
+	if json.Unmarshal(raw, &cp) != nil {
+		return "", zero, errors.New("cycle historical progress unavailable")
+	}
+	sha, err := selectionHash(o.Numbers)
+	if err != nil {
+		return "", zero, err
+	}
+	if cp.History.SHA != "" && cp.History.SHA != sha {
+		return "", zero, errors.New("cycle historical selection changed; explicit admission required")
+	}
+	if cp.History.Offset < 0 || cp.History.Offset > len(o.Numbers) {
+		return "", zero, errors.New("cycle historical offset outside selection")
+	}
+	if cp.History.Offset < len(o.Numbers) {
+		return "historical", zero, nil
+	}
+	return "incremental", zero, nil
 }
