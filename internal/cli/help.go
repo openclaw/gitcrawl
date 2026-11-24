@@ -222,7 +222,7 @@ Usage:
 	"sync": `gitcrawl sync mirrors GitHub issue and pull request metadata.
 
 Usage:
-  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--graphql-history] [--octopool] [--incremental] [--force] [--json]
+  gitcrawl sync owner/repo [--state open|closed|all] [--numbers refs] [--with pr-metadata|pr-details] [--include-comments] [--include-pr-details] [--graphql-history] [--octopool] [--incremental] [--github-app-token-env NAME] [--timeout 15m] [--force] [--json]
 
 pr-metadata fetches only the pull request object; pr-details also hydrates files,
 commits, checks, workflows, and review threads. Comments are selected separately.
@@ -231,6 +231,13 @@ and PR details are always fetched when selected.
 --graphql-history batches exact numbers through GraphQL with no REST fallback.
 It requires --state all --include-comments --with pr-metadata, and does not
 support --since, --limit, or full pr-details hydration.
+--github-app-token-env uses trusted mint-acquisition-token JSON for a bounded
+public-repository REST seed, preserving half of observed REST and GraphQL quota.
+It supports parents, comments and pr-metadata, without personal auth fallback.
+It rejects Octopool, token commands, custom API origins, GraphQL history and
+full pr-details. --timeout applies only to this mode (default 15m, maximum 1h);
+the token must remain valid beyond the entire invocation. Completed native rows
+survive a quota stop; replay the explicit selection with a fresh scoped token.
 --octopool routes REST metadata and comments through Octopool using OCTOPOOL_TOKEN,
 OCTOPOOL_URL and OCTOPOOL_POOL. It never falls back to direct GitHub requests and
 does not support GraphQL history, PR enrichment or --github-token-command.

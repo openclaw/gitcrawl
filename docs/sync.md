@@ -70,6 +70,45 @@ gitcrawl sync owner/repo --since 2026-04-01T00:00:00Z
 gitcrawl sync owner/repo --state all --since 2026-04-01T00:00:00Z
 ```
 
+## Bounded GitHub App seed
+
+A supervisor can use the [App mint command](automation.md) to supply a short-lived,
+single-public-repository read credential to an isolated native seed:
+
+```bash
+gitcrawl --config /private/seed/config.toml sync owner/repo \
+  --github-app-token-env GITCRAWL_APP_CREDENTIAL_JSON --timeout 15m \
+  --state all --since 2026-04-01T00:00:00Z --limit 20 \
+  --include-comments --with pr-metadata --json
+```
+
+The environment variable contains the exact credential JSON emitted by
+`mint-acquisition-token`, not a raw token or private key. Keep that value out of
+arguments, config files and logs. Gitcrawl validates its lifetime, repository
+identity and read-only permissions, confirms the current public repository and
+single-repository installation access, and uses only `https://api.github.com`
+without following redirects. There is no personal-token or `gh` fallback.
+
+This mode reuses the acquisition provider's request-level reserve: at least half
+of each observed installation REST and GraphQL budget remains reserved. Missing,
+expired or depleted quota refuses further acquisition. Other installation users
+share that quota; the guard cannot reserve capacity against their concurrent
+requests. The seed uses REST parents, issue comments, PR reviews, inline review
+comments and optional PR metadata. GraphQL history, full PR details, Octopool,
+token commands and custom API origins are rejected before acquisition.
+
+The timeout defaults to 15 minutes and must be positive and at most one hour.
+The credential must outlive the invocation plus the provider's safety margin;
+this process never mints or refreshes it. Normal sync and Octopool retain their
+existing behavior and do not accept this timeout option.
+
+Completed native rows survive a quota stop. Keep the database and failure
+receipt, then replay the explicit selection with a fresh scoped credential.
+`--since` selects currently updated threads from that lower bound; `--limit`
+and the observed finish time do not prove complete historical coverage. Seal,
+measure and export the stopped native image separately before PostgreSQL seed
+delivery. This seed mode does not create a scheduler or PostgreSQL source.
+
 ## Pooled REST acquisition
 
 ```bash

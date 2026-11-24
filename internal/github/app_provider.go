@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -50,14 +49,8 @@ func newAppAcquisition(ctx context.Context, token AcquisitionToken, base http.Ro
 		return nil, nil, errors.New("installation token is not restricted to the admitted public repository")
 	}
 	owner, repo, _ := strings.Cut(token.Repository, "/")
-	metadata, err := client.GetRepo(ctx, owner, repo, nil)
-	if err != nil {
+	if _, err := client.GetRepo(ctx, owner, repo, nil); err != nil {
 		return nil, nil, err
-	}
-	encoded, _ := json.Marshal(metadata)
-	var repository appRepository
-	if json.Unmarshal(encoded, &repository) != nil || !repository.matches(app) {
-		return nil, nil, errors.New("public repository identity changed before acquisition")
 	}
 	for _, resource := range []string{"core", "graphql"} {
 		if err := client.reserve.beforeRequest(resource, 100); err != nil {
