@@ -3,6 +3,8 @@
 from upstream import SourceCache
 import argparse,fcntl,json,os,plistlib,select,signal,subprocess,sys,time,hashlib,uuid
 from pathlib import Path
+from contextlib import contextmanager
+from tempfile import mkstemp
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def atomic(path,value):
@@ -13,6 +15,25 @@ def atomic(path,value):
  fd=os.open(path.parent,os.O_RDONLY)
  try:os.fsync(fd)
  finally:os.close(fd)
+def remove_gate_file(path):
+ # Cleanup cannot change the outcome of a completed native transaction.
+ try:os.unlink(path)
+ except FileNotFoundError:pass
+ except OSError as e:print(f'commit gate cleanup warning: {e}',file=sys.stderr)
+
+@contextmanager
+def commit_gate(path, content_digest):
+ # The child treats the first readable gate as authoritative. Link, never replace:
+ # the final name must first appear complete and must belong to this publication.
+ fd,tmp=mkstemp(dir=path.parent,prefix='.'+path.name+'-')
+ try:
+  with os.fdopen(fd,'w',encoding='ascii') as f:
+   f.write(content_digest);f.flush();os.fsync(f.fileno())
+  os.link(tmp,path)
+  try:yield
+  finally:remove_gate_file(path)
+ finally:remove_gate_file(tmp)
+
 def command(argv,timeout=20):return subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
 
 class Lifecycle:
@@ -75,9 +96,8 @@ class Lifecycle:
       if time.monotonic()>=until:raise RuntimeError('native owner did not settle within20s')
       time.sleep(.1)
    # Child checks source identity and takes the original runner.lock itself.
-   with open(gate,'x',encoding='ascii') as f:
-    os.chmod(gate,0o600);f.write(prepared['content_digest']);f.flush();os.fsync(f.fileno())
-   out,err=child.communicate(timeout=self.a.write_seconds+20)
+   with commit_gate(gate,prepared['content_digest']):
+    out,err=child.communicate(timeout=self.a.write_seconds+20)
    if child.returncode:raise RuntimeError('native atomic commit failed: '+err[-2000:])
    lines=[x for x in out.splitlines() if x.strip()]
    if not lines:raise RuntimeError('native commit receipt missing')
@@ -98,7 +118,6 @@ class Lifecycle:
     finally:
      child.stdout.close()
      child.stderr.close()
-   if gate.exists():gate.unlink()
    if record is not None:self.restore(record)
 
 def main():

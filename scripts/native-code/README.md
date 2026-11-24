@@ -31,6 +31,12 @@ of the same analytics job. Its existing journal-only recovery helper remains
 compatible. The native SQLite writer opens an existing archive without migration
 or creation and retains the delivered FULL/Darwin full-flush policy.
 
+After settlement, the wrapper writes and fsyncs the prepared digest in a private
+same-directory file, closes it, then hard-links it to the per-run gate. The
+first visible gate is complete; an existing name is never replaced or removed
+on collision. The native writer still refuses a mismatched digest before locking
+or writing the archive. Neither file is used to resume an interrupted commit.
+
 Code readiness is independent of issue/PR provider completeness. It requires the
 verified native core baseline and valid `analytics_coverage.through` and
 `observed_at` clocks within five minutes, with frontier <= observation <= now.

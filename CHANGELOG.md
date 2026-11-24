@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Publish the native code index commit gate atomically so a scheduled run cannot mistake a partially written digest for a mismatch.
+
 - Run scheduled PostgreSQL conversation, commit and lifecycle collection for archives without a historical selection file.
 
 - Support a distinct reader credential for scheduled lifecycle candidate queries served by a separate archive reader.
