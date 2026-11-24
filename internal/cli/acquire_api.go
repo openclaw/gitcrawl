@@ -59,8 +59,8 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if appAuth && (*appToken == "" || !validAccessEnvName(*appToken) || *appToken == *publisher || *appToken == *reader || os.Getenv("OCTOPOOL_TOKEN") != "" || os.Getenv("OCTOPOOL_URL") != "" || os.Getenv("OCTOPOOL_POOL") != "") {
 		return usageErr(errors.New("github-app-token-env requires an explicit environment name and cannot be combined with Octopool configuration"))
 	}
-	if *cycle && (*commits || *parents != "" || *numbers == "") {
-		return usageErr(errors.New("cycle requires numbers-file, without commits or parent selection"))
+	if *cycle && (*commits || *parents != "") {
+		return usageErr(errors.New("cycle cannot be combined with commits or parent selection"))
 	}
 	if *lifecycleReader != "" && (!*cycle || *lifecycle != "") {
 		return usageErr(errors.New("lifecycle-reader-endpoint requires a window-based cycle"))

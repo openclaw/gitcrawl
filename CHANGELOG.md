@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run scheduled PostgreSQL conversation, commit and lifecycle collection for archives without a historical selection file.
+
 - Support a distinct reader credential for scheduled lifecycle candidate queries served by a separate archive reader.
 
 - Collect scheduled closure, reopen and merge events for changed PostgreSQL parents, including older issues and pull requests, across bounded resumable batches.

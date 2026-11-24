@@ -350,10 +350,11 @@ means the selected run completed, not that comments or other history are complet
 
 ### Scheduled reporting turns
 
-`acquire-api --cycle --numbers-file history.txt`
+`acquire-api --cycle`
 uses the same explicit endpoint and credential options. Each bounded invocation
-dispatches one turn: incremental conversations, default-branch commits, selected
-lifecycle events, then one historical conversation batch. PostgreSQL's active run
+dispatches one turn: incremental conversations, default-branch commits, or
+lifecycle events. Add `--numbers-file history.txt` to include a historical
+conversation batch after lifecycle work. PostgreSQL's active run
 always resumes before another turn starts. Only a completed native receipt advances
 the rotation; a new incremental horizon cannot overtake unfinished supplemental work.
 The commit and lifecycle lower bound comes from that completed incremental run,
@@ -363,8 +364,9 @@ bounds resume unchanged; supplemental scans round their lower bound down to the
 preceding microsecond so no event is excluded by precision conversion. A legacy
 empty window receives one microsecond of overlap rather than blocking later turns.
 
-Keep the historical file unchanged. Its checkpoint retains the digest and offset,
-and the cycle skips exhausted history. For lifecycle events the cycle reads eligible
+Keep the historical file unchanged once the archive records its digest or offset.
+The cycle requires that file for retained historical progress and skips exhausted
+history. For lifecycle events the cycle reads eligible
 parent numbers from the completed PostgreSQL inventory in ascending batches of 100.
 It retains the original pin and window across batches and restarts. Older issues
 and PRs with recent changes are eligible. The provider timeline supplies the event
