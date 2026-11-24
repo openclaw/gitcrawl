@@ -28,6 +28,7 @@ type API interface {
 type Provider interface {
 	GetRepo(context.Context, string, string, github.Reporter) (map[string]any, error)
 	GetIssue(context.Context, string, string, int, github.Reporter) (map[string]any, error)
+	GetPull(context.Context, string, string, int, github.Reporter) (map[string]any, error)
 	ReadRESTPage(context.Context, github.RESTPageRequest, github.Reporter) (github.RESTPage, error)
 }
 type Options struct {
@@ -283,7 +284,18 @@ func Run(ctx context.Context, api API, provider Provider, options Options) (Resu
 			if err != nil {
 				return result, err
 			}
-			change, err := remotedelivery.ProjectAcquiredThread(repoID, threadID, row, prior, work.ObservedAt)
+			change, err := remotedelivery.ProjectAcquiredThread(repoID, threadID, options.Repository, row, prior, work.ObservedAt, nil)
+			if errors.Is(err, remotedelivery.ErrFullPullRequired) {
+				pull, readErr := provider.GetPull(ctx, owner, repo, n, nil)
+				if readErr != nil {
+					return result, readErr
+				}
+				merge, verifyErr := github.VerifiedPullMerge(options.Repository, providerID, n, row, pull)
+				if verifyErr != nil {
+					return result, verifyErr
+				}
+				change, err = remotedelivery.ProjectAcquiredThread(repoID, threadID, options.Repository, row, prior, work.ObservedAt, merge)
+			}
 			if err != nil {
 				return result, err
 			}
