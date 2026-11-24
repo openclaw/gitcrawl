@@ -44,6 +44,7 @@ func TestAcquireAPILifecycleDispatchWithoutSQLite(t *testing.T) {
 	t.Setenv("GITCRAWL_DB", db)
 	t.Setenv("LIFECYCLE_PUBLISHER", "publisher")
 	t.Setenv("LIFECYCLE_READER", "reader")
+	t.Setenv("CANDIDATE_READER", "separate-reader")
 	t.Setenv("OCTOPOOL_TOKEN", "relay")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("other active mode must stop before provider call")
@@ -66,7 +67,7 @@ func TestAcquireAPILifecycleDispatchWithoutSQLite(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "another acquisition mode is active") {
 		t.Fatal("lifecycle selector not dispatched", err)
 	}
-	err = a.Run(context.Background(), []string{"acquire-api", "--cycle", "--numbers-file", selection, "--lifecycle-max-pages", "1", "--lifecycle-reader-endpoint", api.URL, "--endpoint", api.URL, "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "LIFECYCLE_PUBLISHER", "--reader-token-env", "LIFECYCLE_READER"})
+	err = a.Run(context.Background(), []string{"acquire-api", "--cycle", "--numbers-file", selection, "--lifecycle-max-pages", "1", "--lifecycle-reader-endpoint", api.URL, "--lifecycle-reader-token-env", "CANDIDATE_READER", "--endpoint", api.URL, "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "LIFECYCLE_PUBLISHER", "--reader-token-env", "LIFECYCLE_READER"})
 	if err == nil || !strings.Contains(err.Error(), "outside the admitted cycle") {
 		t.Fatal("scheduled window did not reach the active-run owner", err)
 	}
@@ -103,4 +104,53 @@ func TestAcquireAPIParentSelectionRejectsAmbiguousModeWithoutOpeningArchive(t *t
 	if _, err = os.Stat(db); !os.IsNotExist(err) {
 		t.Fatal("opened SQLite", err)
 	}
+}
+
+func TestAcquireAPICandidateCredentialRejectsAmbiguousAuthority(t *testing.T) {
+	for _, key := range []string{"OCTOPOOL_TOKEN", "OCTOPOOL_URL", "OCTOPOOL_POOL"} {
+		t.Setenv(key, "")
+	}
+	root := t.TempDir()
+	selection := filepath.Join(root, "history")
+	if err := os.WriteFile(selection, []byte("7\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PUB", "write-only-fixture")
+	t.Setenv("READ", "read-only-fixture")
+	t.Setenv("APP", "app-fixture-envelope")
+	t.Setenv("ALIAS_PUB", os.Getenv("PUB"))
+	t.Setenv("ALIAS_APP", os.Getenv("APP"))
+	t.Setenv("NO_SECRET", "")
+	a := New()
+	a.Stdout, a.Stderr = io.Discard, io.Discard
+	base := []string{"acquire-api", "--cycle", "--numbers-file", selection, "--repo", "example/project", "--source", "fixture", "--endpoint", "https://archive.example", "--publisher-token-env", "PUB", "--reader-token-env", "READ", "--github-app-token-env", "APP"}
+	for _, tc := range []struct {
+		endpoint  bool
+		env, want string
+	}{
+		{false, "READ", "requires a separate lifecycle endpoint"},
+		{true, "", "credential environment name"},
+		{true, "NO_SECRET", "credential is missing"},
+		{true, "PUB", "credential environment name"},
+		{true, "APP", "credential environment name"},
+		{true, "ALIAS_PUB", "invalid lifecycle reader credential"},
+		{true, "ALIAS_APP", "uses provider authentication"},
+	} {
+		args := append([]string{}, base...)
+		if tc.endpoint {
+			args = append(args, "--lifecycle-reader-endpoint", "https://reader.example")
+		}
+		err := a.Run(context.Background(), append(args, "--lifecycle-reader-token-env", tc.env))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "fixture-envelope") || strings.Contains(err.Error(), "write-only-fixture") {
+			t.Fatalf("invalid reader admission (%q, %t): %v", tc.env, tc.endpoint, err)
+		}
+	}
+	t.Setenv("OCTOPOOL_TOKEN", "relay-fixture")
+	t.Setenv("ALIAS_RELAY", os.Getenv("OCTOPOOL_TOKEN"))
+	args := append([]string{}, base[:len(base)-2]...)
+	err := a.Run(context.Background(), append(args, "--lifecycle-reader-endpoint", "https://reader.example", "--lifecycle-reader-token-env", "ALIAS_RELAY"))
+	if err == nil || !strings.Contains(err.Error(), "uses provider authentication") {
+		t.Fatal("accepted provider relay credential", err)
+	}
+
 }

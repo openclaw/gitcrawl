@@ -372,7 +372,9 @@ type and time. An empty candidate page advances to the next scheduled turn.
 
 When a separate read service serves `gitcrawl.lifecycle.candidates`, set
 `--lifecycle-reader-endpoint` to that origin. Only the candidate query uses the
-alternate origin, with the same reader credential, source and publication pin.
+alternate origin, with the same source and publication pin. It uses the acquisition
+reader credential by default. For a separate reader audience, pass
+`--lifecycle-reader-token-env NAME` with the name of its reader credential variable.
 Parent validation and acquisition stay on `--endpoint`. An explicitly restricted
 cycle can still use `--lifecycle-numbers-file` for a fixed selection of up to 500
 parents. Resume any active fixed run with its original file before switching.

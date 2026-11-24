@@ -33,6 +33,7 @@ type lifecycleFixture struct {
 	expectedSince    string
 	windowNumbers    []int
 	failCandidates   bool
+	candidateToken   string
 	windowPin        string
 	candidateQueries []remote.QueryRequest
 	providerNumbers  []int
@@ -51,12 +52,17 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 			}
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer reader" {
-			t.Error("wrong reader token")
-		}
 		var q remote.QueryRequest
 		if json.NewDecoder(r.Body).Decode(&q) != nil {
 			t.Error("invalid query")
+		}
+		token := "reader"
+		if q.Name == "gitcrawl.lifecycle.candidates" && f.candidateToken != "" {
+			token = f.candidateToken
+		}
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "reader credential refused", http.StatusUnauthorized)
+			return
 		}
 		pin := "pg-gitcrawl-current-v1:seed:20"
 		if f.windowPin != "" {
