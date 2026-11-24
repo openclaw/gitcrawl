@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let bounded PostgreSQL acquisition use a public-repository GitHub App token minted by a separate root supervisor, keeping the private key out of the collector and reserving half the installation's observed REST and GraphQL quota.
+
 - Rotate admitted PostgreSQL reporting turns across conversations, commits, lifecycle events and historical batches, resuming unfinished native runs before advancing the schedule.
 
 - Export bounded, resumable updated-parent identity inventories through Octopool, including older threads with recent activity, without exporting provider bodies or claiming historical coverage.

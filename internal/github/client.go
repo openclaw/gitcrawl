@@ -31,6 +31,7 @@ type Client struct {
 	reserve              *rateLimitReserve
 	graphQLResponseLimit int64
 	graphQLQuotaGuard    bool
+	graphQLRequestCost   int
 }
 
 type Options struct {
@@ -83,6 +84,7 @@ type rateLimitReserve struct {
 	requestMu sync.Mutex
 	mu        sync.Mutex
 	reserve   int
+	percent   int
 	snapshots map[string]RateLimitSnapshot
 	// GraphQL response evidence must survive REST snapshot replacement and
 	// upward provider anomalies until the observed reset boundary has passed.
@@ -118,8 +120,12 @@ func (r *rateLimitReserve) beforeObservedGraphQL(token string, cost int) error {
 	if q.Resource != "graphql" || !q.ResetAt.After(time.Now()) {
 		return requestFailureAt("dispatch_guard", "quota_observation_stale", fmt.Errorf("fresh observed GraphQL quota required"))
 	}
-	if q.Remaining-cost < r.reserve {
-		return &RateLimitReserveError{RateLimit: q, Reserve: r.reserve}
+	floor, err := r.floor(q)
+	if err != nil {
+		return err
+	}
+	if q.Remaining-cost < floor {
+		return &RateLimitReserveError{RateLimit: q, Reserve: floor}
 	}
 	r.graphqlObserved.Remaining -= cost
 	return nil
@@ -216,12 +222,26 @@ func (r *rateLimitReserve) beforeRequest(resource string, cost int) error {
 	if !snapshot.ResetAt.IsZero() && !time.Now().UTC().Before(snapshot.ResetAt) {
 		return &rateLimitStatusExpiredError{RateLimit: snapshot}
 	}
-	if snapshot.Remaining-cost < r.reserve {
-		return &RateLimitReserveError{RateLimit: snapshot, Reserve: r.reserve}
+	floor, err := r.floor(snapshot)
+	if err != nil {
+		return err
+	}
+	if snapshot.Remaining-cost < floor {
+		return &RateLimitReserveError{RateLimit: snapshot, Reserve: floor}
 	}
 	snapshot.Remaining -= cost
 	r.snapshots[resource] = snapshot
 	return nil
+}
+
+func (r *rateLimitReserve) floor(snapshot RateLimitSnapshot) (int, error) {
+	if r.percent == 0 {
+		return r.reserve, nil
+	}
+	if snapshot.Limit <= 0 || snapshot.Remaining < 0 || snapshot.Remaining > snapshot.Limit || !snapshot.ResetAt.After(time.Now()) {
+		return 0, errors.New("fresh GitHub installation quota limit, remaining and reset required")
+	}
+	return max(r.reserve, (snapshot.Limit*r.percent+99)/100), nil
 }
 
 func (r *rateLimitReserve) observe(snapshot RateLimitSnapshot) {
@@ -868,7 +888,7 @@ func (c *Client) requestToken(ctx context.Context) (string, error) {
 func (c *Client) requestRateLimit(method, fullURL string) (string, int) {
 	if method == http.MethodPost && fullURL == c.graphQLURL {
 		// The read-only GraphQL queries in this client each have a calculated cost of one point.
-		return "graphql", 1
+		return "graphql", max(1, c.graphQLRequestCost)
 	}
 	if method == http.MethodGet && fullURL == c.baseURL+"/rate_limit" {
 		return "core", 0

@@ -102,7 +102,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if a.githubTokenCommand != nil && rest[0] == "delivery" {
 		return usageErr(fmt.Errorf("delivery does not support --github-token-command; use explicit --token-env for the service"))
 	}
-	if a.githubTokenCommand != nil && (rest[0] == "acquire-api" || rest[0] == "discover-parents") {
+	if a.githubTokenCommand != nil && (rest[0] == "acquire-api" || rest[0] == "discover-parents" || rest[0] == "mint-acquisition-token") {
 		return usageErr(fmt.Errorf("%s does not support --github-token-command; use explicit service credentials", rest[0]))
 	}
 	if releaseNotificationAllowed(rest) {
@@ -143,6 +143,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSync(ctx, rest[1:])
 	case "acquire-api":
 		return a.runAcquireAPI(ctx, rest[1:])
+	case "mint-acquisition-token":
+		return a.runMintAcquisitionToken(ctx, rest[1:])
 	case "discover-parents":
 		return a.runDiscoverParents(ctx, rest[1:])
 	case "fill-pr-details":
