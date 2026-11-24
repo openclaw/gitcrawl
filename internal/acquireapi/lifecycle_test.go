@@ -64,7 +64,7 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 		if !f.missingParent {
 			for _, v := range q.Args["numbers"].([]any) {
 				n, _ := strconv.Atoi(v.(string))
-				change, err := remotedelivery.ProjectAcquiredThread(3, int64(100+n), map[string]any{"id": json.Number(strconv.Itoa(500 + n)), "number": json.Number(strconv.Itoa(n)), "node_id": fmt.Sprint("PR-", n), "title": "retained", "body": "retained\x00body", "pull_request": map[string]any{}}, nil, "2026-01-01T00:00:00Z")
+				change, err := remotedelivery.ProjectAcquiredThread(3, int64(100+n), "example/project", map[string]any{"id": json.Number(strconv.Itoa(500 + n)), "number": json.Number(strconv.Itoa(n)), "node_id": fmt.Sprint("PR-", n), "title": "retained", "body": "retained\x00body", "pull_request": map[string]any{}}, nil, "2026-01-01T00:00:00Z", nil)
 				if err != nil {
 					t.Fatal(err)
 				}

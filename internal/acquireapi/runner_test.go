@@ -157,6 +157,9 @@ func (p *fixtureProvider) GetIssue(_ context.Context, _, _ string, n int, _ gith
 	p.requested = append(p.requested, n)
 	return p.parent(n), nil
 }
+func (*fixtureProvider) GetPull(context.Context, string, string, int, github.Reporter) (map[string]any, error) {
+	return nil, fmt.Errorf("unexpected full pull read")
+}
 func (p *fixtureProvider) ReadRESTPage(_ context.Context, r github.RESTPageRequest, _ github.Reporter) (github.RESTPage, error) {
 	if r.Family == "issues" {
 		p.parents++
@@ -285,5 +288,61 @@ func TestOversizePageCannotAdvanceCheckpoint(t *testing.T) {
 	json.Unmarshal(f.state.Checkpoint, &cp)
 	if cp.Phase != "issue_comment" {
 		t.Fatal(cp.Phase)
+	}
+}
+
+type mergedPullProvider struct {
+	fixtureProvider
+	pull  map[string]any
+	reads int
+}
+
+func (p *mergedPullProvider) GetIssue(ctx context.Context, owner, repo string, n int, r github.Reporter) (map[string]any, error) {
+	issue, err := p.fixtureProvider.GetIssue(ctx, owner, repo, n, r)
+	issue["node_id"] = "PR_fixture"
+	issue["state"] = "closed"
+	issue["pull_request"] = map[string]any{"merged_at": "2026-01-02T00:00:00Z"}
+	return issue, err
+}
+
+func (p *mergedPullProvider) GetPull(context.Context, string, string, int, github.Reporter) (map[string]any, error) {
+	p.reads++
+	if p.pull == nil {
+		return nil, fmt.Errorf("full read stopped by quota reserve")
+	}
+	return p.pull, nil
+}
+
+func TestRunResumesMergedIssueWithFullPullBeforePublication(t *testing.T) {
+	f, c, close := newFixtureAPI(t)
+	defer close()
+	h := options().Since
+	f.state.CompletedThrough = &h
+	o := options()
+	o.Numbers = []int{7}
+	p := &mergedPullProvider{}
+	ctx, cancel := runContext()
+	defer cancel()
+	if _, err := Run(ctx, c, p, o); err == nil || !strings.Contains(err.Error(), "quota reserve") || f.state.ActiveRun == nil || len(f.changes) != 0 || f.state.Revision != 1 {
+		t.Fatal("failed full read advanced the parent or child checkpoint", err)
+	}
+	const stamp = "2026-01-02T00:00:00Z"
+	p.pull = map[string]any{"number": 7, "id": json.Number("901"), "node_id": "PR_fixture", "merged": true, "merged_at": stamp, "merge_commit_sha": strings.Repeat("b", 40), "merged_by": map[string]any{"login": "merger"}, "base": map[string]any{"repo": map[string]any{"id": json.Number("42"), "full_name": "example/project"}}}
+	if r, err := Run(ctx, c, p, o); err != nil || !r.Complete || p.reads != 2 || f.begins != 1 || len(f.changes) != 3 {
+		t.Fatal("same run did not resume", r, err)
+	}
+	var got map[string]any
+	for _, v := range f.changes[0].Row {
+		if v.Value != nil && strings.HasPrefix(*v.Value, "{") && strings.Contains(*v.Value, "merge_commit_sha") {
+			d := json.NewDecoder(strings.NewReader(*v.Value))
+			d.UseNumber()
+			if err := d.Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if got["id"] != json.Number("507") || got["number"] != json.Number("7") || got["body"] != "full parent\x00λ" || got["merge_commit_sha"] != strings.Repeat("b", 40) || got["merged_at"] != stamp || got["merged_by"].(map[string]any)["login"] != "merger" {
+		t.Fatal("full Pull did not enrich the selected backing issue")
 	}
 }

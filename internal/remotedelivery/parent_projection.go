@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,6 +84,9 @@ func ProjectAcquiredParent(repoID, id int64, backingID string, parent github.Par
 		if err := decoder.Decode(&retained); err != nil || retained == nil {
 			return remote.Change{}, ErrPrivateProjection
 		}
+		if node, _ := retained["node_id"].(string); node != "" && node != parent.NodeID {
+			return remote.Change{}, errors.New("provider parent differs from retained node identity")
+		}
 	}
 	stateKey := "issueState"
 	if parent.Kind == "pull_request" {
@@ -122,6 +126,44 @@ func ProjectAcquiredParent(repoID, id int64, backingID string, parent github.Par
 			}
 		}
 	}
+	var merge map[string]any
+	if parent.Kind == "pull_request" {
+		merge, err = github.ParentMergeFields(raw)
+		if err != nil {
+			return remote.Change{}, err
+		}
+		var previous map[string]any
+		if prior != nil {
+			if stamp := prior.Row[deliveryColumn("threads", "merged_at_gh")].Value; stamp != nil && *stamp != "" {
+				if merge == nil || merge["merged_at"] != *stamp {
+					return remote.Change{}, errors.New("confirmed pull merge time changed")
+				}
+				graphRepo, _ := raw["repository"].(map[string]any)
+				name, _ := graphRepo["nameWithOwner"].(string)
+				identity := map[string]any{"id": backingID, "node_id": parent.NodeID, "number": parent.Number}
+				previous, _, err = mergeFromRaw(name, identity, retained, *stamp)
+				if err != nil {
+					return remote.Change{}, err
+				}
+			}
+		}
+		if previous != nil {
+			if value, present := raw["mergeCommit"]; present && value == nil && previous["merge_commit_sha"] != nil {
+				return remote.Change{}, errors.New("known pull merge commit became unavailable")
+			}
+			if err = checkMergeAgreement(previous, merge); err != nil {
+				return remote.Change{}, err
+			}
+			maps.Copy(previous, merge)
+			merge = previous
+		}
+		// Some unmerged REST records have a test merge SHA. Rebuild the
+		// canonical facts only from verified observations for this merge.
+		for _, key := range []string{"merge_commit_sha", "merged_by", "merged_at", "mergeCommit", "mergedAt", "mergedBy"} {
+			delete(retained, key)
+		}
+		maps.Copy(retained, merge)
+	}
 	// Preserve unrelated REST metadata. The namespaced observation identifies
 	// which fields were refreshed; absent collections are not asserted empty.
 	var user any
@@ -155,6 +197,7 @@ func ProjectAcquiredParent(repoID, id int64, backingID string, parent github.Par
 			return remote.Change{}, ErrPrivateProjection
 		}
 		retained["draft"] = draft
+
 	}
 	retained["_gitcrawl_graphql_parent"] = map[string]any{"schema": "gitcrawl-graphql-parent/v1", "fields": raw}
 	encoded, err := json.Marshal(retained)

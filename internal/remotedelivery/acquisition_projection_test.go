@@ -10,7 +10,7 @@ import (
 
 func TestAcquisitionProjectionPreservesLocalAndNativeFields(t *testing.T) {
 	raw := map[string]any{"id": json.Number("9007199254740993"), "number": json.Number("7"), "title": "title", "body": "body\x00λ", "state": "closed", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z", "pull_request": map[string]any{}, "labels": []any{}, "assignees": []any{}}
-	original, err := ProjectAcquiredThread(3, 107, raw, nil, "2026-01-04T00:00:00Z")
+	original, err := ProjectAcquiredThread(3, 107, "example/project", raw, nil, "2026-01-04T00:00:00Z", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestAcquisitionProjectionPreservesLocalAndNativeFields(t *testing.T) {
 	set("first_pulled_at", "2025-12-01T00:00:00Z")
 	draft := "1"
 	original.Row[deliveryColumn("threads", "is_draft")] = remote.ChangeValue{Kind: "integer", Value: &draft}
-	updated, err := ProjectAcquiredThread(3, 107, raw, &original, "2026-01-05T00:00:00Z")
+	updated, err := ProjectAcquiredThread(3, 107, "example/project", raw, &original, "2026-01-05T00:00:00Z", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,13 +50,13 @@ func TestAcquisitionProjectionPreservesLocalAndNativeFields(t *testing.T) {
 		t.Fatal("full parent decode", err)
 	}
 	raw["updated_at"] = "2025-01-01T00:00:00Z"
-	if _, err = ProjectAcquiredThread(3, 107, raw, &original, "2026-01-05T00:00:00Z"); err == nil {
+	if _, err = ProjectAcquiredThread(3, 107, "example/project", raw, &original, "2026-01-05T00:00:00Z", nil); err == nil {
 		t.Fatal("older provider metadata accepted")
 	}
 }
 
 func TestAcquisitionProjectionMatchesNativeEmptyText(t *testing.T) {
-	parent, err := ProjectAcquiredThread(3, 107, map[string]any{"id": json.Number("7"), "number": json.Number("7")}, nil, "2026-01-01T00:00:00Z")
+	parent, err := ProjectAcquiredThread(3, 107, "example/project", map[string]any{"id": json.Number("7"), "number": json.Number("7")}, nil, "2026-01-01T00:00:00Z", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
