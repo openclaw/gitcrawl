@@ -304,6 +304,14 @@ func (c *Client) GetRepo(ctx context.Context, owner, repo string, reporter Repor
 	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s", pathEscape(owner), pathEscape(repo)), nil, reporter, &out); err != nil {
 		return nil, err
 	}
+	if app, ok := c.httpClient.Transport.(*appReadTransport); ok {
+		encoded, _ := json.Marshal(out)
+		var repository appRepository
+		id, _ := strconv.ParseInt(app.repositoryID, 10, 64)
+		if json.Unmarshal(encoded, &repository) != nil || !repository.matches(AcquisitionApp{RepositoryID: id, Repository: strings.TrimPrefix(app.repositoryPath, "/repos/")}) {
+			return nil, errors.New("public repository identity changed before acquisition")
+		}
+	}
 	return out, nil
 }
 
@@ -494,6 +502,14 @@ func (c *Client) paginateEnvelope(ctx context.Context, firstPath string, limit i
 }
 
 func (c *Client) paginatePages(ctx context.Context, firstPath string, limit int, expectedItems int, reporter Reporter, decode func(*http.Response) ([]map[string]any, error)) ([]map[string]any, error) {
+	var fixed *url.URL
+	if _, app := c.httpClient.Transport.(*appReadTransport); app {
+		var err error
+		fixed, err = url.Parse(firstPath)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var out []map[string]any
 	nextPath := firstPath
 	visited := make(map[string]struct{})
@@ -547,10 +563,17 @@ func (c *Client) paginatePages(ctx context.Context, firstPath string, limit int,
 		} else {
 			reporter.Printf("[github] page %d fetched count=%d accumulated=%d", page, len(rows), len(out))
 		}
+		if fixed != nil {
+			nextPath, err = c.restPageNext(linkHeader, fixed.EscapedPath(), fixed.Query())
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			nextPath = nextPage(linkHeader, c.baseURL)
+		}
 		if limit > 0 && len(out) >= limit {
 			break
 		}
-		nextPath = nextPage(linkHeader, c.baseURL)
 		if _, repeated := visited[nextPath]; repeated {
 			return nil, fmt.Errorf("github pagination repeated next link")
 		}

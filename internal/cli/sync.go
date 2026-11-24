@@ -35,7 +35,9 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	includePRDetails := fs.Bool("include-pr-details", false, "hydrate PR files, commits, checks, and workflow runs")
 	withRaw := fs.String("with", "", "extra hydration: pr-metadata, pr-details")
 	progressFile := fs.String("progress-file", "", "write an atomic sanitized sync progress snapshot")
-	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"numbers": true, "since": true, "state": true, "limit": true, "with": true, "progress-file": true})); err != nil {
+	appToken := fs.String("github-app-token-env", "", "environment variable with trusted mint-acquisition-token JSON")
+	timeout := fs.Duration("timeout", 15*time.Minute, "bounded App seed lifetime (at most one hour)")
+	if err := fs.Parse(normalizeCommandArgs(args, map[string]bool{"numbers": true, "since": true, "state": true, "limit": true, "with": true, "progress-file": true, "github-app-token-env": true, "timeout": true})); err != nil {
 		return usageErr(err)
 	}
 	a.applyCommandJSON(*jsonOut)
@@ -61,6 +63,26 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	if err != nil {
 		return usageErr(err)
 	}
+	appAuth := flagWasSet(fs, "github-app-token-env")
+	if appAuth {
+		if *appToken == "" || !validAccessEnvName(*appToken) || *timeout <= 0 || *timeout > time.Hour {
+			return usageErr(errors.New("App seed requires an explicit token environment name and timeout in (0, 1h]"))
+		}
+		if *octopool || *incremental || a.githubTokenCommand != nil || os.Getenv("OCTOPOOL_TOKEN") != "" || os.Getenv("OCTOPOOL_URL") != "" || os.Getenv("OCTOPOOL_POOL") != "" {
+			return usageErr(errors.New("App seed cannot be combined with Octopool or a GitHub token command"))
+		}
+		if origin := githubBaseURL(); origin != "" && origin != "https://api.github.com" {
+			return usageErr(errors.New("App seed requires the fixed GitHub HTTPS origin"))
+		}
+		if *graphqlHistory || *includePRDetails || with["pr-details"] {
+			return usageErr(errors.New("App seed supports REST parents, comments and PR metadata; GraphQL history and full PR details are unsupported"))
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	} else if flagWasSet(fs, "timeout") {
+		return usageErr(errors.New("sync --timeout requires --github-app-token-env"))
+	}
 	if *octopool && (*graphqlHistory || *includePRDetails || len(with) != 0 || a.githubTokenCommand != nil) {
 		return usageErr(fmt.Errorf("--octopool does not support GraphQL history, PR enrichment or --github-token-command"))
 	}
@@ -81,6 +103,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 	}
 
 	stats, target, err := a.syncRepository(ctx, owner, repo, syncOptions{
+		AppTokenEnv:       *appToken,
 		Octopool:          *octopool,
 		Incremental:       *incremental,
 		GraphQLHistory:    *graphqlHistory,
@@ -110,6 +133,7 @@ func (a *App) runSync(ctx context.Context, args []string) error {
 }
 
 type syncOptions struct {
+	AppTokenEnv       string
 	Octopool          bool
 	Incremental       bool
 	GraphQLHistory    bool
@@ -446,6 +470,15 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 }
 
 func (a *App) syncGitHubClient(ctx context.Context, cfg config.Config, repository string, options syncOptions) (*gh.Client, error) {
+	if options.AppTokenEnv != "" {
+		deadline, _ := ctx.Deadline()
+		token, err := gh.DecodeAcquisitionToken(os.Getenv(options.AppTokenEnv), repository, deadline)
+		if err != nil {
+			return nil, err
+		}
+		client, _, err := gh.NewAppAcquisition(ctx, token)
+		return client, err
+	}
 	if options.Octopool {
 		return gh.NewOctopool(strings.TrimSpace(os.Getenv("OCTOPOOL_URL")), strings.TrimSpace(os.Getenv("OCTOPOOL_POOL")), strings.TrimSpace(os.Getenv("OCTOPOOL_TOKEN")), repository)
 	}

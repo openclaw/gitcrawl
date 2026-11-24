@@ -37,11 +37,11 @@ func (a *App) maybeNotifyRelease(ctx context.Context, args []string) {
 }
 
 func releaseNotificationAllowed(args []string) bool {
-	// Pooled acquisition must not make an unrelated direct GitHub release read.
+	// Scoped acquisition must not make an unrelated GitHub release read.
 	if len(args) > 0 && args[0] == "sync" {
 		for _, arg := range args[1:] {
 			name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
-			if name == "octopool" {
+			if name == "octopool" || name == "github-app-token-env" {
 				return false
 			}
 		}
