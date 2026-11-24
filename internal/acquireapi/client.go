@@ -100,13 +100,14 @@ type ResolvedIDs struct {
 type Client struct {
 	endpoint, source, token string
 	http, commit            *http.Client
-	reader                  *remote.Client
+	reader, lifecycleReader *remote.Client
+	readerCredential        remote.TokenProvider
 }
 
 func NewClient(endpoint, source, publisherToken, readerToken string, transport http.RoundTripper) (*Client, error) {
-	u, err := url.Parse(strings.TrimRight(endpoint, "/"))
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1"))) {
-		return nil, errors.New("acquisition requires a fixed HTTPS endpoint or loopback HTTP")
+	u, err := acquisitionEndpoint(endpoint)
+	if err != nil {
+		return nil, err
 	}
 	if source == "" || len(source) > 128 || strings.ContainsAny(source, "/\\?#\x00") || publisherToken == "" || readerToken == "" || publisherToken == readerToken || strings.ContainsAny(publisherToken+readerToken, " \t\r\n") {
 		return nil, errors.New("explicit source and publisher/reader credentials required")
@@ -117,11 +118,34 @@ func NewClient(endpoint, source, publisherToken, readerToken string, transport h
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	h := &http.Client{Transport: transport, Timeout: RequestTimeout, CheckRedirect: noRedirect}
 	commit := &http.Client{Transport: transport, Timeout: DefaultCommitTimeout, CheckRedirect: noRedirect}
-	reader, err := remote.NewClient(remote.Options{Endpoint: u.String(), HTTPClient: h, TokenProvider: remote.StaticToken(readerToken)})
+	credential := remote.StaticToken(readerToken)
+	reader, err := remote.NewClient(remote.Options{Endpoint: u.String(), HTTPClient: h, TokenProvider: credential})
 	if err != nil {
 		return nil, err
 	}
-	return &Client{u.String(), source, publisherToken, h, commit, reader}, nil
+	return &Client{u.String(), source, publisherToken, h, commit, reader, reader, credential}, nil
+}
+
+func acquisitionEndpoint(endpoint string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimRight(endpoint, "/"))
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1"))) {
+		return nil, errors.New("acquisition requires a fixed HTTPS endpoint or loopback HTTP")
+	}
+	return u, nil
+}
+
+// SetLifecycleReader routes only the candidate-number query to the admitted
+// reader. Native parent verification and every write keep their original owner.
+func (c *Client) SetLifecycleReader(endpoint string) error {
+	u, err := acquisitionEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+	reader, err := remote.NewClient(remote.Options{Endpoint: u.String(), HTTPClient: c.http, TokenProvider: c.readerCredential})
+	if err == nil {
+		c.lifecycleReader = reader
+	}
+	return err
 }
 
 // SetCommitTimeout sets the per-request bound for run and page commits. The

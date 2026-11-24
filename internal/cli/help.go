@@ -148,12 +148,15 @@ Use --lifecycle-numbers-file PATH for 1..500 existing PG parents and --since
 for the event lower bound. This follows closure/reopen/merge timelines only; it
 keeps the completed horizon and does not claim repository-wide coverage.
 --lifecycle-max-pages (default 100) bounds each resumable invocation.
-Use --cycle with both --numbers-file and --lifecycle-numbers-file to run one
+Use --cycle with --numbers-file for historical work to run one
 admitted reporting turn. The server's active run resumes first; completed turns
 rotate incremental → commits → lifecycle → historical. Commit/lifecycle windows
 come from the completed incremental turn. An unfinished turn reports deferredModes;
 max-threads/pages bound this invocation, not the lifetime of the durable run.
-The fixed lifecycle cohort is at most 500 parents and is not repository-wide coverage.
+Lifecycle selects changed PostgreSQL parents across bounded batches at the completed
+commit pin. --lifecycle-reader-endpoint optionally sends only that candidate query
+to a separate reader for the same source. An explicit --lifecycle-numbers-file
+restricts the cycle to its fixed cohort of at most 500 parents.
 --commit-timeout (default 10m) bounds each run or page commit request, because a
 final page waits for server-side publication checks; other API calls keep 30s.
 --timeout still bounds the whole invocation.

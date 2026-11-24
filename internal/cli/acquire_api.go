@@ -20,6 +20,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("acquire-api", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	endpoint := fs.String("endpoint", "", "PostgreSQL archive API origin")
+	lifecycleReader := fs.String("lifecycle-reader-endpoint", "", "optional read origin for the scheduled lifecycle candidate query")
 	source := fs.String("source", "", "canonical registered archive ID")
 	repo := fs.String("repo", "", "owner/repository")
 	publisher := fs.String("publisher-token-env", "", "environment variable with acquisition publisher credential")
@@ -54,8 +55,11 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if appAuth && (*appToken == "" || !validAccessEnvName(*appToken) || *appToken == *publisher || *appToken == *reader || os.Getenv("OCTOPOOL_TOKEN") != "" || os.Getenv("OCTOPOOL_URL") != "" || os.Getenv("OCTOPOOL_POOL") != "") {
 		return usageErr(errors.New("github-app-token-env requires an explicit environment name and cannot be combined with Octopool configuration"))
 	}
-	if *cycle && (*commits || *parents != "" || *numbers == "" || *lifecycle == "") {
-		return usageErr(errors.New("cycle requires numbers-file and lifecycle-numbers-file, without commits or parent selection"))
+	if *cycle && (*commits || *parents != "" || *numbers == "") {
+		return usageErr(errors.New("cycle requires numbers-file, without commits or parent selection"))
+	}
+	if *lifecycleReader != "" && (!*cycle || *lifecycle != "") {
+		return usageErr(errors.New("lifecycle-reader-endpoint requires a window-based cycle"))
 	}
 	if *commits && (*lifecycle != "" || *parents != "" || *numbers != "") {
 		return usageErr(errors.New("commits cannot be combined with thread selections"))
@@ -74,7 +78,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 			return usageErr(errors.New("commit-max-pages requires commits"))
 		}
 	}
-	if *lifecycle == "" {
+	if *lifecycle == "" && !*cycle {
 		var lifecycleFlag bool
 		fs.Visit(func(f *flag.Flag) {
 			if f.Name == "lifecycle-max-pages" {
@@ -82,7 +86,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 			}
 		})
 		if lifecycleFlag {
-			return usageErr(errors.New("lifecycle-max-pages requires lifecycle-numbers-file"))
+			return usageErr(errors.New("lifecycle-max-pages requires cycle or lifecycle-numbers-file"))
 		}
 	}
 	options := acquireapi.Options{Repository: *repo, MaxThreads: *limit, ParentPageSize: *parentPage, ChildPageSize: *childPage}
@@ -124,7 +128,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	if *cycle {
+	if *cycle && *lifecycle != "" {
 		var err error
 		lifecycleNumbers, err = readAcquisitionNumbers(*lifecycle)
 		if err != nil {
@@ -146,9 +150,15 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	api, err := acquireapi.NewClient(*endpoint, *source, os.Getenv(*publisher), os.Getenv(*reader), h.Transport)
+	readerToken := os.Getenv(*reader)
+	api, err := acquireapi.NewClient(*endpoint, *source, os.Getenv(*publisher), readerToken, h.Transport)
 	if err != nil {
 		return err
+	}
+	if *lifecycleReader != "" {
+		if err = api.SetLifecycleReader(*lifecycleReader); err != nil {
+			return usageErr(err)
+		}
 	}
 	if err = api.SetCommitTimeout(*commitTimeout); err != nil {
 		return usageErr(err)

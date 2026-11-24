@@ -21,15 +21,21 @@ const lifecycleColumns = "id repo_id github_id number kind state title body auth
 const lifecycleOriginalEvent = "{\n \"__typename\":\"ClosedEvent\", \"id\":\"close-7\", \"createdAt\":\"2026-01-02T00:00:00Z\", \"actor\":null, \"extra\":\"λ\\u0000\"\n}"
 
 type lifecycleFixture struct {
-	api             *fixtureAPI
-	client          *Client
-	provider        *github.OctopoolConversations
-	providerCursors []string
-	parentDrift     bool
-	missingParent   bool
-	queryPins       []string
-	terminalFirst   bool
-	expectedSince   string
+	api              *fixtureAPI
+	archiveHandler   http.Handler
+	client           *Client
+	provider         *github.OctopoolConversations
+	providerCursors  []string
+	parentDrift      bool
+	missingParent    bool
+	queryPins        []string
+	terminalFirst    bool
+	expectedSince    string
+	windowNumbers    []int
+	failCandidates   bool
+	windowPin        string
+	candidateQueries []remote.QueryRequest
+	providerNumbers  []int
 }
 
 func newLifecycleFixture(t *testing.T) *lifecycleFixture {
@@ -52,11 +58,42 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 		if json.NewDecoder(r.Body).Decode(&q) != nil {
 			t.Error("invalid query")
 		}
+		pin := "pg-gitcrawl-current-v1:seed:20"
+		if f.windowPin != "" {
+			pin = f.windowPin
+		}
 		if q.Name == "gitcrawl.repositories.current" {
-			json.NewEncoder(w).Encode(remote.QueryResult{Columns: []string{"id", "full_name", "github_repo_id"}, Rows: [][]any{{"3", "EXAMPLE/PROJECT", "42"}}, Stats: remote.QueryStats{SnapshotID: "pg-gitcrawl-current-v1:seed:20"}})
+			latest := pin
+			if f.windowPin != "" {
+				latest = fmt.Sprintf("pg-gitcrawl-current-v1:seed:%d", f.api.state.Sequence)
+			}
+			json.NewEncoder(w).Encode(remote.QueryResult{Columns: []string{"id", "full_name", "github_repo_id"}, Rows: [][]any{{"3", "EXAMPLE/PROJECT", "42"}}, Stats: remote.QueryStats{SnapshotID: latest}})
 			return
 		}
-		if q.Name != "gitcrawl.threads.list" || q.Args["repository"] != "EXAMPLE/PROJECT" || q.Args["includeClosed"] != true || q.SnapshotID != "pg-gitcrawl-current-v1:seed:20" {
+		if q.Name == "gitcrawl.lifecycle.candidates" {
+			f.candidateQueries = append(f.candidateQueries, q)
+			if f.failCandidates {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if q.SnapshotID != pin || q.Limit < 1 || q.Limit > 500 || q.Cursor != "" || q.Args["since"] != f.expectedSince || q.Args["until"] != "2026-01-04T00:00:00Z" {
+				t.Error("changed lifecycle window query", q)
+			}
+			after, _ := q.Args["after_number"].(string)
+			minimum, _ := strconv.Atoi(after)
+			result := remote.QueryResult{Columns: []string{"number"}, Stats: remote.QueryStats{SnapshotID: pin, SchemaVersion: 1, ObservationOrder: "completed-publication/thread-number"}}
+			for _, number := range f.windowNumbers {
+				if number > minimum {
+					result.Rows = append(result.Rows, []any{strconv.Itoa(number)})
+					if len(result.Rows) == q.Limit {
+						break
+					}
+				}
+			}
+			json.NewEncoder(w).Encode(result)
+			return
+		}
+		if q.Name != "gitcrawl.threads.list" || q.Args["repository"] != "EXAMPLE/PROJECT" || q.Args["includeClosed"] != true || q.SnapshotID != pin {
 			t.Error("not a selected pinned parent query", q)
 		}
 		f.queryPins = append(f.queryPins, q.SnapshotID)
@@ -86,6 +123,7 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 		}
 		json.NewEncoder(w).Encode(result)
 	}))
+	f.archiveHandler = api.Config.Handler
 	t.Cleanup(api.Close)
 	var err error
 	f.client, err = NewClient(api.URL, "fixture", "publisher", "reader", nil)
@@ -114,6 +152,7 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 		}
 		selected, ok := request.GraphQL.Variables["number"].(float64)
 		number := int(selected)
+		f.providerNumbers = append(f.providerNumbers, number)
 		if !ok || number < 1 || request.GraphQL.Variables["owner"] != "example" || request.GraphQL.Variables["repo"] != "project" {
 			t.Error("invalid repository-scoped lifecycle selection")
 		}

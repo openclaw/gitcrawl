@@ -66,6 +66,10 @@ func TestAcquireAPILifecycleDispatchWithoutSQLite(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "another acquisition mode is active") {
 		t.Fatal("lifecycle selector not dispatched", err)
 	}
+	err = a.Run(context.Background(), []string{"acquire-api", "--cycle", "--numbers-file", selection, "--lifecycle-max-pages", "1", "--lifecycle-reader-endpoint", api.URL, "--endpoint", api.URL, "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "LIFECYCLE_PUBLISHER", "--reader-token-env", "LIFECYCLE_READER"})
+	if err == nil || !strings.Contains(err.Error(), "outside the admitted cycle") {
+		t.Fatal("scheduled window did not reach the active-run owner", err)
+	}
 	if _, err = os.Stat(filepath.Dir(db)); !os.IsNotExist(err) {
 		t.Fatal("SQLite path touched", err)
 	}
@@ -95,6 +99,7 @@ func TestAcquireAPIParentSelectionRejectsAmbiguousModeWithoutOpeningArchive(t *t
 	if err == nil {
 		t.Fatal("accepted mixed parent and incremental mode")
 	}
+
 	if _, err = os.Stat(db); !os.IsNotExist(err) {
 		t.Fatal("opened SQLite", err)
 	}

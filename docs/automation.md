@@ -350,7 +350,7 @@ means the selected run completed, not that comments or other history are complet
 
 ### Scheduled reporting turns
 
-`acquire-api --cycle --numbers-file history.txt --lifecycle-numbers-file lifecycle.txt`
+`acquire-api --cycle --numbers-file history.txt`
 uses the same explicit endpoint and credential options. Each bounded invocation
 dispatches one turn: incremental conversations, default-branch commits, selected
 lifecycle events, then one historical conversation batch. PostgreSQL's active run
@@ -363,16 +363,23 @@ bounds resume unchanged; supplemental scans round their lower bound down to the
 preceding microsecond so no event is excluded by precision conversion. A legacy
 empty window receives one microsecond of overlap rather than blocking later turns.
 
-Keep both admitted files unchanged. Historical progress retains its existing digest
-and offset; an exhausted selection is skipped, never restarted. Lifecycle admits
-one cohort of at most 500 existing parents. That cohort is explicit scope, not full
-repository lifecycle coverage. A production cadence with broader coverage must
-separately qualify fresh updated cohorts or durable partitions before installation.
+Keep the historical file unchanged. Its checkpoint retains the digest and offset,
+and the cycle skips exhausted history. For lifecycle events the cycle reads eligible
+parent numbers from the completed PostgreSQL inventory in ascending batches of 100.
+It retains the original pin and window across batches and restarts. Older issues
+and PRs with recent changes are eligible. The provider timeline supplies the event
+type and time. An empty candidate page advances to the next scheduled turn.
+
+When a separate read service serves `gitcrawl.lifecycle.candidates`, set
+`--lifecycle-reader-endpoint` to that origin. Only the candidate query uses the
+alternate origin, with the same reader credential, source and publication pin.
+Parent validation and acquisition stay on `--endpoint`. An explicitly restricted
+cycle can still use `--lifecycle-numbers-file` for a fixed selection of up to 500
+parents. Resume any active fixed run with its original file before switching.
 
 Use one scheduler and one source lock. `--timeout`, `--max-threads` and each mode's
 page limit bound an invocation. `--max-threads` applies to conversation and
-historical turns; lifecycle admits its entire fixed cohort of at most 500 parents
-and uses `--lifecycle-max-pages` to bound work per invocation. Commit turns use
+historical turns. Lifecycle uses `--lifecycle-max-pages` to bound work per invocation. Commit turns use
 `--commit-max-pages`. `--commit-timeout` (default 10 minutes) bounds each run or
 page commit request: the final page of a run waits while the server checks the
 whole candidate snapshot before publication. Other acquisition API calls keep a
