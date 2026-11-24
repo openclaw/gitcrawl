@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 import sys
@@ -7,6 +8,44 @@ import unittest
 from unittest.mock import patch
 
 import run_code_update as m
+
+
+class CommitGateTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.gate = Path(tmp.name) / 'cycle.gate'
+        self.digest = 'ab' * 32
+
+    def test_first_visible_read_is_the_full_synced_digest(self):
+        fsync, link = m.os.fsync, m.os.link
+        events = []
+        def sync(fd):
+            self.assertFalse(self.gate.exists())
+            fsync(fd)
+            events.append('synced')
+        def publish(tmp, final):
+            self.assertEqual(events, ['synced'])
+            self.assertFalse(self.gate.exists())
+            link(tmp, final)
+            self.assertEqual(self.gate.read_bytes(), self.digest.encode('ascii'))
+            events.append('visible')
+        with patch.object(m.os, 'fsync', side_effect=sync), patch.object(m.os, 'link', side_effect=publish):
+            with m.commit_gate(self.gate, self.digest):
+                self.assertEqual(events, ['synced', 'visible'])
+                self.assertEqual(self.gate.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(list(self.gate.parent.iterdir()), [])
+
+    def test_sync_failure_or_collision_never_publishes_or_removes_another_gate(self):
+        with patch.object(m.os, 'fsync', side_effect=OSError('failed sync')):
+            with self.assertRaisesRegex(OSError, 'failed sync'), m.commit_gate(self.gate, self.digest):
+                self.fail('published after sync failure')
+        self.assertEqual(list(self.gate.parent.iterdir()), [])
+        self.gate.write_bytes(b'original')
+        with self.assertRaises(FileExistsError), m.commit_gate(self.gate, self.digest):
+            self.fail('overwrote existing gate')
+        self.assertEqual(self.gate.read_bytes(), b'original')
+        self.assertEqual(list(self.gate.parent.iterdir()), [self.gate])
 
 
 class LifecycleTests(unittest.TestCase):
@@ -81,6 +120,25 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(state['loaded']);self.assertFalse(c.journal.exists())
         self.assertEqual(sum(x[1]=='bootout' for x in calls),1)
         self.assertEqual(sum(x[1]=='bootstrap' for x in calls),1)
+
+    def test_post_commit_unlink_failure_preserves_success_and_restores_owner(self):
+        p,c,calls,state,source,proof=self.fixture(phase='prepared')
+        producer = Path(c.a.binary)
+        producer.write_text(producer.read_text().replace('raise SystemExit(1)',
+            "assert gate.read_text() == 'fixture'\nprint(json.dumps({'phase':'committed','snapshot_id':42}))"))
+        unlink = m.os.unlink
+        def fail_gate_cleanup(path, *args, **kwargs):
+            if str(path).endswith('.gate'):
+                raise PermissionError('fixture cleanup denied')
+            return unlink(path, *args, **kwargs)
+        with patch.object(m.SourceCache,'capture',return_value=(source,proof)), \
+                patch.object(m.os,'unlink',side_effect=fail_gate_cleanup), \
+                patch.object(m.sys,'stderr',new_callable=io.StringIO) as warnings:
+            c.update()
+        self.assertIn('commit gate cleanup warning',warnings.getvalue())
+        self.assertEqual(json.loads((p/'last-code-result.json').read_bytes())['snapshot_id'],42)
+        self.assertFalse((p/'last-failure.json').exists())
+        self.assertTrue(state['loaded']);self.assertFalse(c.journal.exists())
 
     def test_recovery_precedes_fetch_and_preserves_previously_unloaded_owner(self):
         p,c,calls,state,source,proof=self.fixture();state['loaded']=False
