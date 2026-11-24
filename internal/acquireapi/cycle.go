@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// CycleOptions admits one fixed historical selection. LifecycleNumbers optionally
+// CycleOptions can include a fixed historical selection. LifecycleNumbers optionally
 // restricts scheduled lifecycle turns to an explicitly selected cohort.
 // PostgreSQL remains the sole run/checkpoint owner; the scheduler has no cursor.
 type CycleOptions struct {
@@ -47,8 +47,10 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface 
 	if o.Conversations.Since.Nanosecond()%1000 != 0 {
 		return out, errors.New("new cycle lower bound requires microsecond precision")
 	}
-	if _, err := selectionHash(o.Conversations.Numbers); err != nil {
-		return out, err
+	if len(o.Conversations.Numbers) > 0 {
+		if _, err := selectionHash(o.Conversations.Numbers); err != nil {
+			return out, err
+		}
 	}
 	if len(o.LifecycleNumbers) > 0 {
 		if _, err := lifecycleNumbers(o.LifecycleNumbers); err != nil {
@@ -82,6 +84,8 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface 
 		options := o.Conversations
 		if mode == "incremental" {
 			options.Numbers = nil
+		} else if len(options.Numbers) == 0 {
+			return out, errors.New("resume the active historical run with its original numbers-file")
 		}
 		out.Result, err = Run(ctx, api, rest, options)
 	case "commits":
@@ -93,7 +97,7 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface 
 	}
 	if !out.Complete {
 		for _, other := range []string{"incremental", "commits", "lifecycle", "historical"} {
-			if other != mode {
+			if other != mode && (other != "historical" || len(o.Conversations.Numbers) > 0) {
 				out.DeferredModes = append(out.DeferredModes, other)
 			}
 		}
@@ -173,6 +177,12 @@ func afterLifecycle(state State, o Options) (string, time.Time, error) {
 	var cp checkpoint
 	if json.Unmarshal(raw, &cp) != nil {
 		return "", zero, errors.New("cycle historical progress unavailable")
+	}
+	if len(o.Numbers) == 0 {
+		if cp.History.SHA != "" || cp.History.Offset != 0 {
+			return "", zero, errors.New("cycle requires the original numbers-file for retained historical progress")
+		}
+		return "incremental", zero, nil
 	}
 	sha, err := selectionHash(o.Numbers)
 	if err != nil {

@@ -72,6 +72,11 @@ func TestCycleResumesBeforeRotatingAndPreservesHistoricalOffset(t *testing.T) {
 	if third.RunID != fourth.RunID || !reflect.DeepEqual(f.providerCursors, []string{"", "next"}) {
 		t.Fatal("lifecycle turn lost its original cursor")
 	}
+	withoutHistory := options
+	withoutHistory.Conversations.Numbers = nil
+	if _, err := RunCycle(ctx, api, rest, graph, withoutHistory); err == nil || f.api.begins != 3 {
+		t.Fatal("omitting the admitted historical file advanced the cycle", err)
+	}
 	rest.requested = nil
 	turn("historical", true, false)
 	if !reflect.DeepEqual(rest.requested, []int{8}) || !f.api.state.CompletedThrough.Equal(horizon) {
@@ -80,6 +85,34 @@ func TestCycleResumesBeforeRotatingAndPreservesHistoricalOffset(t *testing.T) {
 	mode, _, err := nextCycleMode(f.api.state, options.Conversations)
 	if err != nil || mode != "incremental" || f.api.begins != 4 {
 		t.Fatal("rotation did not give every admitted mode one completed turn", mode, err, f.api.begins)
+	}
+}
+
+func TestCycleWithoutHistoricalSelectionResumesLifecycleThenIncremental(t *testing.T) {
+	f := newLifecycleFixture(t)
+	ctx, cancel := runContext()
+	defer cancel()
+	o := CycleOptions{Conversations: options(), CommitMaxPages: 1, LifecycleMaxPages: 1}
+	o.Conversations.Now = func() time.Time { return time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC) }
+	graph := &cycleGraphFixture{&emptyCommitProvider{}, f.provider}
+	api := cycleFixtureAPI{f.client}
+	rest := &fixtureProvider{}
+	if _, err := RunCommits(ctx, api, graph, CommitOptions{Repository: o.Conversations.Repository, Since: o.Conversations.Since, MaxPages: 1}); err != nil {
+		t.Fatal(err)
+	}
+	f.windowPin = fmt.Sprintf("pg-gitcrawl-current-v1:seed:%d", f.api.state.Sequence)
+	f.windowNumbers = []int{7}
+	first, err := RunCycle(ctx, api, rest, graph, o)
+	if err != nil || first.Mode != "lifecycle" || first.Complete || !slices.Equal(first.DeferredModes, []string{"incremental", "commits"}) {
+		t.Fatalf("cycle without history did not start the lifecycle turn: %+v %v", first, err)
+	}
+	second, err := RunCycle(ctx, api, rest, graph, o)
+	if err != nil || !second.Resumed || !second.Complete || second.RunID != first.RunID || !slices.Equal(f.providerCursors, []string{"", "next"}) {
+		t.Fatalf("cycle without history lost the saved lifecycle cursor: %+v %v", second, err)
+	}
+	third, err := RunCycle(ctx, api, rest, graph, o)
+	if err != nil || third.Mode != "incremental" || len(rest.requested) != 0 {
+		t.Fatalf("cycle without history did not rotate to incremental: %+v %v", third, err)
 	}
 }
 

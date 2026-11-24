@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -67,9 +68,12 @@ func TestAcquireAPILifecycleDispatchWithoutSQLite(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "another acquisition mode is active") {
 		t.Fatal("lifecycle selector not dispatched", err)
 	}
-	err = a.Run(context.Background(), []string{"acquire-api", "--cycle", "--numbers-file", selection, "--lifecycle-max-pages", "1", "--lifecycle-reader-endpoint", api.URL, "--lifecycle-reader-token-env", "CANDIDATE_READER", "--endpoint", api.URL, "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "LIFECYCLE_PUBLISHER", "--reader-token-env", "LIFECYCLE_READER"})
-	if err == nil || !strings.Contains(err.Error(), "outside the admitted cycle") {
-		t.Fatal("scheduled window did not reach the active-run owner", err)
+	cycleArgs := []string{"acquire-api", "--cycle", "--lifecycle-max-pages", "1", "--lifecycle-reader-endpoint", api.URL, "--lifecycle-reader-token-env", "CANDIDATE_READER", "--endpoint", api.URL, "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "LIFECYCLE_PUBLISHER", "--reader-token-env", "LIFECYCLE_READER"}
+	for _, historyArgs := range [][]string{nil, {"--numbers-file", selection}} {
+		err = a.Run(context.Background(), append(slices.Clone(cycleArgs), historyArgs...))
+		if err == nil || !strings.Contains(err.Error(), "outside the admitted cycle") {
+			t.Fatal("scheduled window did not reach the active-run owner", err)
+		}
 	}
 	if _, err = os.Stat(filepath.Dir(db)); !os.IsNotExist(err) {
 		t.Fatal("SQLite path touched", err)
