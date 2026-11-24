@@ -155,7 +155,8 @@ come from the completed incremental turn. An unfinished turn reports deferredMod
 max-threads/pages bound this invocation, not the lifetime of the durable run.
 Lifecycle selects changed PostgreSQL parents across bounded batches at the completed
 commit pin. --lifecycle-reader-endpoint optionally sends only that candidate query
-to a separate reader for the same source. An explicit --lifecycle-numbers-file
+to a separate reader for the same source. If it requires its own reader credential,
+set --lifecycle-reader-token-env NAME. An explicit --lifecycle-numbers-file
 restricts the cycle to its fixed cohort of at most 500 parents.
 --commit-timeout (default 10m) bounds each run or page commit request, because a
 final page waits for server-side publication checks; other API calls keep 30s.

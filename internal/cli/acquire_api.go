@@ -21,6 +21,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	fs.SetOutput(io.Discard)
 	endpoint := fs.String("endpoint", "", "PostgreSQL archive API origin")
 	lifecycleReader := fs.String("lifecycle-reader-endpoint", "", "optional read origin for the scheduled lifecycle candidate query")
+	lifecycleTokenEnv := fs.String("lifecycle-reader-token-env", "", "optional reader credential environment name for the separate lifecycle reader")
 	source := fs.String("source", "", "canonical registered archive ID")
 	repo := fs.String("repo", "", "owner/repository")
 	publisher := fs.String("publisher-token-env", "", "environment variable with acquisition publisher credential")
@@ -43,10 +44,13 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
-	var appAuth bool
+	var appAuth, lifecycleAuth bool
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "github-app-token-env" {
+		switch f.Name {
+		case "github-app-token-env":
 			appAuth = true
+		case "lifecycle-reader-token-env":
+			lifecycleAuth = true
 		}
 	})
 	if fs.NArg() != 0 || *endpoint == "" || *source == "" || *repo == "" || *timeout <= 0 || *timeout > 12*time.Hour || *publisher == "" || *reader == "" || !validAccessEnvName(*publisher) || !validAccessEnvName(*reader) {
@@ -60,6 +64,16 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	if *lifecycleReader != "" && (!*cycle || *lifecycle != "") {
 		return usageErr(errors.New("lifecycle-reader-endpoint requires a window-based cycle"))
+	}
+	var lifecycleToken string
+	if lifecycleAuth {
+		if *lifecycleReader == "" || !validAccessEnvName(*lifecycleTokenEnv) || *lifecycleTokenEnv == *publisher || *lifecycleTokenEnv == *appToken {
+			return usageErr(errors.New("lifecycle-reader-token-env requires a separate lifecycle endpoint and a reader credential environment name"))
+		}
+		lifecycleToken = os.Getenv(*lifecycleTokenEnv)
+		if lifecycleToken == "" || (appAuth && lifecycleToken == os.Getenv(*appToken)) || lifecycleToken == os.Getenv("OCTOPOOL_TOKEN") {
+			return usageErr(errors.New("lifecycle reader credential is missing or uses provider authentication"))
+		}
 	}
 	if *commits && (*lifecycle != "" || *parents != "" || *numbers != "") {
 		return usageErr(errors.New("commits cannot be combined with thread selections"))
@@ -156,7 +170,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 		return err
 	}
 	if *lifecycleReader != "" {
-		if err = api.SetLifecycleReader(*lifecycleReader); err != nil {
+		if err = api.SetLifecycleReader(*lifecycleReader, lifecycleToken); err != nil {
 			return usageErr(err)
 		}
 	}

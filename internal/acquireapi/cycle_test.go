@@ -135,11 +135,12 @@ func TestCycleCollectsPinnedWindowAcrossRunsAndResumesAcceptedPage(t *testing.T)
 	if _, err := RunCommits(ctx, api, graph, CommitOptions{Repository: options.Conversations.Repository, Since: options.Conversations.Since, MaxPages: 1}); err != nil {
 		t.Fatal(err)
 	}
+	f.candidateToken = "candidate-reader"
 	var readerCalls int
 	reader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var q remote.QueryRequest
 		raw, err := io.ReadAll(r.Body)
-		if err != nil || json.Unmarshal(raw, &q) != nil || q.Name != "gitcrawl.lifecycle.candidates" || r.URL.Path != "/v1/apps/gitcrawl/archives/fixture/query" || r.Header.Get("Authorization") != "Bearer reader" {
+		if err != nil || json.Unmarshal(raw, &q) != nil || q.Name != "gitcrawl.lifecycle.candidates" || r.URL.Path != "/v1/apps/gitcrawl/archives/fixture/query" {
 			t.Error("alternate reader received a different operation, source or credential")
 			http.Error(w, "wrong operation", http.StatusBadRequest)
 			return
@@ -149,7 +150,7 @@ func TestCycleCollectsPinnedWindowAcrossRunsAndResumesAcceptedPage(t *testing.T)
 		f.archiveHandler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(reader.Close)
-	if err := f.client.SetLifecycleReader(reader.URL); err != nil {
+	if err := f.client.SetLifecycleReader(reader.URL, ""); err != nil {
 		t.Fatal(err)
 	}
 	f.windowPin = fmt.Sprintf("pg-gitcrawl-current-v1:seed:%d", f.api.state.Sequence)
@@ -163,6 +164,12 @@ func TestCycleCollectsPinnedWindowAcrossRunsAndResumesAcceptedPage(t *testing.T)
 			t.Fatal(err)
 		}
 		return got
+	}
+	if _, err := RunCycle(ctx, api, rest, graph, options); err == nil || f.api.state.ActiveRun != nil || len(f.providerNumbers) != 0 {
+		t.Fatal("reader with another audience advanced a lifecycle run")
+	}
+	if err := f.client.SetLifecycleReader(reader.URL, f.candidateToken); err != nil {
+		t.Fatal(err)
 	}
 	first := next()
 	if first.Mode != "lifecycle" || first.Complete || first.Resumed || first.LifecycleParents < 1 || len(f.providerNumbers) != 1 {
@@ -200,7 +207,7 @@ func TestCycleCollectsPinnedWindowAcrossRunsAndResumesAcceptedPage(t *testing.T)
 		checkProof(f.api.state.CompletedRun)
 	}
 	want := append([]int{f.windowNumbers[0]}, f.windowNumbers...)
-	if !slices.Equal(f.providerNumbers, want) || len(f.candidateQueries) < 4 || readerCalls != len(f.candidateQueries) || !slices.Equal(rest.requested, []int{8}) {
+	if !slices.Equal(f.providerNumbers, want) || len(f.candidateQueries) < 4 || readerCalls != len(f.candidateQueries)+1 || !slices.Equal(rest.requested, []int{8}) {
 		t.Fatalf("more than 500 parents must finish before history: reads=%d candidates=%d history=%v", len(f.providerNumbers), len(f.candidateQueries), rest.requested)
 	}
 	var merged bool

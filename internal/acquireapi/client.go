@@ -136,12 +136,19 @@ func acquisitionEndpoint(endpoint string) (*url.URL, error) {
 
 // SetLifecycleReader routes only the candidate-number query to the admitted
 // reader. Native parent verification and every write keep their original owner.
-func (c *Client) SetLifecycleReader(endpoint string) error {
+func (c *Client) SetLifecycleReader(endpoint, token string) error {
 	u, err := acquisitionEndpoint(endpoint)
 	if err != nil {
 		return err
 	}
-	reader, err := remote.NewClient(remote.Options{Endpoint: u.String(), HTTPClient: c.http, TokenProvider: c.readerCredential})
+	credential := c.readerCredential
+	if token != "" {
+		if token == c.token || strings.ContainsAny(token, " \t\r\n") {
+			return errors.New("invalid lifecycle reader credential")
+		}
+		credential = remote.StaticToken(token)
+	}
+	reader, err := remote.NewClient(remote.Options{Endpoint: u.String(), HTTPClient: c.http, TokenProvider: credential})
 	if err == nil {
 		c.lifecycleReader = reader
 	}
