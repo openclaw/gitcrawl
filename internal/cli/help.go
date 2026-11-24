@@ -154,6 +154,9 @@ rotate incremental → commits → lifecycle → historical. Commit/lifecycle wi
 come from the completed incremental turn. An unfinished turn reports deferredModes;
 max-threads/pages bound this invocation, not the lifetime of the durable run.
 The fixed lifecycle cohort is at most 500 parents and is not repository-wide coverage.
+--commit-timeout (default 10m) bounds each run or page commit request, because a
+final page waits for server-side publication checks; other API calls keep 30s.
+--timeout still bounds the whole invocation.
 No SQLite archive is opened and no direct GitHub credential fallback exists.
 `,
 	"metrics": `gitcrawl metrics collects repository headline metrics in a separate SQLite database.

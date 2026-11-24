@@ -373,7 +373,11 @@ Use one scheduler and one source lock. `--timeout`, `--max-threads` and each mod
 page limit bound an invocation. `--max-threads` applies to conversation and
 historical turns; lifecycle admits its entire fixed cohort of at most 500 parents
 and uses `--lifecycle-max-pages` to bound work per invocation. Commit turns use
-`--commit-max-pages`. They do not impose a deadline on the durable run:
+`--commit-max-pages`. `--commit-timeout` (default 10 minutes) bounds each run or
+page commit request: the final page of a run waits while the server checks the
+whole candidate snapshot before publication. Other acquisition API calls keep a
+30 second bound, and `--timeout` still bounds the invocation. These limits do
+not impose a deadline on the durable run:
 large incremental inventories can require multiple invocations. `complete: false`
 and `deferredModes` expose that condition. Do not start a second mode or discard its
 checkpoint to obtain apparent fairness. Once the run completes, the other admitted

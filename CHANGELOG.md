@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let PostgreSQL acquisition run and page commits wait up to `--commit-timeout` (default 10 minutes) for server-side publication checks, instead of the 30 second bound that canceled large final pages.
+
 - Seed native archives with scoped GitHub App read credentials and request-level quota reserves, retaining completed rows when a bounded sync stops.
 
 - Let bounded PostgreSQL acquisition use a public-repository GitHub App token minted by a separate root supervisor, keeping the private key out of the collector and reserving half the installation's observed REST and GraphQL quota.

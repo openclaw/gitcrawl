@@ -34,6 +34,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
 	since := fs.String("since", "", "initial incremental lower bound, RFC3339")
 	timeout := fs.Duration("timeout", 10*time.Minute, "bounded invocation lifetime")
+	commitTimeout := fs.Duration("commit-timeout", acquireapi.DefaultCommitTimeout, "per-request bound for run and page commits")
 	limit := fs.Int("max-threads", 100, "maximum complete threads per invocation")
 	parentPage := fs.Int("parent-page-size", 100, "repository page size (1..100)")
 	childPage := fs.Int("child-page-size", 20, "child page size (1..100)")
@@ -148,6 +149,9 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	api, err := acquireapi.NewClient(*endpoint, *source, os.Getenv(*publisher), os.Getenv(*reader), h.Transport)
 	if err != nil {
 		return err
+	}
+	if err = api.SetCommitTimeout(*commitTimeout); err != nil {
+		return usageErr(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
