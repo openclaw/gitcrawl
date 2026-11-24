@@ -23,6 +23,14 @@ import (
 
 const MaxPageBytes = 4 << 20
 
+// RequestTimeout bounds ordinary acquisition API calls. Run and page commits
+// use DefaultCommitTimeout instead: the server checks publication eligibility
+// over the whole candidate snapshot before it answers a final page.
+const (
+	RequestTimeout       = 30 * time.Second
+	DefaultCommitTimeout = 10 * time.Minute
+)
+
 type RunRequest struct {
 	ID               string          `json:"id"`
 	Mode             string          `json:"mode,omitempty"`
@@ -91,7 +99,7 @@ type ResolvedIDs struct {
 // Client separates publisher and reader tokens and never follows redirects.
 type Client struct {
 	endpoint, source, token string
-	http                    *http.Client
+	http, commit            *http.Client
 	reader                  *remote.Client
 }
 
@@ -106,12 +114,24 @@ func NewClient(endpoint, source, publisherToken, readerToken string, transport h
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	h := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	h := &http.Client{Transport: transport, Timeout: RequestTimeout, CheckRedirect: noRedirect}
+	commit := &http.Client{Transport: transport, Timeout: DefaultCommitTimeout, CheckRedirect: noRedirect}
 	reader, err := remote.NewClient(remote.Options{Endpoint: u.String(), HTTPClient: h, TokenProvider: remote.StaticToken(readerToken)})
 	if err != nil {
 		return nil, err
 	}
-	return &Client{u.String(), source, publisherToken, h, reader}, nil
+	return &Client{u.String(), source, publisherToken, h, commit, reader}, nil
+}
+
+// SetCommitTimeout sets the per-request bound for run and page commits. The
+// caller context still bounds every request.
+func (c *Client) SetCommitTimeout(d time.Duration) error {
+	if d <= 0 || d > 12*time.Hour {
+		return errors.New("commit timeout must be positive and at most 12h")
+	}
+	c.commit.Timeout = d
+	return nil
 }
 func (c *Client) request(ctx context.Context, kind string, body []byte, out any) error {
 	method := http.MethodPost
@@ -126,7 +146,11 @@ func (c *Client) request(ctx context.Context, kind string, body []byte, out any)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
-	response, err := c.http.Do(req)
+	h := c.http
+	if kind == "runs" || kind == "pages" {
+		h = c.commit
+	}
+	response, err := h.Do(req)
 	if err != nil {
 		return err
 	}
