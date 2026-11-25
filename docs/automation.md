@@ -375,6 +375,13 @@ bounds resume unchanged; supplemental scans round their lower bound down to the
 preceding microsecond so no event is excluded by precision conversion. A legacy
 empty window receives one microsecond of overlap rather than blocking later turns.
 
+A scheduler can use `--cycle-turns 2..8` to run several turns for one source with
+one provider session and one invocation deadline. Existing thread and page
+limits apply per turn. After each terminal receipt the next turn reads the
+PostgreSQL checkpoint again. The first unfinished or failed turn ends the
+invocation. Multi-turn JSON returns a `turns` array of observed results. The
+single-turn output remains the individual result object.
+
 Keep the historical file unchanged once the archive records its digest or offset.
 The cycle requires that file for retained historical progress and skips exhausted
 history. For lifecycle events the cycle reads eligible

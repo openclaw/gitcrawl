@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,6 +77,13 @@ func TestAcquireAPILifecycleDispatchWithoutSQLite(t *testing.T) {
 			t.Fatal("scheduled window did not reach the active-run owner", err)
 		}
 	}
+	var output bytes.Buffer
+	a.Stdout = &output
+	err = a.Run(context.Background(), append(slices.Clone(cycleArgs), "--cycle-turns", "3", "--json"))
+	var report map[string]json.RawMessage
+	if err == nil || !strings.Contains(err.Error(), "outside the admitted cycle") || json.Unmarshal(output.Bytes(), &report) != nil || string(report["turns"]) != "[]" {
+		t.Fatalf("multi-turn pre-dispatch error must report an empty observed batch: %s, %v", output.String(), err)
+	}
 	if _, err = os.Stat(filepath.Dir(db)); !os.IsNotExist(err) {
 		t.Fatal("SQLite path touched", err)
 	}
@@ -85,6 +94,11 @@ func TestAcquireAPILifecycleRejectsMixedSelectors(t *testing.T) {
 	a.Stdout = io.Discard
 	a.Stderr = io.Discard
 	base := []string{"acquire-api", "--endpoint", "https://archive.example", "--source", "fixture", "--repo", "example/project", "--publisher-token-env", "PUB", "--reader-token-env", "READ"}
+	for _, args := range [][]string{{"--cycle-turns", "1"}, {"--cycle", "--cycle-turns", "0"}, {"--cycle", "--cycle-turns", "9"}} {
+		if err := a.Run(context.Background(), append(slices.Clone(base), args...)); err == nil || !strings.Contains(err.Error(), "cycle-turns requires") {
+			t.Fatalf("invalid cycle count accepted (%v): %v", args, err)
+		}
+	}
 	for _, args := range [][]string{{"--commits", "--numbers-file", "unused"}, {"--commits", "--parent-selection-file", "unused"}, {"--commits", "--lifecycle-numbers-file", "unused"}, {"--commit-max-pages", "1"}, {"--lifecycle-numbers-file", "unused", "--numbers-file", "unused"}, {"--lifecycle-numbers-file", "unused", "--parent-selection-file", "unused"}, {"--lifecycle-max-pages", "1"}} {
 		if err := a.Run(context.Background(), append(append([]string{}, base...), args...)); err == nil {
 			t.Fatal("mixed or unselected lifecycle flags accepted", args)

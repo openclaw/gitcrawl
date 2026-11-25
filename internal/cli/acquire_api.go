@@ -31,6 +31,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	parents := fs.String("parent-selection-file", "", "audited parent-only identity selection (no child fetches)")
 	commits := fs.Bool("commits", false, "pinned default-branch commit and attribution scan")
 	cycle := fs.Bool("cycle", false, "one resumable reporting turn: incremental, commits, lifecycle, historical")
+	cycleTurns := fs.Int("cycle-turns", 1, "maximum sequential turns in one cycle invocation (requires --cycle)")
 	commitPages := fs.Int("commit-max-pages", 100, "maximum atomic commit pages per invocation")
 	lifecycle := fs.String("lifecycle-numbers-file", "", "fixed lifecycle parent numbers (1..500, no SQLite)")
 	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
@@ -44,13 +45,15 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
-	var appAuth, lifecycleAuth bool
+	var appAuth, lifecycleAuth, cycleTurnsSet bool
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "github-app-token-env":
 			appAuth = true
 		case "lifecycle-reader-token-env":
 			lifecycleAuth = true
+		case "cycle-turns":
+			cycleTurnsSet = true
 		}
 	})
 	if fs.NArg() != 0 || *endpoint == "" || *source == "" || *repo == "" || *timeout <= 0 || *timeout > 12*time.Hour || *publisher == "" || *reader == "" || !validAccessEnvName(*publisher) || !validAccessEnvName(*reader) {
@@ -58,6 +61,9 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	if appAuth && (*appToken == "" || !validAccessEnvName(*appToken) || *appToken == *publisher || *appToken == *reader || os.Getenv("OCTOPOOL_TOKEN") != "" || os.Getenv("OCTOPOOL_URL") != "" || os.Getenv("OCTOPOOL_POOL") != "") {
 		return usageErr(errors.New("github-app-token-env requires an explicit environment name and cannot be combined with Octopool configuration"))
+	}
+	if cycleTurnsSet && (!*cycle || *cycleTurns < 1 || *cycleTurns > acquireapi.MaxCycleTurns) {
+		return usageErr(fmt.Errorf("cycle-turns requires --cycle and a value of 1..%d", acquireapi.MaxCycleTurns))
 	}
 	if *cycle && (*commits || *parents != "") {
 		return usageErr(errors.New("cycle cannot be combined with commits or parent selection"))
@@ -201,9 +207,19 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	var result acquireapi.Result
 	if *cycle {
-		turn, cycleErr := acquireapi.RunCycle(ctx, api, rest, graph, acquireapi.CycleOptions{Conversations: options, LifecycleNumbers: lifecycleNumbers, CommitMaxPages: *commitPages, LifecycleMaxPages: *maxPages})
+		cycleOptions := acquireapi.CycleOptions{Conversations: options, LifecycleNumbers: lifecycleNumbers, CommitMaxPages: *commitPages, LifecycleMaxPages: *maxPages}
+		var payload any
+		var cycleErr error
+		if *cycleTurns == 1 {
+			payload, cycleErr = acquireapi.RunCycle(ctx, api, rest, graph, cycleOptions)
+		} else {
+			turns, err := acquireapi.RunCycleTurns(ctx, api, rest, graph, cycleOptions, *cycleTurns)
+			payload, cycleErr = struct {
+				Turns []acquireapi.CycleResult `json:"turns"`
+			}{Turns: turns}, err
+		}
 		a.applyCommandJSON(*jsonOut)
-		if outputErr := a.writeOutput("acquire-api", turn, *jsonOut); outputErr != nil {
+		if outputErr := a.writeOutput("acquire-api", payload, *jsonOut); outputErr != nil {
 			return outputErr
 		}
 		if cycleErr != nil {

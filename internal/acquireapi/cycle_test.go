@@ -285,3 +285,38 @@ func TestCycleDistinguishesEmptyWindowFromUnavailableInventory(t *testing.T) {
 		t.Fatal("empty window must advance real historical work without creating a lifecycle run", got, err)
 	}
 }
+
+func TestCycleTurnsStopsOnUnfinishedRunAndResumesBeforeRotating(t *testing.T) {
+	f := newLifecycleFixture(t)
+	f.api.state.CompletedThrough = nil
+	f.api.state.Checkpoint, _ = json.Marshal(checkpoint{Version: 1, Phase: "select"})
+	ctx, cancel := runContext()
+	defer cancel()
+	o := CycleOptions{Conversations: options(), LifecycleNumbers: []int{7}, CommitMaxPages: 1, LifecycleMaxPages: 1}
+	o.Conversations.MaxThreads = 1
+	o.Conversations.Now = func() time.Time { return time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC) }
+	api := cycleFixtureAPI{f.client}
+	graph := &cycleGraphFixture{&emptyCommitProvider{}, f.provider}
+	rest := &fixtureProvider{body: "original"}
+	batch := func(limit int) []CycleResult {
+		t.Helper()
+		turns, err := RunCycleTurns(ctx, api, rest, graph, o, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return turns
+	}
+	first := batch(4)
+	if len(first) != 1 || first[0].Mode != "incremental" || first[0].Complete || graph.calls != 0 || f.api.begins != 1 {
+		t.Fatalf("first batch crossed the unfinished parent run: %+v", first)
+	}
+	second := batch(4)
+	if len(second) != 3 || second[0].Mode != "incremental" || !second[0].Complete || !second[0].Resumed || second[0].RunID != first[0].RunID ||
+		second[1].Mode != "commits" || !second[1].Complete || second[2].Mode != "lifecycle" || second[2].Complete || f.api.begins != 3 {
+		t.Fatalf("second batch skipped the checkpoint or crossed the unfinished lifecycle run: %+v", second)
+	}
+	last := batch(1)
+	if len(last) != 1 || !last[0].Complete || !last[0].Resumed || last[0].RunID != second[2].RunID || !slices.Equal(f.providerCursors, []string{"", "next"}) || f.api.begins != 3 {
+		t.Fatalf("following batch did not resume the original lifecycle cursor: %+v", last)
+	}
+}

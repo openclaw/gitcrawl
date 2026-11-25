@@ -33,13 +33,36 @@ type CycleResult struct {
 	LifecycleParents int      `json:"lifecycleParents"`
 }
 
+type CycleProvider interface {
+	CommitProvider
+	LifecycleProvider
+}
+
+const MaxCycleTurns = 8
+
+// RunCycleTurns reuses one provider session without keeping a scheduler cursor.
+// Each turn reads PostgreSQL state again, and an unfinished turn ends the batch.
+func RunCycleTurns(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvider, o CycleOptions, limit int) ([]CycleResult, error) {
+	if limit < 1 || limit > MaxCycleTurns {
+		return nil, fmt.Errorf("cycle turn limit must be 1..%d", MaxCycleTurns)
+	}
+	turns := make([]CycleResult, 0, limit)
+	for range limit {
+		turn, err := RunCycle(ctx, api, rest, graph, o)
+		if turn.Mode != "" {
+			turns = append(turns, turn)
+		}
+		if err != nil || !turn.Complete {
+			return turns, err
+		}
+	}
+	return turns, nil
+}
+
 // RunCycle dispatches one mode. An unfinished run always owns the next turn;
 // only durable completion advances the rotation. In particular, another parent
 // horizon cannot start ahead of the preceding commit and lifecycle turns.
-func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph interface {
-	CommitProvider
-	LifecycleProvider
-}, o CycleOptions) (CycleResult, error) {
+func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvider, o CycleOptions) (CycleResult, error) {
 	var out CycleResult
 	if _, ok := ctx.Deadline(); !ok || o.CommitMaxPages < 1 || o.CommitMaxPages > 10000 || o.LifecycleMaxPages < 1 || o.LifecycleMaxPages > 10000 {
 		return out, errors.New("cycle requires bounded pages and a deadline")

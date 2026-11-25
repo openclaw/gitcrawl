@@ -156,8 +156,10 @@ Use --cycle to run one admitted reporting turn. The server's active run resumes
 first. Completed turns rotate incremental → commits → lifecycle, then historical
 if --numbers-file is supplied. Keep that file for retained historical progress.
 Commit and lifecycle windows come from the completed incremental turn. An
-unfinished turn reports deferredModes. Thread and page limits apply to the
-invocation. The durable run can span multiple invocations.
+unfinished turn reports deferredModes. Use --cycle-turns 2..8 to reuse the same
+provider session for several turns. The first unfinished turn ends the batch;
+JSON for a multi-turn invocation contains a turns array. Thread and page limits
+apply to each turn. The durable run can span multiple invocations.
 Lifecycle selects changed PostgreSQL parents across bounded batches at the completed
 commit pin. --lifecycle-reader-endpoint optionally sends only that candidate query
 to a separate reader for the same source. If it requires its own reader credential,
