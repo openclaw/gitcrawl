@@ -132,9 +132,11 @@ No config, personal login, refresh daemon or fallback credential is used.
 Usage:
   gitcrawl acquire-api --endpoint URL --source ID --repo owner/repo --publisher-token-env ENV --reader-token-env ENV --since RFC3339 [--numbers-file PATH] [--max-threads 100] [--timeout 10m] [--json]
 
-Provider authentication defaults to Octopool. For a rooted mint supervisor, use
---github-app-token-env ENV with trusted mint-acquisition-token JSON, without any
-OCTOPOOL_* configuration. The short-lived token must outlast --timeout by 60 seconds.
+Provider authentication defaults to Octopool. With a rooted mint supervisor,
+use --github-app-token-stdin for one trusted mint-acquisition-token JSON envelope
+on a private pipe, or --github-app-token-env ENV for a named environment
+variable. Use either option without OCTOPOOL_* configuration. The short-lived
+token must outlast --timeout by 60 seconds.
 The collector never reads the App key or refreshes credentials. Direct App reads
 reserve half each observed REST/GraphQL budget and refuse private-* repositories.
 

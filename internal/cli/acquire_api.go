@@ -27,6 +27,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	publisher := fs.String("publisher-token-env", "", "environment variable with acquisition publisher credential")
 	reader := fs.String("reader-token-env", "", "environment variable with archive reader credential")
 	appToken := fs.String("github-app-token-env", "", "environment variable with trusted mint-acquisition-token JSON")
+	appTokenStdin := fs.Bool("github-app-token-stdin", false, "read one trusted mint-acquisition-token JSON envelope from stdin")
 	numbers := fs.String("numbers-file", "", "fixed historical number selection (no SQLite)")
 	parents := fs.String("parent-selection-file", "", "audited parent-only identity selection (no child fetches)")
 	commits := fs.Bool("commits", false, "pinned default-branch commit and attribution scan")
@@ -46,11 +47,11 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err)
 	}
-	var appAuth, lifecycleAuth, cycleTurnsSet bool
+	var appTokenEnvSet, lifecycleAuth, cycleTurnsSet bool
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "github-app-token-env":
-			appAuth = true
+			appTokenEnvSet = true
 		case "lifecycle-reader-token-env":
 			lifecycleAuth = true
 		case "cycle-turns":
@@ -60,8 +61,12 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	if fs.NArg() != 0 || *endpoint == "" || *source == "" || *repo == "" || *timeout <= 0 || *timeout > 12*time.Hour || *publisher == "" || *reader == "" || !validAccessEnvName(*publisher) || !validAccessEnvName(*reader) {
 		return usageErr(errors.New("acquire-api requires endpoint, source, repo and explicit publisher/reader token environment names"))
 	}
-	if appAuth && (*appToken == "" || !validAccessEnvName(*appToken) || *appToken == *publisher || *appToken == *reader || os.Getenv("OCTOPOOL_TOKEN") != "" || os.Getenv("OCTOPOOL_URL") != "" || os.Getenv("OCTOPOOL_POOL") != "") {
-		return usageErr(errors.New("github-app-token-env requires an explicit environment name and cannot be combined with Octopool configuration"))
+	if appTokenEnvSet && (*appTokenStdin || !validAccessEnvName(*appToken) || *appToken == *publisher || *appToken == *reader) {
+		return usageErr(errors.New("github-app-token-env requires a distinct environment name and cannot be combined with github-app-token-stdin"))
+	}
+	appAuth := appTokenEnvSet || *appTokenStdin
+	if appAuth && (os.Getenv("OCTOPOOL_TOKEN") != "" || os.Getenv("OCTOPOOL_URL") != "" || os.Getenv("OCTOPOOL_POOL") != "") {
+		return usageErr(errors.New("GitHub App acquisition cannot be combined with Octopool configuration"))
 	}
 	if cycleTurnsSet && (!*cycle || *cycleTurns < 1 || *cycleTurns > acquireapi.MaxCycleTurns) {
 		return usageErr(fmt.Errorf("cycle-turns requires --cycle and a value of 1..%d", acquireapi.MaxCycleTurns))
@@ -81,7 +86,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 			return usageErr(errors.New("lifecycle-reader-token-env requires a separate lifecycle endpoint and a reader credential environment name"))
 		}
 		lifecycleToken = os.Getenv(*lifecycleTokenEnv)
-		if lifecycleToken == "" || (appAuth && lifecycleToken == os.Getenv(*appToken)) || lifecycleToken == os.Getenv("OCTOPOOL_TOKEN") {
+		if lifecycleToken == "" || (appTokenEnvSet && lifecycleToken == os.Getenv(*appToken)) || lifecycleToken == os.Getenv("OCTOPOOL_TOKEN") {
 			return usageErr(errors.New("lifecycle reader credential is missing or uses provider authentication"))
 		}
 	}
@@ -193,9 +198,23 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	var graph *github.OctopoolConversations
 	if appAuth {
 		deadline, _ := ctx.Deadline()
-		token, decodeErr := github.DecodeAcquisitionToken(os.Getenv(*appToken), *repo, deadline)
+		var raw []byte
+		if *appTokenStdin {
+			raw, err = readAppCredential(ctx, a.Stdin)
+			if err != nil {
+				return err
+			}
+		} else {
+			raw = []byte(os.Getenv(*appToken))
+		}
+		token, decodeErr := github.DecodeAcquisitionToken(raw, *repo, deadline)
+		lifecycleUsesProvider := lifecycleToken != "" && (lifecycleToken == token.Token || lifecycleToken == string(raw))
+		clear(raw)
 		if decodeErr != nil {
 			return decodeErr
+		}
+		if lifecycleUsesProvider {
+			return usageErr(errors.New("lifecycle reader credential uses provider authentication"))
 		}
 		rest, graph, err = github.NewAppAcquisition(ctx, token)
 	} else if *cycle || *parents != "" || *lifecycle != "" || *commits {
@@ -252,6 +271,40 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 		return fmt.Errorf("acquire-api: %w", err)
 	}
 	return nil
+}
+
+func readAppCredential(ctx context.Context, input io.Reader) ([]byte, error) {
+	type readResult struct {
+		raw []byte
+		err error
+	}
+	result := make(chan readResult)
+	go func() {
+		raw, err := io.ReadAll(io.LimitReader(portableContextReader{ctx: ctx, reader: input}, github.MaxAcquisitionTokenBytes+1))
+		select {
+		case result <- readResult{raw: raw, err: err}:
+		case <-ctx.Done():
+			clear(raw)
+		}
+	}()
+	select {
+	case read := <-result:
+		if read.err != nil {
+			clear(read.raw)
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("reading installation credential from stdin: %w", ctx.Err())
+			}
+			return nil, errors.New("could not read installation credential from stdin")
+		}
+		return read.raw, nil
+	case <-ctx.Done():
+		// A supervisor pipe belongs to this invocation. Close it on cancellation
+		// without waiting on a blocking descriptor to release its pending read.
+		if closer, ok := input.(io.Closer); ok {
+			go func() { _ = closer.Close() }()
+		}
+		return nil, fmt.Errorf("reading installation credential from stdin: %w", ctx.Err())
+	}
 }
 
 func readAcquisitionNumbers(path string) ([]int, error) {

@@ -207,12 +207,15 @@ func appJSONResponse(ctx context.Context, client *http.Client, token, method, pa
 	return response.Header, nil
 }
 
-func DecodeAcquisitionToken(raw, repository string, deadline time.Time) (AcquisitionToken, error) {
+// MaxAcquisitionTokenBytes bounds one private credential envelope.
+const MaxAcquisitionTokenBytes = 16 << 10
+
+func DecodeAcquisitionToken(raw []byte, repository string, deadline time.Time) (AcquisitionToken, error) {
 	var token AcquisitionToken
-	if len(raw) > 16<<10 {
+	if len(raw) > MaxAcquisitionTokenBytes {
 		return token, errors.New("installation credential exceeds size limit")
 	}
-	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&token) != nil || decoder.Decode(new(any)) != io.EOF {
 		return AcquisitionToken{}, errors.New("invalid installation credential JSON")

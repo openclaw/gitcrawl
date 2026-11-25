@@ -206,19 +206,19 @@ a credential array. Earlier requests in a failed batch may have issued tokens.
 The command does not repeat a mint. Keep each credential with its own prepared
 PostgreSQL source and use the existing `acquire-api` per-repository quota checks.
 
-Pass the trusted JSON envelope only to the collector's named environment
-variable and add `--github-app-token-env ENV` to the existing `acquire-api`
-command. Remove `OCTOPOOL_TOKEN`, `OCTOPOOL_URL` and `OCTOPOOL_POOL` from this
-invocation. Use a protected runtime credential handoff such as systemd
-`LoadCredential` for the short-lived envelope, not for the private key. A
-nonroot runner can read that credential into only its Gitcrawl child's
-environment. Never reuse the previous envelope when minting fails.
+Pass one trusted JSON envelope through a private pipe and select
+`--github-app-token-stdin` on `acquire-api`. For a cohort, pass only the
+envelope that matches the repository being acquired. A supervisor that uses
+systemd `LoadCredential` for a short-lived envelope can also pass it in a
+named child environment variable with `--github-app-token-env ENV`. Keep the
+private key in the mint supervisor. Remove `OCTOPOOL_TOKEN`, `OCTOPOOL_URL`
+and `OCTOPOOL_POOL` from either collector invocation.
 
-The token must outlast the entire `--timeout` by at least 60 seconds. For a
-15-minute cycle, mint once immediately before each cycle. There is no token
-refresh daemon or key path in the collector. It verifies the token's accessible
-repository set and current public identity before collection; rejected or
-expired credentials never fall back to Octopool or a personal login.
+The supervisor can retain each envelope in memory for later runs of the same
+repository while the token still outlasts the entire `--timeout` by at least
+60 seconds. If a required fresh mint fails, hold that acquisition. The
+collector verifies the token's accessible repository set and current public
+identity on each invocation. Rejected or expired credentials stop the run.
 
 Direct reads use only `https://api.github.com`, reject redirects and preserve
 half of each observed installation REST and GraphQL limit. Unknown or expired

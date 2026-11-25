@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let a GitHub App acquisition supervisor send one repository's credential through a private pipe.
+
 - Allow a bounded acquisition batch to yield before the next incremental window so a scheduler can service another repository.
 
 - Let a PostgreSQL GitHub acquisition invocation reuse one provider session across several bounded reporting turns for the same source.

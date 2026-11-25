@@ -180,13 +180,13 @@ func TestInstallationEnvelopeRefusesExpiryScopeAndSecretDiagnostics(t *testing.T
 		c := fixtureAppToken()
 		change(&c)
 		raw, _ := json.Marshal(c)
-		if _, err := DecodeAcquisitionToken(string(raw), "fixture/repo", time.Now().Add(15*time.Minute)); err == nil || strings.Contains(err.Error(), c.Token) {
+		if _, err := DecodeAcquisitionToken(raw, "fixture/repo", time.Now().Add(15*time.Minute)); err == nil || strings.Contains(err.Error(), c.Token) {
 			t.Fatal("invalid credential accepted or exposed")
 		}
 	}
 	valid := fixtureAppToken()
 	raw, _ := json.Marshal(valid)
-	if _, err := DecodeAcquisitionToken(string(raw), valid.Repository, time.Now().Add(15*time.Minute)); err != nil {
+	if _, err := DecodeAcquisitionToken(raw, valid.Repository, time.Now().Add(15*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 }

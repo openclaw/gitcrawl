@@ -472,7 +472,9 @@ func (a *App) syncRepository(ctx context.Context, owner, repo string, options sy
 func (a *App) syncGitHubClient(ctx context.Context, cfg config.Config, repository string, options syncOptions) (*gh.Client, error) {
 	if options.AppTokenEnv != "" {
 		deadline, _ := ctx.Deadline()
-		token, err := gh.DecodeAcquisitionToken(os.Getenv(options.AppTokenEnv), repository, deadline)
+		raw := []byte(os.Getenv(options.AppTokenEnv))
+		token, err := gh.DecodeAcquisitionToken(raw, repository, deadline)
+		clear(raw)
 		if err != nil {
 			return nil, err
 		}
