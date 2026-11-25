@@ -461,6 +461,8 @@ exclusive upper bound. The range must end at or before the acquisition
 horizon. Use a receiver that supports historical commit runs. Resume a
 backfill with the same upper bound. The scheduled cycle picks up its prior
 checkpoint after the backfill publishes.
+To read back a lost final acknowledgement, retry with the same upper bound
+and omit `--since` while the backfill is the latest completed run.
 
 Each atomic page carries one full commit and every associated-PR page, including
 nullable merger identities, merge times, merge commit OIDs and repository names.
