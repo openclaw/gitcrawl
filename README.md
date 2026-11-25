@@ -57,7 +57,7 @@ Open `gitcrawl tui [owner/repo]` for the keyboard- and mouse-driven cluster brow
 
 The default local archive keeps configuration, SQLite data, vectors, caches, and logs in platform-native user directories. Exact paths and environment overrides are in [Configuration](docs/configuration.md).
 
-[Portable stores](docs/portable-stores.md) publish a compact SQLite snapshot through Git so multiple machines can share a read-mostly archive. [Cloud archives](docs/cloud-archives.md) configure authenticated reads and snapshot publication through a separately deployed Worker service. Local, portable, and cloud modes keep distinct storage and credential boundaries.
+[Cloud archives](docs/cloud-archives.md) provide authenticated reads through a separately deployed Worker service. OpenClaw maintainers use the [shared archive setup](docs/maintainer-archive.md#read-the-shared-openclaw-archive) for status, search, and native thread reads. [Portable stores](docs/portable-stores.md) remain available for independently owned Git-backed SQLite snapshots and recovery.
 
 Octopool owns pooled live `gh` reads. Gitcrawl keeps local mirror, search, clustering, and TUI workflows; use `gh` or Octopool for final live verification and GitHub write actions. See the [migration note](docs/gh-shim.md).
 

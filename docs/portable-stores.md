@@ -19,21 +19,26 @@ A Git-backed publish target for a `gitcrawl.db` plus its derived bodies — shar
 - You want a backup of the SQLite cache that someone else can clone and use immediately.
 - You want a deterministic snapshot of "what gitcrawl knew at time T" for reproducible triage.
 
-A portable store is just a Git repository whose contents include a SQLite database. Anyone with read access to the repository can `git clone` it and have a fully populated gitcrawl mirror in seconds.
+A portable store is a Git repository containing a SQLite database. A clone
+transfers its reachable Git history as well as the current snapshot.
+
+For the shared OpenClaw maintainer archive use the
+[authenticated cloud reader](/maintainer-archive/#read-the-shared-openclaw-archive).
+The legacy `openclaw/gitcrawl-store` repository is retained for recovery.
 
 ## Setup: pointing gitcrawl at a portable store
 
 ```bash
 gitcrawl init \
-  --portable-store https://github.com/openclaw/gitcrawl-store.git \
-  --portable-db data/openclaw__openclaw.sync.db
+  --portable-store https://github.com/example/archive-store.git \
+  --portable-db data/project.sync.db
 ```
 
 When `--store-dir` is omitted, gitcrawl clones the store under
 `<config-dir>/stores/<repo-name>`. For the example above, a fresh macOS install
-uses `~/Library/Application Support/gitcrawl/stores/gitcrawl-store`; a Linux
+uses `~/Library/Application Support/gitcrawl/stores/archive-store`; a Linux
 install using the default config location uses
-`~/.config/gitcrawl/stores/gitcrawl-store`. Pass `--store-dir` when you want a
+`~/.config/gitcrawl/stores/archive-store`. Pass `--store-dir` when you want a
 fixed checkout path.
 
 `init` will:
@@ -554,10 +559,10 @@ gitcrawl refresh owner/repo
 gitcrawl portable prune --body-chars 256
 
 # Commit and push using normal Git from the configured portable checkout.
-cd ~/Library/Application\ Support/gitcrawl/stores/gitcrawl-store
-# Linux default: cd ~/.config/gitcrawl/stores/gitcrawl-store
-git add data/openclaw__openclaw.sync.db data/openclaw__openclaw.sync.db.manifest.json
-git commit -m "data: refresh openclaw/gitcrawl"
+cd ~/Library/Application\ Support/gitcrawl/stores/archive-store
+# Linux default: cd ~/.config/gitcrawl/stores/archive-store
+git add data/project.sync.db data/project.sync.db.manifest.json
+git commit -m "data: refresh project snapshot"
 git push
 ```
 

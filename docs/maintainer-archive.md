@@ -7,15 +7,41 @@ permalink: /maintainer-archive/
 # Maintainer archive workflow
 {: .no_toc }
 
-A first-run checklist for maintainers who want a local SQLite mirror for issue and pull request triage, with Octopool handling pooled live GitHub reads.
+A first-run checklist for OpenClaw's shared archive and for local SQLite triage workflows, with Octopool handling pooled live GitHub reads.
 {: .fs-6 .fw-300 }
 
 1. TOC
 {:toc}
 
+## Read the shared OpenClaw archive
+
+Use the authenticated cloud reader for the shared PostgreSQL archive. Set
+`CRAWL_ARCHIVE_URL` and `CRAWL_ARCHIVE_ID` to the values from the archive
+operator. Create a separate reader configuration so your existing local mirror
+stays available:
+
+```bash
+reader_config=/path/to/openclaw-reader.toml
+gitcrawl --config "$reader_config" init \
+  --remote "${CRAWL_ARCHIVE_URL:?set the archive URL}" \
+  --archive "${CRAWL_ARCHIVE_ID:?set the archive ID}"
+```
+
+Follow [cloud authentication](/cloud-archives/#authenticate) with the same
+configuration, then verify the reader:
+
+```bash
+gitcrawl --config "$reader_config" status --json
+gitcrawl --config "$reader_config" threads openclaw/openclaw --limit 10 --json
+```
+
+These reads use the service's completed publication. Check its last sync time
+and archive warnings before treating an empty result as evidence.
+
 ## Start with local health
 
-Initialize or verify the runtime before spending GitHub quota:
+For a writable or offline mirror, use a separate local configuration and
+verify the runtime before spending GitHub quota:
 
 ```bash
 gitcrawl init
