@@ -109,6 +109,9 @@ func runCycle(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvi
 	if mode == "incremental" && yieldBeforeIncremental {
 		return out, nil
 	}
+	// Dispatch from the same state that selected the mode. The service checks
+	// the expected revision on writes, and the next turn reads state again.
+	readTurnState := func(context.Context) (State, error) { return state, nil }
 	out.Mode, out.Resumed, out.LifecycleParents = mode, state.ActiveRun != nil, len(o.LifecycleNumbers)
 	switch mode {
 	case "incremental", "historical":
@@ -118,9 +121,9 @@ func runCycle(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvi
 		} else if len(options.Numbers) == 0 {
 			return out, errors.New("resume the active historical run with its original numbers-file")
 		}
-		out.Result, err = Run(ctx, api, rest, options)
+		out.Result, err = runConversations(ctx, api, rest, options, readTurnState)
 	case "commits":
-		out.Result, err = RunCommits(ctx, api, graph, CommitOptions{Repository: o.Conversations.Repository, Since: since, MaxPages: o.CommitMaxPages})
+		out.Result, err = runCommits(ctx, api, graph, CommitOptions{Repository: o.Conversations.Repository, Since: since, MaxPages: o.CommitMaxPages}, readTurnState)
 	case "lifecycle":
 		out.LifecycleParents = len(selection.parents)
 		options := LifecycleOptions{Repository: o.Conversations.Repository, Since: selection.since, MaxPages: o.LifecycleMaxPages}

@@ -302,9 +302,13 @@ func TestCycleTurnsStopsOnUnfinishedRunAndResumesBeforeRotating(t *testing.T) {
 	rest := &fixtureProvider{body: "original"}
 	batch := func(limit int) []CycleResult {
 		t.Helper()
+		before := f.api.stateReads
 		turns, err := RunCycleTurns(ctx, api, rest, graph, o, limit)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if reads := f.api.stateReads - before; reads != len(turns) {
+			t.Fatalf("read acquisition state %d times for %d turns", reads, len(turns))
 		}
 		return turns
 	}

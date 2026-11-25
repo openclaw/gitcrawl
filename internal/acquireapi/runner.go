@@ -78,6 +78,10 @@ type checkpoint struct {
 // Run resumes the server's original run and checkpoint. Only complete provider
 // pages advance progress. It never opens SQLite or supplies observation rows.
 func Run(ctx context.Context, api API, provider Provider, options Options) (Result, error) {
+	return runConversations(ctx, api, provider, options, api.State)
+}
+
+func runConversations(ctx context.Context, api API, provider Provider, options Options, readState func(context.Context) (State, error)) (Result, error) {
 	var result Result
 	owner, repo, ok := strings.Cut(options.Repository, "/")
 	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") || options.MaxThreads < 1 || options.MaxThreads > 10000 || options.ParentPageSize < 1 || options.ParentPageSize > 100 || options.ChildPageSize < 1 || options.ChildPageSize > 100 {
@@ -90,7 +94,7 @@ func Run(ctx context.Context, api API, provider Provider, options Options) (Resu
 	if now == nil {
 		now = time.Now
 	}
-	state, err := api.State(ctx)
+	state, err := readState(ctx)
 	if err != nil {
 		return result, err
 	}

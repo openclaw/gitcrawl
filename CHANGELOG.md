@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use one PostgreSQL state read per acquisition turn for both mode selection and dispatch.
+
 - Let a GitHub App acquisition supervisor send one repository's credential through a private pipe.
 
 - Allow a bounded acquisition batch to yield before the next incremental window so a scheduler can service another repository.

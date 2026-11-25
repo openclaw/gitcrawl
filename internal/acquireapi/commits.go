@@ -60,11 +60,15 @@ type CommitOptions struct {
 // RunCommits records a bounded pinned-branch scan. It does not certify general
 // source coverage, advance the parent horizon, or infer missing merger credit.
 func RunCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o CommitOptions) (Result, error) {
+	return runCommits(ctx, api, provider, o, api.State)
+}
+
+func runCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o CommitOptions, readState func(context.Context) (State, error)) (Result, error) {
 	var result Result
 	if _, ok := ctx.Deadline(); !ok || o.MaxPages < 1 || o.MaxPages > 10000 || len(strings.Split(o.Repository, "/")) != 2 {
 		return result, errors.New("invalid bounded commit options")
 	}
-	state, err := api.State(ctx)
+	state, err := readState(ctx)
 	if err != nil {
 		return result, err
 	}

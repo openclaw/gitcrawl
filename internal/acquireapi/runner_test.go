@@ -20,15 +20,16 @@ import (
 )
 
 type fixtureAPI struct {
-	t        *testing.T
-	state    State
-	pages    map[string][]byte
-	receipts map[string]Receipt
-	changes  []remote.Change
-	requests int
-	drop     int
-	begins   int
-	horizons []time.Time
+	t          *testing.T
+	state      State
+	pages      map[string][]byte
+	receipts   map[string]Receipt
+	changes    []remote.Change
+	requests   int
+	stateReads int
+	drop       int
+	begins     int
+	horizons   []time.Time
 }
 
 func newFixtureAPI(t *testing.T) (*fixtureAPI, *Client, func()) {
@@ -64,6 +65,7 @@ func (f *fixtureAPI) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/state"):
+		f.stateReads++
 		json.NewEncoder(w).Encode(f.state)
 	case strings.HasSuffix(r.URL.Path, "/runs"):
 		var request RunRequest
