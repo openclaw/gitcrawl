@@ -149,6 +149,9 @@ may be reduced to resume after a response-size failure.
 Use --commits --since RFC3339 for a pinned default-branch commit scan with complete
 associated-PR attribution. --commit-max-pages (default 100) bounds each invocation.
 This requires an established acquisition horizon and does not advance it.
+Add --commits-until RFC3339 for an exclusive historical upper bound at or
+before that horizon. Finish the backfill with the same bound before resuming
+the scheduled cycle.
 
 Use --lifecycle-numbers-file PATH for 1..500 existing PG parents and --since
 for the event lower bound. This follows closure/reopen/merge timelines only; it

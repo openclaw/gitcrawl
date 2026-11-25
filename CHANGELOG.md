@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support an exclusive upper bound for historical commit backfills while preserving the scheduled acquisition checkpoint.
+
 - Document the shared OpenClaw archive API as the maintainer setup path and retain portable Git stores for recovery and user-owned snapshots.
 
 - Use one PostgreSQL state read per acquisition turn for both mode selection and dispatch.

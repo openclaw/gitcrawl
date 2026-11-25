@@ -39,13 +39,14 @@ type RunRequest struct {
 	Scope            json.RawMessage `json:"scope"`
 }
 type State struct {
-	Revision         int64           `json:"revision"`
-	Sequence         int64           `json:"sequence"`
-	Checkpoint       json.RawMessage `json:"checkpoint"`
-	CompletedThrough *time.Time      `json:"completedThrough"`
-	ActiveRun        *RunRequest     `json:"activeRun,omitempty"`
-	CompletedRun     *RunRequest     `json:"completedRun,omitempty"`
-	ParentCheckpoint json.RawMessage `json:"parentCheckpoint,omitempty"`
+	Revision                int64           `json:"revision"`
+	Sequence                int64           `json:"sequence"`
+	Checkpoint              json.RawMessage `json:"checkpoint"`
+	CompletedThrough        *time.Time      `json:"completedThrough"`
+	ActiveRun               *RunRequest     `json:"activeRun,omitempty"`
+	CompletedRun            *RunRequest     `json:"completedRun,omitempty"`
+	ParentCheckpoint        json.RawMessage `json:"parentCheckpoint,omitempty"`
+	CompletedCommitBackfill *RunRequest     `json:"completedCommitBackfill,omitempty"`
 }
 type ChildObservation struct {
 	ThreadID   string `json:"threadId"`

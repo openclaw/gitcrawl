@@ -456,6 +456,12 @@ commit collection preserves that horizon. This mode cannot be combined with a
 thread selection. It pins the repository identity, default branch OID and lower
 bound in the existing acquisition run, then resumes its saved cursor.
 
+For a closed historical window, add `--commits-until RFC3339` to set its
+exclusive upper bound. The range must end at or before the acquisition
+horizon. Use a receiver that supports historical commit runs. Resume a
+backfill with the same upper bound. The scheduled cycle picks up its prior
+checkpoint after the backfill publishes.
+
 Each atomic page carries one full commit and every associated-PR page, including
 nullable merger identities, merge times, merge commit OIDs and repository names.
 Full messages retain coauthor trailers. Attribution is preserved for the report

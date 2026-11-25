@@ -35,6 +35,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	cycleTurns := fs.Int("cycle-turns", 1, "maximum sequential turns in one cycle invocation (requires --cycle)")
 	cycleOneWindow := fs.Bool("cycle-one-window", false, "yield before the next incremental turn in a multi-turn cycle")
 	commitPages := fs.Int("commit-max-pages", 100, "maximum atomic commit pages per invocation")
+	commitUntil := fs.String("commits-until", "", "exclusive end of an explicit historical commit scan, RFC3339 (requires --commits)")
 	lifecycle := fs.String("lifecycle-numbers-file", "", "fixed lifecycle parent numbers (1..500, no SQLite)")
 	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
 	since := fs.String("since", "", "initial incremental lower bound, RFC3339")
@@ -92,6 +93,17 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	if *commits && (*lifecycle != "" || *parents != "" || *numbers != "") {
 		return usageErr(errors.New("commits cannot be combined with thread selections"))
+	}
+	var commitUpper time.Time
+	if *commitUntil != "" {
+		if !*commits {
+			return usageErr(errors.New("commits-until requires --commits"))
+		}
+		value, err := time.Parse(time.RFC3339Nano, *commitUntil)
+		if err != nil || value.IsZero() || value.Nanosecond()%1000 != 0 {
+			return usageErr(errors.New("commits-until requires an RFC3339 timestamp with microsecond precision"))
+		}
+		commitUpper = value.UTC()
 	}
 	if !*cycle && *lifecycle != "" && (*parents != "" || *numbers != "") {
 		return usageErr(errors.New("lifecycle selection cannot be combined with parent-selection-file or numbers-file"))
@@ -251,7 +263,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 		return nil
 	} else if *parents != "" || *lifecycle != "" || *commits {
 		if *commits {
-			result, err = acquireapi.RunCommits(ctx, api, graph, acquireapi.CommitOptions{Repository: *repo, Since: options.Since, MaxPages: *commitPages})
+			result, err = acquireapi.RunCommits(ctx, api, graph, acquireapi.CommitOptions{Repository: *repo, Since: options.Since, Until: commitUpper, MaxPages: *commitPages})
 		} else if *lifecycle != "" {
 			if len(options.Numbers) > *limit || *limit < 1 || *limit > 500 {
 				return usageErr(errors.New("lifecycle selection exceeds max-threads (1..500)"))

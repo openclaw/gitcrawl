@@ -14,13 +14,29 @@ import (
 )
 
 func TestCommitsHTTPResumeAndExactACK(t *testing.T) {
+	t.Run("scheduled", func(t *testing.T) { testCommitsHTTPResumeAndExactACK(t, false) })
+	t.Run("historical", func(t *testing.T) { testCommitsHTTPResumeAndExactACK(t, true) })
+}
+
+func testCommitsHTTPResumeAndExactACK(t *testing.T, historical bool) {
 	horizon := time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC)
 	f := &fixtureAPI{t: t, state: State{Revision: 1, Sequence: 20, CompletedThrough: &horizon, Checkpoint: json.RawMessage(`{}`)}, pages: map[string][]byte{}, receipts: map[string]Receipt{}, drop: 2}
+	upper := horizon
+	if historical {
+		upper = horizon.AddDate(0, 0, -1)
+		f.state.CompletedRun = &RunRequest{ID: "incremental", Horizon: horizon, Scope: json.RawMessage(`{"version":1,"repository":"fixture/repo","mode":"incremental","since":"2026-01-03T00:00:00Z"}`)}
+	}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		old := f.state.ActiveRun
+		old, previous := f.state.ActiveRun, f.state.CompletedRun
 		f.serve(w, r)
 		if old != nil && f.state.ActiveRun == nil {
-			f.state.CompletedRun = old
+			if historical {
+				f.state.CompletedCommitBackfill = old
+				f.state.CompletedRun = previous
+				f.state.Checkpoint = json.RawMessage(`{}`)
+			} else {
+				f.state.CompletedRun = old
+			}
 		}
 	}))
 	defer api.Close()
@@ -44,6 +60,9 @@ func TestCommitsHTTPResumeAndExactACK(t *testing.T) {
 		case strings.Contains(req.GraphQL.Query, "defaultBranchRef"):
 			data = `{"repository":{"id":"R1","nameWithOwner":"fixture/repo","defaultBranchRef":{"name":"main","target":{"oid":"` + oid + `"}}}}`
 		case strings.Contains(req.GraphQL.Query, "history(first:1"):
+			if req.GraphQL.Variables["until"] != upper.Format(time.RFC3339Nano) {
+				t.Error("history query lost its upper bound")
+			}
 			cursor, _ := req.GraphQL.Variables["cursor"].(string)
 			cursors = append(cursors, cursor)
 			terminal, next := "true", `"next"`
@@ -73,11 +92,30 @@ func TestCommitsHTTPResumeAndExactACK(t *testing.T) {
 	ctx, cancel := runContext()
 	defer cancel()
 	o := CommitOptions{Repository: "fixture/repo", Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), MaxPages: 10}
+	if historical {
+		o.Until = upper
+	}
 	if _, err = RunCommits(ctx, c, p, o); err == nil {
 		t.Fatal("lost ACK must surface")
 	}
 	if len(f.pages) != 1 {
 		t.Fatal("did not preserve first page")
+	}
+	if historical {
+		active := f.state.ActiveRun
+		var scope CommitScope
+		if active == nil || active.Mode != historicalCommitsMode || json.Unmarshal(active.Scope, &scope) != nil ||
+			scope.Until == nil || !scope.Until.Equal(upper) || !active.Horizon.Equal(horizon) {
+			t.Fatal("historical scope was not pinned", active)
+		}
+		changed := o
+		changed.Until = upper.Add(time.Minute)
+		if _, err = RunCommits(ctx, c, p, changed); err == nil {
+			t.Fatal("resume accepted a different upper bound")
+		}
+		if _, _, err := nextCycleMode(f.state, Options{Repository: o.Repository}); err == nil {
+			t.Fatal("scheduled cycle accepted active historical writer")
+		}
 	}
 	broken = true
 	if _, err = RunCommits(ctx, c, p, o); err == nil || len(f.pages) != 1 {
@@ -106,6 +144,12 @@ func TestCommitsHTTPResumeAndExactACK(t *testing.T) {
 	got, err = RunCommits(ctx, c, p, o)
 	if err != nil || !got.Complete || f.begins != 1 {
 		t.Fatal("completed replay", got, err)
+	}
+	if historical {
+		mode, since, err := nextCycleMode(f.state, Options{Repository: o.Repository})
+		if err != nil || mode != "commits" || !since.Equal(upper) {
+			t.Fatal("historical backfill changed scheduled continuation", mode, since, err)
+		}
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"github.com/openclaw/gitcrawl/internal/github"
 )
 
+const historicalCommitsMode = "historical-commits"
+
 type CommitScope struct {
 	Schema           string          `json:"schema"`
 	Repository       string          `json:"repository"`
@@ -21,6 +23,7 @@ type CommitScope struct {
 	Branch           string          `json:"branch"`
 	HeadOID          string          `json:"headOid"`
 	Since            time.Time       `json:"since"`
+	Until            *time.Time      `json:"until,omitempty"`
 	ParentCheckpoint json.RawMessage `json:"parentCheckpoint"`
 }
 type CommitAttributionPage struct {
@@ -54,6 +57,7 @@ type CommitAPI interface {
 type CommitOptions struct {
 	Repository string
 	Since      time.Time
+	Until      time.Time
 	MaxPages   int
 }
 
@@ -75,31 +79,50 @@ func runCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 	if state.CompletedThrough == nil {
 		return result, errors.New("commits require an established acquisition horizon")
 	}
-	if state.ActiveRun != nil && state.ActiveRun.Mode != "commits" {
+	mode, upper := "commits", *state.CompletedThrough
+	var boundedUntil *time.Time
+	if !o.Until.IsZero() {
+		mode, upper = historicalCommitsMode, o.Until.UTC()
+		if upper.After(*state.CompletedThrough) || upper.Nanosecond()%1000 != 0 {
+			return result, errors.New("commit backfill requires --commits-until at or before the acquisition horizon with microsecond precision")
+		}
+		boundedUntil = &upper
+	}
+	if state.ActiveRun != nil && state.ActiveRun.Mode != mode {
 		return result, errors.New("another acquisition mode is active")
 	}
 	run := state.ActiveRun
 	var scope CommitScope
 	var head github.CommitHead
 	if run != nil {
-		if json.Unmarshal(run.Scope, &scope) != nil || scope.Schema != "github-commits-scope/v1" || scope.Repository != o.Repository || !run.Horizon.Equal(*state.CompletedThrough) || !o.Since.IsZero() && !scope.Since.Equal(o.Since) {
+		if json.Unmarshal(run.Scope, &scope) != nil || scope.Schema != "github-commits-scope/v1" || scope.Repository != o.Repository || !run.Horizon.Equal(*state.CompletedThrough) ||
+			!sameCommitUpperBound(scope.Until, boundedUntil) || !o.Since.IsZero() && !scope.Since.Equal(o.Since) {
 			return result, errors.New("commit resume scope changed")
 		}
 		if err := validateParentProgress(scope.ParentCheckpoint); err != nil {
 			return result, err
 		}
 	} else {
-		completed, hasCompleted, e := completedCommitScope(state, o.Repository)
+		last := state.CompletedRun
+		var completed CommitScope
+		var hasCompleted bool
+		var e error
+		if boundedUntil == nil {
+			completed, hasCompleted, e = completedCommitScope(state, o.Repository)
+		} else {
+			last = state.CompletedCommitBackfill
+			completed, hasCompleted, e = completedCommitBackfillScope(state, o.Repository, upper)
+		}
 		if e != nil {
 			return result, e
 		}
 		// Omitting --since means recovery of the exact completed run, never a
 		// new scan against a branch that may have advanced after the lost ACK.
 		if hasCompleted && o.Since.IsZero() {
-			return Result{RunID: state.CompletedRun.ID, Revision: state.Revision, Complete: true}, nil
+			return Result{RunID: last.ID, Revision: state.Revision, Complete: true}, nil
 		}
-		if o.Since.IsZero() || !o.Since.Before(*state.CompletedThrough) || o.Since.Nanosecond()%1000 != 0 {
-			return result, errors.New("commit scan requires prior --since")
+		if o.Since.IsZero() || !o.Since.Before(upper) || o.Since.Nanosecond()%1000 != 0 {
+			return result, errors.New("commit scan requires --since before the upper bound with microsecond precision")
 		}
 		parent, e := parentProgressCheckpoint(state, o.Repository)
 		if e != nil {
@@ -112,13 +135,13 @@ func runCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 		if head.Repository != o.Repository {
 			return result, errors.New("commit repository changed")
 		}
-		scope = CommitScope{Schema: "github-commits-scope/v1", Repository: o.Repository, RepositoryNodeID: head.NodeID, Branch: head.Branch, HeadOID: head.OID, Since: o.Since.UTC(), ParentCheckpoint: parent}
+		scope = CommitScope{Schema: "github-commits-scope/v1", Repository: o.Repository, RepositoryNodeID: head.NodeID, Branch: head.Branch, HeadOID: head.OID, Since: o.Since.UTC(), Until: boundedUntil, ParentCheckpoint: parent}
 		if hasCompleted && completed.RepositoryNodeID == scope.RepositoryNodeID && completed.Branch == scope.Branch && completed.HeadOID == scope.HeadOID && completed.Since.Equal(scope.Since) {
-			return Result{RunID: state.CompletedRun.ID, Revision: state.Revision, Complete: true}, nil
+			return Result{RunID: last.ID, Revision: state.Revision, Complete: true}, nil
 		}
 		raw, _ := json.Marshal(scope)
 		sum := sha256.Sum256(append(raw, []byte(fmt.Sprintf("/%d/%s", state.Revision, state.CompletedThrough.Format(time.RFC3339Nano)))...))
-		run = &RunRequest{ID: "gitcrawl-commits-" + hex.EncodeToString(sum[:16]), Mode: "commits", ExpectedRevision: state.Revision, Horizon: *state.CompletedThrough, Scope: raw}
+		run = &RunRequest{ID: "gitcrawl-" + mode + "-" + hex.EncodeToString(sum[:16]), Mode: mode, ExpectedRevision: state.Revision, Horizon: *state.CompletedThrough, Scope: raw}
 		if err = api.Begin(ctx, *run); err != nil {
 			return result, err
 		}
@@ -145,7 +168,7 @@ func runCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 	result.RunID = run.ID
 	result.Revision = state.Revision
 	for i := 0; i < o.MaxPages; i++ {
-		page, e := provider.ReadCommit(ctx, github.CommitQuery{Head: head, Since: scope.Since, Until: run.Horizon, Cursor: cp.NextCursor}, nil)
+		page, e := provider.ReadCommit(ctx, github.CommitQuery{Head: head, Since: scope.Since, Until: upper, Cursor: cp.NextCursor}, nil)
 		if e != nil {
 			return result, e
 		}
@@ -204,6 +227,31 @@ func runCommits(ctx context.Context, api CommitAPI, provider CommitProvider, o C
 
 // Completed commit scans retain the preceding parent checkpoint in their
 // immutable run scope. A mode switch restores that exact progress, not zero.
+func sameCommitUpperBound(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+func completedCommitBackfillScope(state State, repository string, upper time.Time) (CommitScope, bool, error) {
+	var scope CommitScope
+	run := state.CompletedCommitBackfill
+	if run == nil {
+		return scope, false, nil
+	}
+	if run.Mode != historicalCommitsMode || state.CompletedThrough == nil || !run.Horizon.Equal(*state.CompletedThrough) ||
+		state.Revision <= run.ExpectedRevision || json.Unmarshal(run.Scope, &scope) != nil || scope.Schema != "github-commits-scope/v1" ||
+		scope.Repository != repository || scope.RepositoryNodeID == "" || scope.HeadOID == "" || scope.Branch == "" ||
+		scope.Since.IsZero() || scope.Until == nil || !scope.Since.Before(*scope.Until) || scope.Until.After(run.Horizon) {
+		return scope, false, errors.New("completed commit backfill scope mismatch")
+	}
+	if err := validateParentProgress(scope.ParentCheckpoint); err != nil {
+		return scope, false, err
+	}
+	return scope, scope.Until.Equal(upper), nil
+}
+
 func completedCommitScope(state State, repository string) (CommitScope, bool, error) {
 	var scope CommitScope
 	var cp commitCheckpoint
