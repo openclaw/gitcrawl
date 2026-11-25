@@ -85,3 +85,29 @@ func TestExplicitEmptyAppTokenFlagCannotFallBackToOctopool(t *testing.T) {
 		t.Fatal("empty App auth fell back", err, requests)
 	}
 }
+
+func TestMintAcquisitionCohortRejectsAmbiguousInputBeforeKeyHandling(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		in   string
+		want string
+	}{
+		{[]string{"--repo", "fixture/repo", "--repository-id", "2"}, `[{"id":1,"name":"fixture/repo"}]`, "or cohort-stdin"},
+		{nil, `[{"id":1,"name":"fixture/repo","scope":"invalid"}]`, "expected a nonempty acquisition cohort"},
+		{nil, `[{"id":1,"name":"fixture/repo"}] {}`, "expected a nonempty acquisition cohort"},
+		{nil, `[{"id":1,"name":"fixture/repo","id":2,"name":"fixture/other"}]`, "unique id and name fields"},
+		{nil, `[{"id":1,"name":"fixture/repo","NAME":"fixture/other"}]`, "unique id and name fields"},
+		{nil, strings.Repeat(" ", (128<<10)+1), "within its size bound"},
+	} {
+		a := New()
+		a.Stdin = strings.NewReader(tc.in)
+		var output bytes.Buffer
+		a.Stdout = &output
+		a.Stderr = io.Discard
+		args := []string{"mint-acquisition-token", "--app-id", "1", "--installation-id", "2", "--private-key-file", "relative-key.pem", "--cohort-stdin"}
+		err := a.Run(context.Background(), append(args, tc.args...))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || output.Len() != 0 {
+			t.Fatalf("unsafe cohort input accepted: %v", err)
+		}
+	}
+}

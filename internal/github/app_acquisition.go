@@ -89,18 +89,9 @@ func mintAcquisitionToken(ctx context.Context, app AcquisitionApp, keyPEM []byte
 	if err != nil {
 		return out, err
 	}
-	var installation struct {
-		ID          int64                  `json:"id"`
-		AppID       int64                  `json:"app_id"`
-		SuspendedAt json.RawMessage        `json:"suspended_at"`
-		Account     struct{ Login string } `json:"account"`
-	}
-	if err = appJSON(ctx, client, jwt, http.MethodGet, fmt.Sprintf("/app/installations/%d", app.InstallationID), nil, &installation); err != nil {
-		return out, err
-	}
 	owner, _, _ := strings.Cut(app.Repository, "/")
-	if installation.ID != app.InstallationID || installation.AppID != app.AppID || !bytes.Equal(installation.SuspendedAt, []byte("null")) || !strings.EqualFold(installation.Account.Login, owner) {
-		return out, errors.New("GitHub App installation identity, owner or suspension mismatch")
+	if err = verifyAcquisitionInstallation(ctx, client, jwt, owner, app); err != nil {
+		return out, err
 	}
 	// Public metadata needs no App credential. Refuse private/unavailable or
 	// transferred repositories before issuing even a narrowed token.
@@ -111,6 +102,27 @@ func mintAcquisitionToken(ctx context.Context, app AcquisitionApp, keyPEM []byte
 	if !repository.matches(app) {
 		return out, errors.New("repository is not the admitted public identity")
 	}
+	return mintRepositoryToken(ctx, client, jwt, app)
+}
+
+func verifyAcquisitionInstallation(ctx context.Context, client *http.Client, jwt, owner string, app AcquisitionApp) error {
+	var installation struct {
+		ID          int64                  `json:"id"`
+		AppID       int64                  `json:"app_id"`
+		SuspendedAt json.RawMessage        `json:"suspended_at"`
+		Account     struct{ Login string } `json:"account"`
+	}
+	if err := appJSON(ctx, client, jwt, http.MethodGet, fmt.Sprintf("/app/installations/%d", app.InstallationID), nil, &installation); err != nil {
+		return err
+	}
+	if installation.ID != app.InstallationID || installation.AppID != app.AppID || !bytes.Equal(installation.SuspendedAt, []byte("null")) || !strings.EqualFold(installation.Account.Login, owner) {
+		return errors.New("GitHub App installation identity, owner or suspension mismatch")
+	}
+	return nil
+}
+
+func mintRepositoryToken(ctx context.Context, client *http.Client, jwt string, app AcquisitionApp) (AcquisitionToken, error) {
+	var out AcquisitionToken
 	var minted struct {
 		Token               string            `json:"token"`
 		ExpiresAt           time.Time         `json:"expires_at"`
@@ -119,14 +131,14 @@ func mintAcquisitionToken(ctx context.Context, app AcquisitionApp, keyPEM []byte
 		Repositories        []appRepository   `json:"repositories"`
 	}
 	body := map[string]any{"repository_ids": []int64{app.RepositoryID}, "permissions": acquisitionPermissions()}
-	if err = appJSON(ctx, client, jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", app.InstallationID), body, &minted); err != nil {
+	if err := appJSON(ctx, client, jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", app.InstallationID), body, &minted); err != nil {
 		return out, err
 	}
 	if minted.RepositorySelection != "selected" || len(minted.Repositories) != 1 || !minted.Repositories[0].matches(app) || !readPermissions(minted.Permissions) {
 		return out, errors.New("minted token did not retain the exact public repository and read permissions")
 	}
 	out = AcquisitionToken{minted.Token, minted.ExpiresAt, app.AppID, app.InstallationID, app.RepositoryID, app.Repository, minted.Permissions}
-	if err = out.validate(app.Repository, time.Now().Add(2*time.Minute)); err != nil {
+	if err := out.validate(app.Repository, time.Now().Add(2*time.Minute)); err != nil {
 		return AcquisitionToken{}, err
 	}
 	return out, nil
@@ -159,13 +171,18 @@ func acquisitionJWT(appID int64, raw []byte, now time.Time) (string, error) {
 // Never include response bodies, bearer values or private transport errors in
 // mint diagnostics. A failed/ambiguous mint is not retried by this command.
 func appJSON(ctx context.Context, client *http.Client, token, method, path string, body, out any) error {
+	_, err := appJSONResponse(ctx, client, token, method, path, body, out)
+	return err
+}
+
+func appJSONResponse(ctx context.Context, client *http.Client, token, method, path string, body, out any) (http.Header, error) {
 	var data []byte
 	if body != nil {
 		data, _ = json.Marshal(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "https://api.github.com"+path, bytes.NewReader(data))
 	if err != nil {
-		return errors.New("invalid App authentication request")
+		return nil, errors.New("invalid App authentication request")
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -177,17 +194,17 @@ func appJSON(ctx context.Context, client *http.Client, token, method, path strin
 	copyClient.CheckRedirect = appNoRedirect
 	response, err := copyClient.Do(req)
 	if err != nil {
-		return errors.New("GitHub App authentication transport failed")
+		return nil, errors.New("GitHub App authentication transport failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK && !(method == http.MethodPost && response.StatusCode == http.StatusCreated) {
-		return fmt.Errorf("GitHub App authentication returned HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("GitHub App authentication returned HTTP %d", response.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, out) != nil {
-		return errors.New("invalid GitHub App authentication response")
+		return nil, errors.New("invalid GitHub App authentication response")
 	}
-	return nil
+	return response.Header, nil
 }
 
 func DecodeAcquisitionToken(raw, repository string, deadline time.Time) (AcquisitionToken, error) {

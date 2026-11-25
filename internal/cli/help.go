@@ -55,7 +55,7 @@ Core commands:
   doctor               check config, token, and database readiness
   sync                 sync GitHub issue and pull request metadata
   acquire-api          acquire full conversations through the PostgreSQL API
-  mint-acquisition-token mint one public-repository App credential (secret JSON)
+  mint-acquisition-token mint scoped public-repository App credentials (secret JSON)
   discover-parents     export missing parent identities through Octopool
   analytics            repair publication dates, enrich identities, or watch GraphQL updates
   sync-failures        list failed sync hydration attempts
@@ -114,10 +114,14 @@ The final empty nextCursor means enumeration finished, not that every requested 
 Once repository binding succeeds, a provider error emits completed pages and exits nonzero; resume its nextCursor.
 Validation, credentials or repository bootstrap failures emit no discovery receipt; preserve the preceding cursor.
 `,
-	"mint-acquisition-token": `gitcrawl mint-acquisition-token issues a one-repository, read-only GitHub App installation token.
+	"mint-acquisition-token": `gitcrawl mint-acquisition-token issues one-repository, read-only GitHub App installation tokens.
 
 Usage:
   gitcrawl mint-acquisition-token --app-id ID --installation-id ID --repo owner/repo --repository-id ID --private-key-file PATH
+  gitcrawl mint-acquisition-token --app-id ID --installation-id ID --cohort-stdin --private-key-file PATH
+
+Cohort stdin is one JSON array of approved {"id":123,"name":"owner/repo"} entries
+for a single organization. It outputs a JSON array of separate scoped credentials.
 
 Run as root with an absolute, root-owned 0400 or 0600 RSA key file. Stdout is credential JSON:
 consume it through a private supervisor pipe; never send it to a terminal, log or report.

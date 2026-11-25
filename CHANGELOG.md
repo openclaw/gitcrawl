@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let GitHub App supervisors qualify multiple public repositories with one organization catalog lookup and mint a separate read-only token for each repository.
+
 - Publish the native code index commit gate atomically so a scheduled run cannot mistake a partially written digest for a mismatch.
 
 - Run scheduled PostgreSQL conversation, commit and lifecycle collection for archives without a historical selection file.

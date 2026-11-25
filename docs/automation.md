@@ -195,6 +195,17 @@ access. A broader returned token is rejected. `private-*` names are excluded.
 The operator remains responsible for an approved repository allowlist and the
 matching prepared PostgreSQL source; public visibility alone is not admission.
 
+For a supervisor rotating several archives in one organization, use
+`--cohort-stdin` in place of `--repo` and `--repository-id`. Send a trusted
+JSON allowlist of up to 500 `{ "id": 123, "name": "example/project" }` entries
+through stdin. The command checks all requested names, immutable IDs and public
+visibility against one paginated public catalog before minting. It then asks
+for a separate, single-repository token for each entry. Stdout is a private
+JSON array in input order. A failed lookup or mint returns an error without
+a credential array. Earlier requests in a failed batch may have issued tokens.
+The command does not repeat a mint. Keep each credential with its own prepared
+PostgreSQL source and use the existing `acquire-api` per-repository quota checks.
+
 Pass the trusted JSON envelope only to the collector's named environment
 variable and add `--github-app-token-env ENV` to the existing `acquire-api`
 command. Remove `OCTOPOOL_TOKEN`, `OCTOPOOL_URL` and `OCTOPOOL_POOL` from this
