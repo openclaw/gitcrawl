@@ -160,6 +160,8 @@ unfinished turn reports deferredModes. Use --cycle-turns 2..8 to reuse the same
 provider session for several turns. The first unfinished turn ends the batch;
 JSON for a multi-turn invocation contains a turns array. Thread and page limits
 apply to each turn. The durable run can span multiple invocations.
+Use --cycle-one-window with --cycle-turns 2..8 to yield before the next
+incremental turn once this batch has done work for the current window.
 Lifecycle selects changed PostgreSQL parents across bounded batches at the completed
 commit pin. --lifecycle-reader-endpoint optionally sends only that candidate query
 to a separate reader for the same source. If it requires its own reader credential,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow a bounded acquisition batch to yield before the next incremental window so a scheduler can service another repository.
+
 - Let a PostgreSQL GitHub acquisition invocation reuse one provider session across several bounded reporting turns for the same source.
 
 - Let GitHub App supervisors qualify multiple public repositories with one organization catalog lookup and mint a separate read-only token for each repository.

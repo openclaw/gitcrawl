@@ -79,7 +79,7 @@ func TestAcquireAPILifecycleDispatchWithoutSQLite(t *testing.T) {
 	}
 	var output bytes.Buffer
 	a.Stdout = &output
-	err = a.Run(context.Background(), append(slices.Clone(cycleArgs), "--cycle-turns", "3", "--json"))
+	err = a.Run(context.Background(), append(slices.Clone(cycleArgs), "--cycle-turns", "3", "--cycle-one-window", "--json"))
 	var report map[string]json.RawMessage
 	if err == nil || !strings.Contains(err.Error(), "outside the admitted cycle") || json.Unmarshal(output.Bytes(), &report) != nil || string(report["turns"]) != "[]" {
 		t.Fatalf("multi-turn pre-dispatch error must report an empty observed batch: %s, %v", output.String(), err)
@@ -97,6 +97,11 @@ func TestAcquireAPILifecycleRejectsMixedSelectors(t *testing.T) {
 	for _, args := range [][]string{{"--cycle-turns", "1"}, {"--cycle", "--cycle-turns", "0"}, {"--cycle", "--cycle-turns", "9"}} {
 		if err := a.Run(context.Background(), append(slices.Clone(base), args...)); err == nil || !strings.Contains(err.Error(), "cycle-turns requires") {
 			t.Fatalf("invalid cycle count accepted (%v): %v", args, err)
+		}
+	}
+	for _, args := range [][]string{{"--cycle-one-window"}, {"--cycle", "--cycle-one-window"}} {
+		if err := a.Run(context.Background(), append(slices.Clone(base), args...)); err == nil || !strings.Contains(err.Error(), "cycle-one-window requires") {
+			t.Fatalf("invalid cycle window accepted (%v): %v", args, err)
 		}
 	}
 	for _, args := range [][]string{{"--commits", "--numbers-file", "unused"}, {"--commits", "--parent-selection-file", "unused"}, {"--commits", "--lifecycle-numbers-file", "unused"}, {"--commit-max-pages", "1"}, {"--lifecycle-numbers-file", "unused", "--numbers-file", "unused"}, {"--lifecycle-numbers-file", "unused", "--parent-selection-file", "unused"}, {"--lifecycle-max-pages", "1"}} {

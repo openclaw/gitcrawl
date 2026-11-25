@@ -382,6 +382,12 @@ PostgreSQL checkpoint again. The first unfinished or failed turn ends the
 invocation. Multi-turn JSON returns a `turns` array of observed results. The
 single-turn output remains the individual result object.
 
+Add `--cycle-one-window` to a multi-turn batch to yield before another
+incremental turn after doing work for the current window. The first turn still
+resumes any saved run or starts the next due window. An empty lifecycle
+selection can end a batch after commits, without a second incremental scan.
+The configured turn, page and time bounds still apply.
+
 Keep the historical file unchanged once the archive records its digest or offset.
 The cycle requires that file for retained historical progress and skips exhausted
 history. For lifecycle events the cycle reads eligible

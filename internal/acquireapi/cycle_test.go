@@ -106,9 +106,11 @@ func TestCycleWithoutHistoricalSelectionResumesLifecycleThenIncremental(t *testi
 	if err != nil || first.Mode != "lifecycle" || first.Complete || !slices.Equal(first.DeferredModes, []string{"incremental", "commits"}) {
 		t.Fatalf("cycle without history did not start the lifecycle turn: %+v %v", first, err)
 	}
-	second, err := RunCycle(ctx, api, rest, graph, o)
-	if err != nil || !second.Resumed || !second.Complete || second.RunID != first.RunID || !slices.Equal(f.providerCursors, []string{"", "next"}) {
-		t.Fatalf("cycle without history lost the saved lifecycle cursor: %+v %v", second, err)
+	o.OneWindow = true
+	resumed, err := RunCycleTurns(ctx, api, rest, graph, o, 3)
+	if err != nil || len(resumed) != 1 || !resumed[0].Resumed || !resumed[0].Complete || resumed[0].RunID != first.RunID ||
+		!slices.Equal(f.providerCursors, []string{"", "next"}) || rest.parents != 0 {
+		t.Fatalf("batch crossed the resumed lifecycle window: %+v %v", resumed, err)
 	}
 	third, err := RunCycle(ctx, api, rest, graph, o)
 	if err != nil || third.Mode != "incremental" || len(rest.requested) != 0 {
@@ -318,5 +320,29 @@ func TestCycleTurnsStopsOnUnfinishedRunAndResumesBeforeRotating(t *testing.T) {
 	last := batch(1)
 	if len(last) != 1 || !last[0].Complete || !last[0].Resumed || last[0].RunID != second[2].RunID || !slices.Equal(f.providerCursors, []string{"", "next"}) || f.api.begins != 3 {
 		t.Fatalf("following batch did not resume the original lifecycle cursor: %+v", last)
+	}
+}
+
+func TestCycleOneWindowYieldsAfterEmptyLifecycleSelection(t *testing.T) {
+	f := newLifecycleFixture(t)
+	f.api.state.CompletedThrough = nil
+	f.api.state.Checkpoint, _ = json.Marshal(checkpoint{Version: 1, Phase: "select"})
+	ctx, cancel := runContext()
+	defer cancel()
+	o := CycleOptions{Conversations: options(), CommitMaxPages: 1, LifecycleMaxPages: 1, OneWindow: true}
+	o.Conversations.Now = func() time.Time { return time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC) }
+	api := cycleFixtureAPI{f.client}
+	graph := &cycleGraphFixture{&emptyCommitProvider{}, f.provider}
+	rest := &fixtureProvider{empty: true}
+	first, err := RunCycle(ctx, api, rest, graph, o)
+	if err != nil || first.Mode != "incremental" || !first.Complete {
+		t.Fatalf("could not establish incremental publication: %+v %v", first, err)
+	}
+	f.windowPin = fmt.Sprintf("pg-gitcrawl-current-v1:seed:%d", f.api.state.Sequence+1)
+	o.Conversations.Now = func() time.Time { return time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC) }
+	turns, err := RunCycleTurns(ctx, api, rest, graph, o, 3)
+	if err != nil || len(turns) != 1 || turns[0].Mode != "commits" || !turns[0].Complete ||
+		rest.parents != 1 || f.api.begins != 2 || len(f.candidateQueries) != 1 || len(f.providerNumbers) != 0 {
+		t.Fatalf("batch missed supplemental work or crossed into a second incremental scan: %+v %v", turns, err)
 	}
 }

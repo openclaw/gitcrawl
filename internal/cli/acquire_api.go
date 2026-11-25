@@ -32,6 +32,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	commits := fs.Bool("commits", false, "pinned default-branch commit and attribution scan")
 	cycle := fs.Bool("cycle", false, "one resumable reporting turn: incremental, commits, lifecycle, historical")
 	cycleTurns := fs.Int("cycle-turns", 1, "maximum sequential turns in one cycle invocation (requires --cycle)")
+	cycleOneWindow := fs.Bool("cycle-one-window", false, "yield before the next incremental turn in a multi-turn cycle")
 	commitPages := fs.Int("commit-max-pages", 100, "maximum atomic commit pages per invocation")
 	lifecycle := fs.String("lifecycle-numbers-file", "", "fixed lifecycle parent numbers (1..500, no SQLite)")
 	maxPages := fs.Int("lifecycle-max-pages", 100, "maximum lifecycle provider pages per invocation")
@@ -64,6 +65,9 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	if cycleTurnsSet && (!*cycle || *cycleTurns < 1 || *cycleTurns > acquireapi.MaxCycleTurns) {
 		return usageErr(fmt.Errorf("cycle-turns requires --cycle and a value of 1..%d", acquireapi.MaxCycleTurns))
+	}
+	if *cycleOneWindow && (!*cycle || *cycleTurns < 2) {
+		return usageErr(fmt.Errorf("cycle-one-window requires --cycle and --cycle-turns 2..%d", acquireapi.MaxCycleTurns))
 	}
 	if *cycle && (*commits || *parents != "") {
 		return usageErr(errors.New("cycle cannot be combined with commits or parent selection"))
@@ -207,7 +211,7 @@ func (a *App) runAcquireAPI(ctx context.Context, args []string) error {
 	}
 	var result acquireapi.Result
 	if *cycle {
-		cycleOptions := acquireapi.CycleOptions{Conversations: options, LifecycleNumbers: lifecycleNumbers, CommitMaxPages: *commitPages, LifecycleMaxPages: *maxPages}
+		cycleOptions := acquireapi.CycleOptions{Conversations: options, LifecycleNumbers: lifecycleNumbers, CommitMaxPages: *commitPages, LifecycleMaxPages: *maxPages, OneWindow: *cycleOneWindow}
 		var payload any
 		var cycleErr error
 		if *cycleTurns == 1 {

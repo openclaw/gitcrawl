@@ -17,6 +17,7 @@ type CycleOptions struct {
 	LifecycleNumbers  []int
 	CommitMaxPages    int
 	LifecycleMaxPages int
+	OneWindow         bool // In a multi-turn batch, yield before another incremental turn.
 }
 
 type CycleAPI interface {
@@ -48,7 +49,7 @@ func RunCycleTurns(ctx context.Context, api CycleAPI, rest Provider, graph Cycle
 	}
 	turns := make([]CycleResult, 0, limit)
 	for range limit {
-		turn, err := RunCycle(ctx, api, rest, graph, o)
+		turn, err := runCycle(ctx, api, rest, graph, o, o.OneWindow && len(turns) > 0)
 		if turn.Mode != "" {
 			turns = append(turns, turn)
 		}
@@ -63,6 +64,10 @@ func RunCycleTurns(ctx context.Context, api CycleAPI, rest Provider, graph Cycle
 // only durable completion advances the rotation. In particular, another parent
 // horizon cannot start ahead of the preceding commit and lifecycle turns.
 func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvider, o CycleOptions) (CycleResult, error) {
+	return runCycle(ctx, api, rest, graph, o, false)
+}
+
+func runCycle(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvider, o CycleOptions, yieldBeforeIncremental bool) (CycleResult, error) {
 	var out CycleResult
 	if _, ok := ctx.Deadline(); !ok || o.CommitMaxPages < 1 || o.CommitMaxPages > 10000 || o.LifecycleMaxPages < 1 || o.LifecycleMaxPages > 10000 {
 		return out, errors.New("cycle requires bounded pages and a deadline")
@@ -100,6 +105,9 @@ func RunCycle(ctx context.Context, api CycleAPI, rest Provider, graph CycleProvi
 				return out, err
 			}
 		}
+	}
+	if mode == "incremental" && yieldBeforeIncremental {
+		return out, nil
 	}
 	out.Mode, out.Resumed, out.LifecycleParents = mode, state.ActiveRun != nil, len(o.LifecycleNumbers)
 	switch mode {
