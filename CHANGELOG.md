@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the pinned TruffleHog action and scanner image to v3.100.1. Thanks @dependabot.
+
 ## 0.20.0 - 2026-11-26
 
 **Highlights:** Add resumable PostgreSQL acquisition and cloud readers, scoped GitHub App credentials, and bounded Octopool collection for conversations, commits and lifecycle events.
