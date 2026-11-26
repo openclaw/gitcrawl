@@ -23,9 +23,17 @@ admission budget and requires 2 GiB free; it never prunes source archives,
 upstream receipts or existing recovery material. When the owned bare cache
 exceeds 2 GiB (with at least 2 GiB free), `upstream.py` compacts it in place
 with `git gc --quiet --prune=now` so unreachable objects from earlier shallow
-fetches do not exhaust the budget. Exceeding the 4 GiB budget after compaction
-or dropping below 2 GiB free remains an explicit failed cycle, not a fresh
-result.
+fetches do not exhaust the budget. Both Git directory paths must point at the
+owned cache. On timeout or interruption, the controller signals the Git process
+group and gives it a bounded chance to clean up, then force-kills remaining
+members and reaps the direct child before releasing the lock. The controller
+does not wait for individual exit notifications from grandchildren after a
+forced stop. Compaction fails if Git reports a diagnostic despite returning
+success. Receipts record what was fetched; they do not pin
+Git objects. A later fetch can make an older commit eligible for compaction
+even if publishing the new snapshot fails. The existing SQLite snapshot stays
+intact. Exceeding the 4 GiB budget after compaction or dropping below 2 GiB free
+remains an explicit failed cycle, not a fresh result.
 
 `run_code_update.py` retains the prior native lifecycle: shared controller lock,
 preparation while core collection runs, exact no-op without owner settlement,
