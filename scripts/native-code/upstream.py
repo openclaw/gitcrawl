@@ -10,6 +10,9 @@ import uuid
 
 REMOTE = 'https://github.com/openclaw/openclaw.git'
 BRANCH = 'main'
+CACHE_BUDGET_BYTES = 4 << 30
+CACHE_COMPACT_BYTES = 2 << 30
+MIN_FREE_BYTES = 2 << 30
 
 
 def now():
@@ -56,6 +59,17 @@ class SourceCache:
         if Path(source).absolute() != self.repo and Path(source).resolve() != self.repo:
             raise RuntimeError('source must be the dedicated state/upstream/source.git cache')
         self.git = git
+
+    def _allocated(self):
+        allocated = 0
+        for parent, directories, files in os.walk(self.repo, followlinks=False):
+            for name in directories+files:
+                path = Path(parent)/name
+                if path.is_symlink():
+                    raise RuntimeError('owned source metadata symlink refused')
+                if path.is_file():
+                    allocated += path.stat().st_size
+        return allocated
 
     def owned(self):
         if self.root.is_symlink() or self.repo.is_symlink():
@@ -105,15 +119,15 @@ class SourceCache:
         for path in ['objects/info/alternates', 'objects/info/http-alternates', 'info/grafts', 'refs/replace']:
             if (self.repo/path).exists():
                 raise RuntimeError('owned source object redirection refused')
-        allocated = 0
-        for parent, directories, files in os.walk(self.repo, followlinks=False):
-            for name in directories+files:
-                path = Path(parent)/name
-                if path.is_symlink():
-                    raise RuntimeError('owned source metadata symlink refused')
-                if path.is_file():
-                    allocated += path.stat().st_size
-        if allocated > 4 << 30 or shutil.disk_usage(self.root).free < 2 << 30:
+        if shutil.disk_usage(self.root).free < MIN_FREE_BYTES:
+            raise RuntimeError('upstream cache disk budget unavailable')
+        allocated = self._allocated()
+        if allocated > CACHE_COMPACT_BYTES:
+            # Compact unreachable objects from prior shallow fetches inside the
+            # owned bare cache only; never touch archives or receipts.
+            self.git(self.repo, ['gc', '--quiet', '--prune=now'], timeout=300)
+            allocated = self._allocated()
+        if allocated > CACHE_BUDGET_BYTES or shutil.disk_usage(self.root).free < MIN_FREE_BYTES:
             raise RuntimeError('upstream cache disk budget unavailable')
 
     def capture(self, run_id):

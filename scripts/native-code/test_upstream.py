@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import uuid
 
 import upstream
@@ -96,6 +97,54 @@ class UpstreamTests(unittest.TestCase):
         root.unlink();root.mkdir(mode=0o700)
         with self.assertRaisesRegex(RuntimeError, 'ownership'):
             self.cache().capture(uuid.uuid4().hex)
+
+    def test_compacts_owned_cache_over_threshold_and_preserves_receipts(self):
+        c = self.cache()
+        first_receipts = []
+        for i in range(4):
+            (self.remote/'payload.bin').write_bytes(os.urandom(32768))
+            self.commit(f'blob-{i}')
+            _, receipt_path = c.capture(uuid.uuid4().hex)
+            first_receipts.append(receipt_path)
+        before_size = c._allocated()
+        self.assertGreater(before_size, 100000)
+        # Replace with a tiny commit so only the latest tip is reachable.
+        (self.remote/'payload.bin').write_bytes(b'small\n')
+        self.commit('shrink')
+        # Set compact threshold below before_size and budget below before_size
+        # (but above the compacted size) to verify recovery from an over-budget cache.
+        with patch.object(upstream, 'CACHE_COMPACT_BYTES', 50000), \
+             patch.object(upstream, 'CACHE_BUDGET_BYTES', before_size - 1):
+            receipt, new_path = c.capture(uuid.uuid4().hex)
+        self.assertEqual(receipt['commit'], self.git(self.remote, 'rev-parse', 'HEAD'))
+        self.assertLess(c._allocated(), before_size)
+        self.assertTrue(any(call[:1] == ['gc'] for call in self.calls))
+        # All prior receipts remain untouched.
+        for p in first_receipts + [new_path]:
+            self.assertTrue(p.exists())
+        self.assertEqual(self.git(c.repo, 'show', receipt['commit']+':payload.bin'), 'small')
+
+    def test_fails_closed_when_budget_still_exceeded_after_compaction(self):
+        c = self.cache()
+        (self.remote/'payload.bin').write_bytes(os.urandom(65536))
+        self.commit('large')
+        c.capture(uuid.uuid4().hex)
+        with patch.object(upstream, 'CACHE_COMPACT_BYTES', 1024), \
+             patch.object(upstream, 'CACHE_BUDGET_BYTES', 1024):
+            with self.assertRaisesRegex(RuntimeError, 'disk budget unavailable'):
+                c.capture(uuid.uuid4().hex)
+        self.assertTrue(any(call[:1] == ['gc'] for call in self.calls))
+
+    def test_refuses_compaction_when_free_disk_below_minimum(self):
+        c = self.cache()
+        c.capture(uuid.uuid4().hex)
+        self.calls.clear()
+        low = upstream.shutil.disk_usage(self.state)._replace(free=upstream.MIN_FREE_BYTES - 1)
+        with patch.object(upstream.shutil, 'disk_usage', return_value=low), \
+             patch.object(upstream, 'CACHE_COMPACT_BYTES', 1):
+            with self.assertRaisesRegex(RuntimeError, 'disk budget unavailable'):
+                c.capture(uuid.uuid4().hex)
+        self.assertFalse(any(call[:1] == ['gc'] for call in self.calls))
 
 
 if __name__ == '__main__':
