@@ -191,6 +191,89 @@ func TestInstallationEnvelopeRefusesExpiryScopeAndSecretDiagnostics(t *testing.T
 	}
 }
 
+func TestAppAcquisitionRefreshesExpiredCoreQuota(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		stale     bool
+		remaining int
+	}{
+		{name: "refilled", remaining: 4900},
+		{name: "still stale", stale: true, remaining: 4900},
+		{name: "below reserve", remaining: 2499},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			token := fixtureAppToken()
+			probes, reads := 0, 0
+			transport := appHTTPFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer "+token.Token {
+					t.Error("quota and content must use the same credential")
+				}
+				switch r.URL.Path {
+				case "/rate_limit":
+					probes++
+					reset := time.Now().Add(time.Hour)
+					if probes == 1 || test.stale {
+						reset = time.Now().Add(-time.Minute)
+					}
+					writeRateLimits(t, w, reset, test.remaining, 4900)
+				case "/installation/repositories":
+					reads++
+					fmt.Fprint(w, `{"total_count":1,"repositories":[`+appRepoJSON+`]}`)
+				case "/repos/fixture/repo":
+					reads++
+					fmt.Fprint(w, appRepoJSON)
+				default:
+					t.Error("unexpected request", r.URL.Path)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, _, err := newAppAcquisition(ctx, token, transport)
+			if test.stale {
+				var expired *rateLimitStatusExpiredError
+				if !errors.As(err, &expired) || probes != 2 || reads != 0 {
+					t.Fatalf("err=%v probes=%d reads=%d", err, probes, reads)
+				}
+			} else if test.remaining < 2500 {
+				var reserve *RateLimitReserveError
+				if !errors.As(err, &reserve) || probes != 2 || reads != 0 {
+					t.Fatalf("err=%v probes=%d reads=%d", err, probes, reads)
+				}
+			} else if err != nil || probes != 3 || reads != 2 {
+				t.Fatalf("err=%v probes=%d reads=%d", err, probes, reads)
+			}
+		})
+	}
+}
+
+func TestAppAcquisitionRefreshesCoreQuotaAfterRepositoryRead(t *testing.T) {
+	probes, repositoryReads := 0, 0
+	transport := appHTTPFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rate_limit":
+			probes++
+			writeRateLimits(t, w, time.Now().Add(time.Hour), 4900, 4900)
+		case "/installation/repositories":
+			fmt.Fprint(w, `{"total_count":1,"repositories":[`+appRepoJSON+`]}`)
+		case "/repos/fixture/repo":
+			repositoryReads++
+			w.Header().Set("X-RateLimit-Limit", "5000")
+			w.Header().Set("X-RateLimit-Remaining", "4900")
+			w.Header().Set("X-RateLimit-Reset", fmt.Sprint(time.Now().Add(-time.Minute).Unix()))
+			w.Header().Set("X-RateLimit-Resource", "core")
+			fmt.Fprint(w, appRepoJSON)
+		default:
+			t.Error("unexpected request", r.URL.Path)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, _, err := newAppAcquisition(ctx, fixtureAppToken(), transport)
+	if err != nil || probes != 3 || repositoryReads != 1 {
+		t.Fatalf("err=%v probes=%d repositoryReads=%d", err, probes, repositoryReads)
+	}
+}
+
 func TestAppAcquisitionNativeRESTGraphQLAndQuotaBoundary(t *testing.T) {
 	remaining, graphRemaining := 4900, 4900
 	apiCalls, graphCalls := 0, 0

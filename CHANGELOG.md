@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh expired GitHub App REST quota before acquisition requests while preserving the 50% reserve.
+
 ## 0.20.0 - 2026-11-26
 
 **Highlights:** Add resumable PostgreSQL acquisition and cloud readers, scoped GitHub App credentials, and bounded Octopool collection for conversations, commits and lifecycle events.
