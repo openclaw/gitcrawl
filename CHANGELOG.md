@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.20.0 - 2026-11-26
+
+**Highlights:** Add resumable PostgreSQL acquisition and cloud readers, scoped GitHub App credentials, and bounded Octopool collection for conversations, commits and lifecycle events.
+
+- Keep scheduled native code indexing running when its Git cache grows, preserving the existing acquisition gate.
+
 - Support an exclusive upper bound for historical commit backfills while preserving the scheduled acquisition checkpoint.
 
 - Document the shared OpenClaw archive API as the maintainer setup path and retain portable Git stores for recovery and user-owned snapshots.
