@@ -786,12 +786,17 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body io.Reader
 		}
 	} else if err := c.reserve.beforeRequest(resource, cost); err != nil {
 		var expired *rateLimitStatusExpiredError
-		if errors.As(err, &expired) && resource == "graphql" {
+		isExpired := errors.As(err, &expired)
+		if isExpired && resource == "graphql" {
 			if err := c.refreshExpiredGraphQLQuota(ctx, token, cost); err != nil {
 				return nil, requestFailureAt("graphql_quota_refresh", "", err)
 			}
+		} else if _, app := c.httpClient.Transport.(*appReadTransport); app && resource == "core" && isExpired {
+			if err := c.refreshExpiredAppCoreQuota(ctx, reporter, token, cost); err != nil {
+				return nil, err
+			}
 		} else {
-			if c.tokenProvider != nil || !errors.As(err, &expired) {
+			if c.tokenProvider != nil || !isExpired {
 				return nil, requestFailureAt("dispatch_guard", "", err)
 			}
 			_, refreshErr := c.GetRateLimits(ctx, reporter)

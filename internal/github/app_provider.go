@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -53,12 +54,34 @@ func newAppAcquisition(ctx context.Context, token AcquisitionToken, base http.Ro
 		return nil, nil, err
 	}
 	for _, resource := range []string{"core", "graphql"} {
-		if err := client.reserve.beforeRequest(resource, 100); err != nil {
+		err := client.reserve.beforeRequest(resource, 100)
+		var expired *rateLimitStatusExpiredError
+		if resource == "core" && errors.As(err, &expired) {
+			err = client.refreshExpiredAppCoreQuota(ctx, nil, token.Token, 100)
+		}
+		if err != nil {
 			return nil, nil, err
 		}
 	}
 	graph := &OctopoolConversations{Client: client, repository: token.Repository, issues: map[int]map[string]any{}, conversations: map[int]HistoryItem{}}
 	return client, graph, nil
+}
+
+// The REST reset can fall between the quota probe and the reservation.
+// Refresh the same credential once before admitting the protected request.
+func (c *Client) refreshExpiredAppCoreQuota(ctx context.Context, reporter Reporter, token string, cost int) error {
+	_, probeToken, err := c.getRateLimits(ctx, reporter, &token)
+	if err != nil {
+		return requestFailureAt("rest_preflight", "", fmt.Errorf("refresh GitHub rate limit status: %w", err))
+	}
+	currentToken, err := c.requestToken(ctx)
+	if err != nil {
+		return err
+	}
+	if probeToken != token || currentToken != token {
+		return requestFailureAt("dispatch_guard", "credential_changed", errors.New("GitHub token changed during rate limit reservation"))
+	}
+	return c.reserve.beforeRequest("core", cost)
 }
 
 // No custom host, redirect, arbitrary method or second repository can receive
