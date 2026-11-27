@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stage weekly and PR CodeQL workflow coverage for Actions, Go, JavaScript/TypeScript, and Python, preserving Go autobuild with the module toolchain, for the managed security-setup cutover.
+
 - Refresh expired GitHub App REST quota before acquisition requests while preserving the 50% reserve.
 
 - Update the pinned TruffleHog action and scanner image to v3.100.1. Thanks @dependabot.
